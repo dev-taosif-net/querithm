@@ -11,7 +11,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const keydowns = (spy: ReturnType<typeof vi.spyOn>) => spy.mock.calls.filter((c) => c[0] === "keydown").length;
+const keydowns = (spy: ReturnType<typeof vi.spyOn>) => spy.mock.calls.filter((c: unknown[]) => c[0] === "keydown").length;
 
 describe("Modal keyboard", () => {
   // A dialog re-renders with a new onClose whenever its state changes (the import wizard after its job starts).

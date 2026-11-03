@@ -29,7 +29,6 @@ export default defineConfig({
     // UI component tests opt in per file with `// @vitest-environment jsdom`.
     coverage: {
       provider: "v8",
-      all: true,
       include: ["src/**/*.{ts,tsx}", "scripts/**/*.mjs"],
       exclude: ["**/__tests__/**", "**/*.d.ts", "src/ipc/contract.ts", "scripts/bench/**", "src-tauri/**"],
       reporter: ["text-summary", "json-summary"],
