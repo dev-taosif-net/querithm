@@ -1,0 +1,29 @@
+<Project>
+  <!-- Phase D3: a macOS publish carries only its RID's slice of universal native libraries (DuckDB's libduckdb.dylib). -->
+  <UsingTask TaskName="ThinMachOLibraries" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Files ParameterType="Microsoft.Build.Framework.ITaskItem[]" Required="true" />
+      <RuntimeIdentifier ParameterType="System.String" Required="true" />
+      <OutputDirectory ParameterType="System.String" Required="true" />
+      <Replaced ParameterType="Microsoft.Build.Framework.ITaskItem[]" Output="true" />
+      <Thinned ParameterType="Microsoft.Build.Framework.ITaskItem[]" Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Class" Language="cs" Source="$(MSBuildThisFileDirectory)MachOThin.cs" />
+    </Task>
+  </UsingTask>
+
+  <Target Name="QuerithmThinMachOLibraries" AfterTargets="ComputeResolvedFilesToPublishList" Condition="$(RuntimeIdentifier.StartsWith('osx-'))">
+    <ItemGroup>
+      <_QuerithmDylib Include="@(ResolvedFileToPublish)" Condition="'%(Extension)' == '.dylib'" />
+    </ItemGroup>
+    <ThinMachOLibraries Files="@(_QuerithmDylib)" RuntimeIdentifier="$(RuntimeIdentifier)" OutputDirectory="$(IntermediateOutputPath)thin/">
+      <Output TaskParameter="Replaced" ItemName="_QuerithmFatDylib" />
+      <Output TaskParameter="Thinned" ItemName="_QuerithmThinDylib" />
+    </ThinMachOLibraries>
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(_QuerithmFatDylib)" />
+      <ResolvedFileToPublish Include="@(_QuerithmThinDylib)" />
+    </ItemGroup>
+  </Target>
+</Project>

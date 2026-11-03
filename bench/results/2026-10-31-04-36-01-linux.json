@@ -1,0 +1,200 @@
+{
+  "date": "2026-10-31T04:36:01.436Z",
+  "os": "Linux 7.0.0-42-generic",
+  "cpu": "AMD Ryzen 7 4700U with Radeon Graphics",
+  "cores": 8,
+  "memGb": 15,
+  "results": {
+    "5": {
+      "metric": "Tier-2 completion latency, 12k-line proc (p95)",
+      "unit": "ms",
+      "target": 150,
+      "value": 29.31,
+      "pass": true,
+      "samples": 60
+    },
+    "6": {
+      "metric": "Full parse of 12k-line proc",
+      "unit": "ms",
+      "target": 100,
+      "value": 37.1,
+      "pass": true,
+      "lines": 12023,
+      "samples": [
+        243.43566900000042,
+        47.019240999999965,
+        36.14859400000023,
+        37.087750999999116,
+        37.102428999998665
+      ]
+    },
+    "8": {
+      "metric": "DB switch, SQL Server, existing connection (overhead over one roundtrip)",
+      "unit": "ms",
+      "target": 20,
+      "value": 1.06,
+      "pass": true,
+      "switchMs": 2.86000199999944,
+      "executeRoundtripMs": 3.591099999999642
+    },
+    "9": {
+      "metric": "Metadata snapshot load from SQLite",
+      "unit": "ms",
+      "target": 80,
+      "value": 52.34,
+      "pass": true,
+      "objects": 1357,
+      "samples": [
+        106.81276999999955,
+        59.42550500000016,
+        37.557300000000396,
+        52.341653999999835,
+        23.43916100000024
+      ]
+    },
+    "10": {
+      "metric": "Incremental refresh with 10 changed objects",
+      "unit": "ms",
+      "target": 2000,
+      "value": 48.23,
+      "pass": true,
+      "samples": [
+        48.230868999999984,
+        48.5754079999997,
+        35.491837999999916,
+        25.80559700000049,
+        79.94267600000057
+      ]
+    },
+    "15": {
+      "metric": "Cancel latency",
+      "unit": "ms",
+      "target": 500,
+      "value": 3.54,
+      "pass": true,
+      "samples": [
+        13.042642000000342,
+        3.840136999999231,
+        3.331374000001233,
+        3.1497849999977916,
+        3.5396509999991395
+      ]
+    },
+    "16": {
+      "metric": "Sidecar processes alive 5 s after killing the app",
+      "unit": "count",
+      "target": 0,
+      "value": 0,
+      "pass": true
+    },
+    "20": {
+      "metric": "Grid edits: DML preview for 100 staged cells (roundtrip)",
+      "unit": "ms",
+      "target": 15,
+      "value": 5.41,
+      "pass": true,
+      "editable": true,
+      "samples": [
+        41.3322619999999,
+        6.541755000002013,
+        31.666730000000825,
+        5.331278999998176,
+        5.320499000001291,
+        5.491976000001159,
+        5.409547999999631
+      ]
+    },
+    "21": {
+      "metric": "Schema compare of the fixture database with itself, slowest engine",
+      "unit": "ms",
+      "target": 2000,
+      "value": 575,
+      "pass": true,
+      "mssql": {
+        "ms": 575,
+        "objects": 1358
+      },
+      "pg": {
+        "ms": 139,
+        "objects": 1365
+      }
+    },
+    "22": {
+      "metric": "Data compare 100k × 10, 1k differences, slowest engine (incl. server time)",
+      "unit": "ms",
+      "target": 1500,
+      "value": 1445,
+      "pass": true,
+      "mssql": {
+        "ms": 1445,
+        "differences": 1000,
+        "memoryDeltaMb": 2
+      },
+      "pg": {
+        "ms": 285,
+        "differences": 1000,
+        "memoryDeltaMb": 7
+      },
+      "memoryGatePass": true
+    },
+    "23": {
+      "metric": "Import 100k × 10 CSV, slowest engine (SQL Server / PostgreSQL)",
+      "unit": "ms",
+      "target": 2000,
+      "value": 1688,
+      "pass": true,
+      "mssql": {
+        "ms": 1688,
+        "rows": 100000,
+        "error": null
+      },
+      "pg": {
+        "ms": 802,
+        "rows": 100000,
+        "error": null
+      }
+    },
+    "24": {
+      "metric": "Find usages of a column all ~550 cached modules mention + 5 open tabs (p50, SQL Server)",
+      "unit": "ms",
+      "target": 120,
+      "value": 85.6,
+      "pass": true,
+      "objectsScanned": 4,
+      "hits": 179,
+      "repeatedSearchMs": 44.5
+    },
+    "27": {
+      "metric": "Tier-2 completion latency, PostgreSQL, 10k-line PL/pgSQL function (p95)",
+      "unit": "ms",
+      "target": 150,
+      "value": 68.54,
+      "pass": true,
+      "lines": 10004,
+      "samples": 60,
+      "itemsPerCall": 5
+    },
+    "sidecarIdleRssMb": 75,
+    "fullRefreshMs": 504,
+    "incrChanged0": 0,
+    "incrChanged1": 0,
+    "incrChanged2": 0,
+    "incrChanged3": 0,
+    "incrChanged4": 0,
+    "dataPlane1MRowsMs": 3049,
+    "dataPlaneFirstBatchMs": 165,
+    "real1MRowsMs": 7670,
+    "11cold": {
+      "metric": "Execute → first batch on a cold pool connection (SELECT 1, median, slower engine)",
+      "unit": "ms",
+      "target": 300,
+      "value": 9.8,
+      "pass": true,
+      "mssqlMedian": 9.8,
+      "mssqlP95": 25.3,
+      "pgMedian": 8.6,
+      "pgP95": 22.9,
+      "samplesPerEngine": 15
+    }
+  }
+}

@@ -1,0 +1,353 @@
+{
+  "date": "2026-10-31T11:58:16.489Z",
+  "os": "Linux 7.0.0-42-generic",
+  "cpu": "AMD Ryzen 7 4700U with Radeon Graphics",
+  "cores": 8,
+  "memGb": 15,
+  "results": {
+    "5": {
+      "metric": "Tier-2 completion latency, 12k-line proc (p95)",
+      "unit": "ms",
+      "target": 150,
+      "value": 27.15,
+      "pass": true,
+      "samples": 60
+    },
+    "6": {
+      "metric": "Full parse of 12k-line proc",
+      "unit": "ms",
+      "target": 100,
+      "value": 37.82,
+      "pass": true,
+      "lines": 12023,
+      "samples": [
+        274.49832999999853,
+        36.468526999999085,
+        39.588894999998956,
+        37.81920100000025,
+        34.85271300000022
+      ]
+    },
+    "8": {
+      "metric": "DB switch, SQL Server, existing connection (overhead over one roundtrip)",
+      "unit": "ms",
+      "target": 20,
+      "value": 0.83,
+      "pass": true,
+      "switchMs": 2.92809600000146,
+      "executeRoundtripMs": 4.1934399999991
+    },
+    "9": {
+      "metric": "Metadata snapshot load from SQLite",
+      "unit": "ms",
+      "target": 80,
+      "value": 36.05,
+      "pass": true,
+      "objects": 1357,
+      "samples": [
+        147.7139729999999,
+        34.774676,
+        36.04778399999941,
+        21.731496999999763,
+        55.01271900000029
+      ]
+    },
+    "10": {
+      "metric": "Incremental refresh with 10 changed objects",
+      "unit": "ms",
+      "target": 2000,
+      "value": 46.55,
+      "pass": true,
+      "samples": [
+        46.55015800000001,
+        44.2233750000014,
+        49.4131010000001,
+        43.37598799999978,
+        72.28756000000067
+      ]
+    },
+    "15": {
+      "metric": "Cancel latency",
+      "unit": "ms",
+      "target": 500,
+      "value": 3.48,
+      "pass": true,
+      "samples": [
+        23.006467999999586,
+        3.309173000001465,
+        3.4908159999977215,
+        3.483621999999741,
+        3.1203179999974964
+      ]
+    },
+    "16": {
+      "metric": "Sidecar processes alive 5 s after killing the app",
+      "unit": "count",
+      "target": 0,
+      "value": 0,
+      "pass": true
+    },
+    "20": {
+      "metric": "Grid edits: DML preview for 100 staged cells (roundtrip)",
+      "unit": "ms",
+      "target": 15,
+      "value": 5.38,
+      "pass": true,
+      "editable": true,
+      "samples": [
+        20.58442500000092,
+        5.690599000001384,
+        23.223046000002796,
+        5.249588999999105,
+        5.192101000000548,
+        5.382378999998764,
+        5.478579999999056
+      ]
+    },
+    "21": {
+      "metric": "Schema compare of the fixture database with itself, slowest engine",
+      "unit": "ms",
+      "target": 2000,
+      "value": 587,
+      "pass": true,
+      "mssql": {
+        "ms": 587,
+        "objects": 1358
+      },
+      "pg": {
+        "ms": 158,
+        "objects": 1365
+      }
+    },
+    "22": {
+      "metric": "Data compare 100k × 10, 1k differences, slowest engine (incl. server time)",
+      "unit": "ms",
+      "target": 1500,
+      "value": 1216,
+      "pass": true,
+      "mssql": {
+        "ms": 1216,
+        "differences": 1000,
+        "memoryDeltaMb": 2
+      },
+      "pg": {
+        "ms": 290,
+        "differences": 1000,
+        "memoryDeltaMb": 1
+      },
+      "memoryGatePass": true
+    },
+    "23": {
+      "metric": "Import 100k × 10 CSV, slowest engine (SQL Server / PostgreSQL)",
+      "unit": "ms",
+      "target": 2000,
+      "value": 1717,
+      "pass": true,
+      "mssql": {
+        "ms": 1717,
+        "rows": 100000,
+        "error": null
+      },
+      "pg": {
+        "ms": 915,
+        "rows": 100000,
+        "error": null
+      }
+    },
+    "24": {
+      "metric": "Find usages of a column all ~550 cached modules mention + 5 open tabs (p50, SQL Server)",
+      "unit": "ms",
+      "target": 120,
+      "value": 76.43,
+      "pass": true,
+      "objectsScanned": 4,
+      "hits": 179,
+      "repeatedSearchMs": 43.6
+    },
+    "27": {
+      "metric": "Tier-2 completion latency, PostgreSQL, 10k-line PL/pgSQL function (p95)",
+      "unit": "ms",
+      "target": 150,
+      "value": 52.23,
+      "pass": true,
+      "lines": 10004,
+      "samples": 60,
+      "itemsPerCall": 5
+    },
+    "sidecarIdleRssMb": 79,
+    "fullRefreshMs": 421,
+    "incrChanged0": 0,
+    "incrChanged1": 0,
+    "incrChanged2": 0,
+    "incrChanged3": 0,
+    "incrChanged4": 0,
+    "dataPlane1MRowsMs": 3096,
+    "dataPlaneFirstBatchMs": 165,
+    "real1MRowsMs": 7406,
+    "11cold": {
+      "metric": "Execute → first batch on a cold pool connection (SELECT 1, median, slower engine)",
+      "unit": "ms",
+      "target": 300,
+      "value": 13.88,
+      "pass": true,
+      "mssqlMedian": 13.9,
+      "mssqlP95": 18.7,
+      "pgMedian": 7.6,
+      "pgP95": 26.7,
+      "samplesPerEngine": 15
+    },
+    "11cold.sqlite": {
+      "metric": "SQLite: execute → first batch on a new tab's own connection (open + hardening + SELECT 1, median)",
+      "unit": "ms",
+      "target": 300,
+      "value": 1.83,
+      "pass": true,
+      "samples": [
+        145.7,
+        3.5,
+        2.6,
+        2.5,
+        1.8,
+        1.8,
+        1.6,
+        1.1,
+        1.8,
+        1.8,
+        2.2,
+        2,
+        1.9,
+        1.8,
+        1.7
+      ]
+    },
+    "9.sqlite": {
+      "metric": "SQLite: metadata snapshot load from SQLite (600 tables, 150 views, 200 triggers)",
+      "unit": "ms",
+      "target": 80,
+      "value": 43.54,
+      "pass": true,
+      "objects": 950,
+      "samples": [
+        118.29324300000007,
+        29.19177900000068,
+        32.01267299999745,
+        43.54233199999726,
+        53.378741000000446
+      ]
+    },
+    "10.sqlite": {
+      "metric": "SQLite: incremental refresh with 10 changed objects",
+      "unit": "ms",
+      "target": 2000,
+      "value": 53.65,
+      "pass": true,
+      "samples": [
+        53.64656499999546,
+        74.40905600000406,
+        47.64155399999436,
+        54.28213300000061,
+        18.1338390000019
+      ]
+    },
+    "15.sqlite": {
+      "metric": "SQLite: cancel latency (sqlite3_interrupt)",
+      "unit": "ms",
+      "target": 500,
+      "value": 1.41,
+      "pass": true,
+      "samples": [
+        6.467654000000039,
+        1.4869509999989532,
+        0.957894999999553,
+        1.4075720000037109,
+        0.7604019999998854
+      ]
+    },
+    "11cold.mysql": {
+      "metric": "MySQL: execute → first batch on a cold pool connection (TCP, TLS, login, identity read, SELECT 1, median)",
+      "unit": "ms",
+      "target": 300,
+      "value": 10.02,
+      "pass": true,
+      "samples": [
+        65.2,
+        8.4,
+        11.8,
+        6.5,
+        6.7,
+        11.8,
+        11,
+        9.9,
+        10.9,
+        11.1,
+        8.4,
+        11,
+        8.1,
+        8,
+        10
+      ]
+    },
+    "8.mysql": {
+      "metric": "MySQL: database switch on an existing connection (COM_INIT_DB, median)",
+      "unit": "ms",
+      "target": 20,
+      "value": 1.81,
+      "pass": true,
+      "samples": [
+        8.528595999996469,
+        2.1989919999978156,
+        1.5544880000015837,
+        1.4080729999986943,
+        2.190736000004108,
+        1.7130659999966156,
+        1.7631919999985257,
+        1.8473200000007637,
+        1.8077350000021397,
+        2.056413000005705
+      ]
+    },
+    "9.mysql": {
+      "metric": "MySQL: metadata snapshot load from SQLite (600 tables, 150 views, 200 triggers)",
+      "unit": "ms",
+      "target": 80,
+      "value": 27.94,
+      "pass": true,
+      "objects": 950,
+      "samples": [
+        88.30813799999305,
+        21.988540999998804,
+        31.034992000000784,
+        27.939951000007568,
+        23.73338700000022
+      ]
+    },
+    "10.mysql": {
+      "metric": "MySQL: incremental refresh with 10 changed objects",
+      "unit": "ms",
+      "target": 2000,
+      "value": 119,
+      "pass": true,
+      "samples": [
+        119.00446199999715,
+        115.37171900000249,
+        118.87330500000098,
+        121.41491300000052,
+        119.63287600000331
+      ]
+    },
+    "15.mysql": {
+      "metric": "MySQL: cancel latency (KILL QUERY on a side connection)",
+      "unit": "ms",
+      "target": 500,
+      "value": 13.49,
+      "pass": true,
+      "samples": [
+        109.99532099999487,
+        13.489751000000979,
+        10.134139999994659,
+        9.411076999997022,
+        13.692762999999104
+      ]
+    }
+  }
+}

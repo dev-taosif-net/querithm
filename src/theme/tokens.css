@@ -1,0 +1,1024 @@
+/* Theme tokens (§12 Theme): defined once for dark and light. Tailwind, Monaco, Glide and Dockview read these. */
+@import "tailwindcss";
+@import "@fontsource-variable/jetbrains-mono";
+
+@theme {
+  --color-bg: var(--q-bg);
+  --color-panel: var(--q-panel);
+  --color-panel-2: var(--q-panel-2);
+  --color-raised: var(--q-raised);
+  --color-hover: var(--q-hover);
+  --color-line: var(--q-line);
+  --color-line-strong: var(--q-line-strong);
+  --color-fg: var(--q-fg);
+  --color-muted: var(--q-muted);
+  --color-faint: var(--q-faint);
+  --color-accent: var(--q-accent);
+  --color-accent-fg: var(--q-accent-fg);
+  --color-accent-solid: var(--q-accent-solid);
+  --color-active: var(--q-active);
+  --color-row-sel: var(--q-row-sel);
+  --color-overlay-sel: var(--q-overlay-sel);
+  --color-warn-solid: var(--q-warn-solid);
+  --color-warn-solid-fg: var(--q-warn-solid-fg);
+  --color-ok: var(--q-ok);
+  --color-warn: var(--q-warn);
+  --color-err: var(--q-err);
+  --color-err-solid: var(--q-err-solid);
+  --color-env-local: var(--q-env-local);
+  --color-env-dev: var(--q-env-dev);
+  --color-env-test: var(--q-env-test);
+  --color-env-staging: var(--q-env-staging);
+  --color-env-prod: var(--q-env-prod);
+  --color-obj-table: var(--q-obj-table);
+  --color-obj-view: var(--q-obj-view);
+  --color-obj-proc: var(--q-obj-proc);
+  --color-obj-func: var(--q-obj-func);
+  --color-obj-type: var(--q-obj-type);
+  --color-obj-sequence: var(--q-obj-sequence);
+  --color-obj-synonym: var(--q-obj-synonym);
+  --color-obj-index: var(--q-obj-index);
+  --color-ident: var(--q-ident);
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", sans-serif;
+}
+
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --q-bg: #0f1117;
+  --q-panel: #161922;
+  --q-panel-2: #12151e;
+  --q-raised: #1e222e;
+  --q-hover: #262b38;
+  /* Lighter than --q-hover, so a bordered control keeps its outline under the hover fill. */
+  --q-line: #30363d;
+  /* Field and launch-strip borders: 3:1 non-text contrast on every surface (WCAG 1.4.11). */
+  --q-line-strong: #6e7681;
+  --q-fg: #e6edf3;
+  --q-muted: #8c949e;
+  --q-muted-hl: #acb3bc; /* muted text inside a highlighted row (.q-hl) */
+  --q-faint: #4b5260;
+  /* Text tokens (accent, ok, warn, err) reach 4.5:1 on every surface and on their own ≤ 15 % tint; -solid fills carry
+     white text (src/theme/__tests__/contrast.test.ts). */
+  --q-accent: #60a5fa;
+  --q-accent-solid: #2563eb;
+  --q-accent-fg: #ffffff;
+  --q-ok: #10b981;
+  --q-warn: #f59e0b;
+  --q-null: #facc15;
+  --q-err: #f97b7b;
+  --q-err-solid: #dc2626;
+  /* Activity monitor: blocking / wait age (< 5 s, 5–30 s, > 30 s) */
+  --q-wait-short: #10b981;
+  --q-wait-mid: #f59e0b;
+  --q-wait-long: #f97b7b;
+  --q-env-local: #64748b;
+  --q-env-dev: #10b981;
+  --q-env-test: #8b5cf6;
+  --q-env-staging: #f59e0b;
+  --q-env-prod: #ef4444;
+  --q-obj-table: #38bdf8;
+  --q-obj-view: #c084fc;
+  --q-obj-proc: #fbbf24;
+  --q-obj-func: #34d399;
+  --q-obj-type: #f472b6;
+  --q-obj-sequence: #2dd4bf;
+  --q-obj-synonym: #9ca3af;
+  --q-obj-index: #5eead4;
+  --q-sel: rgba(59, 130, 246, 0.25);
+  --q-active: #264476; /* selected row in lists/popups: accent tint, distinct from --q-hover */
+  /* Selected Object Explorer row: accent 12 % over --q-panel; status text (err, warn, accent) keeps 4.5:1 on it, unlike on --q-active. */
+  --q-row-sel: #1f2a3c;
+  /* Highlighted row of Ctrl+P and Ctrl+Tab: accent 25 % over --q-raised. */
+  --q-overlay-sel: #2f4361;
+  /* The open-transaction pill on tabs and lists (D10): the strip's one loud mark; its text reaches 4.5:1 on it. */
+  --q-warn-solid: #f59e0b;
+  --q-warn-solid-fg: #0f1117;
+  /* Edge of sticky pinned tabs while the strip is scrolled under them. */
+  --q-edge-shadow: rgba(0, 0, 0, 0.45);
+  /* SQL syntax colors are per syntax theme in src/editor/syntaxTheme.ts. These two are UI chrome and never follow it:
+     object and variable names in dialogs, the plan view and the Explorer (4.5:1 on every surface, selected rows
+     included), and the matched characters in the completion list (4.5:1 on --q-raised and --q-active). */
+  --q-ident: #f5e0dc;
+  --q-suggest-match: #93c5fd;
+  /* Diff editors: inserted / removed lines, and the changed text on them (the same tint again). Kept faint so every
+     syntax theme's colors stay at 4.5:1 on both layers; the gutter's +/− marks the change too. */
+  --q-diff-insert: rgba(16, 185, 129, 0.045);
+  --q-diff-remove: rgba(220, 38, 38, 0.085);
+  /* Result charts (Phase C1): categorical series colors in this fixed order, never cycled (a 9th series folds into
+     "Other", drawn in the "other" token). Validated as a set on the dark background and panel: adjacent CVD ΔE ≥ 8.4,
+     normal-vision ΔE ≥ 19.3, every slot ≥ 3 to 1 (src/charts/__tests__/draw.test.ts). Marks only: chart text uses the
+     text tokens. */
+  --q-chart-1: #3987e5;
+  --q-chart-2: #d95926;
+  --q-chart-3: #199e70;
+  --q-chart-4: #c98500;
+  --q-chart-5: #d55181;
+  --q-chart-6: #008300;
+  --q-chart-7: #9085e9;
+  --q-chart-8: #e66767;
+  --q-chart-other: #8c949e;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --q-bg: #ffffff;
+  --q-panel: #f6f8fa;
+  --q-panel-2: #f0f2f5;
+  --q-raised: #eaeef2;
+  --q-hover: #e1e6ec;
+  --q-line: #d0d7de;
+  --q-line-strong: #768390;
+  --q-fg: #1f2328;
+  --q-muted: #59636e;
+  --q-muted-hl: #4b545d;
+  --q-faint: #8c959f;
+  --q-accent: #2252cd;
+  --q-accent-solid: #2563eb;
+  --q-accent-fg: #ffffff;
+  --q-ok: #05694d;
+  --q-warn: #97430d;
+  --q-null: #a16207;
+  --q-err: #b11c1c;
+  --q-err-solid: #dc2626;
+  /* Activity monitor: blocking / wait age (< 5 s, 5–30 s, > 30 s) */
+  --q-wait-short: #05694d;
+  --q-wait-mid: #97430d;
+  --q-wait-long: #b11c1c;
+  --q-env-local: #475569;
+  --q-env-dev: #059669;
+  --q-env-test: #7c3aed;
+  --q-env-staging: #d97706;
+  --q-env-prod: #dc2626;
+  --q-obj-table: #0369a1;
+  --q-obj-view: #9333ea;
+  --q-obj-proc: #b45309;
+  --q-obj-func: #047857;
+  --q-obj-type: #db2777;
+  --q-obj-sequence: #0f766e;
+  --q-obj-synonym: #6b7280;
+  --q-obj-index: #0f766e;
+  --q-sel: rgba(37, 99, 235, 0.15);
+  --q-active: #bcd2fa;
+  --q-row-sel: #dde4f5;
+  --q-overlay-sel: #b8c7e9;
+  --q-warn-solid: #97430d;
+  --q-warn-solid-fg: #ffffff;
+  --q-edge-shadow: rgba(31, 35, 40, 0.15);
+  --q-ident: #8a1f5c;
+  --q-suggest-match: #1d3fa8;
+  --q-diff-insert: rgba(5, 150, 105, 0.038);
+  --q-diff-remove: rgba(220, 38, 38, 0.027);
+  /* Same eight hues stepped for the light surface; slots 3, 4 and 5 sit below 3:1 on white, so every chart has a
+     legend (two or more series) and the Grid view is its table. */
+  --q-chart-1: #2a78d6;
+  --q-chart-2: #eb6834;
+  --q-chart-3: #1baf7a;
+  --q-chart-4: #eda100;
+  --q-chart-5: #e87ba4;
+  --q-chart-6: #008300;
+  --q-chart-7: #6250d6;
+  --q-chart-8: #e34948;
+  --q-chart-other: #768390;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--q-bg);
+  color: var(--q-fg);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+input,
+textarea,
+select {
+  user-select: text;
+}
+
+/* Thin scrollbars (VS Code style). The thumb is the only sign that a panel scrolls: it reaches 3:1 on every surface
+   (WCAG 1.4.11), as field edges do; --q-hover was ~1.2:1. */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--q-line-strong);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--q-muted);
+}
+
+:focus-visible {
+  outline: 1px solid var(--q-accent);
+  outline-offset: -1px;
+}
+
+@layer components {
+  /* A field's edge reaches 3:1 on every surface (WCAG 1.4.11), as the top bar's search does. */
+  .q-input {
+    background: var(--q-bg);
+    border: 1px solid var(--q-line-strong);
+    border-radius: 4px;
+    color: var(--q-fg);
+    padding: 3px 8px;
+    font-size: 12px;
+    outline: none;
+  }
+  .q-input:focus {
+    border-color: var(--q-accent);
+  }
+  .q-input::placeholder {
+    color: var(--q-muted);
+  }
+
+  .q-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 24px;
+    padding: 0 10px;
+    border-radius: 4px;
+    border: 1px solid var(--q-line);
+    background: var(--q-raised);
+    color: var(--q-fg);
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: default;
+  }
+  .q-btn:hover:not(:disabled):not([aria-disabled="true"]) {
+    background: var(--q-hover);
+  }
+  .q-btn:disabled,
+  .q-btn[aria-disabled="true"] {
+    opacity: 0.45;
+  }
+  /* Hover darkens a solid fill: lightening it toward white drops the white label below 4.5:1. */
+  .q-btn-primary {
+    background: var(--q-accent-solid);
+    border-color: var(--q-accent-solid);
+    color: var(--q-accent-fg);
+    font-weight: 600;
+  }
+  .q-btn-primary:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--q-accent-solid) 85%, black);
+  }
+  .q-btn-danger {
+    background: var(--q-err-solid);
+    border-color: var(--q-err-solid);
+    color: #fff;
+    font-weight: 600;
+  }
+  /* Without its own hover rule, .q-btn:hover (higher specificity) paints --q-hover under the white label. */
+  .q-btn-danger:hover:not(:disabled):not([aria-disabled="true"]) {
+    background: color-mix(in srgb, var(--q-err-solid) 85%, black);
+  }
+  /* An unavailable destructive button is a plain one: a red fill reads as armed even when dimmed. */
+  .q-btn-danger:disabled,
+  .q-btn-danger[aria-disabled="true"] {
+    background: var(--q-raised);
+    border-color: var(--q-line);
+    color: var(--q-fg);
+    font-weight: 500;
+  }
+  /* Tinted buttons keep the tint at ≤ 15 % so the same-hue label stays at 4.5:1; the border is the full hue so the
+     control's edge reaches 3:1 (WCAG 1.4.11). */
+  .q-btn-run {
+    background: color-mix(in srgb, var(--q-ok) 10%, transparent);
+    border-color: var(--q-ok);
+    color: var(--q-ok);
+    font-weight: 600;
+  }
+  .q-btn-run:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--q-ok) 15%, transparent);
+  }
+  .q-btn-stop {
+    background: color-mix(in srgb, var(--q-err) 10%, transparent);
+    border-color: var(--q-err);
+    color: var(--q-err);
+    font-weight: 600;
+  }
+  .q-btn-stop:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--q-err) 15%, transparent);
+  }
+  .q-btn-ghost {
+    background: transparent;
+    border-color: transparent;
+  }
+  /* Top-bar control: no fill or border at rest (only the launch strip and Run carry an outline), 28 px tall. */
+  .q-tb {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 28px;
+    min-width: 28px;
+    padding: 0 8px;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--q-fg);
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: default;
+    transition: background-color 80ms;
+  }
+  .q-tb:hover:not([aria-disabled="true"]),
+  .q-tb[aria-expanded="true"] {
+    background: var(--q-hover);
+  }
+  .q-tb[aria-disabled="true"] {
+    opacity: 0.45;
+  }
+  /* The bar's focus ring sits outside the control, 2 px: the 1 px inset default disappears on a bordered control. */
+  .q-topbar :focus-visible {
+    outline: 2px solid var(--q-accent);
+    outline-offset: 1px;
+  }
+  /* A highlighted row (selection, focus, or an error / warning tint): muted text in it, from a class or an inline
+     var(--q-muted), keeps 4.5:1 on the tint. */
+  .q-hl {
+    --q-muted: var(--q-muted-hl);
+    --color-muted: var(--q-muted-hl);
+  }
+  /* Object Explorer tree row: --q-row-bg is the surface under the row, for marks drawn in the background color
+     (the cut lines of the monochrome engine logo). */
+  .q-tree-row {
+    --q-row-bg: var(--q-panel);
+  }
+  .q-tree-row:hover {
+    --q-row-bg: var(--q-hover);
+  }
+  .q-tree-row[aria-selected="true"] {
+    --q-row-bg: var(--q-row-sel);
+  }
+  /* On/off switch (Settings): a native checkbox with role="switch". Off is an outline with a muted knob; on is a
+     solid --q-fg track (§12 keeps the accent for focus and selection). Both edges reach 3:1 on every surface. */
+  .q-switch {
+    appearance: none;
+    position: relative;
+    flex: none;
+    width: 28px;
+    height: 16px;
+    margin: 0;
+    border-radius: 8px;
+    border: 1px solid var(--q-line-strong);
+    background: transparent;
+    cursor: default;
+    transition: background-color 80ms, border-color 80ms;
+  }
+  .q-switch::before {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--q-muted);
+    transition: transform 80ms;
+  }
+  .q-switch:checked {
+    background: var(--q-fg);
+    border-color: var(--q-fg);
+  }
+  .q-switch:checked::before {
+    transform: translateX(12px);
+    background: var(--q-panel);
+  }
+  .q-switch:focus-visible {
+    outline: 2px solid var(--q-accent);
+    outline-offset: 2px;
+  }
+  .q-switch[aria-disabled="true"] {
+    opacity: 0.45;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .q-switch,
+    .q-switch::before {
+      transition: none;
+    }
+  }
+  /* Key cap (Settings → Keyboard shortcuts, About). */
+  .q-keycap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 20px;
+    min-width: 20px;
+    padding: 0 6px;
+    border-radius: 3px;
+    border: 1px solid var(--q-line);
+    background: var(--q-raised);
+    box-shadow: inset 0 -1px 0 var(--q-line);
+    color: var(--q-fg);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    white-space: nowrap;
+  }
+  .q-kbd {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--q-muted);
+  }
+  .q-mono {
+    font-family: var(--font-mono);
+  }
+}
+
+/* Dockview, mapped onto the same tokens. */
+.dockview-theme-querithm {
+  --dv-background-color: var(--q-bg);
+  --dv-paneview-header-border-color: var(--q-line);
+  --dv-tabs-and-actions-container-font-size: 12px;
+  --dv-tabs-and-actions-container-height: 40px;
+  --dv-tab-close-icon: none;
+  --dv-drag-over-background-color: var(--q-sel);
+  --dv-drag-over-border-color: var(--q-accent);
+  /* The strip's scroll thumb (Dockview reads this name; it shows while hovering or scrolling the strip). */
+  --dv-scrollbar-background-color: var(--q-line-strong);
+  --dv-group-view-background-color: var(--q-bg);
+  --dv-tabs-and-actions-container-background-color: var(--q-panel);
+  /* Tabs (D1): the active tab of the focused group is the Explorer's selection (--q-row-sel and a 2 px accent bar);
+     every other tab is transparent on --q-panel. The bars are drawn by the tab header (.q-tab::after). */
+  --dv-activegroup-visiblepanel-tab-background-color: var(--q-row-sel);
+  --dv-activegroup-hiddenpanel-tab-background-color: transparent;
+  --dv-inactivegroup-visiblepanel-tab-background-color: transparent;
+  --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
+  --dv-tab-divider-color: transparent;
+  --dv-activegroup-visiblepanel-tab-color: var(--q-fg);
+  --dv-activegroup-hiddenpanel-tab-color: var(--q-fg);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--q-fg);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--q-fg);
+  --dv-separator-border: var(--q-line);
+  --dv-paneview-active-outline-color: var(--q-accent);
+  --dv-sash-color: transparent;
+  --dv-active-sash-color: var(--q-accent);
+}
+.dockview-theme-querithm .dv-tabs-and-actions-container {
+  border-bottom: 1px solid var(--q-line);
+}
+/* Editor tabs (§12, strip redesign D1–D27, owner revisions 1–3). Every state is painted from Dockview's classes, so
+   switching tabs re-renders no tab header (D26). !important: this file ends up in a cascade layer, and Dockview's
+   unlayered rules win otherwise. */
+.dockview-theme-querithm .dv-tab {
+  padding: 0 !important;
+  position: relative;
+  /* As wide as the name needs (line 2 never widens a tab), 120–184 px; a full strip shrinks tabs to the minimum,
+     then scrolls (owner revision 1). */
+  flex: 0 1 auto !important;
+  min-width: 120px !important;
+  max-width: 184px !important;
+}
+.dockview-theme-querithm .dv-tab:has(.q-tab[data-disc]) {
+  min-width: 150px !important; /* "disconnected" is never cut (D8) */
+}
+.dockview-theme-querithm .dv-tab:has(.q-tab[data-pinned]) {
+  flex: none !important;
+  width: 128px !important;
+  min-width: 128px !important;
+  max-width: 128px !important;
+}
+.dockview-theme-querithm .dv-groupview .dv-tabs-container > .dv-tab:not(.dv-active-tab):hover,
+.dockview-theme-querithm .dv-groupview.dv-inactive-group .dv-tabs-container > .dv-tab.dv-active-tab:hover {
+  background-color: var(--q-hover) !important;
+}
+/* Pinned tabs stay at the left while the strip scrolls, up to 40 % of it (D13); offsets and the edge are set by the
+   strip layout (hiddenTabs.ts). Opaque, with a shadow on the last one while tabs pass under them. */
+.dockview-theme-querithm .dv-tab[data-q-sticky] {
+  position: sticky !important;
+  z-index: 3;
+}
+.dockview-theme-querithm .dv-groupview .dv-tabs-container > .dv-tab[data-q-sticky]:not(.dv-active-tab),
+.dockview-theme-querithm .dv-groupview.dv-inactive-group .dv-tabs-container > .dv-tab.dv-active-tab[data-q-sticky] {
+  background-color: var(--q-panel) !important;
+}
+.dockview-theme-querithm .dv-groupview .dv-tabs-container > .dv-tab[data-q-sticky]:not(.dv-active-tab):hover {
+  background-color: var(--q-hover) !important;
+}
+.dockview-theme-querithm .dv-tabs-container[data-q-scrolled] > .dv-tab[data-q-sticky-edge] {
+  box-shadow: 6px 0 6px -4px var(--q-edge-shadow);
+}
+/* 24 px fades at an edge that cuts a tab, never over a fully visible one (D14); the left one starts after the pins. */
+.dockview-theme-querithm .dv-scrollable[data-q-fade-l]::before,
+.dockview-theme-querithm .dv-scrollable[data-q-fade-r]::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 1px;
+  width: 24px;
+  pointer-events: none;
+  z-index: 4;
+}
+.dockview-theme-querithm .dv-scrollable[data-q-fade-l]::before {
+  left: var(--q-pin-w, 0px);
+  background: linear-gradient(to right, var(--q-panel), transparent);
+}
+.dockview-theme-querithm .dv-scrollable[data-q-fade-r]::after {
+  right: 0;
+  background: linear-gradient(to left, var(--q-panel), transparent);
+}
+/* A tab's identity in Ctrl+P and Ctrl+Tab rows (D18): the name in text colour, whatever the strip state. */
+.q-list-identity .q-tab-name {
+  color: var(--q-fg);
+}
+/* The strip's end (D14): always there, 48 px, "≡ N" and the status of hidden tabs. */
+.q-strip-end {
+  width: 48px;
+  height: 100%;
+  box-sizing: border-box;
+  border-left: 1px solid var(--q-line);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  background: var(--q-panel);
+}
+.q-strip-menu {
+  height: 18px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--q-muted);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.q-strip-menu[data-hidden],
+.q-strip-menu:hover {
+  color: var(--q-fg);
+}
+.q-strip-menu:hover {
+  background: var(--q-hover);
+}
+.q-strip-tx {
+  height: 13px;
+  line-height: 13px;
+  padding: 0 3px;
+  border: 0;
+}
+.q-strip-busy {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--q-fg);
+  font-variant-numeric: tabular-nums;
+}
+.dockview-theme-querithm .dv-tab.dv-tab-dragging {
+  opacity: 0.5;
+}
+/* Dockview's 1 px focus outline is replaced by a 2 px accent ring 4 px inside the tab, for the keyboard only (D22). */
+.dockview-theme-querithm .dv-tab:focus-within::after,
+.dockview-theme-querithm .dv-tab:focus::after {
+  outline: none !important;
+}
+.dockview-theme-querithm .dv-tab:focus-visible::after {
+  outline: 2px solid var(--q-accent) !important;
+  outline-offset: -4px;
+  border-radius: 6px;
+}
+.dockview-theme-querithm .dv-tab:focus-visible {
+  outline: none;
+}
+.q-tab {
+  --q-row-bg: var(--q-panel); /* the surface under the tab: the engine mark's cut lines take it */
+  position: relative;
+  height: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px 0 8px;
+  box-sizing: border-box;
+  color: var(--q-fg);
+  font-size: 12px;
+  user-select: none;
+}
+.dv-tab:hover .q-tab {
+  --q-row-bg: var(--q-hover);
+}
+.dv-active-group .dv-tab.dv-active-tab .q-tab {
+  --q-row-bg: var(--q-row-sel);
+}
+/* Top band: Prod only, 2 px, at least 3:1 on every tab surface (D3); the colour comes from the connection. */
+.q-tab-band {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  pointer-events: none;
+}
+/* Bottom bar: accent under the active tab of the focused group (5.68 / 5.22:1), --q-line-strong under the tab shown
+   in an unfocused split group (D2). */
+.q-tab::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 2px;
+  pointer-events: none;
+}
+.dv-active-group .dv-tab.dv-active-tab .q-tab::after {
+  background: var(--q-accent);
+}
+.dv-inactive-group .dv-tab.dv-active-tab .q-tab::after {
+  background: var(--q-line-strong);
+}
+/* One 1 px × 18 px separator per tab, hidden beside the active and the hovered tab (D27). */
+.q-tab-sep {
+  position: absolute;
+  right: 0;
+  top: 11px;
+  width: 1px;
+  height: 18px;
+  background: var(--q-line);
+  pointer-events: none;
+}
+.dv-tab:hover .q-tab-sep,
+.dv-active-group .dv-tab.dv-active-tab .q-tab-sep,
+.dv-tab:has(+ .dv-tab:hover) .q-tab-sep,
+.dv-active-group .dv-tab:has(+ .dv-tab.dv-active-tab) .q-tab-sep {
+  visibility: hidden;
+}
+.q-tab-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  padding-top: 2px;
+}
+/* Line 1: kind or bug icon · TX pill · spinner · lock · VERB · name · folder · Preview (12/16 px, weight 500 always). */
+.q-tab-l1 {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 16px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.q-tab-icon {
+  flex: none;
+  color: var(--q-muted);
+}
+.q-tab-name {
+  display: flex;
+  min-width: 0;
+  color: var(--q-muted-hl);
+}
+.dv-tab:hover .q-tab .q-tab-name,
+.dv-tab.dv-active-tab .q-tab .q-tab-name,
+.dv-tab:focus-visible .q-tab .q-tab-name {
+  color: var(--q-fg);
+}
+/* Middle cut: the head takes the ellipsis, the tail stays whole. "pre" keeps a space at the cut (a flex item drops
+   leading and trailing spaces otherwise: "Q3 revenue by" + " region"). */
+.q-cut-head {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+  flex-shrink: 1000; /* the head gives way first */
+}
+/* When even the tail does not fit (a 120 px tab with a TX pill), the head keeps its "…" so the cut stays visible. */
+.q-cut-head:has(+ .q-cut-tail) {
+  min-width: 1em;
+}
+.q-cut-tail {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis; /* a tail cut too (a 112 px data compare tab: two names and the arrow) still shows the cut */
+  white-space: pre;
+}
+.q-tab-verb {
+  flex: none;
+  color: var(--q-muted);
+}
+.q-tab-verb[data-danger] {
+  color: var(--q-err);
+}
+.q-tab-suffix {
+  flex: none;
+  font-size: 11px;
+  color: var(--q-muted);
+}
+.q-tab-preview {
+  flex: none;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--q-muted);
+}
+.q-tx-pill {
+  flex: none;
+  height: 14px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--q-warn-solid);
+  color: var(--q-warn-solid-fg);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.q-spin {
+  flex: none;
+  animation: q-spin 0.9s linear infinite;
+}
+@keyframes q-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .q-spin {
+    animation: none;
+  }
+}
+/* Line 2: engine mark · database · server. A size container, so it never widens the tab and can drop the engine mark
+   below 112 px of its own width (owner revision 1). */
+.q-tab-l2 {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 14px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--q-muted);
+  container-type: inline-size;
+}
+@container (max-width: 111px) {
+  .q-tab-mark {
+    display: none;
+  }
+}
+.q-tab-mark {
+  flex: none;
+  display: flex;
+}
+.q-tab-db {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  font-weight: 500;
+}
+.q-tab-server {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Close slot (D12, owner revision 3): 24 × 20 at the end of line 1, so line 2 runs the tab's full width. The modified
+   dot at rest, × on hover, keyboard focus and on the active clean tab; the pin on pinned tabs. Line 1 ends in 26 px of
+   room for it, which counts in the tab's width (+38 px) but gives way first when a tab is cut: the name then runs to
+   the tab's end and a hover's × is drawn over it. A tab that always shows something there (active, modified, pinned,
+   renaming) keeps the room, so its name is never covered. */
+.q-tab-top {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+/* A width, not a flex-basis: a tab's width comes from its content, and the content size counts `width` only. */
+.q-tab-top::after {
+  content: "";
+  width: 26px;
+  flex-shrink: 1000000;
+  min-width: 4px;
+}
+.dv-tab.dv-active-tab .q-tab .q-tab-top::after,
+.q-tab:is([data-dirty], [data-pinned], [data-editing]) .q-tab-top::after {
+  flex-shrink: 0;
+}
+.q-tab-slot {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--q-muted);
+}
+.q-tab-x {
+  display: none;
+  position: relative;
+  width: 24px;
+  height: 20px;
+  border: 0;
+  border-radius: 4px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  background: var(--q-row-bg); /* hides the name it is drawn over */
+  color: var(--q-muted);
+}
+/* Over a name: the name fades into the × instead of being cut at its edge. */
+.dv-tab:not(.dv-active-tab) .q-tab:not([data-dirty], [data-editing]) .q-tab-x::before {
+  content: "";
+  position: absolute;
+  right: 100%;
+  top: 2px;
+  bottom: 2px;
+  width: 10px;
+  background: linear-gradient(to right, transparent, var(--q-row-bg));
+  pointer-events: none;
+}
+.q-tab-x:hover {
+  background: var(--q-line);
+  color: var(--q-fg);
+}
+.q-tab-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--q-muted-hl);
+}
+.dv-tab:hover .q-tab .q-tab-x,
+.dv-tab:focus-visible .q-tab .q-tab-x,
+.dv-tab.dv-active-tab .q-tab:not([data-dirty]) .q-tab-x {
+  display: flex;
+}
+.dv-tab:hover .q-tab .q-tab-dot,
+.dv-tab:focus-visible .q-tab .q-tab-dot {
+  display: none;
+}
+.dv-tab:hover .q-tab .q-tab-x,
+.dv-tab.dv-active-tab .q-tab .q-tab-x,
+.dv-tab.dv-active-tab .q-tab .q-tab-dot {
+  color: var(--q-fg);
+}
+.dv-tab.dv-active-tab .q-tab .q-tab-dot {
+  background: var(--q-fg);
+}
+
+/* React Flow (ER diagram, plan view): zoom controls and minimap on the same tokens; its light defaults are a white box
+   in the dark theme. The control group's edge reaches 3:1 on the canvas (WCAG 1.4.11). */
+.react-flow {
+  --xy-controls-button-background-color: var(--q-raised);
+  --xy-controls-button-background-color-hover: var(--q-hover);
+  --xy-controls-button-color: var(--q-fg);
+  --xy-controls-button-color-hover: var(--q-fg);
+  --xy-controls-button-border-color: var(--q-line);
+  --xy-controls-box-shadow: 0 0 0 1px var(--q-line-strong);
+  --xy-minimap-background-color: var(--q-panel);
+}
+
+/* Monaco glyph margin decorations (breakpoints, current debug line, trace line). */
+.q-breakpoint {
+  background: var(--q-err);
+  border-radius: 50%;
+  width: 9px !important;
+  height: 9px !important;
+  margin-left: 4px;
+  margin-top: 5px;
+}
+.q-debug-line {
+  background: color-mix(in srgb, var(--q-warn) 18%, transparent);
+}
+.q-trace-line {
+  background: color-mix(in srgb, var(--q-accent) 18%, transparent);
+}
+.q-error-line {
+  background: color-mix(in srgb, var(--q-err) 14%, transparent);
+}
+/* What Run would execute, while the pointer or focus is on a Run control; the env color on a prod connection. */
+.q-run-scope {
+  background: color-mix(in srgb, var(--q-accent) 12%, transparent);
+}
+.q-run-scope-prod {
+  background: color-mix(in srgb, var(--q-env-prod) 12%, transparent);
+}
+.q-pair-match {
+  background: color-mix(in srgb, var(--q-accent) 22%, transparent);
+  border-bottom: 2px solid var(--q-accent);
+}
+.q-insert-match {
+  background: color-mix(in srgb, var(--q-accent) 25%, transparent);
+  outline: 1px dashed var(--q-accent);
+  border-radius: 2px;
+}
+
+/* Result charts (Phase C1): uPlot's legend and zoom box on the theme; series colors stay on the marks only. */
+.q-chart .u-legend {
+  color: var(--q-fg);
+  font: 11px var(--font-sans);
+  text-align: left;
+  padding: 2px 8px;
+}
+.q-chart .u-legend .u-marker {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.q-chart .u-legend th {
+  font-weight: 500;
+}
+.q-chart .u-select {
+  background: var(--q-sel);
+}
+
+/* Notebook markdown cells (Phase C3): HTML escaped at render; links are copied, never followed. */
+.q-markdown h1,
+.q-markdown h2,
+.q-markdown h3,
+.q-markdown h4 {
+  font-weight: 600;
+  margin: 0.4em 0 0.25em;
+  line-height: 1.3;
+}
+.q-markdown h1 {
+  font-size: 1.5em;
+}
+.q-markdown h2 {
+  font-size: 1.3em;
+}
+.q-markdown h3 {
+  font-size: 1.12em;
+}
+.q-markdown p,
+.q-markdown ul,
+.q-markdown ol,
+.q-markdown pre,
+.q-markdown table,
+.q-markdown blockquote {
+  margin: 0.35em 0;
+}
+.q-markdown ul {
+  list-style: disc;
+  padding-left: 1.5em;
+}
+.q-markdown ol {
+  list-style: decimal;
+  padding-left: 1.5em;
+}
+.q-markdown code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: var(--q-raised);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+.q-markdown pre {
+  background: var(--q-raised);
+  border-radius: 4px;
+  padding: 6px 8px;
+  overflow-x: auto;
+}
+.q-markdown pre code {
+  padding: 0;
+  background: none;
+}
+.q-markdown a {
+  color: var(--q-accent);
+  text-decoration: underline;
+  cursor: copy;
+}
+.q-markdown blockquote {
+  border-left: 3px solid var(--q-line-strong);
+  padding-left: 8px;
+  color: var(--q-muted);
+}
+.q-markdown table {
+  border-collapse: collapse;
+}
+.q-markdown th,
+.q-markdown td {
+  border: 1px solid var(--q-line);
+  padding: 2px 8px;
+}
+.q-markdown .q-md-img {
+  color: var(--q-muted);
+  font-style: italic;
+}

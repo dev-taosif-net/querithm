@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Querithm.Contract\Querithm.Contract.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Apache.Arrow" />
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="SSH.NET" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Store\Schema.sql" />
+    <EmbeddedResource Include="Monitoring\WaitDictionary.json" />
+    <InternalsVisibleTo Include="Querithm.Tests" />
+  </ItemGroup>
+</Project>

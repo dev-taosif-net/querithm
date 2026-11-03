@@ -1,0 +1,33 @@
+[package]
+name = "querithm"
+version = "0.1.0"
+description = "Querithm — a cross-platform SQL IDE for SQL Server, PostgreSQL, MySQL / MariaDB, SQLite and DuckDB"
+edition = "2021"
+rust-version = "1.89"
+license = "MIT"
+
+# §2: the shell stays thin. No SQL, parser or driver crates here (no tiberius, sqlparser-rs, tree-sitter).
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+# No `zip` feature: v2 updater artifacts are raw installers/AppImages, and zip 4.x has RUSTSEC-2026-0367..0369.
+tauri-plugin-updater = { version = "2.14", default-features = false, features = ["rustls-tls", "system-proxy"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "sync", "time"] }
+keyring = { version = "3", features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
+getrandom = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading", "Win32_Security", "Win32_Storage_FileSystem"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

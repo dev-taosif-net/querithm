@@ -1,0 +1,3 @@
+# Check out text files with LF on every OS. Windows checkouts otherwise turn "#!...\n" into "#!...\r\n", which
+# vitest cannot parse when a test imports the script (load-testdb.test.ts failed on the Windows CI runner).
+* text=auto eol=lf

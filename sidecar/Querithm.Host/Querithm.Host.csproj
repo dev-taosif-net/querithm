@@ -1,0 +1,81 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>querithm-sidecar</AssemblyName>
+    <!-- One restore covers every release RID, so builds work offline from the package cache. -->
+    <RuntimeIdentifiers>win-x64;linux-x64;osx-x64;osx-arm64</RuntimeIdentifiers>
+    <RootNamespace>Querithm.Host</RootNamespace>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <TieredPGO>true</TieredPGO>
+    <TieredCompilation>true</TieredCompilation>
+    <UseSystemResourceKeys>false</UseSystemResourceKeys>
+    <!-- §3: SMO and ScriptDom are reflection-heavy; partial trimming with explicit roots. -->
+    <TrimMode>partial</TrimMode>
+    <!-- Trimmed apps disable reflection-based System.Text.Json by default; StreamJsonRpc and the DTOs need it (roots below keep the types). -->
+    <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
+    <!-- SMO, ScriptDom, SqlClient and StreamJsonRpc warn and are rooted below instead. CI publishes once with the warnings
+         shown and fails when they grow past scripts/trim-warnings-baseline.json (scripts/trim-warnings.mjs, L23). -->
+    <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
+    <!-- SqlClient's native SNI marshals AuthProviderInfo, whose object fields need built-in COM marshalling. Trimming turns it
+         off by default, and every TLS pre-login (including Encrypt=Optional against 2022) then fails with an empty TypeLoadException. -->
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <EnableCompressionInSingleFile Condition="'$(SelfContained)' == 'true'">true</EnableCompressionInSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Querithm.Contract\Querithm.Contract.csproj" />
+    <ProjectReference Include="..\Querithm.Core\Querithm.Core.csproj" />
+    <ProjectReference Include="..\Querithm.Providers.SqlServer\Querithm.Providers.SqlServer.csproj" />
+    <ProjectReference Include="..\Querithm.Providers.Postgres\Querithm.Providers.Postgres.csproj" />
+    <ProjectReference Include="..\Querithm.Intelligence.TSql\Querithm.Intelligence.TSql.csproj" />
+    <ProjectReference Include="..\Querithm.Intelligence.PgSql\Querithm.Intelligence.PgSql.csproj" />
+    <ProjectReference Include="..\Querithm.Providers.Sqlite\Querithm.Providers.Sqlite.csproj" />
+    <ProjectReference Include="..\Querithm.Intelligence.Sqlite\Querithm.Intelligence.Sqlite.csproj" />
+    <ProjectReference Include="..\Querithm.Providers.MySql\Querithm.Providers.MySql.csproj" />
+    <ProjectReference Include="..\Querithm.Intelligence.MySql\Querithm.Intelligence.MySql.csproj" />
+    <ProjectReference Include="..\Querithm.Providers.DuckDb\Querithm.Providers.DuckDb.csproj" />
+    <ProjectReference Include="..\Querithm.Intelligence.DuckDb\Querithm.Intelligence.DuckDb.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="StreamJsonRpc" />
+    <PackageReference Include="Microsoft.Extensions.Logging" />
+  </ItemGroup>
+  <ItemGroup>
+    <TrimmerRootAssembly Include="Microsoft.SqlServer.TransactSql.ScriptDom" />
+    <TrimmerRootAssembly Include="Microsoft.SqlServer.Smo" />
+    <TrimmerRootAssembly Include="Microsoft.SqlServer.SqlEnum" />
+    <TrimmerRootAssembly Include="Microsoft.SqlServer.Management.Sdk.Sfc" />
+    <TrimmerRootAssembly Include="Microsoft.SqlServer.ConnectionInfo" />
+    <TrimmerRootAssembly Include="Microsoft.Data.SqlClient" />
+    <TrimmerRootAssembly Include="Renci.SshNet" />
+    <TrimmerRootAssembly Include="StreamJsonRpc" />
+    <TrimmerRootAssembly Include="Querithm.Contract" />
+    <TrimmerRootAssembly Include="querithm-sidecar" />
+    <TrimmerRootAssembly Include="Querithm.Core" />
+    <TrimmerRootAssembly Include="Querithm.Providers.SqlServer" />
+    <TrimmerRootAssembly Include="Querithm.Providers.Postgres" />
+    <TrimmerRootAssembly Include="Querithm.Intelligence.TSql" />
+    <TrimmerRootAssembly Include="Querithm.Intelligence.PgSql" />
+    <TrimmerRootAssembly Include="Npgsql" />
+    <!-- Phase D1: the SQLite provider and its intelligence; SQLitePCLRaw is called directly (authorizer delegate, db_config). -->
+    <TrimmerRootAssembly Include="Querithm.Providers.Sqlite" />
+    <TrimmerRootAssembly Include="Querithm.Intelligence.Sqlite" />
+    <TrimmerRootAssembly Include="SQLitePCLRaw.core" />
+    <!-- Phase D2: MySQL / MariaDB; MySqlConnector has no IsTrimmable metadata, so it is rooted whole. -->
+    <TrimmerRootAssembly Include="Querithm.Providers.MySql" />
+    <TrimmerRootAssembly Include="Querithm.Intelligence.MySql" />
+    <TrimmerRootAssembly Include="MySqlConnector" />
+    <!-- Phase D3: DuckDB; DuckDB.NET has no IsTrimmable metadata and reads nested values through generic reflection, so both
+         of its assemblies are rooted whole. -->
+    <TrimmerRootAssembly Include="Querithm.Providers.DuckDb" />
+    <TrimmerRootAssembly Include="Querithm.Intelligence.DuckDb" />
+    <TrimmerRootAssembly Include="DuckDB.NET.Data" />
+    <TrimmerRootAssembly Include="DuckDB.NET.Bindings" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Querithm.Tests" />
+  </ItemGroup>
+  <Import Project="..\build\ThinMachO.targets" />
+</Project>

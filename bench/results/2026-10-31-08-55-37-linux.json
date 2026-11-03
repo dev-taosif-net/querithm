@@ -1,0 +1,95 @@
+{
+  "date": "2026-10-31T08:55:37.808Z",
+  "os": "Linux 7.0.0-42-generic",
+  "cpu": "AMD Ryzen 7 4700U with Radeon Graphics",
+  "cores": 8,
+  "memGb": 15,
+  "results": {
+    "11cold.mysql": {
+      "metric": "MySQL: execute → first batch on a cold pool connection (TCP, TLS, login, identity read, SELECT 1, median)",
+      "unit": "ms",
+      "target": 300,
+      "value": 11.64,
+      "pass": true,
+      "samples": [
+        84,
+        10.6,
+        11.8,
+        11.6,
+        12.9,
+        11.3,
+        10.3,
+        11.9,
+        11.8,
+        21.1,
+        12,
+        11.5,
+        10.8,
+        11.4,
+        9.6
+      ]
+    },
+    "8.mysql": {
+      "metric": "MySQL: database switch on an existing connection (COM_INIT_DB, median)",
+      "unit": "ms",
+      "target": 20,
+      "value": 2.39,
+      "pass": true,
+      "samples": [
+        15.555085999999392,
+        3.647965000000113,
+        2.3996219999999084,
+        2.421593999999459,
+        2.297881000000416,
+        2.2026710000000094,
+        2.089157000000341,
+        2.486616999999569,
+        2.391987999999401,
+        2.329931000000215
+      ]
+    },
+    "9.mysql": {
+      "metric": "MySQL: metadata snapshot load from SQLite (600 tables, 150 views, 200 triggers)",
+      "unit": "ms",
+      "target": 80,
+      "value": 33.15,
+      "pass": true,
+      "objects": 950,
+      "samples": [
+        93.89138100000127,
+        34.0683769999996,
+        33.15065700000196,
+        16.420476999999664,
+        16.36050400000022
+      ]
+    },
+    "10.mysql": {
+      "metric": "MySQL: incremental refresh with 10 changed objects",
+      "unit": "ms",
+      "target": 2000,
+      "value": 119.05,
+      "pass": true,
+      "samples": [
+        115.78432099999918,
+        116.3918049999993,
+        119.48629699999947,
+        119.04540700000143,
+        119.70621200000096
+      ]
+    },
+    "15.mysql": {
+      "metric": "MySQL: cancel latency (KILL QUERY on a side connection)",
+      "unit": "ms",
+      "target": 500,
+      "value": 14.28,
+      "pass": true,
+      "samples": [
+        103.8095229999999,
+        14.730180999998993,
+        14.281033999999636,
+        11.880610999996861,
+        13.757427999997162
+      ]
+    }
+  }
+}

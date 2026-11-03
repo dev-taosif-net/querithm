@@ -1,0 +1,40 @@
+node_modules/
+dist/
+*.log
+.vite/
+sidecar/**/bin/
+sidecar/**/obj/
+bench/results/*.local.json
+.DS_Store
+coverage/
+*.tsbuildinfo
+# UI smoke and release staging output (screenshots, installers).
+/out/
+/smoke-screens/
+# Secrets, local databases and diagnostics never belong in the repo (§13). Ignoring a file does not remove a copy that
+# is already in history. The SSH fixture keys under scripts/bench/docker/ssh/ have no such extension and stay tracked.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.snk
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.duckdb
+*.duckdb.wal
+*.dmp
+*.nettrace
+*.gcdump
+*.cpuprofile
+*.har
+.claude/settings.local.json

@@ -1,0 +1,22 @@
+# gitleaks configuration for local and CI scans of the tree and the history (`gitleaks git`, `gitleaks dir`).
+# It keeps every default rule. The allowlists below name exact files and, where a file holds real code, the exact fake
+# value too, so a new secret anywhere else still fails the scan.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Local Docker SSH fixture keys: only scripts/bench/docker/ssh/ may hold credentials, and they work only against the fixture bound to 127.0.0.1"
+paths = ['''^scripts/bench/docker/ssh/test_(ed25519|rsa_pass)$''']
+
+# Rule-level (generic-api-key only) and path AND value: `gitleaks dir` ignores `condition` on a global allowlist and
+# would skip these files whole, src-tauri/src/shell_log.rs included. Paths are relative: run gitleaks from the repo root.
+[[rules]]
+id = "generic-api-key"
+  [[rules.allowlists]]
+  description = "Fake values in tests: a deliberately wrong password and a placeholder launch token"
+  condition = "AND"
+  paths = [
+    '''^sidecar/Querithm\.Tests/Integration/CoverageSessionIntegrationTests\.cs$''',
+    '''^src-tauri/src/shell_log\.rs$''',
+  ]
+  regexes = ['''^wrong\-pw\-xyz\-123$''', '''^0123456789abcdef0123456789abcdef$''']

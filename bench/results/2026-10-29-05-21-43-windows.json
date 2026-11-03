@@ -1,0 +1,152 @@
+{
+  "date": "2026-10-29T05:21:43.784Z",
+  "os": "Windows_NT 10.0.26300",
+  "cpu": "11th Gen Intel(R) Core(TM) i5-1135G7 @ 2.40GHz",
+  "cores": 8,
+  "memGb": 16,
+  "results": {
+    "1": {
+      "metric": "Cold start to interactive editor",
+      "unit": "ms",
+      "target": 1500,
+      "value": 1441,
+      "pass": true,
+      "note": "browser navigation → first keystroke rendered (app cold start: use --app)"
+    },
+    "3": {
+      "metric": "Typing latency in the 12k-line proc (p95)",
+      "unit": "ms",
+      "target": 16,
+      "value": 8.3,
+      "pass": true,
+      "samples": 200,
+      "toPaintP95IncludingVsync": 18.5
+    },
+    "4": {
+      "metric": "Tier-1 completion latency (p95)",
+      "unit": "ms",
+      "target": 5,
+      "value": 10.5,
+      "pass": false,
+      "samples": 300
+    },
+    "7": {
+      "metric": "Tab switch between connected sessions (p95)",
+      "unit": "ms",
+      "target": 50,
+      "value": 64.1,
+      "pass": false,
+      "samples": 50
+    },
+    "11": {
+      "metric": "1M-row result: time to first batch painted (minus server time)",
+      "unit": "ms",
+      "target": 300,
+      "value": 366.1,
+      "pass": false,
+      "fullFetchMs": 11551.60000000894,
+      "rows": 1000000
+    },
+    "12": {
+      "metric": "1M-row result: scroll frame time (p95)",
+      "unit": "ms",
+      "target": 16,
+      "value": 16.9,
+      "refreshMs": 16.7,
+      "longFrames": 1,
+      "samples": 240,
+      "pass": true
+    },
+    "13": {
+      "metric": "1M-row result: peak webview memory delta",
+      "unit": "MB",
+      "target": 600,
+      "value": 311.05,
+      "pass": true
+    },
+    "14": {
+      "metric": "Frames > 32 ms with 5 concurrent 60 s queries",
+      "unit": "frames",
+      "target": 0,
+      "value": 0,
+      "pass": true,
+      "frames": 900,
+      "worstMs": 18.900000000001455
+    },
+    "18": {
+      "metric": "ERD 2-hop neighbourhood on the fixture: subgraph + layout",
+      "unit": "ms",
+      "target": 30,
+      "value": 8.2,
+      "pass": true,
+      "tables": 6,
+      "samples": [
+        9.900000005960464,
+        11.5,
+        8.200000002980232,
+        7.0999999940395355,
+        6.0999999940395355
+      ]
+    },
+    "19": {
+      "metric": "ERD whole-schema compact layout (web worker)",
+      "unit": "ms",
+      "target": 1000,
+      "value": 226.1,
+      "pass": true,
+      "tables": 606,
+      "fks": 301,
+      "samples": [
+        239.30000001192093,
+        226.09999999403954,
+        192.29999999701977
+      ]
+    },
+    "28ui": {
+      "metric": "Activity snapshot, 500 sessions: parse + apply + cell damage in the webview (p95)",
+      "unit": "ms",
+      "target": 16,
+      "value": 13.3,
+      "pass": true,
+      "sessions": 500,
+      "tickBytes": 211282,
+      "samples": 60
+    },
+    "28first": {
+      "metric": "Activity first snapshot, 500 sessions with texts: parse + apply in the webview",
+      "unit": "ms",
+      "target": 50,
+      "value": 5.3,
+      "pass": true,
+      "firstSnapshotBytes": 442882
+    },
+    "30list": {
+      "metric": "Deadlock history: first paint of the 200-event list after the events arrive",
+      "unit": "ms",
+      "target": 100,
+      "value": 41.7,
+      "pass": true,
+      "events": 200
+    },
+    "30graph": {
+      "metric": "Deadlock history: graph render of a 10-process deadlock (median of 10)",
+      "unit": "ms",
+      "target": 50,
+      "value": 15.9,
+      "pass": true,
+      "processes": 10,
+      "samples": [
+        11.699999988079071,
+        4.299999997019768,
+        16,
+        16.099999994039536,
+        16,
+        16.200000002980232,
+        15.5,
+        17.099999994039536,
+        15.399999991059303,
+        15.900000005960464
+      ]
+    }
+  }
+}

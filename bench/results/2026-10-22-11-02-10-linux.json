@@ -1,0 +1,282 @@
+{
+  "date": "2026-10-22T11:02:10.720Z",
+  "os": "Linux 7.0.0-38-generic",
+  "cpu": "AMD Ryzen 7 4700U with Radeon Graphics",
+  "cores": 8,
+  "memGb": 15,
+  "results": {
+    "1": {
+      "metric": "Cold start to interactive editor",
+      "unit": "ms",
+      "target": 1500,
+      "value": 1272,
+      "pass": true,
+      "note": "browser navigation → first keystroke rendered (app cold start: use --app)"
+    },
+    "3": {
+      "metric": "Typing latency in the 12k-line proc (p95)",
+      "unit": "ms",
+      "target": 16,
+      "value": 9.3,
+      "pass": true,
+      "samples": 200,
+      "toPaintP95IncludingVsync": 20.2
+    },
+    "4": {
+      "metric": "Tier-1 completion latency (p95)",
+      "unit": "ms",
+      "target": 5,
+      "value": 4.3,
+      "pass": true,
+      "samples": 300
+    },
+    "5": {
+      "metric": "Tier-2 completion latency, 12k-line proc (p95)",
+      "unit": "ms",
+      "target": 150,
+      "value": 34.61,
+      "pass": true,
+      "samples": 60
+    },
+    "6": {
+      "metric": "Full parse of 12k-line proc",
+      "unit": "ms",
+      "target": 100,
+      "value": 58.29,
+      "pass": true,
+      "lines": 12023,
+      "samples": [
+        379.0785109999997,
+        56.25658900000053,
+        58.28964099999939,
+        66.12476900000001,
+        46.32276400000046
+      ]
+    },
+    "7": {
+      "metric": "Tab switch between connected sessions (p95)",
+      "unit": "ms",
+      "target": 50,
+      "value": 33.1,
+      "pass": true,
+      "samples": 50
+    },
+    "8": {
+      "metric": "DB switch, SQL Server, existing connection (overhead over one roundtrip)",
+      "unit": "ms",
+      "target": 20,
+      "value": 0,
+      "pass": true,
+      "switchMs": 1.8686819999984436,
+      "executeRoundtripMs": 4.492107000000033
+    },
+    "9": {
+      "metric": "Metadata snapshot load from SQLite",
+      "unit": "ms",
+      "target": 80,
+      "value": 71.32,
+      "pass": true,
+      "objects": 1155,
+      "samples": [
+        198.81249500000013,
+        59.9278290000002,
+        71.50072300000011,
+        60.619321999999556,
+        71.31566399999974
+      ]
+    },
+    "10": {
+      "metric": "Incremental refresh with 10 changed objects",
+      "unit": "ms",
+      "target": 2000,
+      "value": 42.85,
+      "pass": true,
+      "samples": [
+        32.76183299999957,
+        28.87289300000066,
+        50.57834600000024,
+        42.85483899999963,
+        84.76043600000048
+      ]
+    },
+    "11": {
+      "metric": "1M-row result: time to first batch painted (minus server time)",
+      "unit": "ms",
+      "target": 300,
+      "value": 218.9,
+      "pass": true,
+      "fullFetchMs": 5444.799999998882,
+      "rows": 1000000
+    },
+    "12": {
+      "metric": "1M-row result: scroll frame time (p95)",
+      "unit": "ms",
+      "target": 16,
+      "value": 16.8,
+      "refreshMs": 16.7,
+      "longFrames": 0,
+      "samples": 240,
+      "pass": true
+    },
+    "13": {
+      "metric": "1M-row result: peak webview memory delta",
+      "unit": "MB",
+      "target": 600,
+      "value": 313.31,
+      "pass": true
+    },
+    "14": {
+      "metric": "Frames > 32 ms with 5 concurrent 60 s queries",
+      "unit": "frames",
+      "target": 0,
+      "value": 0,
+      "pass": true,
+      "frames": 900,
+      "worstMs": 16.80000000000291
+    },
+    "15": {
+      "metric": "Cancel latency",
+      "unit": "ms",
+      "target": 500,
+      "value": 4.55,
+      "pass": true,
+      "samples": [
+        31.36999999999898,
+        4.708694999999352,
+        4.471698000001197,
+        4.23435100000097,
+        4.550677999999607
+      ]
+    },
+    "16": {
+      "metric": "Sidecar processes alive 5 s after killing the app",
+      "unit": "count",
+      "target": 0,
+      "value": 0,
+      "pass": true
+    },
+    "17": {
+      "metric": "Installer size",
+      "unit": "MB",
+      "target": 120,
+      "value": 35.1,
+      "pass": true
+    },
+    "18": {
+      "metric": "ERD 2-hop neighbourhood on the fixture: subgraph + layout",
+      "unit": "ms",
+      "target": 30,
+      "value": 7.5,
+      "pass": true,
+      "tables": 6,
+      "samples": [
+        8.799999998882413,
+        7.700000001117587,
+        7.5,
+        7,
+        6.599999999627471
+      ]
+    },
+    "19": {
+      "metric": "ERD whole-schema compact layout (web worker)",
+      "unit": "ms",
+      "target": 1000,
+      "value": 238.4,
+      "pass": true,
+      "tables": 604,
+      "fks": 301,
+      "samples": [
+        257.5,
+        237.30000000074506,
+        238.39999999850988
+      ]
+    },
+    "20": {
+      "metric": "Grid edits: DML preview for 100 staged cells (roundtrip)",
+      "unit": "ms",
+      "target": 15,
+      "value": 6.77,
+      "pass": true,
+      "editable": true,
+      "samples": [
+        66.54725599999983,
+        7.446727000000465,
+        25.336858000000575,
+        5.872809000000416,
+        5.996783000000505,
+        6.774019000000408,
+        8.619517000000997
+      ]
+    },
+    "21": {
+      "metric": "Schema compare of the fixture database with itself, slowest engine",
+      "unit": "ms",
+      "target": 2000,
+      "value": 571,
+      "pass": true,
+      "mssql": {
+        "ms": 571,
+        "objects": 1156
+      },
+      "pg": {
+        "ms": 135,
+        "objects": 1158
+      }
+    },
+    "22": {
+      "metric": "Data compare 100k × 10, 1k differences, slowest engine (incl. server time)",
+      "unit": "ms",
+      "target": 1500,
+      "value": 1297,
+      "pass": true,
+      "mssql": {
+        "ms": 1297,
+        "differences": 1000,
+        "memoryDeltaMb": 3
+      },
+      "pg": {
+        "ms": 306,
+        "differences": 1000,
+        "memoryDeltaMb": 2
+      },
+      "memoryGatePass": true
+    },
+    "23": {
+      "metric": "Import 100k × 10 CSV, slowest engine (SQL Server / PostgreSQL)",
+      "unit": "ms",
+      "target": 2000,
+      "value": 2153,
+      "pass": false,
+      "mssql": {
+        "ms": 2153,
+        "rows": 100000,
+        "error": null
+      },
+      "pg": {
+        "ms": 1088,
+        "rows": 100000,
+        "error": null
+      }
+    },
+    "24": {
+      "metric": "Find usages of a column all ~550 cached modules mention + 5 open tabs (p50, SQL Server)",
+      "unit": "ms",
+      "target": 120,
+      "value": 79.49,
+      "pass": true,
+      "objectsScanned": 3,
+      "hits": 177,
+      "repeatedSearchMs": 44.9
+    },
+    "sidecarIdleRssMb": 73,
+    "fullRefreshMs": 1780,
+    "incrChanged0": 0,
+    "incrChanged1": 0,
+    "incrChanged2": 0,
+    "incrChanged3": 0,
+    "incrChanged4": 0,
+    "dataPlane1MRowsMs": 3282,
+    "dataPlaneFirstBatchMs": 162,
+    "real1MRowsMs": 7337
+  }
+}

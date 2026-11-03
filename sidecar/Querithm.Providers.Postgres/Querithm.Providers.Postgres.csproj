@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Querithm.Contract\Querithm.Contract.csproj" />
+    <ProjectReference Include="..\Querithm.Intelligence.PgSql\Querithm.Intelligence.PgSql.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Npgsql" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Querithm.Tests" />
+  </ItemGroup>
+</Project>

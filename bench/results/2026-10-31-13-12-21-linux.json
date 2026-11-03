@@ -1,0 +1,89 @@
+{
+  "date": "2026-10-31T13:12:21.527Z",
+  "os": "Linux 7.0.0-42-generic",
+  "cpu": "AMD Ryzen 7 4700U with Radeon Graphics",
+  "cores": 8,
+  "memGb": 15,
+  "results": {
+    "11cold.duckdb": {
+      "metric": "DuckDB: execute → first batch on a new tab's own connection (new file, open + policy + SELECT 1, median)",
+      "unit": "ms",
+      "target": 300,
+      "value": 81.32,
+      "pass": true,
+      "samples": [
+        261.8,
+        114.5,
+        100.1,
+        91.6,
+        70.6,
+        46.1,
+        47.5,
+        78.5,
+        81.3,
+        71.3,
+        63.1,
+        91.7,
+        92.4,
+        92.5,
+        72.3
+      ]
+    },
+    "9.duckdb": {
+      "metric": "DuckDB: metadata snapshot load from SQLite (600 tables, 150 views)",
+      "unit": "ms",
+      "target": 80,
+      "value": 54.5,
+      "pass": true,
+      "objects": 750,
+      "samples": [
+        117.91335600000093,
+        33.52091699999983,
+        55.15824000000066,
+        54.499477999999726,
+        41.36117099999865
+      ]
+    },
+    "10.duckdb": {
+      "metric": "DuckDB: incremental refresh with 10 changed objects",
+      "unit": "ms",
+      "target": 2000,
+      "value": 71.15,
+      "pass": true,
+      "samples": [
+        85.03408800000034,
+        71.148181999999,
+        60.06806200000028,
+        73.7609650000013,
+        37.17623399999866
+      ]
+    },
+    "15.duckdb": {
+      "metric": "DuckDB: cancel latency (duckdb_interrupt)",
+      "unit": "ms",
+      "target": 500,
+      "value": 1.76,
+      "pass": true,
+      "samples": [
+        6.994380000000092,
+        4.2120969999996305,
+        1.4818620000005467,
+        1.6093120000005001,
+        1.7584939999997005
+      ]
+    },
+    "23.duckdb": {
+      "metric": "DuckDB: import 100k × 10 CSV into a new table (batched INSERT loader, median of 3)",
+      "unit": "ms",
+      "target": 2000,
+      "value": 788.16,
+      "pass": true,
+      "rows": 100000,
+      "samples": [
+        1058,
+        788,
+        706
+      ]
+    }
+  }
+}

@@ -1,0 +1,89 @@
+{
+  "date": "2026-10-31T13:07:01.648Z",
+  "os": "Linux 7.0.0-42-generic",
+  "cpu": "AMD Ryzen 7 4700U with Radeon Graphics",
+  "cores": 8,
+  "memGb": 15,
+  "results": {
+    "11cold.duckdb": {
+      "metric": "DuckDB: execute → first batch on a new tab's own connection (new file, open + policy + SELECT 1, median)",
+      "unit": "ms",
+      "target": 300,
+      "value": 88.45,
+      "pass": true,
+      "samples": [
+        219.2,
+        88.8,
+        46,
+        91,
+        69.8,
+        78.2,
+        109.9,
+        72,
+        91.8,
+        44.5,
+        70.6,
+        88.5,
+        62.7,
+        90.1,
+        91.3
+      ]
+    },
+    "9.duckdb": {
+      "metric": "DuckDB: metadata snapshot load from SQLite (600 tables, 150 views)",
+      "unit": "ms",
+      "target": 80,
+      "value": 48.45,
+      "pass": true,
+      "objects": 750,
+      "samples": [
+        82.70591999999942,
+        31.678013999999166,
+        49.81568200000038,
+        48.44521999999961,
+        28.557802999999694
+      ]
+    },
+    "10.duckdb": {
+      "metric": "DuckDB: incremental refresh with 10 changed objects",
+      "unit": "ms",
+      "target": 2000,
+      "value": 43.27,
+      "pass": true,
+      "samples": [
+        43.27302400000008,
+        75.17847600000005,
+        37.953669999999875,
+        41.421714999999494,
+        75.90176900000006
+      ]
+    },
+    "15.duckdb": {
+      "metric": "DuckDB: cancel latency (duckdb_interrupt)",
+      "unit": "ms",
+      "target": 500,
+      "value": 2.13,
+      "pass": true,
+      "samples": [
+        6.423172999999224,
+        2.127348999998503,
+        1.6379670000005717,
+        2.5771160000003874,
+        1.5279399999999441
+      ]
+    },
+    "23.duckdb": {
+      "metric": "DuckDB: import 100k × 10 CSV into a new table (batched INSERT loader, median of 3)",
+      "unit": "ms",
+      "target": 2000,
+      "value": 24089.59,
+      "pass": false,
+      "rows": 100000,
+      "samples": [
+        24137,
+        23991,
+        24090
+      ]
+    }
+  }
+}

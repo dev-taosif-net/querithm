@@ -1,0 +1,401 @@
+// Static word tables for the tier-1 scanner and completion (§9). Pure data, per dialect.
+import type { Dialect } from "../../ipc/contract";
+
+const set = (s: string): Set<string> => new Set(s.trim().split(/\s+/));
+
+/** T-SQL reserved words (SQL Server docs) plus the non-reserved words that can never be an unquoted alias. */
+const TSQL_RESERVED = set(`
+ADD ALL ALTER AND ANY AS ASC AUTHORIZATION BACKUP BEGIN BETWEEN BREAK BROWSE BULK BY CASCADE CASE CHECK
+CHECKPOINT CLOSE CLUSTERED COALESCE COLLATE COLUMN COMMIT COMPUTE CONSTRAINT CONTAINS CONTAINSTABLE CONTINUE
+CONVERT CREATE CROSS CURRENT CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER CURSOR DATABASE DBCC
+DEALLOCATE DECLARE DEFAULT DELETE DENY DESC DISK DISTINCT DISTRIBUTED DOUBLE DROP DUMP ELSE END ERRLVL ESCAPE
+EXCEPT EXEC EXECUTE EXISTS EXIT EXTERNAL FETCH FILE FILLFACTOR FOR FOREIGN FREETEXT FREETEXTTABLE FROM FULL
+FUNCTION GOTO GRANT GROUP HAVING HOLDLOCK IDENTITY IDENTITY_INSERT IDENTITYCOL IF IN INDEX INNER INSERT
+INTERSECT INTO IS JOIN KEY KILL LEFT LIKE LINENO LOAD MERGE NATIONAL NOCHECK NONCLUSTERED NOT NULL NULLIF OF
+OFF OFFSETS ON OPEN OPENDATASOURCE OPENQUERY OPENROWSET OPENXML OPTION OR ORDER OUTER OVER PERCENT PIVOT PLAN
+PRECISION PRIMARY PRINT PROC PROCEDURE PUBLIC RAISERROR READ READTEXT RECONFIGURE REFERENCES REPLICATION
+RESTORE RESTRICT RETURN REVERT REVOKE RIGHT ROLLBACK ROWCOUNT ROWGUIDCOL RULE SAVE SCHEMA SECURITYAUDIT SELECT
+SESSION_USER SET SETUSER SHUTDOWN SOME STATISTICS SYSTEM_USER TABLE TABLESAMPLE TEXTSIZE THEN TO TOP TRAN
+TRANSACTION TRIGGER TRUNCATE TRY_CONVERT TSEQUAL UNION UNIQUE UNPIVOT UPDATE UPDATETEXT USE USER VALUES
+VARYING VIEW WAITFOR WHEN WHERE WHILE WITH WRITETEXT
+APPLY OUTPUT MATCHED THROW TRY CATCH WINDOW USING OFFSET NEXT ROWS ONLY
+`);
+
+const PG_RESERVED = set(`
+ALL ANALYSE ANALYZE AND ANY ARRAY AS ASC ASYMMETRIC BOTH CASE CAST CHECK COLLATE COLUMN CONSTRAINT CREATE
+CURRENT_CATALOG CURRENT_DATE CURRENT_ROLE CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER DEFAULT DEFERRABLE DESC
+DISTINCT DO ELSE END EXCEPT FALSE FETCH FOR FOREIGN FROM GRANT GROUP HAVING IN INITIALLY INTERSECT INTO LATERAL
+LEADING LIMIT LOCALTIME LOCALTIMESTAMP NOT NULL OFFSET ON ONLY OR ORDER PLACING PRIMARY REFERENCES RETURNING
+SELECT SESSION_USER SOME SYMMETRIC SYSTEM_USER TABLE THEN TO TRAILING TRUE UNION UNIQUE USER USING VARIADIC
+WHEN WHERE WINDOW WITH AUTHORIZATION BINARY COLLATION CONCURRENTLY CROSS CURRENT_SCHEMA FREEZE FULL ILIKE INNER
+IS ISNULL JOIN LEFT LIKE NATURAL NOTNULL OUTER OVERLAPS RIGHT SIMILAR TABLESAMPLE VERBOSE
+INSERT UPDATE DELETE MERGE SET VALUES BEGIN COMMIT ROLLBACK DECLARE CALL IF ELSIF LOOP RAISE PERFORM RETURN
+CONFLICT NOTHING EXPLAIN VACUUM COPY TRUNCATE DROP ALTER
+`);
+
+/** SQLite's keywords (sqlite.org/lang_keywords.html) that cannot be an unquoted name or alias in practice. */
+const SQLITE_RESERVED = set(`
+ABORT ACTION ADD AFTER ALL ALTER ALWAYS ANALYZE AND AS ASC ATTACH AUTOINCREMENT BEFORE BEGIN BETWEEN BY CASCADE CASE
+CAST CHECK COLLATE COLUMN COMMIT CONFLICT CONSTRAINT CREATE CROSS CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP DATABASE
+DEFAULT DEFERRABLE DEFERRED DELETE DESC DETACH DISTINCT DO DROP EACH ELSE END ESCAPE EXCEPT EXCLUSIVE EXISTS EXPLAIN
+FAIL FILTER FOREIGN FROM FULL GENERATED GLOB GROUP HAVING IF IGNORE IMMEDIATE IN INDEX INDEXED INITIALLY INNER INSERT
+INSTEAD INTERSECT INTO IS ISNULL JOIN KEY LEFT LIKE LIMIT MATCH NATURAL NOT NOTHING NOTNULL NULL OF OFFSET ON OR
+ORDER OUTER OVER PRAGMA PRIMARY QUERY RAISE RECURSIVE REFERENCES REGEXP REINDEX RELEASE RENAME REPLACE RESTRICT
+RETURNING RIGHT ROLLBACK SAVEPOINT SELECT SET TABLE TEMP TEMPORARY THEN TO TRANSACTION TRIGGER UNION UNIQUE UPDATE
+USING VACUUM VALUES VIEW VIRTUAL WHEN WHERE WINDOW WITH WITHOUT
+`);
+
+/** MySQL 8 reserved words (dev.mysql.com, "Keywords and Reserved Words") that statement analysis meets. */
+const MYSQL_RESERVED = set(`
+ACCESSIBLE ADD ALL ALTER ANALYZE AND AS ASC ASENSITIVE BEFORE BETWEEN BIGINT BINARY BLOB BOTH BY CALL CASCADE CASE
+CHANGE CHAR CHARACTER CHECK COLLATE COLUMN CONDITION CONSTRAINT CONTINUE CONVERT CREATE CROSS CUBE CURRENT_DATE
+CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER CURSOR DATABASE DATABASES DAY_HOUR DAY_MICROSECOND DAY_MINUTE DAY_SECOND
+DEC DECIMAL DECLARE DEFAULT DELAYED DELETE DESC DESCRIBE DETERMINISTIC DISTINCT DISTINCTROW DIV DOUBLE DROP DUAL EACH
+ELSE ELSEIF ENCLOSED ESCAPED EXCEPT EXISTS EXIT EXPLAIN FALSE FETCH FLOAT FOR FORCE FOREIGN FROM FULLTEXT FUNCTION
+GENERATED GET GRANT GROUP GROUPING GROUPS HAVING HIGH_PRIORITY IF IGNORE IN INDEX INFILE INNER INOUT INSENSITIVE
+INSERT INT INTEGER INTERSECT INTERVAL INTO IS ITERATE JOIN KEY KEYS KILL LATERAL LEADING LEAVE LEFT LIKE LIMIT LINES
+LOAD LOCALTIME LOCALTIMESTAMP LOCK LONG LOOP LOW_PRIORITY MATCH MOD MODIFIES NATURAL NOT NULL NUMERIC OF ON OPTIMIZE
+OPTION OPTIONALLY OR ORDER OUT OUTER OUTFILE OVER PARTITION PRECISION PRIMARY PROCEDURE PURGE RANGE READ READS REAL
+RECURSIVE REFERENCES REGEXP RELEASE RENAME REPEAT REPLACE REQUIRE RESIGNAL RESTRICT RETURN REVOKE RIGHT RLIKE ROW ROWS
+SCHEMA SCHEMAS SELECT SENSITIVE SEPARATOR SET SHOW SIGNAL SMALLINT SPATIAL SPECIFIC SQL SQLEXCEPTION SQLSTATE
+SQLWARNING STARTING STORED STRAIGHT_JOIN TABLE TERMINATED THEN TO TRAILING TRIGGER TRUE UNDO UNION UNIQUE UNLOCK
+UNSIGNED UPDATE USAGE USE USING UTC_DATE UTC_TIME UTC_TIMESTAMP VALUES VARCHAR VARYING VIRTUAL WHEN WHERE WHILE WINDOW
+WITH WRITE XOR YEAR_MONTH ZEROFILL BEGIN END COMMIT ROLLBACK START TRUNCATE
+`);
+
+/**
+ * DuckDB 1.5.6's reserved and type/function-name keywords (duckdb_keywords(), categories "reserved" and "type_function"),
+ * plus the statement verbs statement analysis meets.
+ */
+const DUCKDB_RESERVED = set(`
+ALL ANALYSE ANALYZE AND ANY ARRAY AS ASC ASYMMETRIC BOTH CASE CAST CHECK COLLATE COLUMN CONSTRAINT CREATE DEFAULT
+DEFERRABLE DESC DESCRIBE DISTINCT DO ELSE END EXCEPT FALSE FETCH FOR FOREIGN FROM GROUP HAVING IN INITIALLY INTERSECT
+INTO LAMBDA LATERAL LEADING LIMIT NOT NULL OFFSET ON ONLY OR ORDER PIVOT PIVOT_LONGER PIVOT_WIDER PLACING PRIMARY
+QUALIFY REFERENCES RETURNING SELECT SHOW SOME SUMMARIZE SYMMETRIC TABLE THEN TO TRAILING TRUE UNION UNIQUE UNPIVOT
+USING VARIADIC WHEN WHERE WINDOW WITH
+ANTI ASOF AT AUTHORIZATION BINARY BY COLLATION COLUMNS CONCURRENTLY CROSS FREEZE FULL GENERATED GLOB ILIKE INNER IS
+ISNULL JOIN LEFT LIKE MAP NATURAL NOTNULL OUTER OVERLAPS POSITIONAL RIGHT SEMI SIMILAR STRUCT TABLESAMPLE TRY_CAST
+UNPACK VERBOSE
+INSERT UPDATE DELETE SET VALUES BEGIN COMMIT ROLLBACK CALL EXPLAIN VACUUM CHECKPOINT TRUNCATE DROP ALTER PRAGMA USE
+`);
+
+const RESERVED: Record<Dialect, Set<string>> = {
+  tsql: TSQL_RESERVED, pg: PG_RESERVED, sqlite: SQLITE_RESERVED, mySql: MYSQL_RESERVED, duckDb: DUCKDB_RESERVED,
+};
+
+export function reservedWords(dialect: Dialect): Set<string> {
+  return RESERVED[dialect];
+}
+
+/** Keywords that start a statement when met at paren depth 0 in the middle of another one (subject to context rules). */
+const TSQL_STMT = set(`
+SELECT INSERT UPDATE DELETE MERGE WITH DECLARE SET EXEC EXECUTE IF WHILE BEGIN END ELSE CREATE ALTER DROP USE
+PRINT RETURN RAISERROR THROW TRUNCATE GOTO WAITFOR BREAK CONTINUE DEALLOCATE OPEN CLOSE FETCH COMMIT ROLLBACK
+SAVE GRANT REVOKE DENY DBCC BACKUP RESTORE BULK CHECKPOINT KILL RECONFIGURE REVERT SHUTDOWN
+`);
+const PG_STMT = set(`
+SELECT INSERT UPDATE DELETE MERGE WITH DECLARE SET CALL IF ELSIF ELSE END BEGIN CREATE ALTER DROP TRUNCATE
+COMMIT ROLLBACK GRANT REVOKE COPY VACUUM ANALYZE EXPLAIN PERFORM RAISE RETURN EXIT CONTINUE OPEN CLOSE FETCH
+MOVE LISTEN NOTIFY REFRESH REINDEX CLUSTER LOCK COMMENT SHOW RESET DISCARD
+`);
+
+const SQLITE_STMT = set(`
+SELECT INSERT REPLACE UPDATE DELETE WITH CREATE ALTER DROP BEGIN COMMIT END ROLLBACK SAVEPOINT RELEASE ATTACH DETACH
+PRAGMA VACUUM ANALYZE REINDEX EXPLAIN
+`);
+const MYSQL_STMT = set(`
+SELECT INSERT REPLACE UPDATE DELETE WITH SET CALL CREATE ALTER DROP TRUNCATE RENAME USE SHOW DESCRIBE DESC EXPLAIN
+BEGIN START COMMIT ROLLBACK SAVEPOINT RELEASE GRANT REVOKE LOCK UNLOCK DECLARE IF ELSEIF ELSE END WHILE REPEAT LOOP
+LEAVE ITERATE RETURN OPEN CLOSE FETCH SIGNAL RESIGNAL ANALYZE OPTIMIZE CHECK HANDLER LOAD DO KILL FLUSH PREPARE
+EXECUTE DEALLOCATE
+`);
+
+/** DuckDB statement verbs (DuckDB requires ';' between statements: the sidecar splits on it only, see DuckDbTokenizer). */
+const DUCKDB_STMT = set(`
+SELECT FROM INSERT UPDATE DELETE WITH CREATE ALTER DROP TRUNCATE BEGIN COMMIT END ROLLBACK ABORT SET RESET USE SHOW
+DESCRIBE SUMMARIZE EXPLAIN PRAGMA CALL CHECKPOINT VACUUM ANALYZE PIVOT UNPIVOT COMMENT PREPARE EXECUTE DEALLOCATE
+`);
+
+const STMT: Record<Dialect, Set<string>> = { tsql: TSQL_STMT, pg: PG_STMT, sqlite: SQLITE_STMT, mySql: MYSQL_STMT, duckDb: DUCKDB_STMT };
+
+export function statementKeywords(dialect: Dialect): Set<string> {
+  return STMT[dialect];
+}
+
+/** Keywords that always start a statement at depth 0; safe restart points for a backward boundary search. */
+export const ANCHOR_KEYWORDS = set(`DECLARE IF WHILE BEGIN PRINT RAISERROR TRUNCATE GOTO WAITFOR DEALLOCATE CREATE ELSIF`);
+
+/** A statement keyword preceded by one of these words continues the current statement. */
+export const CONTINUATION_PREV = set(`
+UNION ALL INTERSECT EXCEPT MINUS AS FOR AFTER BEFORE OF OR INSTEAD DO GRANT REVOKE DENY QUERY IN WITH ROWS ROW
+EXPLAIN ANALYZE ANALYSE VERBOSE VACUUM
+`);
+
+/** Object-kind words; `IF` after one of these is `IF [NOT] EXISTS`, not a statement. */
+export const OBJECT_KIND_WORDS = set(`
+TABLE VIEW PROCEDURE PROC FUNCTION INDEX SCHEMA DATABASE TRIGGER SEQUENCE TYPE COLUMN CONSTRAINT EXTENSION
+ROLE USER SYNONYM LOGIN DOMAIN
+`);
+
+/** Words that end a SELECT projection list at its depth. */
+export const PROJECTION_END = set(`FROM INTO WHERE GROUP ORDER HAVING UNION EXCEPT INTERSECT WINDOW LIMIT OFFSET FETCH FOR OPTION`);
+
+/** T-SQL table hints accepted in `t (NOLOCK)` / `t WITH (...)`. */
+export const TABLE_HINTS = set(`
+NOLOCK READUNCOMMITTED UPDLOCK ROWLOCK HOLDLOCK TABLOCK TABLOCKX NOWAIT READPAST XLOCK PAGLOCK SERIALIZABLE
+REPEATABLEREAD READCOMMITTED READCOMMITTEDLOCK SNAPSHOT FORCESEEK FORCESCAN NOEXPAND INDEX KEEPIDENTITY
+KEEPDEFAULTS IGNORE_CONSTRAINTS IGNORE_TRIGGERS SPATIAL_WINDOW_MAX_CELLS
+`);
+
+export interface DataType { name: string; snippet?: string }
+
+const TSQL_TYPES: DataType[] = [
+  { name: "int" }, { name: "bigint" }, { name: "smallint" }, { name: "tinyint" }, { name: "bit" },
+  { name: "decimal", snippet: "decimal(${1:18}, ${2:2})" }, { name: "numeric", snippet: "numeric(${1:18}, ${2:2})" },
+  { name: "money" }, { name: "smallmoney" }, { name: "float" }, { name: "real" },
+  { name: "date" }, { name: "time" }, { name: "datetime" }, { name: "datetime2", snippet: "datetime2(${1:7})" },
+  { name: "datetimeoffset" }, { name: "smalldatetime" },
+  { name: "char", snippet: "char(${1:10})" }, { name: "varchar", snippet: "varchar(${1:50})" },
+  { name: "nchar", snippet: "nchar(${1:10})" }, { name: "nvarchar", snippet: "nvarchar(${1:50})" },
+  { name: "nvarchar(max)" }, { name: "varchar(max)" }, { name: "varbinary", snippet: "varbinary(${1:max})" },
+  { name: "binary", snippet: "binary(${1:16})" }, { name: "text" }, { name: "ntext" }, { name: "image" },
+  { name: "uniqueidentifier" }, { name: "xml" }, { name: "sql_variant" }, { name: "hierarchyid" },
+  { name: "geography" }, { name: "geometry" }, { name: "rowversion" }, { name: "sysname" }, { name: "json" },
+];
+
+const PG_TYPES: DataType[] = [
+  { name: "integer" }, { name: "int" }, { name: "bigint" }, { name: "smallint" }, { name: "serial" },
+  { name: "bigserial" }, { name: "numeric", snippet: "numeric(${1:18}, ${2:2})" }, { name: "decimal" },
+  { name: "real" }, { name: "double precision" }, { name: "money" }, { name: "text" },
+  { name: "varchar", snippet: "varchar(${1:50})" }, { name: "char", snippet: "char(${1:10})" },
+  { name: "boolean" }, { name: "bytea" }, { name: "date" }, { name: "time" }, { name: "timestamp" },
+  { name: "timestamptz" }, { name: "interval" }, { name: "uuid" }, { name: "json" }, { name: "jsonb" },
+  { name: "xml" }, { name: "inet" }, { name: "cidr" }, { name: "tsvector" }, { name: "record" },
+  { name: "void" }, { name: "anyelement" }, { name: "text[]" }, { name: "integer[]" },
+];
+
+/** SQLite's storage classes and the type names that give its affinities. */
+const SQLITE_TYPES: DataType[] = [
+  { name: "INTEGER" }, { name: "REAL" }, { name: "TEXT" }, { name: "BLOB" }, { name: "NUMERIC" }, { name: "ANY" },
+  { name: "INTEGER PRIMARY KEY" }, { name: "BOOLEAN" }, { name: "DATE" }, { name: "DATETIME" },
+  { name: "VARCHAR", snippet: "VARCHAR(${1:50})" }, { name: "DECIMAL", snippet: "DECIMAL(${1:18}, ${2:2})" },
+];
+
+const MYSQL_TYPES: DataType[] = [
+  { name: "int" }, { name: "bigint" }, { name: "smallint" }, { name: "tinyint" }, { name: "mediumint" },
+  { name: "int unsigned" }, { name: "bigint unsigned" }, { name: "decimal", snippet: "decimal(${1:18}, ${2:2})" },
+  { name: "float" }, { name: "double" }, { name: "bit" }, { name: "boolean" },
+  { name: "date" }, { name: "time" }, { name: "datetime" }, { name: "timestamp" }, { name: "year" },
+  { name: "char", snippet: "char(${1:10})" }, { name: "varchar", snippet: "varchar(${1:255})" },
+  { name: "text" }, { name: "mediumtext" }, { name: "longtext" }, { name: "binary", snippet: "binary(${1:16})" },
+  { name: "varbinary", snippet: "varbinary(${1:255})" }, { name: "blob" }, { name: "longblob" },
+  { name: "enum", snippet: "enum(${1:'a', 'b'})" }, { name: "set", snippet: "set(${1:'a', 'b'})" }, { name: "json" },
+  { name: "geometry" },
+];
+
+const DUCKDB_TYPES: DataType[] = [
+  { name: "INTEGER" }, { name: "BIGINT" }, { name: "SMALLINT" }, { name: "TINYINT" }, { name: "HUGEINT" },
+  { name: "UINTEGER" }, { name: "UBIGINT" }, { name: "DECIMAL", snippet: "DECIMAL(${1:18}, ${2:3})" }, { name: "DOUBLE" },
+  { name: "FLOAT" }, { name: "BOOLEAN" }, { name: "VARCHAR" }, { name: "BLOB" }, { name: "DATE" }, { name: "TIME" },
+  { name: "TIMESTAMP" }, { name: "TIMESTAMPTZ" }, { name: "INTERVAL" }, { name: "UUID" }, { name: "JSON" },
+  { name: "BIT" }, { name: "INTEGER[]" }, { name: "VARCHAR[]" }, { name: "STRUCT", snippet: "STRUCT(${1:a} ${2:INTEGER})" },
+  { name: "MAP", snippet: "MAP(${1:VARCHAR}, ${2:INTEGER})" }, { name: "ENUM", snippet: "ENUM(${1:'a', 'b'})" },
+  { name: "UNION", snippet: "UNION(${1:n} ${2:INTEGER}, ${3:s} ${4:VARCHAR})" },
+];
+
+const TYPES: Record<Dialect, DataType[]> = { tsql: TSQL_TYPES, pg: PG_TYPES, sqlite: SQLITE_TYPES, mySql: MYSQL_TYPES, duckDb: DUCKDB_TYPES };
+
+export function dataTypes(dialect: Dialect): DataType[] {
+  return TYPES[dialect];
+}
+
+const TSQL_FUNCS = `COUNT SUM AVG MIN MAX COUNT_BIG STRING_AGG GETDATE GETUTCDATE SYSDATETIME SYSUTCDATETIME DATEADD DATEDIFF
+DATEPART DATENAME EOMONTH DATEFROMPARTS FORMAT ISNULL COALESCE NULLIF IIF CAST CONVERT TRY_CAST TRY_CONVERT LEN
+DATALENGTH LEFT RIGHT SUBSTRING CHARINDEX PATINDEX REPLACE LTRIM RTRIM TRIM UPPER LOWER CONCAT CONCAT_WS STUFF
+REPLICATE ROUND ABS CEILING FLOOR POWER SQRT ROW_NUMBER RANK DENSE_RANK NTILE LAG LEAD FIRST_VALUE LAST_VALUE
+NEWID NEWSEQUENTIALID SCOPE_IDENTITY OBJECT_ID OBJECT_NAME DB_NAME SCHEMA_NAME SUSER_SNAME JSON_VALUE JSON_QUERY
+JSON_MODIFY ISJSON OPENJSON STRING_SPLIT ISNUMERIC CHOOSE ERROR_MESSAGE ERROR_NUMBER ERROR_LINE`;
+const PG_FUNCS = `count sum avg min max string_agg array_agg now current_date current_timestamp date_trunc date_part
+extract age coalesce nullif greatest least length lower upper substring position replace trim btrim ltrim rtrim
+concat concat_ws to_char to_date to_timestamp to_number round abs ceil floor power sqrt row_number rank
+dense_rank ntile lag lead first_value last_value jsonb_build_object json_build_object json_agg jsonb_agg
+jsonb_set to_jsonb generate_series unnest gen_random_uuid random format split_part regexp_replace left right`;
+
+const SQLITE_FUNCS = `count sum total avg min max group_concat abs changes char coalesce format glob hex ifnull iif instr
+last_insert_rowid length like lower ltrim nullif printf quote random randomblob replace round rtrim sign substr substring
+trim typeof unhex unicode upper zeroblob date time datetime julianday unixepoch strftime json json_extract json_object
+json_array json_group_array json_group_object json_each json_tree row_number rank dense_rank ntile lag lead
+first_value last_value`;
+const MYSQL_FUNCS = `COUNT SUM AVG MIN MAX GROUP_CONCAT JSON_ARRAYAGG JSON_OBJECTAGG NOW CURDATE CURTIME SYSDATE DATE_ADD
+DATE_SUB DATEDIFF DATE_FORMAT STR_TO_DATE TIMESTAMPDIFF EXTRACT YEAR MONTH DAY IFNULL COALESCE NULLIF IF CAST CONVERT
+LENGTH CHAR_LENGTH CONCAT CONCAT_WS SUBSTRING SUBSTRING_INDEX LOCATE REPLACE LOWER UPPER TRIM LTRIM RTRIM LPAD RPAD
+LEFT RIGHT ROUND ABS CEIL FLOOR POWER SQRT RAND UUID LAST_INSERT_ID ROW_COUNT FOUND_ROWS DATABASE USER JSON_EXTRACT
+JSON_UNQUOTE JSON_OBJECT JSON_ARRAY JSON_CONTAINS JSON_SET ROW_NUMBER RANK DENSE_RANK NTILE LAG LEAD FIRST_VALUE
+LAST_VALUE`;
+
+const DUCKDB_FUNCS = `count sum avg min max string_agg list array_agg first last arg_min arg_max any_value median mode
+quantile_cont approx_count_distinct now current_date current_timestamp date_trunc date_part date_diff date_add strftime
+strptime epoch make_date age coalesce nullif greatest least ifnull length lower upper substring position replace trim
+concat concat_ws regexp_matches regexp_replace regexp_extract split_part string_split starts_with ends_with contains
+format printf round abs ceil floor power sqrt row_number rank dense_rank ntile lag lead first_value last_value
+list_value list_transform list_filter list_sort list_contains unnest range generate_series struct_pack map
+json_extract json_extract_string to_json from_json gen_random_uuid random hash md5 typeof try_cast`;
+
+const FUNCS: Record<Dialect, string[]> = {
+  tsql: TSQL_FUNCS.split(/\s+/), pg: PG_FUNCS.split(/\s+/), sqlite: SQLITE_FUNCS.split(/\s+/), mySql: MYSQL_FUNCS.split(/\s+/),
+  duckDb: DUCKDB_FUNCS.split(/\s+/),
+};
+export function builtinFunctions(dialect: Dialect): string[] {
+  return FUNCS[dialect];
+}
+
+const kw = (s: string): string[] => s.trim().split(/\s*\|\s*/);
+
+/** Statement-start keywords (clause 'unknown'). */
+const STMT_KW_T = kw(`SELECT | INSERT INTO | UPDATE | DELETE FROM | MERGE | WITH | DECLARE | SET | EXEC | IF | ELSE | WHILE |
+BEGIN | END | BEGIN TRAN | BEGIN TRY | BEGIN CATCH | END TRY | END CATCH | COMMIT | ROLLBACK | CREATE TABLE |
+CREATE PROCEDURE | CREATE OR ALTER PROCEDURE | CREATE VIEW | CREATE FUNCTION | CREATE INDEX | ALTER TABLE | DROP TABLE |
+TRUNCATE TABLE | USE | PRINT | RETURN | RAISERROR | THROW | GO | SET NOCOUNT ON`);
+const STMT_KW_P = kw(`SELECT | INSERT INTO | UPDATE | DELETE FROM | MERGE INTO | WITH | CALL | DO | BEGIN | COMMIT | ROLLBACK |
+CREATE TABLE | CREATE OR REPLACE FUNCTION | CREATE OR REPLACE PROCEDURE | CREATE VIEW | CREATE INDEX | ALTER TABLE |
+DROP TABLE | TRUNCATE | EXPLAIN | EXPLAIN ANALYZE | COPY | VACUUM | ANALYZE | SET | SHOW | GRANT | DECLARE | IF |
+ELSIF | ELSE | END IF | LOOP | END LOOP | RETURN | RETURN QUERY | PERFORM | RAISE NOTICE`);
+const STMT_KW_S = kw(`SELECT | INSERT INTO | INSERT OR REPLACE INTO | REPLACE INTO | UPDATE | DELETE FROM | WITH | WITH RECURSIVE |
+BEGIN | BEGIN IMMEDIATE | COMMIT | ROLLBACK | SAVEPOINT | RELEASE | CREATE TABLE | CREATE TABLE IF NOT EXISTS |
+CREATE VIEW | CREATE INDEX | CREATE UNIQUE INDEX | CREATE TRIGGER | ALTER TABLE | DROP TABLE | DROP VIEW | DROP INDEX |
+PRAGMA | VACUUM | ANALYZE | REINDEX | EXPLAIN | EXPLAIN QUERY PLAN | ATTACH DATABASE | DETACH DATABASE`);
+const STMT_KW_M = kw(`SELECT | INSERT INTO | INSERT IGNORE INTO | REPLACE INTO | UPDATE | DELETE FROM | WITH | SET | CALL | USE |
+START TRANSACTION | BEGIN | COMMIT | ROLLBACK | CREATE TABLE | CREATE TABLE IF NOT EXISTS | CREATE VIEW | CREATE INDEX |
+CREATE PROCEDURE | CREATE FUNCTION | CREATE TRIGGER | ALTER TABLE | DROP TABLE | TRUNCATE TABLE | RENAME TABLE |
+SHOW TABLES | SHOW DATABASES | SHOW CREATE TABLE | SHOW COLUMNS FROM | DESCRIBE | EXPLAIN | EXPLAIN FORMAT=JSON |
+DECLARE | IF | ELSEIF | ELSE | END IF | WHILE | END WHILE | REPEAT | LOOP | END LOOP | LEAVE | RETURN | SIGNAL SQLSTATE`);
+const STMT_KW_D = kw(`SELECT | FROM | INSERT INTO | INSERT OR REPLACE INTO | UPDATE | DELETE FROM | WITH | WITH RECURSIVE | BEGIN TRANSACTION |
+COMMIT | ROLLBACK | CREATE TABLE | CREATE TABLE IF NOT EXISTS | CREATE OR REPLACE TABLE | CREATE VIEW | CREATE OR REPLACE VIEW |
+CREATE INDEX | CREATE SEQUENCE | CREATE MACRO | CREATE TYPE | CREATE SCHEMA | ALTER TABLE | DROP TABLE | DROP VIEW | TRUNCATE |
+DESCRIBE | SUMMARIZE | SHOW TABLES | PIVOT | UNPIVOT | EXPLAIN | EXPLAIN ANALYZE | CHECKPOINT | USE | SET schema`);
+
+const EXPR_KW = kw(`AND | OR | NOT | NULL | IS NULL | IS NOT NULL | IN | LIKE | BETWEEN | EXISTS | CASE | WHEN | THEN | ELSE | END`);
+
+const CLAUSE_KW: Record<string, Record<Dialect, string[]>> = {
+  select: {
+    tsql: kw(`FROM | AS | DISTINCT | TOP | INTO | OVER | PARTITION BY | WHERE | GROUP BY | ORDER BY | UNION | UNION ALL`),
+    pg: kw(`FROM | AS | DISTINCT | INTO | OVER | PARTITION BY | WHERE | GROUP BY | ORDER BY | UNION | UNION ALL | LIMIT`),
+    sqlite: kw(`FROM | AS | DISTINCT | OVER | PARTITION BY | WHERE | GROUP BY | ORDER BY | UNION | UNION ALL | LIMIT`),
+    mySql: kw(`FROM | AS | DISTINCT | INTO | OVER | PARTITION BY | WHERE | GROUP BY | ORDER BY | UNION | UNION ALL | LIMIT`),
+    duckDb: kw(`FROM | AS | DISTINCT | EXCLUDE | REPLACE | OVER | PARTITION BY | WHERE | GROUP BY | GROUP BY ALL | ORDER BY | QUALIFY | UNION | UNION ALL | UNION BY NAME | LIMIT`),
+  },
+  where: {
+    tsql: kw(`GROUP BY | ORDER BY | HAVING | UNION | UNION ALL | EXCEPT | INTERSECT | OPTION`),
+    pg: kw(`GROUP BY | ORDER BY | HAVING | UNION | UNION ALL | EXCEPT | INTERSECT | LIMIT | OFFSET | RETURNING | ILIKE`),
+    sqlite: kw(`GROUP BY | ORDER BY | HAVING | UNION | UNION ALL | EXCEPT | INTERSECT | LIMIT | OFFSET | RETURNING | GLOB`),
+    mySql: kw(`GROUP BY | ORDER BY | HAVING | UNION | UNION ALL | EXCEPT | INTERSECT | LIMIT | REGEXP | FOR UPDATE`),
+    duckDb: kw(`GROUP BY | GROUP BY ALL | ORDER BY | HAVING | QUALIFY | UNION | UNION ALL | EXCEPT | INTERSECT | LIMIT | OFFSET | RETURNING | ILIKE | GLOB`),
+  },
+  on: {
+    tsql: kw(`WHERE | INNER JOIN | LEFT JOIN | RIGHT JOIN | FULL JOIN | CROSS JOIN | JOIN | CROSS APPLY | OUTER APPLY | GROUP BY | ORDER BY`),
+    pg: kw(`WHERE | INNER JOIN | LEFT JOIN | RIGHT JOIN | FULL JOIN | CROSS JOIN | JOIN | GROUP BY | ORDER BY | LIMIT`),
+    sqlite: kw(`WHERE | INNER JOIN | LEFT JOIN | RIGHT JOIN | FULL JOIN | CROSS JOIN | JOIN | GROUP BY | ORDER BY | LIMIT`),
+    mySql: kw(`WHERE | INNER JOIN | LEFT JOIN | RIGHT JOIN | CROSS JOIN | STRAIGHT_JOIN | JOIN | GROUP BY | ORDER BY | LIMIT`),
+    duckDb: kw(`WHERE | INNER JOIN | LEFT JOIN | RIGHT JOIN | FULL JOIN | CROSS JOIN | ASOF JOIN | POSITIONAL JOIN | JOIN | GROUP BY | ORDER BY | LIMIT`),
+  },
+  groupBy: {
+    tsql: kw(`HAVING | ORDER BY | ROLLUP | CUBE | GROUPING SETS`), pg: kw(`HAVING | ORDER BY | ROLLUP | CUBE | GROUPING SETS | LIMIT`),
+    sqlite: kw(`HAVING | ORDER BY | LIMIT`), mySql: kw(`HAVING | ORDER BY | WITH ROLLUP | LIMIT`),
+    duckDb: kw(`HAVING | QUALIFY | ORDER BY | ROLLUP | CUBE | GROUPING SETS | LIMIT`),
+  },
+  having: { tsql: kw(`ORDER BY | UNION`), pg: kw(`ORDER BY | UNION | LIMIT`), sqlite: kw(`ORDER BY | UNION | LIMIT`), mySql: kw(`ORDER BY | UNION | LIMIT`),
+    duckDb: kw(`QUALIFY | ORDER BY | UNION | LIMIT`) },
+  orderBy: {
+    tsql: kw(`ASC | DESC | OFFSET | FETCH NEXT | ROWS | ONLY | OPTION`),
+    pg: kw(`ASC | DESC | NULLS FIRST | NULLS LAST | LIMIT | OFFSET | FETCH FIRST`),
+    sqlite: kw(`ASC | DESC | NULLS FIRST | NULLS LAST | COLLATE NOCASE | LIMIT | OFFSET`),
+    mySql: kw(`ASC | DESC | LIMIT | FOR UPDATE`),
+    duckDb: kw(`ASC | DESC | NULLS FIRST | NULLS LAST | LIMIT | OFFSET`),
+  },
+  set: {
+    tsql: kw(`WHERE | FROM | OUTPUT | DEFAULT`), pg: kw(`WHERE | FROM | RETURNING | DEFAULT`),
+    sqlite: kw(`WHERE | FROM | RETURNING | DEFAULT`), mySql: kw(`WHERE | ORDER BY | LIMIT | DEFAULT`),
+    duckDb: kw(`WHERE | FROM | RETURNING | DEFAULT`),
+  },
+};
+
+/** Keywords offered after a complete table reference in FROM/JOIN/UPDATE/DELETE/INTO. */
+const AFTER_REF_T = kw(`WHERE | AS | INNER JOIN | LEFT JOIN | LEFT OUTER JOIN | RIGHT JOIN | FULL OUTER JOIN | CROSS JOIN | JOIN |
+CROSS APPLY | OUTER APPLY | ON | WITH (NOLOCK) | GROUP BY | ORDER BY | HAVING | UNION | UNION ALL | EXCEPT | INTERSECT |
+OPTION | FOR | PIVOT | UNPIVOT`);
+const AFTER_REF_P = kw(`WHERE | AS | INNER JOIN | LEFT JOIN | LEFT OUTER JOIN | RIGHT JOIN | FULL OUTER JOIN | CROSS JOIN | JOIN |
+JOIN LATERAL | ON | USING | GROUP BY | ORDER BY | HAVING | UNION | UNION ALL | EXCEPT | INTERSECT | LIMIT | OFFSET |
+RETURNING | FOR UPDATE | TABLESAMPLE`);
+const AFTER_REF_S = kw(`WHERE | AS | INNER JOIN | LEFT JOIN | LEFT OUTER JOIN | RIGHT JOIN | FULL OUTER JOIN | CROSS JOIN | JOIN |
+ON | USING | INDEXED BY | NOT INDEXED | GROUP BY | ORDER BY | HAVING | UNION | UNION ALL | EXCEPT | INTERSECT | LIMIT | RETURNING`);
+const AFTER_REF_M = kw(`WHERE | AS | INNER JOIN | LEFT JOIN | LEFT OUTER JOIN | RIGHT JOIN | CROSS JOIN | STRAIGHT_JOIN | JOIN |
+ON | USING | USE INDEX | FORCE INDEX | IGNORE INDEX | GROUP BY | ORDER BY | HAVING | UNION | UNION ALL | LIMIT | FOR UPDATE`);
+const AFTER_REF_D = kw(`WHERE | AS | INNER JOIN | LEFT JOIN | LEFT OUTER JOIN | RIGHT JOIN | FULL OUTER JOIN | CROSS JOIN | JOIN |
+ASOF JOIN | POSITIONAL JOIN | ANTI JOIN | SEMI JOIN | JOIN LATERAL | ON | USING | GROUP BY | GROUP BY ALL | ORDER BY | HAVING |
+QUALIFY | UNION | UNION ALL | UNION BY NAME | EXCEPT | INTERSECT | LIMIT | OFFSET | RETURNING | USING SAMPLE | PIVOT | UNPIVOT`);
+const AFTER_REF: Record<Dialect, string[]> = { tsql: AFTER_REF_T, pg: AFTER_REF_P, sqlite: AFTER_REF_S, mySql: AFTER_REF_M, duckDb: AFTER_REF_D };
+const AFTER_UPDATE: Record<Dialect, string[]> = {
+  tsql: kw(`SET | AS | WITH (ROWLOCK)`), pg: kw(`SET | AS`), sqlite: kw(`SET | AS`), mySql: kw(`SET | AS`), duckDb: kw(`SET | AS`),
+};
+const AFTER_DELETE: Record<Dialect, string[]> = {
+  tsql: kw(`FROM | WHERE | OUTPUT | AS`), pg: kw(`WHERE | USING | RETURNING | AS`), sqlite: kw(`WHERE | RETURNING | AS`),
+  mySql: kw(`WHERE | ORDER BY | LIMIT | AS`), duckDb: kw(`WHERE | USING | RETURNING | AS`),
+};
+const AFTER_INSERT_INTO: Record<Dialect, string> = {
+  tsql: `VALUES | SELECT | DEFAULT VALUES | EXEC | OUTPUT`, pg: `VALUES | SELECT | DEFAULT VALUES`, sqlite: `VALUES | SELECT | DEFAULT VALUES`,
+  mySql: `VALUES | SELECT | SET`, duckDb: `VALUES | SELECT | DEFAULT VALUES | BY NAME`,
+};
+const STMT_KW: Record<Dialect, string[]> = { tsql: STMT_KW_T, pg: STMT_KW_P, sqlite: STMT_KW_S, mySql: STMT_KW_M, duckDb: STMT_KW_D };
+
+export function statementStartKeywords(dialect: Dialect): string[] {
+  return STMT_KW[dialect];
+}
+
+export function clauseKeywords(clause: string, dialect: Dialect): string[] {
+  const c = CLAUSE_KW[clause];
+  const own = c ? c[dialect] : [];
+  return clause === "orderBy" || clause === "groupBy" ? own : own.concat(EXPR_KW);
+}
+
+export function afterReferenceKeywords(clause: string, dialect: Dialect): string[] {
+  if (clause === "update") return AFTER_UPDATE[dialect];
+  if (clause === "delete") return AFTER_DELETE[dialect];
+  if (clause === "insertInto") return kw(AFTER_INSERT_INTO[dialect]);
+  return AFTER_REF[dialect];
+}
+
+const TABLE_CONTEXT: Record<Dialect, string> = {
+  tsql: `OPENJSON | OPENROWSET | OPENQUERY | STRING_SPLIT | SELECT`, pg: `LATERAL | ONLY | SELECT`, sqlite: `json_each | json_tree | SELECT`,
+  mySql: `LATERAL | JSON_TABLE | SELECT`, duckDb: `LATERAL | range | generate_series | unnest | SELECT`,
+};
+export function tableContextKeywords(dialect: Dialect): string[] {
+  return kw(TABLE_CONTEXT[dialect]);
+}
+
+const VALUES_KW: Record<Dialect, string> = {
+  tsql: `VALUES | SELECT | DEFAULT VALUES | EXEC | OUTPUT`, pg: `VALUES | SELECT | DEFAULT VALUES | RETURNING`,
+  sqlite: `VALUES | SELECT | DEFAULT VALUES | RETURNING`, mySql: `VALUES | SELECT | SET`, duckDb: `VALUES | SELECT | DEFAULT VALUES | RETURNING`,
+};
+export function valuesKeywords(dialect: Dialect): string[] {
+  return kw(VALUES_KW[dialect]);
+}
+
+const EXEC_ARG_VALUE: Record<Dialect, string> = { tsql: `NULL | DEFAULT | OUTPUT`, pg: `NULL | DEFAULT`, sqlite: `NULL`, mySql: `NULL`, duckDb: `NULL` };
+export function argValueKeywords(clause: string, dialect: Dialect): string[] {
+  if (clause === "execArgs") return kw(EXEC_ARG_VALUE[dialect]);
+  return kw(`NULL | DEFAULT`);
+}
+
+const EXEC_ARGS: Record<Dialect, string | null> = { tsql: `OUTPUT | DEFAULT | NULL | WITH RECOMPILE`, pg: null, sqlite: null, mySql: null, duckDb: null };
+export function execArgsKeywords(dialect: Dialect): string[] {
+  const k = EXEC_ARGS[dialect];
+  return k ? kw(k) : [];
+}
+
+const DECLARE_KW: Record<Dialect, string> = {
+  tsql: `TABLE | CURSOR FOR | AS`, pg: `CONSTANT | NOT NULL | DEFAULT`, sqlite: `DEFAULT`, mySql: `DEFAULT | CURSOR FOR | CONDITION FOR | HANDLER FOR`,
+  duckDb: `DEFAULT`,
+};
+export function declareKeywords(dialect: Dialect): string[] {
+  return kw(DECLARE_KW[dialect]);
+}

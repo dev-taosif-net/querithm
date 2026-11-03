@@ -1,0 +1,279 @@
+# Signed installers per platform (milestone 7): win-x64, linux-x64 (AppImage + deb + rpm), osx-x64, osx-arm64 (dmg +
+# .app.tar.gz updater package). macOS runners are free only while the repository is public (ARCHITECTURE §16).
+# Secrets: TAURI_SIGNING_PRIVATE_KEY(+_PASSWORD) — minisign key kept outside the repo (§13 rule 10); its public half is
+# plugins.updater.pubkey in tauri.conf.json, and every installed app only accepts updates signed with it. Only the `sign`
+# job sees it: the build job runs vite, tsc and every crate build script, so it builds without updater artifacts and
+# signs nothing (on macOS it tars the .app into the .app.tar.gz updater package, which the sign job signs).
+# optional platform signing: APPLE_CERTIFICATE/APPLE_ID/..., WINDOWS_CERTIFICATE.
+# RELEASES_REPO_TOKEN — fine-grained PAT limited to dev-taosif-net/querithm-releases (Contents: read and write);
+# installers are published as a Release of that public repo, never of the code repo (§16).
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+# Least privilege for GITHUB_TOKEN; actions are pinned to commit SHAs (tags can be moved).
+permissions:
+  contents: read
+
+# One release at a time: two tags pushed together must not race on the releases repo (or on which one is "latest").
+# GitHub keeps only one pending run per group, so push tags one at a time; a tag whose run was cancelled as a
+# superseded pending run must be re-run from the Actions tab.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  # A tag releases only a commit on main, and only after the dependency audits CI runs on main (§13 rule 10).
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read # gh run list: the ci run of the tagged commit
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        # fetch-depth 0 fetches every branch into refs/remotes/origin/*, so origin/main needs no authenticated fetch
+        # and the token is not left in .git/config for the audit steps below (cargo install runs crate build scripts).
+        with: { fetch-depth: 0, persist-credentials: false }
+      - name: Tag commit is on main
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not on main: merge it to main and let CI pass first"; exit 1
+          fi
+      # ci.yml runs on every push to main: its integration tests, smoke and bench must have passed on this very commit.
+      - name: CI passed on the tagged commit
+        env: { GH_TOKEN: "${{ github.token }}" }
+        shell: bash
+        run: |
+          set -euo pipefail
+          passed=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$GITHUB_SHA" --status success --json databaseId -q length)
+          if [ "$passed" -lt 1 ]; then
+            echo "::error::no successful ci run for $GITHUB_SHA yet: wait until CI on main passes, then re-run this workflow"; exit 1
+          fi
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with: { node-version: 24 }
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with: { dotnet-version: 10.0.x }
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - run: cargo install cargo-audit --version 0.22.2 --locked
+      - run: cargo audit --file src-tauri/Cargo.lock
+      - name: NuGet vulnerabilities (fails on high/critical)
+        run: |
+          dotnet restore sidecar
+          out=$(dotnet list sidecar/Querithm.Host package --vulnerable --include-transitive)
+          echo "$out"
+          if echo "$out" | grep -qiE "\b(High|Critical)\b"; then exit 1; fi
+      - run: pnpm audit --prod --audit-level high
+
+  build:
+    needs: gate
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, rid: win-x64, target: x86_64-pc-windows-msvc }
+          - { os: ubuntu-22.04, rid: linux-x64, target: x86_64-unknown-linux-gnu }
+          - { os: macos-15-intel, rid: osx-x64, target: x86_64-apple-darwin }
+          - { os: macos-15, rid: osx-arm64, target: aarch64-apple-darwin }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { persist-credentials: false } # no later step needs git auth; keeps the token out of .git/config
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with: { node-version: 24, cache: pnpm }
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with: { dotnet-version: 10.0.x }
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { targets: "${{ matrix.target }}" }
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev librsvg2-dev libayatana-appindicator3-dev libxdo-dev libssl-dev pkg-config
+      - run: pnpm install --frozen-lockfile
+      # The updater compares the app's own version with the manifest: a mismatch would offer the same update forever.
+      - name: Tag matches the app version
+        shell: bash
+        run: |
+          app=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "v$app" != "$GITHUB_REF_NAME" ]; then echo "::error::tag $GITHUB_REF_NAME but tauri.conf.json is $app"; exit 1; fi
+      - run: pnpm test
+      - if: runner.os == 'Linux'
+        name: contract.ts is generated, never hand-edited (§15 rule 5)
+        run: pnpm gen:contract && git diff --exit-code src/ipc/contract.ts
+      - run: node scripts/run.mjs build-sidecar --release --rid ${{ matrix.rid }}
+      # After build-sidecar: tauri-build copies bundle.externalBin (the sidecar) on every build, tests included.
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      # The CI release-smoke gate, on the very binary this release ships (trim roots, SQLite, MySqlConnector, DuckDB natives).
+      - name: Trimmed sidecar self-test
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe=sidecar/Querithm.Host/bin/publish/${{ matrix.rid }}-release/querithm-sidecar
+          if [ "${{ matrix.rid }}" = win-x64 ]; then exe="$exe.exe"; fi
+          status=0; "$exe" --self-test 2> self-test.txt || status=$?
+          cat self-test.txt
+          test "$status" -eq 0
+          for m in "monitorJson ok" "monitorHistory ok" "sqlite ok" "arrow ok" "mysql ok" "duckdb ok"; do grep -q "$m" self-test.txt || { echo "::error::missing '$m'"; exit 1; }; done
+      - run: node scripts/gen-notices.mjs
+      # No signing key here: the packages are signed in the sign job (createUpdaterArtifacts would need the key).
+      - name: Build the installers (unsigned)
+        shell: bash
+        run: pnpm tauri build --target ${{ matrix.target }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      # createUpdaterArtifacts=false also skips the macOS updater package: tar the .app here, the sign job signs it.
+      - if: runner.os == 'macOS'
+        name: macOS updater package (.app.tar.gz)
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apps=(src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app)
+          test "${#apps[@]}" -eq 1
+          tar -C "$(dirname "${apps[0]}")" -czf "${apps[0]}.tar.gz" "$(basename "${apps[0]}")"
+      # The AppImage bundles WebKitGTK, JavaScriptCore and ICU, which every other package takes from the OS: its own budget
+      # (owner decision 2026-10-31, ARCHITECTURE §16 "Installer size with DuckDB").
+      - name: Installer size gate (bench metric 17, ≤ 120 MB; AppImage ≤ 150 MB)
+        shell: bash
+        run: |
+          bundle=src-tauri/target/${{ matrix.target }}/release/bundle
+          find "$bundle" -type f \( -name "*.msi" -o -name "*.exe" -o -name "*.deb" -o -name "*.rpm" -o -name "*.dmg" \) -size +120M | tee big.txt
+          find "$bundle" -type f -name "*.AppImage" -size +150M | tee -a big.txt
+          test ! -s big.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: querithm-${{ matrix.rid }}
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/
+
+  # The only job that holds the updater key. It runs the Tauri CLI from the lockfile (install scripts off) on the build
+  # artifacts and uploads just the signatures, in each package's folder layout, as one artifact.
+  sign:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read # gh run download of this run's artifacts
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { persist-credentials: false }
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with: { node-version: 24 }
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Download build artifacts
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --dir artifacts
+      # The app sets requireSignedVersion: each update package's signature must name its version (anti-downgrade).
+      - name: Sign updater packages with the release version
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for dir in artifacts/querithm-*/; do
+            name=$(basename "$dir")
+            find "$dir" -type f \( -name "*.msi" -o -name "*-setup.exe" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" -o -name "*.app.tar.gz" \) -print0 |
+              while IFS= read -r -d '' f; do
+                pnpm exec tauri signer sign --app-version "${GITHUB_REF_NAME#v}" "$f"
+                rel=${f#"$dir"}
+                mkdir -p "sigs/$name/$(dirname "$rel")"
+                mv "$f.sig" "sigs/$name/$rel.sig"
+              done
+          done
+          find sigs -type f | sort
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: querithm-signatures
+          path: sigs/
+
+  # Stable asset names keep https://github.com/<releases repo>/releases/latest/download/<name> valid across versions;
+  # the download page links to these names.
+  publish:
+    needs: sign
+    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read # gh run download of this run's artifacts
+      contents: read # checkout for the manifest script and release notes
+    env:
+      RELEASES_REPO: dev-taosif-net/querithm-releases
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { path: src, persist-credentials: false }
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with: { node-version: 24 }
+      - name: Download build artifacts
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --dir artifacts
+      - name: Rename to stable asset names
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir out
+          pick() { # <artifact> <glob inside it> <stable name>; exactly one match or the job fails
+            local hits=(artifacts/"$1"/$2)
+            if [ "${#hits[@]}" -ne 1 ]; then echo "::error::expected one $2 in $1, found ${#hits[@]}"; exit 1; fi
+            cp "${hits[0]}" "out/$3"
+          }
+          signed() { pick "$1" "$2" "$3"; pick "querithm-signatures/$1" "$2.sig" "$3.sig"; } # package + its updater signature
+          signed querithm-win-x64 'msi/*.msi' Querithm-windows-x64.msi
+          signed querithm-win-x64 'nsis/*-setup.exe' Querithm-windows-x64-setup.exe
+          pick querithm-osx-arm64 'dmg/*.dmg' Querithm-macos-arm64.dmg
+          pick querithm-osx-x64 'dmg/*.dmg' Querithm-macos-x64.dmg
+          signed querithm-osx-arm64 'macos/*.app.tar.gz' Querithm-macos-arm64.app.tar.gz
+          signed querithm-osx-x64 'macos/*.app.tar.gz' Querithm-macos-x64.app.tar.gz
+          signed querithm-linux-x64 'appimage/*.AppImage' Querithm-linux-x64.AppImage
+          signed querithm-linux-x64 'deb/*.deb' Querithm-linux-x64.deb
+          signed querithm-linux-x64 'rpm/*.rpm' Querithm-linux-x64.rpm
+          (cd out && sha256sum Querithm-* > SHA256SUMS.txt)
+          cat out/SHA256SUMS.txt
+      # latest.json is what installed apps poll (releases/latest/download/latest.json); a pre-release never becomes
+      # "latest", so betas reach no one's updater. Every signature is verified here against the app's public key.
+      - name: Update manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          notes=src/docs/release-notes/$TAG.md
+          node src/scripts/release-manifest.mjs out "$TAG" $([ -f "$notes" ] && echo "$notes")
+      - name: Publish release
+        env: { GH_TOKEN: "${{ secrets.RELEASES_REPO_TOKEN }}" }
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then echo "::error::secret RELEASES_REPO_TOKEN is not set"; exit 1; fi
+          # Only the highest version becomes "latest" (installed apps poll latest/download/latest.json, and the download
+          # page uses the stable names under it): a later tag of an older line must not repoint every updater to it.
+          current=$(gh release view --repo "$RELEASES_REPO" --json tagName -q .tagName 2>/dev/null || true)
+          latest=(--latest)
+          if [[ "$TAG" == *-* ]]; then
+            latest=(--latest=false)
+          elif [ -n "$current" ] && [ "$current" != "$TAG" ] && [ "$(printf '%s\n%s\n' "${current#v}" "${TAG#v}" | sort -V | tail -n1)" != "${TAG#v}" ]; then
+            echo "::warning::$TAG is older than the latest release $current: published without becoming latest"
+            latest=(--latest=false)
+          fi
+          if gh release view "$TAG" --repo "$RELEASES_REPO" > /dev/null 2>&1; then
+            # Re-run of the same tag: replace the assets, keep the release and its download counts
+            gh release upload "$TAG" out/* --repo "$RELEASES_REPO" --clobber
+            # A first run that died after gh created the release leaves a draft: publish it now.
+            if [ "$(gh release view "$TAG" --repo "$RELEASES_REPO" --json isDraft -q .isDraft)" = true ]; then
+              gh release edit "$TAG" --repo "$RELEASES_REPO" --draft=false "${latest[@]}"
+            fi
+            exit 0
+          fi
+          flags=("${latest[@]}")
+          if [[ "$TAG" == *-* ]]; then flags+=(--prerelease); fi # v1.2.0-beta.1 never becomes "latest"
+          cat > notes.md <<NOTES
+          $([ -f "src/docs/release-notes/$TAG.md" ] && cat "src/docs/release-notes/$TAG.md")
+
+          Download page: https://dev-taosif-net.github.io/querithm-releases/ · Installed copies update from the Update button.
+
+          The installers are not code-signed yet: Windows shows a SmartScreen prompt (More info → Run anyway) and
+          macOS asks you to allow the app under System Settings → Privacy & Security. Verify files with \`SHA256SUMS.txt\`.
+          NOTES
+          gh release create "$TAG" out/* --repo "$RELEASES_REPO" --title "Querithm ${TAG#v}" --notes-file notes.md "${flags[@]}"

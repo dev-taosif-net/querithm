@@ -1,0 +1,154 @@
+# Tests on every OS, integration + benchmarks on Linux (docker fixture), dependency audit (§13 rule 10, §14).
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: # run on any branch from the Actions tab (e.g. the release smoke before a tag)
+
+# Least privilege for GITHUB_TOKEN; actions are pinned to commit SHAs (tags can be moved).
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { persist-credentials: false } # no later step needs git auth; keeps the token out of .git/config
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with: { node-version: 24, cache: pnpm }
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with: { dotnet-version: 10.0.x }
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev librsvg2-dev libayatana-appindicator3-dev libxdo-dev libssl-dev pkg-config
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm gen:contract && git diff --exit-code src/ipc/contract.ts   # contract.ts is generated, never hand-edited (§15 rule 5)
+      - run: pnpm test
+      - run: node scripts/run.mjs build-sidecar --debug
+      - run: cargo check --locked --manifest-path src-tauri/Cargo.toml
+      # The shell's own tests (relay, grants, injection, keyring, updater): `pnpm test` covers only Vitest and xUnit.
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+  # Phase D release gate: the trimmed single-file sidecar of every shipped RID runs its --self-test on that OS (trim roots,
+  # SQLite, MySqlConnector and DuckDB natives — on macOS the thinned libduckdb.dylib slice), and reports its size (metric 17).
+  release-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, rid: win-x64 }
+          - { os: ubuntu-22.04, rid: linux-x64 }
+          - { os: macos-15-intel, rid: osx-x64 }
+          - { os: macos-15, rid: osx-arm64 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { persist-credentials: false } # no later step needs git auth; keeps the token out of .git/config
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with: { node-version: 24 }
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with: { dotnet-version: 10.0.x }
+      - run: node scripts/run.mjs build-sidecar --release --rid ${{ matrix.rid }}
+      - name: Trimmed self-test and size
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe=sidecar/Querithm.Host/bin/publish/${{ matrix.rid }}-release/querithm-sidecar
+          if [ "${{ matrix.rid }}" = win-x64 ]; then exe="$exe.exe"; fi
+          status=0; "$exe" --self-test 2> self-test.txt || status=$?
+          cat self-test.txt
+          test "$status" -eq 0
+          for m in "monitorJson ok" "monitorHistory ok" "sqlite ok" "arrow ok" "mysql ok" "duckdb ok"; do grep -q "$m" self-test.txt || { echo "::error::missing '$m'"; exit 1; }; done
+          echo "${{ matrix.rid }}: trimmed sidecar $(wc -c < "$exe" | tr -d ' ') bytes, self-test ok" | tee -a "$GITHUB_STEP_SUMMARY"
+      # L23: the Host suppresses trim warnings (SMO, SqlClient and StreamJsonRpc warn and are rooted instead); this publish
+      # shows them and fails when there are more than scripts/trim-warnings-baseline.json lists.
+      - name: Trim warnings stay at the baseline
+        if: matrix.rid == 'linux-x64'
+        run: node scripts/trim-warnings.mjs --rid linux-x64
+
+  integration-and-bench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { persist-credentials: false } # no later step needs git auth; keeps the token out of .git/config
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with: { node-version: 24, cache: pnpm }
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with: { dotnet-version: 10.0.x }
+      - run: pnpm install --frozen-lockfile
+      - run: docker compose -f scripts/bench/docker/compose.yml up -d --build --wait || (sleep 20 && docker compose -f scripts/bench/docker/compose.yml ps)
+      - run: node scripts/bench/gen-schema.mjs --apply   # waits until SQL Server and PostgreSQL take queries (no healthchecks)
+      - run: node scripts/fixture/load-testdb.mjs   # querithm_test for PostgresTestDbIntegrationTests
+      # Before the tests: W10 runs the trimmed release sidecar's --self-test (wait dictionary under trimming).
+      - run: node scripts/run.mjs build-sidecar --release
+      - run: QUERITHM_IT=1 dotnet test sidecar
+      - run: QUERITHM_SIDECAR=$PWD/src-tauri/binaries/querithm-sidecar-x86_64-unknown-linux-gnu node scripts/bench/run.mjs
+      # Runs even when the integration tests or the bench failed, so one red step does not hide the E2E result.
+      - if: ${{ !cancelled() }}
+        run: node scripts/bench/smoke-ui.mjs smoke-screens --no-build
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: bench-and-screens
+          path: |
+            bench/results/
+            smoke-screens/
+
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { persist-credentials: false } # no later step needs git auth; keeps the token out of .git/config
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with: { node-version: 24 }
+      # Shipped npm packages only (the webview bundle); dev tooling advisories are reviewed by hand.
+      - run: pnpm audit --prod --audit-level high
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with: { dotnet-version: 10.0.x }
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - run: cargo install cargo-audit --version 0.22.2 --locked
+      # Fails on vulnerabilities; RustSec "unmaintained"/"unsound" warnings (transitive GTK and keyring crates) are
+      # printed for review and do not fail the job.
+      - run: cargo audit --file src-tauri/Cargo.lock
+      - name: NuGet vulnerabilities (fails on high/critical)
+        run: |
+          dotnet restore sidecar
+          out=$(dotnet list sidecar/Querithm.Host package --vulnerable --include-transitive)
+          echo "$out"
+          if echo "$out" | grep -qiE "\b(High|Critical)\b"; then exit 1; fi
+
+  # Secret scan of every commit and of the checked-out tree (§13; CLAUDE.md "Never commit real credentials").
+  # .gitleaks.toml allowlists only the documented SSH fixture keys and two fake test values; anything else fails.
+  secrets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { fetch-depth: 0, persist-credentials: false }
+      - name: gitleaks (pinned release, checksum-verified)
+        shell: bash
+        run: |
+          set -euo pipefail
+          v=8.30.1
+          sum=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+          cd "$RUNNER_TEMP"
+          curl -fsSLo gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v$v/gitleaks_${v}_linux_x64.tar.gz"
+          echo "$sum  gitleaks.tgz" | sha256sum -c -
+          tar -xzf gitleaks.tgz gitleaks
+          cd "$GITHUB_WORKSPACE"
+          "$RUNNER_TEMP/gitleaks" git --redact --no-banner --config .gitleaks.toml .
+          "$RUNNER_TEMP/gitleaks" dir --redact --no-banner --config .gitleaks.toml .

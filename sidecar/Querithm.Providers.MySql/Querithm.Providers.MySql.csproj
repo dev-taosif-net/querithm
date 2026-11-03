@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Querithm.Contract\Querithm.Contract.csproj" />
+    <ProjectReference Include="..\Querithm.Intelligence.MySql\Querithm.Intelligence.MySql.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="MySqlConnector" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Querithm.Tests" />
+  </ItemGroup>
+</Project>

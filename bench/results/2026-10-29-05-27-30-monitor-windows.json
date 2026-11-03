@@ -1,0 +1,112 @@
+{
+  "date": "2026-10-29T05:27:30.2107433Z",
+  "os": "Microsoft Windows 10.0.26300",
+  "cores": 8,
+  "fixture": "scripts/bench/docker/compose.yml (SQL Server 2022, PostgreSQL 16)",
+  "results": {
+    "30": {
+      "events": 200,
+      "serverReadAndParseMs": {
+        "value": 1402.0794,
+        "target": 2000
+      },
+      "parseTotalMs": {
+        "value": 5.7933,
+        "target": 200
+      },
+      "pollReadMs": {
+        "first": 957.7432,
+        "later": [
+          389.5684,
+          371.5206
+        ],
+        "note": "the 30 s poll: the first primes its position in the event files (a full read), later ones read only new events"
+      },
+      "parsePerEventMs": {
+        "median": 0.0333,
+        "target": 5
+      },
+      "note": "graph render of a 10-process deadlock is measured in the webview (scripts/bench/run.mjs --ui)"
+    },
+    "28-pg-idle": {
+      "sessions": 507,
+      "serverQueryMs": {
+        "median": 9.3844,
+        "p95": 12.8338,
+        "target": 100
+      },
+      "sidecarProcessingMs": {
+        "median": 0.2861,
+        "p95": 0.3913,
+        "max": 1.3084,
+        "samplesWithAGc": 2,
+        "samples": 60,
+        "target": 10
+      },
+      "payloadBytesPerTickWithoutNewTexts": {
+        "median": 198460,
+        "max": 201264,
+        "target": 524288
+      },
+      "payloadBytesPerTick": {
+        "median": 198462,
+        "max": 203898
+      },
+      "firstSnapshotBytes": {
+        "value": 195214,
+        "target": 2560000
+      },
+      "tickLagMs": {
+        "p95": 16,
+        "max": 17,
+        "target": 200
+      },
+      "sidecarCpuPercent": {
+        "value": 0.1529838510265605,
+        "target": 2,
+        "note": "whole test process (sidecar services in-process), all cores"
+      },
+      "ticks": 30
+    },
+    "28-mssql-idle": {
+      "sessions": 570,
+      "serverQueryMs": {
+        "median": 63.7921,
+        "p95": 88.8198,
+        "target": 100
+      },
+      "sidecarProcessingMs": {
+        "median": 0.2648,
+        "p95": 1.1158,
+        "max": 1.2973,
+        "samplesWithAGc": 6,
+        "samples": 60,
+        "target": 10
+      },
+      "payloadBytesPerTickWithoutNewTexts": {
+        "median": 196706,
+        "max": 450179,
+        "target": 524288
+      },
+      "payloadBytesPerTick": {
+        "median": 196911,
+        "max": 450179
+      },
+      "firstSnapshotBytes": {
+        "value": 196572,
+        "target": 2560000
+      },
+      "tickLagMs": {
+        "p95": 18,
+        "max": 18,
+        "target": 200
+      },
+      "sidecarCpuPercent": {
+        "value": 0.29941746171809763,
+        "target": 2,
+        "note": "whole test process (sidecar services in-process), all cores"
+      },
+      "ticks": 30
+    }
+  }
+}

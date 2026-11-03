@@ -1,0 +1,17 @@
+<Solution>
+  <Project Path="Querithm.Contract/Querithm.Contract.csproj" />
+  <Project Path="Querithm.ContractGen/Querithm.ContractGen.csproj" />
+  <Project Path="Querithm.Core/Querithm.Core.csproj" />
+  <Project Path="Querithm.Host/Querithm.Host.csproj" />
+  <Project Path="Querithm.Intelligence.DuckDb/Querithm.Intelligence.DuckDb.csproj" />
+  <Project Path="Querithm.Intelligence.MySql/Querithm.Intelligence.MySql.csproj" />
+  <Project Path="Querithm.Intelligence.PgSql/Querithm.Intelligence.PgSql.csproj" />
+  <Project Path="Querithm.Intelligence.Sqlite/Querithm.Intelligence.Sqlite.csproj" />
+  <Project Path="Querithm.Intelligence.TSql/Querithm.Intelligence.TSql.csproj" />
+  <Project Path="Querithm.Providers.DuckDb/Querithm.Providers.DuckDb.csproj" />
+  <Project Path="Querithm.Providers.MySql/Querithm.Providers.MySql.csproj" />
+  <Project Path="Querithm.Providers.Postgres/Querithm.Providers.Postgres.csproj" />
+  <Project Path="Querithm.Providers.SqlServer/Querithm.Providers.SqlServer.csproj" />
+  <Project Path="Querithm.Providers.Sqlite/Querithm.Providers.Sqlite.csproj" />
+  <Project Path="Querithm.Tests/Querithm.Tests.csproj" />
+</Solution>

@@ -1,0 +1,343 @@
+{
+  "date": "2026-10-29T11:25:30.064Z",
+  "os": "Linux 7.0.0-42-generic",
+  "cpu": "AMD Ryzen 7 4700U with Radeon Graphics",
+  "cores": 8,
+  "memGb": 15,
+  "results": {
+    "1": {
+      "metric": "Cold start to interactive editor",
+      "unit": "ms",
+      "target": 1500,
+      "value": 982,
+      "pass": true,
+      "note": "browser navigation → first keystroke rendered (app cold start: use --app)"
+    },
+    "3": {
+      "metric": "Typing latency in the 12k-line proc (p95)",
+      "unit": "ms",
+      "target": 16,
+      "value": 4,
+      "pass": true,
+      "samples": 200,
+      "toPaintP95IncludingVsync": 17.3
+    },
+    "4": {
+      "metric": "Tier-1 completion latency (p95)",
+      "unit": "ms",
+      "target": 5,
+      "value": 4,
+      "pass": true,
+      "samples": 300
+    },
+    "5": {
+      "metric": "Tier-2 completion latency, 12k-line proc (p95)",
+      "unit": "ms",
+      "target": 150,
+      "value": 25.71,
+      "pass": true,
+      "samples": 60
+    },
+    "6": {
+      "metric": "Full parse of 12k-line proc",
+      "unit": "ms",
+      "target": 100,
+      "value": 38.86,
+      "pass": true,
+      "lines": 12023,
+      "samples": [
+        276.3797510000004,
+        38.86215699999957,
+        44.565571000001,
+        33.93447699999888,
+        33.6573640000006
+      ]
+    },
+    "7": {
+      "metric": "Tab switch between connected sessions (p95)",
+      "unit": "ms",
+      "target": 50,
+      "value": 36.5,
+      "pass": true,
+      "samples": 50
+    },
+    "8": {
+      "metric": "DB switch, SQL Server, existing connection (overhead over one roundtrip)",
+      "unit": "ms",
+      "target": 20,
+      "value": 0,
+      "pass": true,
+      "switchMs": 1.6184309999989637,
+      "executeRoundtripMs": 3.2759559999976773
+    },
+    "9": {
+      "metric": "Metadata snapshot load from SQLite",
+      "unit": "ms",
+      "target": 80,
+      "value": 41.78,
+      "pass": true,
+      "objects": 1357,
+      "samples": [
+        163.55057300000044,
+        57.83352399999967,
+        41.7787759999992,
+        38.95353900000009,
+        37.094444999998814
+      ]
+    },
+    "10": {
+      "metric": "Incremental refresh with 10 changed objects",
+      "unit": "ms",
+      "target": 2000,
+      "value": 43.09,
+      "pass": true,
+      "samples": [
+        43.08732299999974,
+        46.58147000000099,
+        33.058817000001,
+        39.29574500000126,
+        64.08376800000042
+      ]
+    },
+    "11": {
+      "metric": "1M-row result: time to first batch painted (minus server time)",
+      "unit": "ms",
+      "target": 300,
+      "value": 151.4,
+      "pass": true,
+      "fullFetchMs": 5476.5,
+      "rows": 1000000
+    },
+    "12": {
+      "metric": "1M-row result: scroll frame time (p95)",
+      "unit": "ms",
+      "target": 16,
+      "value": 16.7,
+      "refreshMs": 16.7,
+      "longFrames": 0,
+      "samples": 240,
+      "pass": true
+    },
+    "13": {
+      "metric": "1M-row result: peak webview memory delta",
+      "unit": "MB",
+      "target": 600,
+      "value": 299.76,
+      "pass": true
+    },
+    "14": {
+      "metric": "Frames > 32 ms with 5 concurrent 60 s queries",
+      "unit": "frames",
+      "target": 0,
+      "value": 0,
+      "pass": true,
+      "frames": 900,
+      "worstMs": 16.80000000000291
+    },
+    "15": {
+      "metric": "Cancel latency",
+      "unit": "ms",
+      "target": 500,
+      "value": 3.4,
+      "pass": true,
+      "samples": [
+        14.742835000000923,
+        3.8850950000014564,
+        2.871634000002814,
+        3.4030259999999544,
+        3.246370000000752
+      ]
+    },
+    "16": {
+      "metric": "Sidecar processes alive 5 s after killing the app",
+      "unit": "count",
+      "target": 0,
+      "value": 0,
+      "pass": true
+    },
+    "18": {
+      "metric": "ERD 2-hop neighbourhood on the fixture: subgraph + layout",
+      "unit": "ms",
+      "target": 30,
+      "value": 5.8,
+      "pass": true,
+      "tables": 6,
+      "samples": [
+        5.799999998882413,
+        5.900000000372529,
+        6.099999999627471,
+        4.5,
+        4.700000001117587
+      ]
+    },
+    "19": {
+      "metric": "ERD whole-schema compact layout (web worker)",
+      "unit": "ms",
+      "target": 1000,
+      "value": 167.1,
+      "pass": true,
+      "tables": 606,
+      "fks": 301,
+      "samples": [
+        163,
+        167.09999999962747,
+        179.69999999925494
+      ]
+    },
+    "20": {
+      "metric": "Grid edits: DML preview for 100 staged cells (roundtrip)",
+      "unit": "ms",
+      "target": 15,
+      "value": 5.95,
+      "pass": true,
+      "editable": true,
+      "samples": [
+        41.73967300000004,
+        14.382574999999633,
+        22.72855999999956,
+        5.30104399999982,
+        5.270958000000974,
+        6.099398999998812,
+        5.949145999999018
+      ]
+    },
+    "21": {
+      "metric": "Schema compare of the fixture database with itself, slowest engine",
+      "unit": "ms",
+      "target": 2000,
+      "value": 598,
+      "pass": true,
+      "mssql": {
+        "ms": 598,
+        "objects": 1358
+      },
+      "pg": {
+        "ms": 188,
+        "objects": 1365
+      }
+    },
+    "22": {
+      "metric": "Data compare 100k × 10, 1k differences, slowest engine (incl. server time)",
+      "unit": "ms",
+      "target": 1500,
+      "value": 1440,
+      "pass": true,
+      "mssql": {
+        "ms": 1440,
+        "differences": 1000,
+        "memoryDeltaMb": 3
+      },
+      "pg": {
+        "ms": 292,
+        "differences": 1000,
+        "memoryDeltaMb": 4
+      },
+      "memoryGatePass": true
+    },
+    "23": {
+      "metric": "Import 100k × 10 CSV, slowest engine (SQL Server / PostgreSQL)",
+      "unit": "ms",
+      "target": 2000,
+      "value": 1748,
+      "pass": true,
+      "mssql": {
+        "ms": 1748,
+        "rows": 100000,
+        "error": null
+      },
+      "pg": {
+        "ms": 784,
+        "rows": 100000,
+        "error": null
+      }
+    },
+    "24": {
+      "metric": "Find usages of a column all ~550 cached modules mention + 5 open tabs (p50, SQL Server)",
+      "unit": "ms",
+      "target": 120,
+      "value": 92.43,
+      "pass": true,
+      "objectsScanned": 4,
+      "hits": 179,
+      "repeatedSearchMs": 41
+    },
+    "27": {
+      "metric": "Tier-2 completion latency, PostgreSQL, 10k-line PL/pgSQL function (p95)",
+      "unit": "ms",
+      "target": 150,
+      "value": 65.8,
+      "pass": true,
+      "lines": 10004,
+      "samples": 60,
+      "itemsPerCall": 5
+    },
+    "sidecarIdleRssMb": 78,
+    "fullRefreshMs": 1254,
+    "incrChanged0": 0,
+    "incrChanged1": 0,
+    "incrChanged2": 0,
+    "incrChanged3": 0,
+    "incrChanged4": 0,
+    "dataPlane1MRowsMs": 3112,
+    "dataPlaneFirstBatchMs": 141,
+    "real1MRowsMs": 7304,
+    "11cold": {
+      "metric": "Execute → first batch on a cold pool connection (SELECT 1, median, slower engine)",
+      "unit": "ms",
+      "target": 300,
+      "value": 16.25,
+      "pass": true,
+      "mssqlMedian": 16.2,
+      "mssqlP95": 18.9,
+      "pgMedian": 9.1,
+      "pgP95": 26.8,
+      "samplesPerEngine": 15
+    },
+    "28ui": {
+      "metric": "Activity snapshot, 500 sessions: parse + apply + cell damage in the webview (p95)",
+      "unit": "ms",
+      "target": 16,
+      "value": 8.9,
+      "pass": true,
+      "sessions": 500,
+      "tickBytes": 211282,
+      "samples": 60
+    },
+    "28first": {
+      "metric": "Activity first snapshot, 500 sessions with texts: parse + apply in the webview",
+      "unit": "ms",
+      "target": 50,
+      "value": 7.7,
+      "pass": true,
+      "firstSnapshotBytes": 442882
+    },
+    "30list": {
+      "metric": "Deadlock history: first paint of the 200-event list after the events arrive",
+      "unit": "ms",
+      "target": 100,
+      "value": 38.2,
+      "pass": true,
+      "events": 200
+    },
+    "30graph": {
+      "metric": "Deadlock history: graph render of a 10-process deadlock (median of 10)",
+      "unit": "ms",
+      "target": 50,
+      "value": 16.1,
+      "pass": true,
+      "processes": 10,
+      "samples": [
+        9.800000000745058,
+        12.200000001117587,
+        15.5,
+        16.699999999254942,
+        16.40000000037253,
+        16,
+        16.200000001117587,
+        16.300000000745058,
+        16.199999999254942,
+        16.09999999962747
+      ]
+    }
+  }
+}

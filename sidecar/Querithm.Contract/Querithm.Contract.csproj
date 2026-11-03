@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Querithm.Contract</RootNamespace>
+    <IsTrimmable>true</IsTrimmable>
+  </PropertyGroup>
+</Project>

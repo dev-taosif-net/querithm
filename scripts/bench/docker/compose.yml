@@ -1,0 +1,68 @@
+# Benchmark/test fixture (§14): SQL Server 2022 + PostgreSQL 16 + an SSH bastion (+ MySQL 8.4 / MariaDB 11.8, Phase D2). Development credentials only.
+name: querithm-fixture
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Querithm_Dev_2026!"
+      MSSQL_PID: "Developer"
+    ports: ["127.0.0.1:14333:1433"]
+  postgres:
+    build:
+      context: .
+      dockerfile: postgres.Dockerfile
+    environment:
+      POSTGRES_PASSWORD: "Querithm_Dev_2026!"
+    ports: ["127.0.0.1:54329:5432"]
+  # Activity monitor (Phase B): PostgreSQL 17 catalog renames (pg_stat_checkpointer, shared_blk_*_time) with
+  # pg_stat_statements loaded but no pg_wait_sampling (tick-sampled waits) and track_io_timing off.
+  postgres17:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: "Querithm_Dev_2026!"
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements"]
+    ports: ["127.0.0.1:54330:5432"]
+  # Activity monitor degradation: nothing preloaded, so pg_stat_statements can be created but not queried.
+  postgres-bare:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: "Querithm_Dev_2026!"
+    ports: ["127.0.0.1:54331:5432"]
+  # Phase D2: MySQL 8.4 LTS (the floor) and MariaDB 11.8 LTS, pinned by digest; fixture-only credentials.
+  mysql84:
+    image: mysql:8.4.13@sha256:a0225d1ea6631c8bc2385dc4c2faba17bbf1834ecf369e1659a9a382bd8d5dd7
+    # MonitorBench metric 28 holds 500 idle sessions plus the churn, holder and monitor connections (default 151).
+    command: ["--max-connections=700"]
+    environment:
+      MYSQL_ROOT_PASSWORD: "Querithm_Dev_2026!"
+      MYSQL_DATABASE: "querithm"
+    ports: ["127.0.0.1:33084:3306"]
+  mysql97:
+    image: mysql:9.7.4@sha256:86b390ef642f89a0157d6215dee33ddc928b8b0ecab173117f56f6c40cb24eab
+    environment:
+      MYSQL_ROOT_PASSWORD: "Querithm_Dev_2026!"
+      MYSQL_DATABASE: "querithm"
+    ports: ["127.0.0.1:33097:3306"]
+  # lower_case_table_names can only be set when the data directory is initialized: a separate container (Phase D2).
+  mysql84-lctn:
+    image: mysql:8.4.13@sha256:a0225d1ea6631c8bc2385dc4c2faba17bbf1834ecf369e1659a9a382bd8d5dd7
+    command: ["--lower-case-table-names=1"]
+    environment:
+      MYSQL_ROOT_PASSWORD: "Querithm_Dev_2026!"
+      MYSQL_DATABASE: "querithm"
+    ports: ["127.0.0.1:33085:3306"]
+  mariadb118:
+    image: mariadb:11.8.9@sha256:c4124d1afa875e47f2892edf26b482fa54f796e2f342d3717a04ca091a22a9bd
+    environment:
+      MARIADB_ROOT_PASSWORD: "Querithm_Dev_2026!"
+      MARIADB_DATABASE: "querithm"
+    ports: ["127.0.0.1:33118:3306"]
+  ssh:
+    build:
+      context: .
+      dockerfile: sshd.Dockerfile
+      args:
+        # The bastion user's password (the key passphrase is in ssh/test_rsa_pass.passphrase); tests read both from here.
+        SSH_PASSWORD: querithm_ssh
+    ports: ["127.0.0.1:22220:22"]

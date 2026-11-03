@@ -1,0 +1,257 @@
+{
+  "date": "2026-10-29T03:42:56.1177414Z",
+  "os": "Microsoft Windows 10.0.26300",
+  "cores": 8,
+  "fixture": "scripts/bench/docker/compose.yml (SQL Server 2022, PostgreSQL 16)",
+  "results": {
+    "30": {
+      "events": 200,
+      "serverReadAndParseMs": {
+        "value": 2987.7864,
+        "target": 2000
+      },
+      "parseTotalMs": {
+        "value": 8.7858,
+        "target": 200
+      },
+      "pollReadMs": {
+        "first": 2607.6799,
+        "later": [
+          539.6156,
+          553.6804
+        ],
+        "note": "the 30 s poll: the first primes its position in the event files (a full read), later ones read only new events"
+      },
+      "parsePerEventMs": {
+        "median": 0.0434,
+        "target": 5
+      },
+      "note": "graph render of a 10-process deadlock is measured in the webview (scripts/bench/run.mjs --ui)"
+    },
+    "28-pg-idle": {
+      "sessions": 507,
+      "serverQueryMs": {
+        "median": 11.1357,
+        "p95": 17.9881,
+        "target": 100
+      },
+      "sidecarProcessingMs": {
+        "median": 0.3025,
+        "p95": 0.916,
+        "max": 2.7023,
+        "samplesWithAGc": 3,
+        "samples": 60,
+        "target": 10
+      },
+      "payloadBytesPerTickWithoutNewTexts": {
+        "median": 197961,
+        "max": 200754,
+        "target": 524288
+      },
+      "payloadBytesPerTick": {
+        "median": 197962,
+        "max": 203464
+      },
+      "firstSnapshotBytes": {
+        "value": 194882,
+        "target": 2560000
+      },
+      "tickLagMs": {
+        "p95": 17,
+        "max": 20,
+        "target": 200
+      },
+      "sidecarCpuPercent": {
+        "value": 0.16601250922188943,
+        "target": 2,
+        "note": "whole test process (sidecar services in-process), all cores"
+      },
+      "ticks": 30
+    },
+    "28-mssql-idle": {
+      "sessions": 545,
+      "serverQueryMs": {
+        "median": 62.3775,
+        "p95": 76.2445,
+        "target": 100
+      },
+      "sidecarProcessingMs": {
+        "median": 0.2713,
+        "p95": 1.2468,
+        "max": 2.3416,
+        "samplesWithAGc": 8,
+        "samples": 60,
+        "target": 10
+      },
+      "payloadBytesPerTickWithoutNewTexts": {
+        "median": 192340,
+        "max": 442980,
+        "target": 524288
+      },
+      "payloadBytesPerTick": {
+        "median": 192356,
+        "max": 442980
+      },
+      "firstSnapshotBytes": {
+        "value": 193859,
+        "target": 2560000
+      },
+      "tickLagMs": {
+        "p95": 46,
+        "max": 439,
+        "target": 200
+      },
+      "sidecarCpuPercent": {
+        "value": 0.4166067315392338,
+        "target": 2,
+        "note": "whole test process (sidecar services in-process), all cores"
+      },
+      "ticks": 30
+    },
+    "28-pg-active": {
+      "sessions": 511,
+      "serverQueryMs": {
+        "median": 51.0413,
+        "p95": 74.5204,
+        "target": 100
+      },
+      "sidecarProcessingMs": {
+        "median": 0.623,
+        "p95": 2.2594,
+        "max": 3.7744,
+        "samplesWithAGc": 3,
+        "samples": 60,
+        "target": 10
+      },
+      "payloadBytesPerTickWithoutNewTexts": {
+        "median": null,
+        "max": null,
+        "target": 524288
+      },
+      "payloadBytesPerTick": {
+        "median": 201618,
+        "max": 207014
+      },
+      "firstSnapshotBytes": {
+        "value": 196920,
+        "target": 2560000
+      },
+      "tickLagMs": {
+        "p95": 15,
+        "max": 15,
+        "target": 200
+      },
+      "sidecarCpuPercent": {
+        "value": 0.08137577687977705,
+        "target": 2,
+        "note": "whole test process (sidecar services in-process), all cores"
+      },
+      "ticks": 30
+    },
+    "28-mssql-active": {
+      "sessions": 561,
+      "serverQueryMs": {
+        "median": 188.5754,
+        "p95": 225.7802,
+        "target": 100
+      },
+      "sidecarProcessingMs": {
+        "median": 0.6993,
+        "p95": 1.2463,
+        "max": 2.1754,
+        "samplesWithAGc": 0,
+        "samples": 60,
+        "target": 10
+      },
+      "payloadBytesPerTickWithoutNewTexts": {
+        "median": null,
+        "max": null,
+        "target": 524288
+      },
+      "payloadBytesPerTick": {
+        "median": 198663,
+        "max": 452754
+      },
+      "firstSnapshotBytes": {
+        "value": 195593,
+        "target": 2560000
+      },
+      "tickLagMs": {
+        "p95": 22,
+        "max": 4880,
+        "target": 200
+      },
+      "sidecarCpuPercent": {
+        "value": 0.7095978694780664,
+        "target": 2,
+        "note": "whole test process (sidecar services in-process), all cores"
+      },
+      "ticks": 28
+    },
+    "31-pg": {
+      "entries": 4764,
+      "fullReadMs": {
+        "median": 20.6217,
+        "target": 100
+      },
+      "incrementalReadMs": {
+        "median": "NaN",
+        "p95": "NaN",
+        "target": 100
+      },
+      "deltaAndTop100Ms": {
+        "median": 1.5539,
+        "p95": 4.1543,
+        "target": 20
+      },
+      "fullReadTrackerUpdateMs": {
+        "median": 1.4416,
+        "max": 3.9303,
+        "target": 20
+      }
+    },
+    "31-mssql": {
+      "entries": 28501,
+      "fullReadMs": {
+        "median": 210.6386,
+        "target": 1500
+      },
+      "incrementalReadMs": {
+        "median": 141.7215,
+        "p95": 172.5179,
+        "target": 300
+      },
+      "deltaAndTop100Ms": {
+        "median": 0.037,
+        "p95": 0.1601,
+        "target": 20
+      },
+      "fullReadTrackerUpdateMs": {
+        "median": 4.2588,
+        "max": 6.1235,
+        "target": 20
+      }
+    },
+    "31-mssql-T10-long-running-request": {
+      "entriesReadPerIncrementalRun": 5005,
+      "entriesSinceTheLongRequestStarted": 5000,
+      "incrementalReadMs": {
+        "median": 176.6016,
+        "p95": 246.2031,
+        "target": 300
+      }
+    },
+    "29": {
+      "ticks": 300,
+      "estimatedBytes": 11645563,
+      "measuredHeapDeltaBytes": 13458608,
+      "targetBytes": 52428800,
+      "scrubMs": {
+        "median": 1.4015,
+        "p95": 4.5738,
+        "max": 9.588,
+        "target": 50
+      }
+    }
+  }
+}

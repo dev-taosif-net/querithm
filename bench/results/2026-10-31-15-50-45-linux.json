@@ -1,0 +1,181 @@
+{
+  "date": "2026-10-31T15:50:45.882Z",
+  "os": "Linux 7.0.0-42-generic",
+  "cpu": "AMD Ryzen 7 4700U with Radeon Graphics",
+  "cores": 8,
+  "memGb": 15,
+  "results": {
+    "11cold.mysql": {
+      "metric": "MySQL: execute → first batch on a cold pool connection (TCP, TLS, login, identity read, SELECT 1, median)",
+      "unit": "ms",
+      "target": 300,
+      "value": 9.72,
+      "pass": true,
+      "samples": [
+        94.7,
+        13.4,
+        9.2,
+        9.5,
+        9.7,
+        9.9,
+        9.7,
+        9.6,
+        11.5,
+        9.6,
+        9.1,
+        7.2,
+        7,
+        12,
+        9.7
+      ]
+    },
+    "8.mysql": {
+      "metric": "MySQL: database switch on an existing connection (COM_INIT_DB, median)",
+      "unit": "ms",
+      "target": 20,
+      "value": 1.52,
+      "pass": true,
+      "samples": [
+        13.330527000000075,
+        2.579891999999745,
+        1.3460639999993873,
+        1.21399300000121,
+        1.9311300000008487,
+        1.6447779999998602,
+        1.519481999999698,
+        1.2453529999984312,
+        1.372254999998404,
+        2.221113999999943
+      ]
+    },
+    "9.mysql": {
+      "metric": "MySQL: metadata snapshot load from SQLite (600 tables, 150 views, 200 triggers)",
+      "unit": "ms",
+      "target": 80,
+      "value": 32.81,
+      "pass": true,
+      "objects": 950,
+      "samples": [
+        76.72286800000074,
+        32.80798499999946,
+        32.90750900000057,
+        11.100962000000436,
+        16.33408100000088
+      ]
+    },
+    "10.mysql": {
+      "metric": "MySQL: incremental refresh with 10 changed objects",
+      "unit": "ms",
+      "target": 2000,
+      "value": 122.74,
+      "pass": true,
+      "samples": [
+        122.74446400000306,
+        127.41996500000096,
+        110.19218700000056,
+        132.41771700000027,
+        117.37634099999923
+      ]
+    },
+    "15.mysql": {
+      "metric": "MySQL: cancel latency (KILL QUERY on a side connection)",
+      "unit": "ms",
+      "target": 500,
+      "value": 12.4,
+      "pass": true,
+      "samples": [
+        98.80207900000096,
+        12.129664000000048,
+        10.973500000000058,
+        13.295884999999544,
+        12.400092000003497
+      ]
+    },
+    "5.mysql": {
+      "metric": "MySQL: tier-2 completion latency, 10k-line script on the 600-table fixture (p95)",
+      "unit": "ms",
+      "target": 150,
+      "value": 53.72,
+      "pass": true,
+      "p95": 53.721534000003885,
+      "lines": 10000,
+      "itemsPerCall": 15,
+      "samples": 60
+    },
+    "20.mysql": {
+      "metric": "MySQL: grid edits, DML preview for 100 staged cells",
+      "unit": "ms",
+      "target": 15,
+      "value": 3.35,
+      "pass": true,
+      "samples": [
+        47.55679199999577,
+        7.397661000002699,
+        3.0401509999937844,
+        3.7835489999997662,
+        4.027297000000544,
+        3.3529730000009295,
+        2.8554890000013984
+      ]
+    },
+    "23.mysql": {
+      "metric": "MySQL: import 100k × 10 CSV into a new table (median of 3)",
+      "unit": "ms",
+      "target": 2000,
+      "value": 3939.54,
+      "pass": false,
+      "rows": 100000,
+      "samples": [
+        4246,
+        3704,
+        3940
+      ]
+    },
+    "21.mysql": {
+      "metric": "MySQL: schema compare of the fixture database with itself (600 tables, 150 views, 200 triggers)",
+      "unit": "ms",
+      "target": 2000,
+      "value": 323.75,
+      "pass": true,
+      "objects": 951,
+      "samples": [
+        346,
+        285,
+        324
+      ]
+    },
+    "22.mysql": {
+      "metric": "MySQL: data compare 100k × 10 against a copy with 1,000 changed rows",
+      "unit": "ms",
+      "target": 1500,
+      "value": 340.77,
+      "pass": true,
+      "differences": 1000,
+      "memoryDeltaMb": 3,
+      "memoryGatePass": true,
+      "samples": [
+        543,
+        341,
+        248
+      ]
+    },
+    "24.mysql": {
+      "metric": "MySQL: find usages of a column every fixture module mentions + 5 open tabs",
+      "unit": "ms",
+      "target": 120,
+      "value": 14.28,
+      "pass": true,
+      "objectsScanned": 2,
+      "hits": 128,
+      "samples": [
+        56.2,
+        14.3,
+        12.3,
+        21.1,
+        12.7,
+        30,
+        10.3
+      ]
+    }
+  }
+}

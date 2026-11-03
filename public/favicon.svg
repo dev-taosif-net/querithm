@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#141927"/>
+      <stop offset="100%" stop-color="#090C14"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="55%" stop-color="#2563EB"/>
+      <stop offset="100%" stop-color="#4F46E5"/>
+    </linearGradient>
+    <linearGradient id="plat" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#60A5FA"/>
+      <stop offset="50%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#2563EB"/>
+    </linearGradient>
+    <linearGradient id="pulse" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#10B981"/>
+      <stop offset="100%" stop-color="#34D399"/>
+    </linearGradient>
+  </defs>
+  <!-- squircle base -->
+  <rect width="464" height="464" x="24" y="24" rx="104" fill="url(#bg)" stroke="#262B38" stroke-width="8"/>
+  <!-- "Q" ring -->
+  <path d="M398 292 C402 278 404 264 404 248 C404 166.3 337.7 100 256 100 C174.3 100 108 166.3 108 248 C108 329.7 174.3 396 256 396 C286 396 314 387 337.5 371.5" fill="none" stroke="url(#ring)" stroke-width="34" stroke-linecap="round"/>
+  <!-- three-tier database -->
+  <path d="M180 184 V212 C180 227 214 238 256 238 C298 238 332 227 332 212 V184 Z" fill="url(#plat)" opacity="0.88"/>
+  <ellipse cx="256" cy="184" rx="76" ry="24" fill="#7DD3FC"/>
+  <path d="M180 232 V262 C180 277 214 288 256 288 C298 288 332 277 332 262 V232 C316 244 288 250 256 250 C224 250 196 244 180 232 Z" fill="url(#plat)" opacity="0.75"/>
+  <path d="M180 282 V312 C180 327 214 338 256 338 C275 338 292 335 306 330 L332 282 C316 294 288 300 256 300 C224 300 196 294 180 282 Z" fill="url(#plat)" opacity="0.6"/>
+  <circle cx="206" cy="214" r="5" fill="#0F1117"/>
+  <circle cx="206" cy="264" r="5" fill="#0F1117"/>
+  <circle cx="206" cy="314" r="5" fill="#10B981"/>
+  <!-- rhythm pulse forming the Q tail -->
+  <path d="M276 314 L318 314 L344 262 L374 366 L402 302 L430 338" fill="none" stroke="url(#pulse)" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -1,0 +1,32 @@
+{
+  "date": "2026-10-29T04:44:54.6584424Z",
+  "os": "Microsoft Windows 10.0.26300",
+  "cores": 8,
+  "fixture": "scripts/bench/docker/compose.yml (SQL Server 2022, PostgreSQL 16)",
+  "results": {
+    "30": {
+      "events": 200,
+      "serverReadAndParseMs": {
+        "value": 1295.9695,
+        "target": 2000
+      },
+      "parseTotalMs": {
+        "value": 5.6327,
+        "target": 200
+      },
+      "pollReadMs": {
+        "first": 1097.6243,
+        "later": [
+          463.1668,
+          446.1116
+        ],
+        "note": "the 30 s poll: the first primes its position in the event files (a full read), later ones read only new events"
+      },
+      "parsePerEventMs": {
+        "median": 0.0318,
+        "target": 5
+      },
+      "note": "graph render of a 10-process deadlock is measured in the webview (scripts/bench/run.mjs --ui)"
+    }
+  }
+}

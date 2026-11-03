@@ -1,0 +1,185 @@
+{
+  "date": "2026-10-21T12:38:56.536Z",
+  "os": "Linux 7.0.0-38-generic",
+  "cpu": "AMD Ryzen 7 4700U with Radeon Graphics",
+  "cores": 8,
+  "memGb": 15,
+  "results": {
+    "5": {
+      "metric": "Tier-2 completion latency, 12k-line proc (p95)",
+      "unit": "ms",
+      "target": 150,
+      "value": 30.22,
+      "pass": true,
+      "samples": 60
+    },
+    "6": {
+      "metric": "Full parse of 12k-line proc",
+      "unit": "ms",
+      "target": 100,
+      "value": 53.23,
+      "pass": true,
+      "lines": 12023,
+      "samples": [
+        284.09627399999954,
+        46.59030200000052,
+        53.22689200000059,
+        54.8189399999992,
+        49.9389429999992
+      ]
+    },
+    "8": {
+      "metric": "DB switch, SQL Server, existing connection (overhead over one roundtrip)",
+      "unit": "ms",
+      "target": 20,
+      "value": 0,
+      "pass": true,
+      "switchMs": 2.004672999999457,
+      "executeRoundtripMs": 4.304008999999496
+    },
+    "9": {
+      "metric": "Metadata snapshot load from SQLite",
+      "unit": "ms",
+      "target": 80,
+      "value": 44.05,
+      "pass": true,
+      "objects": 1156,
+      "samples": [
+        130.58047499999975,
+        31.115144000000328,
+        32.87103900000011,
+        60.10080599999992,
+        44.04574999999977
+      ]
+    },
+    "10": {
+      "metric": "Incremental refresh with 10 changed objects",
+      "unit": "ms",
+      "target": 2000,
+      "value": 32.09,
+      "pass": true,
+      "samples": [
+        22.797526999999718,
+        30.81356599999981,
+        32.08999800000038,
+        33.98459999999977,
+        60.43632699999944
+      ]
+    },
+    "15": {
+      "metric": "Cancel latency",
+      "unit": "ms",
+      "target": 500,
+      "value": 3.6,
+      "pass": true,
+      "samples": [
+        22.32525600000008,
+        3.441182000000481,
+        4.353806000000986,
+        3.4719119999990653,
+        3.597208999999566
+      ]
+    },
+    "16": {
+      "metric": "Sidecar processes alive 5 s after killing the app",
+      "unit": "count",
+      "target": 0,
+      "value": 0,
+      "pass": true
+    },
+    "17": {
+      "metric": "Installer size",
+      "unit": "MB",
+      "target": 120,
+      "value": 35.1,
+      "pass": true
+    },
+    "20": {
+      "metric": "Grid edits: DML preview for 100 staged cells (roundtrip)",
+      "unit": "ms",
+      "target": 15,
+      "value": 6.04,
+      "pass": true,
+      "editable": true,
+      "samples": [
+        22.023957000001246,
+        5.985455000000002,
+        34.465462000000116,
+        5.9892259999996895,
+        5.630587000001469,
+        6.04453999999896,
+        6.275299000000814
+      ]
+    },
+    "21": {
+      "metric": "Schema compare of the fixture database with itself, slowest engine",
+      "unit": "ms",
+      "target": 2000,
+      "value": 563,
+      "pass": true,
+      "mssql": {
+        "ms": 563,
+        "objects": 1157
+      },
+      "pg": {
+        "ms": 124,
+        "objects": 1158
+      }
+    },
+    "22": {
+      "metric": "Data compare 100k × 10, 1k differences, slowest engine (incl. server time)",
+      "unit": "ms",
+      "target": 1500,
+      "value": 1049,
+      "pass": true,
+      "mssql": {
+        "ms": 1049,
+        "differences": 1000,
+        "memoryDeltaMb": 2
+      },
+      "pg": {
+        "ms": 312,
+        "differences": 1000,
+        "memoryDeltaMb": 4
+      },
+      "memoryGatePass": true
+    },
+    "23": {
+      "metric": "Import 100k × 10 CSV, slowest engine (SQL Server / PostgreSQL)",
+      "unit": "ms",
+      "target": 2000,
+      "value": 1585,
+      "pass": true,
+      "mssql": {
+        "ms": 1585,
+        "rows": 100000,
+        "error": null
+      },
+      "pg": {
+        "ms": 863,
+        "rows": 100000,
+        "error": null
+      }
+    },
+    "24": {
+      "metric": "Find usages of a column all ~550 cached modules mention + 5 open tabs (p50, SQL Server)",
+      "unit": "ms",
+      "target": 120,
+      "value": 69.79,
+      "pass": true,
+      "objectsScanned": 3,
+      "hits": 177,
+      "repeatedSearchMs": 44.7
+    },
+    "sidecarIdleRssMb": 72,
+    "fullRefreshMs": 1459,
+    "incrChanged0": 0,
+    "incrChanged1": 0,
+    "incrChanged2": 0,
+    "incrChanged3": 0,
+    "incrChanged4": 0,
+    "dataPlane1MRowsMs": 3246,
+    "dataPlaneFirstBatchMs": 175,
+    "real1MRowsMs": 7803
+  }
+}

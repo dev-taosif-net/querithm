@@ -1,0 +1,40 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Minimum capability set (§13 rule 6): dialogs, fs scoped to the files the webview itself keeps under $DATA/querithm (tab recovery copies and the workspace, written to a temporary name and renamed into place, the folder listed for unsaved scripts to recover; app-bench results; reading the sidecar's exports) and user-picked paths. Nothing reaches the sidecar's store, known_hosts, logs or native libraries. No shell, no http. The webview may set its own page zoom (the Interface scale setting, §16).",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:webview:allow-set-webview-zoom",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "dialog:allow-message",
+    "dialog:allow-ask",
+    "dialog:allow-confirm",
+    {
+      "identifier": "fs:allow-read-text-file",
+      "allow": [{ "path": "$DATA/querithm/scripts/*" }, { "path": "$DATA/querithm/exports/*" }]
+    },
+    {
+      "identifier": "fs:allow-write-text-file",
+      "allow": [{ "path": "$DATA/querithm/scripts/*" }, { "path": "$DATA/querithm/bench/*" }]
+    },
+    "fs:allow-write-file",
+    {
+      "identifier": "fs:allow-mkdir",
+      "allow": [{ "path": "$DATA/querithm/scripts" }, { "path": "$DATA/querithm/bench" }]
+    },
+    {
+      "identifier": "fs:allow-remove",
+      "allow": [{ "path": "$DATA/querithm/scripts/*" }]
+    },
+    {
+      "identifier": "fs:allow-rename",
+      "allow": [{ "path": "$DATA/querithm/scripts/*" }]
+    },
+    {
+      "identifier": "fs:allow-read-dir",
+      "allow": [{ "path": "$DATA/querithm/scripts" }]
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Querithm.Contract\Querithm.Contract.csproj" />
+    <ProjectReference Include="..\Querithm.Intelligence.Sqlite\Querithm.Intelligence.Sqlite.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="SQLitePCLRaw.core" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Querithm.Tests" />
+  </ItemGroup>
+</Project>

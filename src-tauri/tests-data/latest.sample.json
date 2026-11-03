@@ -1,0 +1,51 @@
+{
+  "version": "0.1.3",
+  "notes": "- In-app updates: when a newer version is released, an Update button appears next to Settings. One click downloads the update, checks its signature, saves your open tabs and restarts Querithm. Turn automatic checks off under Settings.\n- Result grid: more selection, sorting and copy options, and clearer header sort indicators.\n- Editor: expand `*` to the column list, and signature help while typing a procedure or function call.\n- Query errors switch to Messages & Stats automatically.\n- Connections: choose how long Querithm remembers a password (once, for this session, for a set time, or always).\n- Import: a small file that finished importing very quickly no longer leaves the wizard stuck on \"Cancel import\".",
+  "pub_date": "2026-10-24T19:38:37.680Z",
+  "platforms": {
+    "windows-x86_64-nsis": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTODFRZW90K2pZbnBVL25FNUx0VXVmdC9MWGE5cjhIZFJaVXo5ZW00Ums2aDhBc1JRbFJ3T3MvZy9neGdObS9ieTZjR2E2VDc1VFdJVkFJalpXRmpNaHdXTE1Zam5sY2dZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyODcwNzE1CWZpbGU6UXVlcml0aG0td2luZG93cy14NjQtc2V0dXAuZXhlCXZlcnNpb246MC4xLjMKWXdCUDd2bXlVU3pvTW4xaTFSR1FCcXNWUHFZYUMveDB3WUVPVm1qSHBPM3hkeVNxR2FuZGtnaitYVld5S0xSMTBmRk9aN3VRelk2eVV5Si9rREkzRFE9PQo=",
+      "url": "https://github.com/dev-taosif-net/querithm-releases/releases/download/v0.1.3/Querithm-windows-x64-setup.exe"
+    },
+    "windows-x86_64-msi": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTODFRZW90K2pZbnVwVzlBdkhVU2tVcUJTeCs3TXd6Y1VPRVRzTVZZSVJyS0xiWGIvV1N5OGE0VzBtbEd2WkQybFk1UFBBUmd3dm0vQ2lhNmJKYTU3M0tSamEyc3N2SUE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyODcwNzE2CWZpbGU6UXVlcml0aG0td2luZG93cy14NjQubXNpCXZlcnNpb246MC4xLjMKMkxHTEhuOWc3R0g5Wk0xUUROT0hNR3pjZFBZMUpSV1FmZ1ZCYWZGNWNjdXVYcEhSY2RvaGlUSmVabjdNanF1d2dhbVJpaDFReEsyMVZ1dy9FUnV5QlE9PQo=",
+      "url": "https://github.com/dev-taosif-net/querithm-releases/releases/download/v0.1.3/Querithm-windows-x64.msi"
+    },
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTODFRZW90K2pZbnBVL25FNUx0VXVmdC9MWGE5cjhIZFJaVXo5ZW00Ums2aDhBc1JRbFJ3T3MvZy9neGdObS9ieTZjR2E2VDc1VFdJVkFJalpXRmpNaHdXTE1Zam5sY2dZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyODcwNzE1CWZpbGU6UXVlcml0aG0td2luZG93cy14NjQtc2V0dXAuZXhlCXZlcnNpb246MC4xLjMKWXdCUDd2bXlVU3pvTW4xaTFSR1FCcXNWUHFZYUMveDB3WUVPVm1qSHBPM3hkeVNxR2FuZGtnaitYVld5S0xSMTBmRk9aN3VRelk2eVV5Si9rREkzRFE9PQo=",
+      "url": "https://github.com/dev-taosif-net/querithm-releases/releases/download/v0.1.3/Querithm-windows-x64-setup.exe"
+    },
+    "darwin-aarch64-app": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTODFRZW90K2pZbnUzalBEa0tydHRsajB3SEZHOXI0YVAyWnFCM0tNanFKYzh6MWFKWldlUjE2dTJXd1NwMk45akRwU0RHT29sQStoVDEyaFc3ckIwcWMwQjdPRExiOWdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyODcwNzE2CWZpbGU6UXVlcml0aG0tbWFjb3MtYXJtNjQuYXBwLnRhci5negl2ZXJzaW9uOjAuMS4zClNkRjBHSDlKVkEvTXYrc0RvN3lNb2NBdFBLeU5rMEhVanFnY3ZKZXpKVzZLZFA3MmlYS2FwWElqUG9MWmJpcytPMm9HWlZuQXNLNkxkZHlsUk9iNUNnPT0K",
+      "url": "https://github.com/dev-taosif-net/querithm-releases/releases/download/v0.1.3/Querithm-macos-arm64.app.tar.gz"
+    },
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTODFRZW90K2pZbnUzalBEa0tydHRsajB3SEZHOXI0YVAyWnFCM0tNanFKYzh6MWFKWldlUjE2dTJXd1NwMk45akRwU0RHT29sQStoVDEyaFc3ckIwcWMwQjdPRExiOWdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyODcwNzE2CWZpbGU6UXVlcml0aG0tbWFjb3MtYXJtNjQuYXBwLnRhci5negl2ZXJzaW9uOjAuMS4zClNkRjBHSDlKVkEvTXYrc0RvN3lNb2NBdFBLeU5rMEhVanFnY3ZKZXpKVzZLZFA3MmlYS2FwWElqUG9MWmJpcytPMm9HWlZuQXNLNkxkZHlsUk9iNUNnPT0K",
+      "url": "https://github.com/dev-taosif-net/querithm-releases/releases/download/v0.1.3/Querithm-macos-arm64.app.tar.gz"
+    },
+    "darwin-x86_64-app": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTODFRZW90K2pZbmgyUjZLSnM1WWY0OTEvcjY2dXNXZEptUkVOaEhraUhEQ0Z3NSt3TnlDOFF0SzZ1MG5VcVJiNnQwSXM3bUZNb1VhYU95T2JyNzlKNmFMOWRtK1hMMHdrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyODcwNzE2CWZpbGU6UXVlcml0aG0tbWFjb3MteDY0LmFwcC50YXIuZ3oJdmVyc2lvbjowLjEuMwo0emJNeE9pL2FhbFBkc3VFU296MTk0M0l1bkRCVGRCN21HTG9FeWcyZHlpa1FkQjNnZ1R3NjFUVWljZEliYktRSHZtaWpsVmRsY1drbnVZWVdsRGVDUT09Cg==",
+      "url": "https://github.com/dev-taosif-net/querithm-releases/releases/download/v0.1.3/Querithm-macos-x64.app.tar.gz"
+    },
+    "darwin-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTODFRZW90K2pZbmgyUjZLSnM1WWY0OTEvcjY2dXNXZEptUkVOaEhraUhEQ0Z3NSt3TnlDOFF0SzZ1MG5VcVJiNnQwSXM3bUZNb1VhYU95T2JyNzlKNmFMOWRtK1hMMHdrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyODcwNzE2CWZpbGU6UXVlcml0aG0tbWFjb3MteDY0LmFwcC50YXIuZ3oJdmVyc2lvbjowLjEuMwo0emJNeE9pL2FhbFBkc3VFU296MTk0M0l1bkRCVGRCN21HTG9FeWcyZHlpa1FkQjNnZ1R3NjFUVWljZEliYktRSHZtaWpsVmRsY1drbnVZWVdsRGVDUT09Cg==",
+      "url": "https://github.com/dev-taosif-net/querithm-releases/releases/download/v0.1.3/Querithm-macos-x64.app.tar.gz"
+    },
+    "linux-x86_64-appimage": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTODFRZW90K2pZbnZFeGVMVHRZUVpmeS9wZ2V4eEdXWDFYSnBXMkhCRnVSWFNrbldRQ1UvWXlvcGJCbzhwUFpXYmJLQllJMVdZb0RBVUE1Rk1McFJyanpIeU9LOWRhRFFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyODcwNzE3CWZpbGU6UXVlcml0aG0tbGludXgteDY0LkFwcEltYWdlCXZlcnNpb246MC4xLjMKYjlxcGNhWDVOcUYzZVRBWW02QTIvTE52ejRaVFIzcEFuanhXUzg3R1pRR2JuRFA4cU5IMjhWcjRYUldyUFBXYVMrNFhUbFcwdkpIMUZHR2psb3RyQ3c9PQo=",
+      "url": "https://github.com/dev-taosif-net/querithm-releases/releases/download/v0.1.3/Querithm-linux-x64.AppImage"
+    },
+    "linux-x86_64-deb": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTODFRZW90K2pZbmgzbm81YWIxL1FtcEtCallSNURsVGliQmFvSGtpR3M5Q1BhM2d2MGdPZ3ZTQ2xLWkl0T2xncm5hY0ppMDRodWgxUXdDYkVDMzBBckp0dTRSQVVYeHcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyODcwNzE3CWZpbGU6UXVlcml0aG0tbGludXgteDY0LmRlYgl2ZXJzaW9uOjAuMS4zCkVQREUxaDJtZGRGRTVFV2hnbExVaE4vcC9MejFWR0dZM1dJYXRheExEb1lPNHNWNkRTcUNKcjVPeUpmaEQzRFh5S3dpOUt0TFl1alBCc2NSOFdnYUF3PT0K",
+      "url": "https://github.com/dev-taosif-net/querithm-releases/releases/download/v0.1.3/Querithm-linux-x64.deb"
+    },
+    "linux-x86_64-rpm": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTODFRZW90K2pZbnNxVGVzWmh1UzZ4S0k3WVpYbHpveFBHYjU4eWw2YnZkclV1QTFKcmh5RWd5OE80NWV0UWhlbnRZVUJjWWMwZWtTVWQ0RlhoeUxHaGs1VEs2Vjd6MWdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyODcwNzE3CWZpbGU6UXVlcml0aG0tbGludXgteDY0LnJwbQl2ZXJzaW9uOjAuMS4zCmRqN1ptNjM5MFpQcjJqTUF1S0xESThnTmdLaStIcmh2UVZITjQyUXZQREV5NFdYd3FGSEZnQ3N2dG9LYjRZa080eXZSMldTNVNudnlqaENVcW05SUNnPT0K",
+      "url": "https://github.com/dev-taosif-net/querithm-releases/releases/download/v0.1.3/Querithm-linux-x64.rpm"
+    },
+    "linux-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTODFRZW90K2pZbnZFeGVMVHRZUVpmeS9wZ2V4eEdXWDFYSnBXMkhCRnVSWFNrbldRQ1UvWXlvcGJCbzhwUFpXYmJLQllJMVdZb0RBVUE1Rk1McFJyanpIeU9LOWRhRFFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyODcwNzE3CWZpbGU6UXVlcml0aG0tbGludXgteDY0LkFwcEltYWdlCXZlcnNpb246MC4xLjMKYjlxcGNhWDVOcUYzZVRBWW02QTIvTE52ejRaVFIzcEFuanhXUzg3R1pRR2JuRFA4cU5IMjhWcjRYUldyUFBXYVMrNFhUbFcwdkpIMUZHR2psb3RyQ3c9PQo=",
+      "url": "https://github.com/dev-taosif-net/querithm-releases/releases/download/v0.1.3/Querithm-linux-x64.AppImage"
+    }
+  }
+}

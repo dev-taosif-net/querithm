@@ -1,0 +1,7 @@
+# pnpm workspace root (§3). The webview lives at the repo root; Rust and .NET build with their own tools.
+packages:
+  - "."
+onlyBuiltDependencies:
+  - esbuild
+allowBuilds:
+  esbuild: true

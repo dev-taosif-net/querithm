@@ -1,0 +1,259 @@
+{
+  "date": "2026-10-31T11:53:11.820Z",
+  "os": "Linux 7.0.0-42-generic",
+  "cpu": "AMD Ryzen 7 4700U with Radeon Graphics",
+  "cores": 8,
+  "memGb": 15,
+  "results": {
+    "1": {
+      "metric": "Cold start to interactive editor",
+      "unit": "ms",
+      "target": 1500,
+      "value": 821,
+      "pass": true,
+      "note": "browser navigation → first keystroke rendered (app cold start: use --app)"
+    },
+    "3": {
+      "metric": "Typing latency in the 12k-line proc (p95)",
+      "unit": "ms",
+      "target": 16,
+      "value": 6.7,
+      "pass": true,
+      "samples": 200,
+      "toPaintP95IncludingVsync": 18.9
+    },
+    "4": {
+      "metric": "Tier-1 completion latency (p95)",
+      "unit": "ms",
+      "target": 5,
+      "value": 4.5,
+      "pass": true,
+      "samples": 300,
+      "schemaObjects": 1157
+    },
+    "7": {
+      "metric": "Tab switch between connected sessions (p95)",
+      "unit": "ms",
+      "target": 50,
+      "value": 34.6,
+      "pass": true,
+      "samples": 50
+    },
+    "11": {
+      "metric": "1M-row result: time to first batch painted (minus server time)",
+      "unit": "ms",
+      "target": 300,
+      "value": 152.7,
+      "pass": true,
+      "fullFetchMs": 5546.4000000059605,
+      "rows": 1000000
+    },
+    "12": {
+      "metric": "1M-row result: scroll frame time (p95)",
+      "unit": "ms",
+      "target": 16,
+      "value": 16.8,
+      "refreshMs": 16.7,
+      "longFrames": 0,
+      "samples": 240,
+      "pass": true
+    },
+    "13": {
+      "metric": "1M-row result: peak webview memory delta",
+      "unit": "MB",
+      "target": 600,
+      "value": 324.3,
+      "pass": true
+    },
+    "14": {
+      "metric": "Frames > 32 ms with 5 concurrent 60 s queries",
+      "unit": "frames",
+      "target": 0,
+      "value": 1,
+      "pass": false,
+      "frames": 899,
+      "worstMs": 33.30000000000291
+    },
+    "18": {
+      "metric": "ERD 2-hop neighbourhood on the fixture: subgraph + layout",
+      "unit": "ms",
+      "target": 30,
+      "value": 4.9,
+      "pass": true,
+      "tables": 6,
+      "samples": [
+        5.699999988079071,
+        4.9000000059604645,
+        4.700000002980232,
+        8,
+        4.299999997019768
+      ]
+    },
+    "19": {
+      "metric": "ERD whole-schema compact layout (web worker)",
+      "unit": "ms",
+      "target": 1000,
+      "value": 168.1,
+      "pass": true,
+      "tables": 606,
+      "fks": 301,
+      "samples": [
+        174,
+        168.09999999403954,
+        164.79999999701977
+      ]
+    },
+    "34": {
+      "metric": "Chart 1M-row result, line with 2 series: Chart toggle → first paint (median)",
+      "unit": "ms",
+      "target": 500,
+      "value": 467.7,
+      "pass": true,
+      "rows": 1000000,
+      "samples": [
+        453.40000000596046,
+        474,
+        467.70000000298023
+      ]
+    },
+    "7b": {
+      "metric": "Tab switch 1 ↔ 30 with 30 tabs open (p95)",
+      "unit": "ms",
+      "target": 50,
+      "value": 36.1,
+      "pass": true,
+      "samples": 50
+    },
+    "34frames": {
+      "metric": "Chart toggle on a 1M-row result: frames longer than 32 ms",
+      "unit": "frames",
+      "target": 0,
+      "value": 0,
+      "pass": true,
+      "frames": 122,
+      "worstMs": 26.2
+    },
+    "28ui": {
+      "metric": "Activity snapshot, 500 sessions: parse + apply + cell damage in the webview (p95)",
+      "unit": "ms",
+      "target": 16,
+      "value": 9.2,
+      "pass": true,
+      "sessions": 500,
+      "tickBytes": 211282,
+      "samples": 60
+    },
+    "28first": {
+      "metric": "Activity first snapshot, 500 sessions with texts: parse + apply in the webview",
+      "unit": "ms",
+      "target": 50,
+      "value": 8.2,
+      "pass": true,
+      "firstSnapshotBytes": 442882
+    },
+    "30list": {
+      "metric": "Deadlock history: first paint of the 200-event list after the events arrive",
+      "unit": "ms",
+      "target": 100,
+      "value": 33.5,
+      "pass": true,
+      "events": 200
+    },
+    "30graph": {
+      "metric": "Deadlock history: graph render of a 10-process deadlock (median of 10)",
+      "unit": "ms",
+      "target": 50,
+      "value": 15.9,
+      "pass": true,
+      "processes": 10,
+      "samples": [
+        4.0999999940395355,
+        19.900000005960464,
+        15.600000008940697,
+        16.400000005960464,
+        15.899999991059303,
+        16.900000005960464,
+        15.5,
+        16.5,
+        15.900000005960464,
+        16.400000005960464
+      ]
+    },
+    "33expand": {
+      "metric": "Explorer: expand a 20,000-table folder → painted (median)",
+      "unit": "ms",
+      "target": 50,
+      "value": 22.5,
+      "pass": true,
+      "objects": 25000,
+      "samples": [
+        22.700000002980232,
+        22.5,
+        21,
+        23.599999994039536,
+        21.299999997019768
+      ]
+    },
+    "33scroll": {
+      "metric": "Explorer: scroll frame time through 20,000 tables (p95; renders once per 16 rows)",
+      "unit": "ms",
+      "target": 16,
+      "value": 16.7,
+      "refreshMs": 16.7,
+      "longFrames": 0,
+      "renders": 23,
+      "steps": 240,
+      "pass": true
+    },
+    "33patch": {
+      "metric": "Explorer: metadata patch to another database while 20,000 rows are expanded → painted (median)",
+      "unit": "ms",
+      "target": 33,
+      "value": 17.7,
+      "pass": true,
+      "samples": [
+        27.899999991059303,
+        17.700000002980232,
+        18,
+        15.899999991059303,
+        16.69999998807907
+      ]
+    },
+    "33search": {
+      "metric": "Explorer: search keystroke over 25,000 objects (p95, warm)",
+      "unit": "ms",
+      "target": 16,
+      "value": 5.6,
+      "pass": true,
+      "coldMs": 4.5,
+      "samples": [
+        5.5999999940395355,
+        2.800000011920929,
+        1.3999999910593033,
+        1.1000000089406967,
+        1.0999999940395355,
+        1.4000000059604645,
+        1,
+        1.199999988079071,
+        4.4000000059604645,
+        1.5999999940395355,
+        1.1000000089406967,
+        1.2000000029802322
+      ]
+    },
+    "33group": {
+      "metric": "Explorer: group a 25,000-object database by schema → painted (median)",
+      "unit": "ms",
+      "target": 50,
+      "value": 16.6,
+      "pass": true,
+      "samples": [
+        7,
+        16.899999991059303,
+        14.399999991059303,
+        16.899999991059303,
+        16.599999994039536
+      ]
+    }
+  }
+}
