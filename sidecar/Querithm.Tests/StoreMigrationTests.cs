@@ -228,6 +228,13 @@ public class StoreRecoveryTests : IDisposable
         return path;
     }
 
+    // The open store holds its WAL; Windows refuses File.ReadAllText on it unless the read shares write access.
+    static string ReadShared(string file)
+    {
+        using var s = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        return new StreamReader(s).ReadToEnd();
+    }
+
     [Fact]
     public void A_file_that_is_not_a_database_is_set_aside_with_its_wal_and_a_fresh_store_opens()
     {
@@ -239,7 +246,7 @@ public class StoreRecoveryTests : IDisposable
         Assert.StartsWith("store.db.corrupt-", Path.GetFileName(setAside));
         Assert.StartsWith("this is not a SQLite file", File.ReadAllText(setAside!));
         // The old WAL never meets the new file: moved with it, or (not a WAL SQLite can read) dropped by SQLite itself.
-        Assert.False(File.Exists(path + "-wal") && File.ReadAllText(path + "-wal") == "stale wal");
+        Assert.False(File.Exists(path + "-wal") && ReadShared(path + "-wal") == "stale wal");
         Assert.Equal((long)LocalStore.Version, Scalar(path, "PRAGMA user_version"));
         Assert.Empty(new ProfileStore(store).List());
         if (!OperatingSystem.IsWindows()) Assert.Equal(Querithm.Core.Store.PrivateFiles.FileMode, File.GetUnixFileMode(setAside!) & (UnixFileMode)0x1FF);

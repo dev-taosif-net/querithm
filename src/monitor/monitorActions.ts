@@ -29,7 +29,8 @@ function route() {
 export function registerModel(model: MonitorModel, profileId: string) {
   route();
   models.set(model.monitorId, { model, profileId });
-  return () => models.delete(model.monitorId);
+  // Only its own entry: monitor ids restart with the sidecar, so a closing tab must not drop a newer tab's model.
+  return () => { if (models.get(model.monitorId)?.model === model) models.delete(model.monitorId); };
 }
 
 export function modelsFor(profileId: string) {

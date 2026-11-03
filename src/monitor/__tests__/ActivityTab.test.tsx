@@ -49,6 +49,11 @@ const snap = (sessions: ActivityRow[] | null, o: Partial<MonitorSnapshot> = {}):
   monitorId: "mon1", at: Date.now(), seq: ++seq, sessions, status: [{ pane: "sessions", state: "ok" }], lagMs: 0, connectionCount: 1, throttled: false, paused: false, connection: "connected", ...o,
 });
 const push = (s: MonitorSnapshot) => act(() => handlers.get("monitor.snapshot")?.(s));
+// The tab is on screen and subscribed: a push before monitor.start resolved (slow runners) would be lost.
+const ready = async () => {
+  await screen.findByTestId("activity-tab");
+  await vi.waitFor(() => expect(handlers.has("monitor.snapshot")).toBe(true));
+};
 
 beforeEach(() => {
   seq = 0;
@@ -69,8 +74,9 @@ const tool = { id: "t1", kind: "activity" as const, title: "Activity", profileId
 describe("ActivityTab", () => {
   it("U1: snapshots never re-render the tab; the grid gets damaged cells only", async () => {
     render(<ActivityTab tool={tool} />);
-    await screen.findByTestId("activity-tab");
+    await ready();
     push(snap([row(1, { cpuMs: 1 }), row(2, { cpuMs: 2 })]));
+    await screen.findByTestId("glide");
     const renders = activityTabRenders.count;
     for (let i = 0; i < 20; i++) push(snap([row(1, { cpuMs: 1 }), row(2, { cpuMs: 2 + i })]));
     expect(activityTabRenders.count).toBe(renders);
@@ -81,7 +87,7 @@ describe("ActivityTab", () => {
 
   it("U9: each pane state renders its text from PaneStatus", async () => {
     render(<ActivityTab tool={tool} />);
-    await screen.findByTestId("activity-tab");
+    await ready();
     expect(screen.getByText("collecting…")).toBeTruthy(); // loading: no snapshot yet
     push(snap(null, { connection: "reconnecting", connectionError: "connection lost", retryInMs: 4000, status: [{ pane: "sessions", state: "error", reason: "connection lost" }] }));
     expect(document.querySelector('[data-pane-state="disconnected"]')?.textContent).toContain("connection lost");
@@ -105,7 +111,7 @@ describe("ActivityTab", () => {
   it("U8: a Querithm connection row offers Go to tab, never kill or cancel", async () => {
     useTabs.setState({ tabs: { q1: { id: "q1", title: "Orders.sql", sessionId: "s1" } as never } } as never);
     render(<ActivityTab tool={tool} />);
-    await screen.findByTestId("activity-tab");
+    await ready();
     push(snap([row(60, { querithmKind: "pool", ownSessionId: "s1" })]));
     act(() => gridProps.current.onGridSelectionChange({ rows: { first: () => 0 }, current: { cell: [0, 0] } }));
     expect(screen.queryByTestId("btn-kill")).toBeNull();
@@ -282,7 +288,7 @@ describe("Deadlocks pane (B7)", () => {
       return { texts: {}, missing: [] };
     });
     render(<ActivityTab tool={tool} />);
-    await screen.findByTestId("activity-tab");
+    await ready();
     push(withDeadlocks());
     const reads = () => rpc.mock.calls.filter(([m]) => m === "monitor.deadlocks").length;
     fireEvent.click(screen.getByRole("tab", { name: "Deadlocks" }));
@@ -324,7 +330,7 @@ describe("Deadlocks pane (B7)", () => {
   it("X16: a toast for deadlocks after the first read only, whatever the server clock says (10 min ahead or behind)", async () => {
     useUi.setState({ toasts: [] });
     render(<ActivityTab tool={tool} />);
-    await screen.findByTestId("activity-tab");
+    await ready();
     const toasts = () => useUi.getState().toasts.filter((t) => t.text.startsWith("Deadlock in")).length;
     push(withDeadlocks({ newDeadlocks: [deadlock("old", Date.now() + 10 * 60_000)] })); // the first read: the last 24 h
     expect(toasts()).toBe(0);
@@ -360,7 +366,7 @@ describe("SidePanel detail (S4)", () => {
 describe("ActivityTab lifecycle (L3)", () => {
   it("closing the tab stops its monitor", async () => {
     const { unmount } = render(<ActivityTab tool={tool} />);
-    await screen.findByTestId("activity-tab");
+    await ready();
     unmount();
     expect(rpc).toHaveBeenCalledWith("monitor.stop", { monitorId: "mon1" });
   });
@@ -392,7 +398,7 @@ describe("BlockingBanner (O9)", () => {
 describe("Kill / Cancel availability (U4): never armed while unavailable", () => {
   it("Kill session is focusable and says why while unavailable, does nothing on click, and is the danger button once a session can be killed", async () => {
     render(<ActivityTab tool={tool} />);
-    await screen.findByTestId("activity-tab");
+    await ready();
     push(snap([row(70, { login: "app" })]));
     const kill = screen.getByTestId("btn-kill") as HTMLButtonElement;
     // aria-disabled, not disabled: tokens.css paints .q-btn-danger[aria-disabled] as a plain button (the red fill read as armed).
@@ -427,7 +433,7 @@ describe("Kill / Cancel availability (U4): never armed while unavailable", () =>
 describe("paused monitor (U9): said in words and dimmed to a readable tier", () => {
   it("the header says Paused, the grid repaints with muted (not faint) text, the overview and the blocking pane follow; resume clears it", async () => {
     render(<ActivityTab tool={tool} />);
-    await screen.findByTestId("activity-tab");
+    await ready();
     push(snap([row(1, { login: "app" })]));
     const live = gridProps.current.getCellContent;
     expect(live([1, 0]).themeOverride).toBeUndefined();
@@ -514,7 +520,7 @@ describe("KillDialog server chip", () => {
       return { texts: {}, missing: [] };
     });
     render(<ActivityTab tool={tool} />);
-    await screen.findByTestId("activity-tab");
+    await ready();
     push(snap([row(70, { login: "app" })]));
     act(() => gridProps.current.onGridSelectionChange({ rows: { first: () => 0 }, current: { cell: [0, 0] } }));
     fireEvent.click(screen.getByTestId("btn-kill"));

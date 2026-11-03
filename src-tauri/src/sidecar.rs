@@ -867,8 +867,10 @@ mod tests {
         use tokio::io::AsyncReadExt;
 
         /// A scratch folder of the test's own (0700), removed by the caller.
+        // Under /tmp, not temp_dir(): macOS's $TMPDIR (/var/folders/…) plus these two folder levels passes
+        // MAX_SOCKET_PATH, so `choose` would skip every scratch base and the tests would see /tmp instead.
         fn scratch(mode: u32) -> PathBuf {
-            let d = std::env::temp_dir().join(format!("qsock-test-{}", random_hex(4)));
+            let d = PathBuf::from("/tmp").join(format!("qsock-test-{}", random_hex(4)));
             std::fs::create_dir(&d).unwrap();
             std::fs::set_permissions(&d, std::fs::Permissions::from_mode(mode)).unwrap();
             d
