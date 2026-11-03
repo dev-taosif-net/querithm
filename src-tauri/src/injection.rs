@@ -219,8 +219,11 @@ mod tests {
     #[test]
     fn a_replaced_file_is_refused_with_the_re_pick_code() {
         let (r, f) = registry_with_file();
-        std::fs::remove_file(&f).unwrap();
-        std::fs::write(&f, b"another file").unwrap();
+        // Another file renamed over it: while both exist they have distinct inodes. (Delete-then-write could get the
+        // freed inode back, and then it is the same file to the identity check.)
+        let other = f.with_extension("other");
+        std::fs::write(&other, b"another file").unwrap();
+        std::fs::rename(&other, &f).unwrap();
         let mut params = json!({ "profile": file_profile("", "g1") });
         let n = needs_for("profile.test", &params);
         let err = inject_file_grant(&mut params, &n, &r).unwrap_err();
