@@ -81,6 +81,7 @@ describe("ActivityTab", () => {
     for (let i = 0; i < 20; i++) push(snap([row(1, { cpuMs: 1 }), row(2, { cpuMs: 2 + i })]));
     expect(activityTabRenders.count).toBe(renders);
     // Row count unchanged: damage only, and only the cpu cell of row 2.
+    await vi.waitFor(() => expect(updateCells).toHaveBeenCalled());
     const last = updateCells.mock.calls.at(-1)![0] as { cell: [number, number] }[];
     expect(last).toEqual([{ cell: [7, 1] }]);
   });
@@ -114,8 +115,8 @@ describe("ActivityTab", () => {
     await ready();
     push(snap([row(60, { querithmKind: "pool", ownSessionId: "s1" })]));
     act(() => gridProps.current.onGridSelectionChange({ rows: { first: () => 0 }, current: { cell: [0, 0] } }));
+    const go = await screen.findByText("Go to tab");
     expect(screen.queryByTestId("btn-kill")).toBeNull();
-    const go = screen.getByText("Go to tab");
     expect(go.getAttribute("title")).toContain("Querithm connection");
   });
 });
@@ -400,7 +401,7 @@ describe("Kill / Cancel availability (U4): never armed while unavailable", () =>
     render(<ActivityTab tool={tool} />);
     await ready();
     push(snap([row(70, { login: "app" })]));
-    const kill = screen.getByTestId("btn-kill") as HTMLButtonElement;
+    const kill = (await screen.findByTestId("btn-kill")) as HTMLButtonElement;
     // aria-disabled, not disabled: tokens.css paints .q-btn-danger[aria-disabled] as a plain button (the red fill read as armed).
     expect(kill.getAttribute("aria-disabled")).toBe("true");
     expect(kill.disabled).toBe(false);
@@ -523,7 +524,7 @@ describe("KillDialog server chip", () => {
     await ready();
     push(snap([row(70, { login: "app" })]));
     act(() => gridProps.current.onGridSelectionChange({ rows: { first: () => 0 }, current: { cell: [0, 0] } }));
-    fireEvent.click(screen.getByTestId("btn-kill"));
+    fireEvent.click(await screen.findByTestId("btn-kill"));
     expect((await screen.findByTestId("kill-fact-Server")).textContent).toContain("Prod Billing");
   });
 });
