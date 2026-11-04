@@ -97,7 +97,8 @@ public sealed class DataEditorService(SessionManager sessions, ExecutionService 
                     {
                         var expect = group.Key.Length == 0 ? [] : group.Key.Split('\u0001');
                         var perRow = keyCols.Length + expect.Length;
-                        foreach (var chunk in group.Chunk(Math.Max(1, MaxParamsPerStatement / Math.Max(1, perRow))))
+                        // Bounded by the parameter budget and by the rows one derived table may hold (SQLite: 500 compound terms).
+                        foreach (var chunk in group.Chunk(Math.Max(1, Math.Min(d.MaxRelationRows, MaxParamsPerStatement / Math.Max(1, perRow)))))
                             await ReadTokensAsync(d, conn.Db, session, edit, keyCols, expect.Select(n => byName[n]).ToArray(), p, chunk, tokens, ct).ConfigureAwait(false);
                     }
                     return true;

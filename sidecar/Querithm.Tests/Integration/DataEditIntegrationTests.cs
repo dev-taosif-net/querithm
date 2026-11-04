@@ -311,6 +311,45 @@ public class DataEditIntegrationTests
     }
 
     [IntegrationTheory, MemberData(nameof(Engines))]
+    public async Task Self_joins_unions_and_filtered_unique_indexes_are_read_only(string engine)
+    {
+        // Grid-edit audit: both aliases of a self-join carry one table id, so a key could update another row than the one
+        // shown; a filtered / partial unique index proves nothing about the rows outside its filter.
+        var (h, p, sid) = await SetupAsync(engine);
+        await using var _h = h;
+        var t = T(engine, "q_plain");
+        var (_, self) = await SelectAsync(h, sid, $"SELECT a.id, a.name FROM {t} a JOIN {t} b ON b.id = a.id + 1");
+        Assert.False(self.Editable);
+        Assert.Equal($"Read-only: the same table ({(engine == "mssql" ? "dbo.q_plain" : "q_plain")}) appears more than once in the query", self.Reason);
+        var (_, union) = await SelectAsync(h, sid, $"SELECT id, name FROM {t} UNION ALL SELECT id, name FROM {T(engine, "q_edit")}");
+        Assert.False(union.Editable);
+        Assert.Equal("Read-only: the query combines several queries (UNION)", union.Reason);
+
+        await Ok(h, sid, engine == "mssql"
+            ? "DROP TABLE IF EXISTS dbo.q_filtered; CREATE TABLE dbo.q_filtered (code varchar(10) NOT NULL, active bit NOT NULL, label nvarchar(10) NULL); CREATE UNIQUE INDEX ux_active ON dbo.q_filtered (code) WHERE active = 1; INSERT dbo.q_filtered VALUES ('a', 0, N'x'), ('a', 0, N'y'), ('a', 1, N'z');"
+            : "DROP TABLE IF EXISTS q_filtered; CREATE TABLE q_filtered (code text NOT NULL, active boolean NOT NULL, label text); CREATE UNIQUE INDEX ux_active ON q_filtered (code) WHERE active; CREATE UNIQUE INDEX ux_lower ON q_filtered (lower(code), code); INSERT INTO q_filtered VALUES ('a', false, 'x'), ('a', false, 'y'), ('a', true, 'z');");
+        await RefreshAsync(h, p);
+        var (_, filtered) = await SelectAsync(h, sid, $"SELECT code, label FROM {T(engine, "q_filtered")}");
+        Assert.False(filtered.Editable, string.Join(",", filtered.KeyColumns));
+        Assert.Contains("no primary key", filtered.Reason);
+    }
+
+    [IntegrationFact]
+    public async Task Sql_server_unqualified_name_in_two_schemas_is_ambiguous()
+    {
+        var (h, p, sid) = await SetupAsync("mssql");
+        await using var _h = h;
+        await Ok(h, sid, "IF SCHEMA_ID('q_other') IS NULL EXEC('CREATE SCHEMA q_other'); DROP TABLE IF EXISTS q_other.q_plain; CREATE TABLE q_other.q_plain (id int PRIMARY KEY, name nvarchar(50) NULL);");
+        await RefreshAsync(h, p);
+        var (_, bare) = await SelectAsync(h, sid, "SELECT id, name FROM q_plain");
+        Assert.False(bare.Editable);
+        Assert.Equal("Read-only: table q_plain exists in more than one schema (ambiguous schema — qualify the table name)", bare.Reason);
+        var (_, qualified) = await SelectAsync(h, sid, "SELECT id, name FROM dbo.q_plain");
+        Assert.True(qualified.Editable, qualified.Reason);
+        await Ok(h, sid, "DROP TABLE q_other.q_plain;");
+    }
+
+    [IntegrationTheory, MemberData(nameof(Engines))]
     public async Task An_insert_trigger_does_not_replace_the_new_key(string engine)
     {
         var (h, p, sid) = await SetupAsync(engine);

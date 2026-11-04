@@ -10,15 +10,15 @@ import type { CopyFormat, ResultGridHandle, SelectionStats } from "./ResultGrid"
 import { formatStatNumber } from "./selectionStats";
 import { exportFormats, exportResultSet } from "./export";
 import { setBottomTab } from "../app/actions";
-import { toast } from "../store/ui";
+import { ask, toast } from "../store/ui";
 import { useDismiss } from "../app/dismiss";
 import { envColor, envLabel, useProfiles } from "../store/profiles";
 import { knownEngine } from "../engines";
-import type { GridStaging } from "./staging";
+import { MAX_DUPLICATE, stagings, type GridStaging } from "./staging";
 import { applyChanges, reviewChanges, scheduleTokens, stagingFor } from "./gridEdit";
 import { setChartSpec, setResultChart } from "./resultViews";
 import type { ChartSpec } from "../charts/chartSpec";
-import { Icon } from "../app/icons";
+import { Icon, type IconName } from "../app/icons";
 import type { MenuEntry } from "../app/ToolbarMenu";
 import { Chips, MenuButton, PanelFooter, PanelIconButton, PanelRow, Seg, SplitButton, usePanelWidth, type ChipModel } from "../app/panelKit";
 import { isFinal, isLatestRun, ledgerItems, lineOf, previousRun, selectPatch, selectedItem, type LedgerItem } from "./ledger";
@@ -73,7 +73,7 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
   const prevView = useExecutions((s) => (prevId ? s.views[prevId] : undefined));
   const items = ledgerItems(view, data, prevId ? { view: prevView, data: executionData.get(prevId) } : undefined);
   const item = selectedItem(items, tab);
-  const rs = item?.kind === "set" ? data?.resultSets[item.resultIndex] : undefined;
+  const rs = item?.kind === "set" ? data?.byIndex(item.resultIndex) : undefined;
   // Sorting and filtering notify the shown set itself (not the execution): follow it too, at the same pace.
   useThrottledVersion(rs);
   const latest = isLatestRun(tab);
@@ -86,20 +86,27 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
   const handle = useRef<ResultGridHandle | null>(null);
   const engine = knownEngine(useProfiles((st) => st.profiles.find((x) => x.id === tab.profileId)?.engine));
   const edit = rs ? view?.edits?.[rs.index] : undefined;
+  const key = rs ? `${executionId}:${rs.index}` : null;
+  // The sidecar forgets a run's edit record when its session closes (disconnect, engine restart, profile switch): the
+  // set is read-only from then on. Changes staged before that stay visible so they can be discarded, never hidden.
+  const sessionLive = !!view?.sessionId && view.sessionId === tab.sessionId;
+  const stagedBefore = key ? stagings.get(key)?.hasChanges : false;
   // An interrupted set never completes and the sidecar drops its edit record, so it stays read-only; an older run too.
-  const editable = rs && executionId && latest && edit?.editable && !rs.interrupted ? stagingFor(executionId, rs, engine) : undefined;
+  const editable = rs && executionId && latest && (sessionLive || stagedBefore) && edit?.editable && !rs.interrupted ? stagingFor(executionId, rs, engine) : undefined;
+  const chart = rs ? tab.charts?.[rs.index] : undefined;
   // Results open read-only; Edit (shown only when the set is editable) turns the grid into an editor. Staged changes
   // keep it in edit mode so they never sit hidden behind a read-only grid.
   const [editKey, setEditKey] = useState<string | null>(null);
-  const key = rs ? `${executionId}:${rs.index}` : null;
+  // Edit mode belongs to the set it was turned on for, while it is shown as a grid: showing another set, another run or
+  // the chart ends it, so coming back always starts read-only (clicked Edit once must not mean editable forever).
+  if (editKey !== null && (editKey !== key || !editable || chart?.view === "chart")) setEditKey(null);
   useSyncExternalStore(editable?.subscribe ?? EMPTY.subscribe, editable?.getVersion ?? EMPTY.getVersion);
   const editing = !!editable && (editKey === key || editable.hasChanges);
-  const chart = rs ? tab.charts?.[rs.index] : undefined;
   // Staged edits never hide behind a chart: the grid stays until they are applied or discarded.
   const chartOn = chart?.view === "chart" && !editable?.hasChanges;
   const staging = editing && !chartOn ? editable : undefined;
   const shownIndex = rs?.index;
-  const compareRs = tab.compare ? executionData.get(tab.compare.executionId)?.resultSets[tab.compare.resultIndex] : undefined;
+  const compareRs = tab.compare ? executionData.get(tab.compare.executionId)?.byIndex(tab.compare.resultIndex) : undefined;
   const comparing = !!compareRs && !!rs && !staging && !chartOn;
   // Stable, so the memoized chart view does not re-render for every arriving batch.
   const onViewCell = useCallback((row: number, col: number) => key && rs && setViewer({ key, row, col, order: rs.viewVersion }), [key, rs]);
@@ -208,7 +215,7 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
         onChange={(v) => !(v === "chart" && editable?.hasChanges) && setResultChart(tab.id, rs.index, { view: v })}
       />
       {!chartOn && filterBox}
-      {!chartOn && <EditButton rs={rs} editable={!!editable} latest={latest} reason={edit?.reason} onEdit={() => setEditKey(key)} compact={width === "narrow"} />}
+      {!chartOn && <EditButton rs={rs} editable={!!editable} latest={latest} sessionLive={sessionLive} reason={edit?.reason} onEdit={() => setEditKey(key)} compact={width === "narrow"} />}
       <span aria-hidden className="w-px h-4 bg-line shrink-0" />
       {!chartOn && width !== "narrow" && (
         <SplitButton
@@ -407,7 +414,7 @@ function ResultsFooter({ rs, item, view, stats, staging, comparing }: {
         {problems > 0 && <span className="text-err"> · {problems} invalid</span>} · stays local until applied as one transaction
       </span>
     ) : (
-      <span className="truncate">Double-click a cell to edit · Ctrl+0 NULL · Alt+Insert new row · Ctrl+Delete delete row</span>
+      <span className="truncate">Type or double-click to edit · Ctrl+0 NULL · Alt+Insert new row · Ctrl+D duplicate · Ctrl+Delete delete · Ctrl+S apply</span>
     );
   } else if (comparing) {
     left = <CompareCount a={rs} b={comparing} />;
@@ -452,7 +459,9 @@ function StatsLine({ stats }: { stats: SelectionStats }) {
 }
 
 /** Edit / Read-only in the same place: an uneditable set says why (the edit rule teaches itself). */
-function EditButton({ rs, editable, latest, reason, onEdit, compact }: { rs: ArrowResultSet; editable: boolean; latest: boolean; reason?: string | null; onEdit: () => void; compact: boolean }) {
+function EditButton({ rs, editable, latest, sessionLive, reason, onEdit, compact }: {
+  rs: ArrowResultSet; editable: boolean; latest: boolean; sessionLive: boolean; reason?: string | null; onEdit: () => void; compact: boolean;
+}) {
   if (editable) {
     return (
       <button type="button" className="q-btn h-[22px] px-2 shrink-0" data-q-edit-toggle aria-label={compact ? "Edit the rows" : undefined} title="Edit the rows of this table" onClick={onEdit}>
@@ -461,13 +470,51 @@ function EditButton({ rs, editable, latest, reason, onEdit, compact }: { rs: Arr
       </button>
     );
   }
-  const why = !latest ? "Read-only: an older run" : rs.interrupted ? "Read-only: the run stopped before every row arrived" : reason ? `Read-only: ${reason}` : "Read-only: these rows are not one table with a key";
+  const why = readOnlyWhy(rs, latest, sessionLive, reason);
   return (
-    <button type="button" className="q-btn h-[22px] px-2 shrink-0" aria-disabled title={why} aria-label={compact ? why : undefined}>
+    <button type="button" className="q-btn h-[22px] px-2 shrink-0" data-q-edit-toggle aria-disabled title={why} aria-label={compact ? why : undefined} aria-description={compact ? undefined : why}>
       <Icon name="lock" size={13} strokeWidth={2} />
       {!compact && "Read-only"}
     </button>
   );
+}
+
+/** Why a set is read-only, as one "Read-only: …" sentence (the sidecar's reasons may carry the prefix already). */
+export function readOnlyWhy(rs: Pick<ArrowResultSet, "interrupted">, latest: boolean, sessionLive: boolean, reason?: string | null): string {
+  if (!latest) return "Read-only: this is an older run — edit the latest result";
+  if (rs.interrupted) return "Read-only: the run stopped before every row arrived";
+  if (reason) return /^read-only\b/i.test(reason.trim()) ? reason.trim() : `Read-only: ${reason}`;
+  if (!sessionLive) return "Read-only: the connection was closed since this ran — run the query again to edit";
+  return "Read-only: these rows are not one table with a key";
+}
+
+/** A text button of the edit row: always in its place; unavailable ones stay focusable and say why (aria-disabled). */
+function EditAction({ label, icon, title, disabled, onClick, className = "", minWidth, compact, ...data }: {
+  label: string; icon?: IconName; title: string; disabled?: string | false; onClick: () => void; className?: string; minWidth?: number; compact?: boolean;
+  [k: `data-${string}`]: string | undefined;
+}) {
+  return (
+    <button
+      type="button"
+      className={`q-btn h-[22px] px-2 shrink-0 justify-center ${className}`}
+      style={minWidth ? { minWidth } : undefined}
+      aria-disabled={disabled ? true : undefined}
+      aria-label={compact && icon ? label : undefined}
+      title={disabled || title}
+      onClick={() => !disabled && onClick()}
+      {...data}
+    >
+      {icon && <Icon name={icon} size={12} strokeWidth={2} />}
+      {!(compact && icon) && label}
+    </button>
+  );
+}
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/** After leaving edit mode the Edit button is where focus belongs (the button that had it is gone). */
+function focusEditToggle() {
+  requestAnimationFrame(() => document.querySelector<HTMLElement>("[data-q-edit-toggle]")?.focus());
 }
 
 /** The 3 px environment rule under the row while editing: the environment's color, its word in the pill beside. */
@@ -483,7 +530,10 @@ function EditTools({ tabId, executionId, rs, staging, handle, filterBox, onDone 
 }) {
   useSyncExternalStore(staging.subscribe, staging.getVersion);
   const width = usePanelWidth();
-  const [busy, setBusy] = useState(false);
+  const compact = width === "narrow";
+  // A review dialog opened from the menu is in flight before the Apply starts; staging.busy covers every Apply.
+  const [reviewing, setReviewing] = useState(false);
+  const busy = staging.busy || reviewing;
   const profile = useProfiles((s) => s.profiles.find((p) => p.id === useTabs.getState().tabs[tabId]?.profileId));
   const env = profile?.environment;
   // Prod and staging always show the SQL first (the sidecar's ProdWrite guard still decides).
@@ -491,12 +541,46 @@ function EditTools({ tabId, executionId, rs, staging, handle, filterBox, onDone 
   const c = staging.counts;
   const any = staging.hasChanges;
   const problems = any ? staging.problems().length : 0;
-  const run = (f: () => Promise<unknown>) => {
-    setBusy(true);
-    void f().finally(() => setBusy(false));
-  };
+  const total = c.updates + c.inserts + c.deletes;
   const selected = () => handle.current?.selectedRefs() ?? [];
   const word = env ? envLabel[env].toUpperCase() : "";
+  const table = `${staging.edit.schema}.${staging.edit.table}`;
+  const WAIT = "Wait for Apply to finish";
+  const loading = rs.complete ? undefined : "Wait for all rows to arrive";
+  const insertBlocked = busy ? WAIT : loading ?? (staging.canInsert ? undefined : staging.edit.insertBlockedReason ?? "Rows cannot be added to this table");
+  const applyBlocked = busy ? WAIT
+    : staging.outcomeUnknown ? "The last Apply may have been written already — run the query again before applying"
+    : !any ? "Nothing to apply"
+    : problems > 0 ? `Fix ${plural(problems, "invalid value")} first (marked red)`
+    : undefined;
+  const leave = () => {
+    onDone();
+    focusEditToggle();
+  };
+  /** Cancel: leave edit mode; staged changes are discarded only after the user agrees (Keep editing is the default). */
+  const cancel = async () => {
+    if (!staging.hasChanges) return leave();
+    const parts = [c.updates && `${c.updates} changed`, c.inserts && `${c.inserts} new`, c.deletes && `${c.deletes} deleted`].filter(Boolean).join(" · ");
+    const ok = await ask<boolean>((resolve) => ({
+      kind: "confirm", danger: true, title: `Discard ${plural(total, "staged change")} to ${table}?`,
+      body: `${parts}. Nothing has been written to the database yet.`, ok: "Discard and leave", cancel: "Keep editing", resolve,
+    }));
+    if (!ok || staging.busy) return;
+    staging.discardAll();
+    leave();
+  };
+  const duplicate = () => {
+    const rows = selected();
+    if (!rows.length) return toast("info", "Select the rows to duplicate first (click a row number).");
+    const made = staging.duplicateRows(rows);
+    if (made.length) handle.current?.revealRow?.({ kind: "inserted", index: made[0] });
+    if (rows.length > made.length && made.length === MAX_DUPLICATE) toast("info", `Duplicated the first ${MAX_DUPLICATE.toLocaleString("en-US")} rows.`);
+  };
+  const remove = () => {
+    const rows = selected();
+    if (!rows.length) return toast("info", "Select the rows to delete first (click a row number).");
+    staging.toggleDelete(rows);
+  };
   return (
     <>
       {env && (
@@ -510,7 +594,7 @@ function EditTools({ tabId, executionId, rs, staging, handle, filterBox, onDone 
           Editing <b className="q-mono font-semibold">{staging.edit.schema}.{staging.edit.table}</b>
         </span>
       )}
-      <span className="text-[11.5px] shrink-0" data-q-edit-counts>
+      <span className="text-[11.5px] shrink-0" data-q-edit-counts aria-live="polite">
         {any ? (
           <>
             {c.updates > 0 && <span className="text-warn">{c.updates} changed </span>}
@@ -524,49 +608,49 @@ function EditTools({ tabId, executionId, rs, staging, handle, filterBox, onDone 
       </span>
       <span className="flex-1" />
       {filterBox}
-      <button type="button" className="q-btn h-[22px] px-2 shrink-0" disabled={!staging.canInsert || !rs.complete} title={staging.edit.insertBlockedReason ?? "Add a row (Alt+Insert)"} onClick={() => staging.addRow()}>
-        <Icon name="plus" size={12} strokeWidth={2} />Row
-      </button>
-      <button type="button" className="q-btn h-[22px] px-2 shrink-0" disabled={!rs.complete} title="Mark the selected rows for deletion (Ctrl+Delete)" onClick={() => staging.toggleDelete(selected())}>
-        <Icon name="trash" size={12} strokeWidth={2} />Delete rows
-      </button>
-      <PanelIconButton icon="undo" label="Undo (Ctrl+Z)" disabled={staging.canUndo ? undefined : "Nothing to undo"} onClick={() => staging.undo()} />
-      <PanelIconButton icon="redo" label="Redo (Ctrl+Y)" disabled={staging.canRedo ? undefined : "Nothing to redo"} onClick={() => staging.redo()} />
+      {/* Fixed order, nothing ever hidden: the same button is always in the same place for repetitive work. */}
+      <EditAction icon="plus" label="Row" compact={compact} title="Add a row (Alt+Insert)" disabled={insertBlocked} onClick={() => staging.addRow()} />
+      <EditAction icon="copy" label="Duplicate" compact={compact} title="Copy the selected rows as new rows (Ctrl+D)" disabled={insertBlocked} onClick={duplicate} />
+      <EditAction icon="trash" label="Delete rows" compact={compact} title="Mark the selected rows for deletion, or unmark them (Ctrl+Delete)" disabled={busy ? WAIT : loading} onClick={remove} />
+      <PanelIconButton icon="undo" label="Undo (Ctrl+Z)" disabled={busy ? WAIT : staging.canUndo ? undefined : "Nothing to undo"} onClick={() => staging.undo()} />
+      <PanelIconButton icon="redo" label="Redo (Ctrl+Y)" disabled={busy ? WAIT : staging.canRedo ? undefined : "Nothing to redo"} onClick={() => staging.redo()} />
       <MenuButton
         label="More edit actions"
         icon="more"
+        disabled={busy ? WAIT : undefined}
         items={() => [
-          { label: "Revert selected rows", unavailable: any ? undefined : "Nothing is staged", run: () => staging.revert(selected().filter((r) => r.kind === "existing")) },
+          { label: "Duplicate selected rows", unavailable: insertBlocked, run: duplicate },
+          { label: "Revert selected rows", unavailable: any ? undefined : "Nothing is staged", run: () => staging.revert(selected()) },
           { label: "Discard all", unavailable: any ? undefined : "Nothing is staged", run: () => staging.discardAll() },
-          ...(!reviewFirst ? [{ label: "Review SQL", unavailable: any ? undefined : "Nothing is staged", run: () => run(async () => { if (await reviewChanges(tabId, executionId, staging)) await applyChanges(tabId, executionId, staging, false, true); }) }] : []),
+          {
+            label: "Review SQL",
+            unavailable: reviewFirst ? `Apply always shows the SQL on ${word}` : applyBlocked,
+            run: () => {
+              setReviewing(true);
+              void (async () => {
+                if (await reviewChanges(tabId, executionId, staging)) await applyChanges(tabId, executionId, staging, false, true);
+              })().finally(() => setReviewing(false));
+            },
+          },
         ]}
       />
-      {reviewFirst ? (
-        <button
-          type="button"
-          className={`q-btn h-[22px] px-2 shrink-0 ${env === "prod" ? "q-btn-danger" : "q-btn-primary"}`}
-          disabled={!any || busy || problems > 0}
-          title="Shows the SQL, then writes it in one transaction (Ctrl+S in the grid)"
-          onClick={() => run(() => applyChanges(tabId, executionId, staging))}
-        >
-          {busy ? "Applying…" : `Review & apply to ${word}…`}
-        </button>
-      ) : (
-        <button
-          type="button"
-          className="q-btn q-btn-primary h-[22px] px-2 shrink-0"
-          disabled={!any || busy || problems > 0}
-          title="Write the staged changes in one transaction (Ctrl+S in the grid)"
-          onClick={() => run(() => applyChanges(tabId, executionId, staging))}
-        >
-          {busy ? "Applying…" : "Apply"}
-        </button>
-      )}
-      {!any && (
-        <button type="button" className="q-btn h-[22px] px-2 shrink-0" title="Back to the read-only grid" onClick={onDone}>
-          Done
-        </button>
-      )}
+      <span aria-hidden className="w-px h-4 bg-line shrink-0" />
+      <EditAction
+        label={busy && staging.busy ? "Applying…" : reviewFirst ? `Review & apply to ${word}…` : "Apply"}
+        className={reviewFirst && env === "prod" ? "q-btn-danger" : "q-btn-primary"}
+        // The longest label sets the width, so "Applying…" never moves Cancel.
+        minWidth={reviewFirst ? undefined : 74}
+        title={reviewFirst ? `Shows the SQL, then writes ${plural(total, "change")} in one transaction (Ctrl+S)` : `Write ${plural(total, "change")} in one transaction (Ctrl+S)`}
+        disabled={applyBlocked}
+        onClick={() => void applyChanges(tabId, executionId, staging)}
+      />
+      {/* The one way out, always here: with nothing staged it leaves at once; with changes it asks, then discards. */}
+      <EditAction
+        label="Cancel" data-q-edit-cancel=""
+        title={any ? `Discard the ${plural(total, "staged change")} and leave edit mode…` : "Leave edit mode (back to the read-only grid)"}
+        disabled={busy ? WAIT : undefined}
+        onClick={() => void cancel()}
+      />
     </>
   );
 }

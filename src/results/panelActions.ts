@@ -56,7 +56,7 @@ export function compareNext(tabId: string) {
   const shown = t.resultIndex ?? 0;
   const other = sets.find((s) => s.index !== shown);
   const prev = previousRun(t, id);
-  const target = other ? { executionId: id, resultIndex: other.index } : prev && executionData.get(prev)?.resultSets[shown] ? { executionId: prev, resultIndex: shown } : undefined;
+  const target = other ? { executionId: id, resultIndex: other.index } : prev && executionData.get(prev)?.byIndex(shown) ? { executionId: prev, resultIndex: shown } : undefined;
   if (!target) return toast("info", "Nothing to compare with: run a query that returns two result sets, or run this one again.");
   useTabs.getState().update(tabId, { compare: target, ledgerError: undefined });
   setBottomTab(tabId, "results");

@@ -66,7 +66,7 @@ function DialogView({ d }: { d: Dialog }) {
           onEnter={() => d.resolve(true)}
           footer={
             <>
-              <button className="q-btn" data-modal-cancel onClick={() => d.resolve(false)}>Cancel</button>
+              <button className="q-btn" data-modal-cancel onClick={() => d.resolve(false)}>{d.cancel ?? "Cancel"}</button>
               <button className={`q-btn ${d.danger ? "q-btn-danger" : "q-btn-primary"}`} onClick={() => d.resolve(true)}>{d.ok ?? "OK"}</button>
             </>
           }

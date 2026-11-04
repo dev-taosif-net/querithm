@@ -1021,6 +1021,14 @@ describe("execution notifications", () => {
     fire("query.plan", { executionId: "e1", batchIndex: 0, plan: { root: 1 }, raw: "<x/>" });
     expect(useExecutions.getState().views.e1.plans).toHaveLength(1);
   });
+  it("a set arriving without edit info at an index clears the edit info held there (never inherited)", () => {
+    fire("query.resultSet", { executionId: "e1", resultIndex: 0, edit: { editable: true, table: "a" } });
+    expect(useExecutions.getState().views.e1.edits?.[0]).toMatchObject({ editable: true });
+    fire("query.resultSet", { executionId: "e1", resultIndex: 0, edit: null });
+    expect(useExecutions.getState().views.e1.edits?.[0]).toBeUndefined();
+    fire("query.resultSet", { executionId: "e1", resultIndex: 1, edit: { editable: false, table: "b" } });
+    expect(useExecutions.getState().views.e1.edits).toEqual({ 1: { editable: false, table: "b" } });
+  });
   it("buffers events that arrive before the view exists", () => {
     fire("query.started", { executionId: "late" });
     expect(useExecutions.getState().views.late).toBeUndefined();

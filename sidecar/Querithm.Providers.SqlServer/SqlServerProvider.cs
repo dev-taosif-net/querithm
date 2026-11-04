@@ -183,6 +183,10 @@ public sealed partial class SqlServerProvider : IDbProvider
 
     // Predicted from the batch's AST, then checked against the real columns: a statement that failed at run time
     // shifts later result sets, and a stale snapshot changes SELECT * — either way the names stop matching.
+    /// <summary>A self-join, an ambiguous unqualified table name or a set operator (ScriptDom; <see cref="ResultSources.Refusal"/>).</summary>
+    public string? ResultEditRefusal(string batchText, int resultInBatch, SchemaSnapshot? snapshot) =>
+        snapshot == null ? null : ResultSources.Refusal(batchText, snapshot, resultInBatch);
+
     public ColumnOrigin?[]? ResultOrigins(DbDataReader reader, IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot)
     {
         if (snapshot == null || ResultSources.Predict(batchText, snapshot) is not { } sets || resultInBatch >= sets.Count || sets[resultInBatch] is not { } predicted) return null;

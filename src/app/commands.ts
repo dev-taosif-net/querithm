@@ -185,7 +185,7 @@ export function keysFor(c: Command): string[] {
 }
 
 /** Shortcuts an editable grid handles itself. */
-export const GRID_KEYS = new Set(["Ctrl+S", "Ctrl+0", "Ctrl+Z", "Ctrl+Y", "Ctrl+Shift+Z", "Alt+Insert", "Ctrl+Delete"]);
+export const GRID_KEYS = new Set(["Ctrl+S", "Ctrl+0", "Ctrl+D", "Ctrl+Z", "Ctrl+Y", "Ctrl+Shift+Z", "Alt+Insert", "Ctrl+Delete"]);
 
 /** Shortcuts the Object Explorer's tree handles itself while it has focus (§12): Ctrl+Enter inserts the name instead of
  *  running the query, F5 refreshes, F2 renames, Shift+F12 finds usages, Ctrl+C copies the name. */
@@ -213,6 +213,9 @@ export function installKeybindings() {
     const inField = !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") && !target.closest(".monaco-editor");
     // An editable result grid owns its editing keys (Ctrl+S applies the staged changes there, not Save).
     if (target?.closest?.("[data-q-grid-edit]") && GRID_KEYS.has(sc)) return;
+    // Glide draws its cell editor in #portal, outside the grid: a grid key typed there must not save the script
+    // (Ctrl+S) or reset the zoom (Ctrl+0) while an editable grid is open; the editor keeps the key.
+    if (target?.closest?.("#portal") && document.querySelector("[data-q-grid-edit]") && GRID_KEYS.has(sc)) return;
     if (target?.closest?.("[data-q-explorer-tree]") && EXPLORER_TREE_KEYS.has(sc)) return;
     if (target?.closest?.('.dv-tab[role="tab"]') && STRIP_TAB_KEYS.has(sc)) return;
     if (target?.closest?.("[data-q-explorer-search]") && EXPLORER_SEARCH_KEYS.has(sc)) return;

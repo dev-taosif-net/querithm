@@ -68,7 +68,7 @@ export function ledgerItems(
   const keyed: { at: number; item: LedgerItem }[] = [];
   for (const rs of data?.resultSets ?? []) {
     let delta: number | undefined;
-    const before = comparable ? prev!.data!.resultSets[rs.index] : undefined;
+    const before = comparable ? prev!.data!.byIndex(rs.index) : undefined;
     if (before && before.complete && !before.truncated && !before.interrupted && rs.complete && !rs.truncated && !rs.interrupted) delta = rs.rowCount - before.rowCount;
     const after = view.setAfter?.[rs.index];
     keyed.push({

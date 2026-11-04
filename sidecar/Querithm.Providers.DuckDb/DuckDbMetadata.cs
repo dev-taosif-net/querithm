@@ -197,7 +197,10 @@ public sealed class DuckDbMetadata : IMetadataProvider
             while (await r.ReadAsync(ct).ConfigureAwait(false))
             {
                 var id = IdOf(r.GetString(0), "table", r.GetString(1));
-                if (wanted.Contains(id)) indexes.Add(new IndexRow(id, r.GetString(2), r.GetBoolean(3), false, IndexColumns(r.IsDBNull(4) ? "" : r.GetString(4))));
+                if (!wanted.Contains(id)) continue;
+                var cols = IndexColumns(r.IsDBNull(4) ? "" : r.GetString(4));
+                // An expression key part (lower(x)) is never a grid row key.
+                indexes.Add(new IndexRow(id, r.GetString(2), r.GetBoolean(3), false, cols, NotAKey: cols.Contains("(expression)")));
             }
         }
 

@@ -27,6 +27,8 @@ public static class EditabilityAnalyzer
         if (!byId.TryGetValue(ids[0], out var table)) return ReadOnly("Read-only: the table is not in the cached metadata (refresh the explorer)");
         var qualified = $"{table.Schema}.{table.Name}";
         if (table.Kind != ObjectKind.Table) return ReadOnly($"Read-only: {qualified} is a {KindName(table.Kind)}");
+        // Apply is all or nothing through a transaction; a MyISAM / MEMORY / ARCHIVE / Aria table keeps what a failed Apply wrote.
+        if (table.NoRollbackEngine is { } engine) return ReadOnly($"Read-only: {qualified} is a {engine} table — its changes can't be rolled back");
         if (table.Columns is not { Length: > 0 } tableColumns) return ReadOnly($"Read-only: column metadata for {qualified} is not loaded yet");
 
         SnapColumn? ColumnOf(int ordinal) =>
@@ -52,7 +54,8 @@ public static class EditabilityAnalyzer
         else
         {
             var notNull = tableColumns.Where(c => !c.Nullable).Select(c => c.Name).ToHashSet(StringComparer.Ordinal);
-            var uniques = tableIndexes.Where(i => i.IsUnique && i.Columns.Length > 0 && i.Columns.All(notNull.Contains)).ToArray();
+            // A partial / filtered, expression, disabled or invalid unique index does not prove a row unique.
+            var uniques = tableIndexes.Where(i => i.IsUnique && !i.NotAKey && i.Columns.Length > 0 && i.Columns.All(notNull.Contains)).ToArray();
             var usable = uniques.FirstOrDefault(i => i.Columns.All(firstOrdinal.ContainsKey));
             if (usable == null)
                 return ReadOnly(uniques.Length > 0

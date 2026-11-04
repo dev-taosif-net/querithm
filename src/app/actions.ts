@@ -31,6 +31,12 @@ import { notebookHooks } from "../notebook/hooks";
 
 const KEEP_EXECUTIONS = 3;
 
+function withoutKey<V>(rec: Record<number, V>, key: number): Record<number, V> {
+  const out = { ...rec };
+  delete out[key];
+  return out;
+}
+
 function tab(id: string): TabState | undefined {
   return useTabs.getState().tabs[id];
 }
@@ -840,7 +846,8 @@ export function installExecutionListeners() {
         ex().patch(e.executionId, (v) => ({
           state: "streaming", resultSetCount: Math.max(v.resultSetCount, e.resultIndex + 1),
           setAfter: { ...v.setAfter, [e.resultIndex]: v.messages.length },
-          ...(e.edit ? { edits: { ...v.edits, [e.resultIndex]: e.edit } } : {}),
+          // Always (re)written: a set that arrives without edit info must never inherit an earlier set's at its index.
+          ...(e.edit ? { edits: { ...v.edits, [e.resultIndex]: e.edit } } : v.edits?.[e.resultIndex] ? { edits: withoutKey(v.edits, e.resultIndex) } : {}),
         })),
       ),
     ),

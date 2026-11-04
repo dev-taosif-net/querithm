@@ -80,6 +80,12 @@ public interface IDataEditDialect
     string ValuesRelation(IReadOnlyList<IReadOnlyList<string>> rows, IReadOnlyList<string> names, string alias) =>
         $"(VALUES {string.Join(", ", rows.Select(r => "(" + string.Join(", ", r) + ")"))}) AS {alias}({string.Join(", ", names)})";
 
+    /// <summary>
+    /// The most rows one <see cref="ValuesRelation"/> may hold. SQLite builds it as a compound SELECT, which the engine caps
+    /// at 500 terms (SQLITE_MAX_COMPOUND_SELECT); the default only bounds the statement's size.
+    /// </summary>
+    int MaxRelationRows => 1000;
+
     /// <summary>The same rows as SELECT … UNION ALL SELECT …: SQLite and MariaDB have no column list on a derived table.</summary>
     static string UnionAllRelation(IReadOnlyList<IReadOnlyList<string>> rows, IReadOnlyList<string> names, string alias) =>
         "(" + string.Join(" UNION ALL ", rows.Select((r, i) => "SELECT " + string.Join(", ", r.Select((e, k) => i == 0 ? $"{e} AS {names[k]}" : e)))) + $") AS {alias}";

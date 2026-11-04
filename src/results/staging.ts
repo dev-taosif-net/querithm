@@ -53,6 +53,8 @@ export interface StagedCounts {
 }
 
 const MAX_UNDO = 200;
+/** Rows one Duplicate copies at most. */
+export const MAX_DUPLICATE = 1000;
 export const CHANGED_ON_SERVER = "This row changed on the server after the query ran (or it was deleted). Re-run the query to edit it.";
 
 export class GridStaging {
@@ -96,6 +98,15 @@ export class GridStaging {
   };
 
   getVersion = () => this.version;
+
+  /** An Apply is in flight (started by the button, Ctrl+S or a prompt): the edit row locks its buttons. */
+  busy = false;
+
+  setBusy(b: boolean) {
+    if (this.busy === b) return;
+    this.busy = b;
+    this.changed();
+  }
 
   private changed() {
     this.version++;
@@ -149,8 +160,19 @@ export class GridStaging {
     return this.deleted.has(row);
   }
 
+  /** The cell's validation error; a new row's required column left empty counts too, so the cell itself shows it. */
   errorFor(ref: RowRef, ordinal: number): string | undefined {
-    return this.errors.get(errKey(ref, ordinal));
+    const err = this.errors.get(errKey(ref, ordinal));
+    if (err || ref.kind !== "inserted") return err;
+    const col = this.column(ordinal);
+    return col && this.missing(this.inserted[ref.index], col) ? `${col.column} needs a value` : undefined;
+  }
+
+  /** A required column of a new row with no value: NOT NULL, no default, not generated or locked. */
+  private missing(r: InsertedRow | undefined, c: EditColumn): boolean {
+    if (!r || !c.column || c.locked || c.generated || c.nullable || c.hasDefault) return false;
+    const v = r.values.get(c.ordinal);
+    return !v || !!v.isDefault || v.value == null;
   }
 
   /** Why this cell cannot be edited, or null. `fullValue`: the edit carries the whole value (cell viewer), so a shortened display is no obstacle. */
@@ -199,8 +221,35 @@ export class GridStaging {
     this.revalidate();
   }
 
+  /** Set while `batch` runs: the batch recorded its one undo step already. */
+  private batching = false;
+
+  /** Runs several changes (a paste that also adds rows) as one undo step with one notification. */
+  batch<T>(f: () => T): T {
+    if (this.batching) return f();
+    const before = this.snapshot();
+    const undoLen = this.undoStack.length;
+    this.batching = true;
+    let out: T;
+    try {
+      out = f();
+    } finally {
+      this.batching = false;
+    }
+    // Nothing changed: no undo step, and redo survives.
+    if (JSON.stringify(before) !== JSON.stringify(this.snapshot())) {
+      this.undoStack.length = undoLen;
+      this.undoStack.push(before);
+      if (this.undoStack.length > MAX_UNDO) this.undoStack.shift();
+      this.redoStack = [];
+      this.changed();
+    }
+    return out;
+  }
+
   /** Records the state before a change, for undo. */
   private record() {
+    if (this.batching) return;
     this.undoStack.push(this.snapshot());
     if (this.undoStack.length > MAX_UNDO) this.undoStack.shift();
     this.redoStack = [];
@@ -257,7 +306,8 @@ export class GridStaging {
 
   private revalidate() {
     this.errors.clear();
-    for (const [row, m] of this.edits) for (const [o, c] of m) this.validateCell({ kind: "existing", row }, o, this.column(o)!, c);
+    // A row marked for deletion is never sent with its edits (buildPatch skips them), so they cannot block Apply.
+    for (const [row, m] of this.edits) if (!this.deleted.has(row)) for (const [o, c] of m) this.validateCell({ kind: "existing", row }, o, this.column(o)!, c);
     this.inserted.forEach((r, index) => {
       for (const [o, c] of r.values) this.validateCell({ kind: "inserted", index }, o, this.column(o)!, c);
     });
@@ -294,11 +344,58 @@ export class GridStaging {
     this.changed();
   }
 
-  /** Reverts staged values of the given cells (or whole rows when ordinals is omitted). */
+  /**
+   * Copies rows into new rows (one undo step) and returns their indexes among inserted rows. Server-generated and
+   * locked columns are left to the server; a key column is never copied (it would collide): DEFAULT when it has one,
+   * else empty so validation asks for a new value. A value the grid holds only shortened is not copied either.
+   */
+  duplicateRows(refs: RowRef[]): number[] {
+    if (!this.canInsert) return [];
+    const seen = new Set<string>();
+    const src = refs.filter((r) => {
+      const k = r.kind === "inserted" ? `i${this.inserted[r.index]?.id}` : `e${r.row}`;
+      if (seen.has(k) || (r.kind === "existing" && this.appliedDeleted.has(r.row)) || (r.kind === "inserted" && !this.inserted[r.index])) return false;
+      seen.add(k);
+      return true;
+    }).slice(0, MAX_DUPLICATE);
+    if (!src.length) return [];
+    // Read every source cell first: the copies are appended to `inserted`, which inserted-row refs index into.
+    const copies = src.map((ref) => {
+      const values = new Map<number, Cell>();
+      for (const col of this.edit.columns) {
+        const o = col.ordinal;
+        if (!col.column || col.generated || col.locked) continue;
+        if (col.key || this.edit.keyOrdinals.includes(o)) {
+          values.set(o, col.hasDefault ? { value: null, isDefault: true } : { value: null });
+          continue;
+        }
+        const c = this.cell(ref, o);
+        const shortened = ref.kind === "existing" && !c.staged && this.isTruncated(ref.row, o);
+        if (c.unknown || shortened) values.set(o, col.hasDefault ? { value: null, isDefault: true } : { value: null });
+        else values.set(o, c.isDefault ? { value: null, isDefault: true } : { value: c.value });
+      }
+      return values;
+    });
+    return this.batch(() => copies.map((values) => this.addRow(values)));
+  }
+
+  /** Reverts staged values of the given cells (or whole rows when ordinals is omitted); a new row goes back to empty. */
   revert(rows: RowRef[], ordinals?: number[]) {
+    const touches = rows.some((ref) =>
+      ref.kind === "inserted"
+        ? (this.inserted[ref.index]?.values.size ?? 0) > 0
+        : this.edits.has(ref.row) || (!ordinals && this.deleted.has(ref.row)),
+    );
+    if (!touches) return; // nothing to revert: keep the redo history
     this.record();
     for (const ref of rows) {
-      if (ref.kind === "inserted") continue;
+      if (ref.kind === "inserted") {
+        const r = this.inserted[ref.index];
+        if (!r) continue;
+        if (!ordinals) r.values.clear();
+        else for (const o of ordinals) r.values.delete(o);
+        continue;
+      }
       if (!ordinals) {
         this.edits.delete(ref.row);
         this.deleted.delete(ref.row);
@@ -356,15 +453,18 @@ export class GridStaging {
     return { updates: [...this.edits.keys()].filter((r) => !this.deleted.has(r)).length, inserts: this.inserted.length, deletes: this.deleted.size };
   }
 
-  /** Cells with invalid values, and new rows missing a required value. Apply is refused while there are any. */
+  /**
+   * One entry per invalid cell (never merged: five bad numbers are five problems), and per required value a new row
+   * lacks. Apply is refused while there are any.
+   */
   problems(): string[] {
-    const out = [...new Set(this.errors.values())];
+    const out: string[] = [];
+    for (const [key, msg] of this.errors) {
+      const [where] = key.split(":");
+      out.push(where.startsWith("i") ? `New row ${Number(where.slice(1)) + 1}: ${msg}` : `Row ${Number(where) + 1}: ${msg}`);
+    }
     this.inserted.forEach((r, i) => {
-      for (const c of this.edit.columns) {
-        if (!c.column || c.locked || c.generated || c.nullable || c.hasDefault) continue;
-        const v = r.values.get(c.ordinal);
-        if (!v || v.isDefault || v.value == null) out.push(`New row ${i + 1}: ${c.column} needs a value`);
-      }
+      for (const c of this.edit.columns) if (this.missing(r, c) && !this.errors.has(errKey({ kind: "inserted", index: i }, c.ordinal))) out.push(`New row ${i + 1}: ${c.column} needs a value`);
     });
     return out;
   }
@@ -511,6 +611,7 @@ export class GridStaging {
 
   /** Drops the staged changes of rows (after the user discarded the conflicting ones). */
   dropRows(rows: number[]) {
+    if (!rows.some((r) => this.edits.has(r) || this.deleted.has(r))) return;
     this.record();
     for (const r of rows) {
       this.edits.delete(r);

@@ -626,6 +626,14 @@ export class ExecutionData {
     return rs;
   }
 
+  /**
+   * The result set with this sidecar index, or undefined. Never look a set up by array position: `finishStream` drops
+   * aborted sets, so positions shift and would show one set's rows under another set's chip and edit rule.
+   */
+  byIndex(resultIndex: number): ArrowResultSet | undefined {
+    return this.resultSets.find((r) => r.index === resultIndex);
+  }
+
   finishStream() {
     this.streamEnded = true;
     // A schema without rows or an end marker is an aborted result. Keep completed

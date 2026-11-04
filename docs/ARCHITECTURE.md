@@ -809,11 +809,12 @@ spec's tables: `profile` (no password column, ever), `schema_snapshot`, `obj`, `
 `fk`, `idx`, `definition_cache`, `history` + `history_fts` (FTS5), `script`, `setting`, and `snippet`
 (the snippet library, user data never logged).
 
-**Schema versions.** `PRAGMA user_version` is `LocalStore.Version` (5). Opening a file written by an
+**Schema versions.** `PRAGMA user_version` is `LocalStore.Version` (6). Opening a file written by an
 older build runs the migration steps first (v1 → v2: `obj.parent_object_id` added and every
 `schema_snapshot` marked `stale`, so the next refresh lists triggers; v2 → v3: the `snippet` table; v3 → v4:
 `profile.location` and `profile.file_grant_id`, NULL — a server — for every existing profile, Phase D0a; v4 → v5:
-`history.preview` and `history.sql_length`, NULL in older rows, L17), then
+`history.preview` and `history.sql_length`, NULL in older rows, L17; v5 → v6: `obj.no_rollback_engine` and
+`idx.not_key` for grid editing, every `schema_snapshot` marked `empty` so its next refresh is a full one that fills them), then
 `Schema.sql`, all in one transaction: a crash mid-migration leaves the file at its old version and the
 next open runs the steps again. A file from a newer build keeps its version.
 
@@ -1318,11 +1319,19 @@ Results (row counts, PRINT output, or its error card). The **notice line** holds
 run's first error and a row-limit cut ("Fetch all rows"; Copy and Export of a cut set warn that they hold the fetched
 rows only); errors and the limit are added when the run ends, never while rows stream, so the line never moves the grid
 mid-scroll; it can be dismissed until the next run. The **Results tools** are Grid | Chart, the filter with its column
-scope as a prefix, Edit (or Read-only with the reason: an older run, an interrupted set, the sidecar's reason), Copy
-(split: with headers, IN list, Markdown) and Export. **Edit mode replaces the tool row** and keeps the filter: the
-environment as a word (Prod solid), a 3 px environment rule, counts, + Row, Delete rows, undo/redo, ⋯ (Revert selected
-rows, Discard all, Review SQL) and Apply; on Prod and Stage one "Review & apply to PROD…" button always shows the SQL
-first (`applyChanges`; the sidecar's ProdWrite guard still decides); the ledger is locked while changes are staged. The
+scope as a prefix, Edit (or Read-only with the reason: an older run, an interrupted set, a closed session, the
+sidecar's reason), Copy (split: with headers, IN list, Markdown) and Export. Edit is per result set (found by its
+sidecar index, never its position) and ends when another set, run or the chart is shown: coming back starts read-only.
+**Edit mode replaces the tool row** and keeps the filter: the environment as a word (Prod solid), a 3 px environment
+rule, counts, then a fixed order that never hides a button — + Row, Duplicate (Ctrl+D: selected rows as new rows; key
+columns are never copied: DEFAULT when they have one, else empty for the user to fill), Delete rows, undo/redo, ⋯
+(Duplicate, Revert selected rows, Discard all, Review SQL), Apply, Cancel. An unavailable button stays in place,
+`aria-disabled` with its reason as the tooltip (Apply with nothing staged or invalid values; all of them while an Apply
+runs, whoever started it). Cancel is the one way out (there is no separate Done: it would only repeat Cancel): it
+leaves at once when nothing is staged and otherwise asks "Discard N staged changes…?" (Keep editing is the default).
+Apply keeps the grid in edit mode, so edit → Apply → edit needs no new Edit click. On Prod and Stage one "Review & apply to
+PROD…" button always shows the SQL first (`applyChanges`; the sidecar's ProdWrite guard still decides); the ledger is
+locked while changes are staged. The
 **footer** describes the shown result set (rows, "212 of 1,234" when filtered, streaming, row limit, incomplete; the
 Arrow batch count is its tooltip) and the selection statistics next to the data: Count · NULL · Distinct · Sum · Avg ·
 Min · Max, "≈" when sampled; run timing lives in the status bar only. **Messages** is the run's log in arrival order with a
@@ -2015,3 +2024,4 @@ without a UI stall.
 | Engine stdin deadline at start (2026-11-03, R1-1) | the 10 s write deadline and the stall refusal from the first request | armed by the engine's first reply | A first start that extracts natives or is scanned took over 15 s: restored tabs' requests failed "not sent" and later calls `sidecarDown` while the status said running |
 | Fresh start (2026-11-03) | one repository and version line from the first commit | **Owner decision:** the code moved to a new repository with a single starting commit and the version restarts at 0.1.0, with a new updater signing key; the earlier private line (0.1.0–0.2.0) is retired and its releases were withdrawn. Version numbers before this row ("since 0.2.0", "builds up to 0.2.0") refer to that earlier line. Earlier installs do not update to the new line (different key, lower version): they are uninstalled and the new build installed | Publish the source without the earlier history; the repository switches between public and private, so the controls in §13 must hold in both states |
 | minimatch advisory (2026-11-04) | no known-vulnerable package | `minimatch` 9.0.9 (GHSA-g3hv-75wg-m249, moderate ReDoS; fixed only in 11.x) stays: it comes through glide-data-grid → linaria, runs only at build time and is not in the webview bundle (checked: no minimatch code in `dist/`) | Forcing 11.x onto linaria's 9.x API is riskier than a build-time ReDoS on our own globs; revisit when glide-data-grid updates |
+| Grid-edit audit (2026-11-04) | editability from driver / AST column origins and the cached keys alone | (1) result indices live on the execution, so a SQL Server batch that fails after streaming a set never hands its index to the next GO batch; (2) `IDbProvider.ResultEditRefusal` names shapes whose origins cannot name the row shown — a table read twice (self-join, subquery, CTE) or a set operator — from ScriptDom (SQL Server) or the engine's tokens (`ResultShape`: PostgreSQL, SQLite, DuckDB; never a regular expression), and SQL Server refuses an unqualified name that exists in several schemas instead of assuming `dbo`; (3) a MySQL / MariaDB table whose engine has no transactions (`information_schema.ENGINES.TRANSACTIONS`) is read-only; (4) a partial / filtered, expression, disabled or invalid unique index is never a row key; (5) SQLite row checks send at most 500 keys per statement (`IDataEditDialect.MaxRelationRows`). The two catalog flags are `internal` properties of `SnapObject` / `IndexInfo` (Contract `InternalsVisibleTo` Core and Tests), persisted in store v6 | Each could make an edit update another row than the one shown, or report "nothing was written" after writing; the flags are sidecar-only, so the UI contract (`contract.ts`) is unchanged. The shape check is conservative: a table named twice anywhere in the statement refuses editing even where the outer rows would be exact |

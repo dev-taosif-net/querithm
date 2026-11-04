@@ -118,20 +118,22 @@ public sealed class SqliteMetadata : IMetadataProvider
         await using (var cmd = connection.CreateCommand())
         {
             cmd.CommandText = """
-                SELECT 'main', m.name, il.name, il."unique", il.origin, ii.seqno, ii.name FROM main.sqlite_schema m
+                SELECT 'main', m.name, il.name, il."unique", il.origin, ii.seqno, ii.name, il.partial FROM main.sqlite_schema m
                   JOIN pragma_index_list(m.name, 'main') il JOIN pragma_index_info(il.name, 'main') ii WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite\_%' ESCAPE '\'
                 UNION ALL
-                SELECT 'temp', m.name, il.name, il."unique", il.origin, ii.seqno, ii.name FROM temp.sqlite_schema m
+                SELECT 'temp', m.name, il.name, il."unique", il.origin, ii.seqno, ii.name, il.partial FROM temp.sqlite_schema m
                   JOIN pragma_index_list(m.name, 'temp') il JOIN pragma_index_info(il.name, 'temp') ii WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite\_%' ESCAPE '\'
                 ORDER BY 1, 2, 3, 6
                 """;
             await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            var rows = new List<(long Id, string Index, bool Unique, bool Pk, string? Column)>();
+            var rows = new List<(long Id, string Index, bool Unique, bool Pk, string? Column, bool Partial)>();
             while (await r.ReadAsync(ct).ConfigureAwait(false))
                 if (ids.TryGetValue((r.GetString(0), r.GetString(1).ToLowerInvariant()), out var id) && wanted.Contains(id))
-                    rows.Add((id, r.GetString(2), r.GetInt32(3) == 1, r.GetString(4) == "pk", r.IsDBNull(6) ? null : r.GetString(6)));
+                    rows.Add((id, r.GetString(2), r.GetInt32(3) == 1, r.GetString(4) == "pk", r.IsDBNull(6) ? null : r.GetString(6), r.GetInt32(7) == 1));
+            // Never a grid row key: a partial index (WHERE …) or one with an expression part (no column name).
             foreach (var g in rows.GroupBy(x => (x.Id, x.Index)))
-                indexes.Add(new IndexRow(g.Key.Id, g.Key.Index, g.First().Unique, g.First().Pk, g.Select(x => x.Column ?? "(expression)").ToArray()));
+                indexes.Add(new IndexRow(g.Key.Id, g.Key.Index, g.First().Unique, g.First().Pk, g.Select(x => x.Column ?? "(expression)").ToArray(),
+                    NotAKey: g.First().Partial || g.Any(x => x.Column == null)));
         }
         // A rowid-alias primary key has no index of its own: the key is the declared PRIMARY KEY columns.
         foreach (var (id, pks) in pkCols)

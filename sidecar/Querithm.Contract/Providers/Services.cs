@@ -36,8 +36,10 @@ public interface IDialectService
 /// One catalog object and its change marker; <paramref name="ParentObjectId"/> is a trigger's table or view.
 /// <paramref name="SessionLocal"/> (Phase D0d): the object exists only for the connection that read it (a temporary
 /// table): it goes to that session's view, never into the snapshot other tabs share.
+/// <paramref name="NoRollbackEngine"/> (MySQL / MariaDB): the storage engine of a table whose changes cannot be rolled back.
 /// </summary>
-public sealed record ObjectStamp(long Id, string Schema, string Name, ObjectKind Kind, long Marker, string? ReturnType, long? ParentObjectId = null, bool SessionLocal = false);
+public sealed record ObjectStamp(long Id, string Schema, string Name, ObjectKind Kind, long Marker, string? ReturnType, long? ParentObjectId = null, bool SessionLocal = false,
+    string? NoRollbackEngine = null);
 
 public sealed record ColumnRow(
     long ObjectId, int Ordinal, string Name, string TypeName, int? MaxLen, int? Precision, int? Scale,
@@ -45,7 +47,8 @@ public sealed record ColumnRow(
 
 public sealed record ParamRow(long ObjectId, int Ordinal, string Name, string TypeName, int? MaxLen, bool Output, bool HasDefault);
 
-public sealed record IndexRow(long ObjectId, string Name, bool Unique, bool Primary, string[] Columns);
+/// <summary>One index; <paramref name="NotAKey"/>: partial / filtered, an expression key part, disabled or invalid — never a grid row key.</summary>
+public sealed record IndexRow(long ObjectId, string Name, bool Unique, bool Primary, string[] Columns, bool NotAKey = false);
 
 public sealed record FkRow(string Name, long Parent, long Referenced, FkColumnPair[] Columns);
 

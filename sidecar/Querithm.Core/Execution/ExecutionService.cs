@@ -29,6 +29,12 @@ public sealed class Execution(Ulid id, Session? session, string sql, ExecuteOpti
     internal MessageBatcher? Batcher;
     /// <summary>L13: the run told the user it passed <see cref="ExecutionService.MaxResultSets"/>.</summary>
     internal bool ResultSetLimitNoted;
+    /// <summary>
+    /// The index the next data result set gets. Kept on the run, not in a batch's locals, so a set that a failing batch
+    /// started still uses up its index: the next batch (SQL Server runs on after an error) never reuses it, so two
+    /// result sets never share <see cref="Results"/> or the grid's edits.
+    /// </summary>
+    internal int NextResultIndex;
 
     /// <summary>
     /// The connection the run holds, from the moment it has one until it hands it back (pool or pin); guarded by
@@ -354,7 +360,6 @@ public sealed class ExecutionService : IAsyncDisposable
         var sw = Stopwatch.StartNew();
         var messages = new ConcurrentQueue<StatementStats>();
         long? affected = null;
-        var resultIndex = 0;
         var truncatedAny = false;
         var hadError = false;
         ErrorInfo? firstError = null;
@@ -424,8 +429,7 @@ public sealed class ExecutionService : IAsyncDisposable
                         ct.ThrowIfCancellationRequested();
                         try
                         {
-                            var (rows, ri, trunc) = await RunBatchAsync(exec, session, conn.Db, text, batchIndex, resultIndex, maxRows, ct).ConfigureAwait(false);
-                            resultIndex = ri;
+                            var (rows, trunc) = await RunBatchAsync(exec, session, conn.Db, text, batchIndex, maxRows, ct).ConfigureAwait(false);
                             truncatedAny |= trunc;
                             if (rows >= 0) affected = (affected ?? 0) + rows;
                             // A cancel requested before the driver came back stopped the statement even when the driver
@@ -565,7 +569,7 @@ public sealed class ExecutionService : IAsyncDisposable
                 ExecutionId = exec.IdText, SessionId = session.Id, State = exec.State, AffectedRows = affected, ElapsedMs = sw.Elapsed.TotalMilliseconds,
                 ServerElapsedMs = timeStats.Length > 0 ? timeStats.Sum(s => s.ElapsedMs ?? 0) : null,
                 ServerCpuMs = timeStats.Length > 0 ? timeStats.Sum(s => s.CpuMs ?? 0) : null,
-                Error = cancelled ? null : firstError, Truncated = truncatedAny, ResultSetCount = resultIndex,
+                Error = cancelled ? null : firstError, Truncated = truncatedAny, ResultSetCount = exec.NextResultIndex,
                 Statistics = stats.Length > 0 ? stats : null, Database = session.Database, HadDdl = classification.HasDdl,
             });
             _notifier.Notify("session.stateChanged", session.State());
@@ -582,8 +586,8 @@ public sealed class ExecutionService : IAsyncDisposable
         }
     }
 
-    async Task<(long Rows, int ResultIndex, bool Truncated)> RunBatchAsync(Execution exec, Session session, DbConnection db, string text, int batchIndex,
-        int resultIndex, int maxRows, CancellationToken ct)
+    async Task<(long Rows, bool Truncated)> RunBatchAsync(Execution exec, Session session, DbConnection db, string text, int batchIndex,
+        int maxRows, CancellationToken ct)
     {
         await using var cmd = db.CreateCommand();
         cmd.CommandText = text;
@@ -619,6 +623,7 @@ public sealed class ExecutionService : IAsyncDisposable
                 }
                 // L13: the data plane numbers result sets with a u16; past the limit the batch still runs (and Cancel still
                 // ends it), but its further result sets are skipped, said once.
+                var resultIndex = exec.NextResultIndex;
                 if (resultIndex >= MaxResultSets)
                 {
                     if (!exec.ResultSetLimitNoted)
@@ -636,16 +641,23 @@ public sealed class ExecutionService : IAsyncDisposable
                 snapshot ??= SafeSnapshot(session);
                 var inBatch = dataResult++;
                 var snap = snapshot;
+                // A statement shape whose origins cannot name the row shown (self-join, UNION): no origins, and the reason.
+                string? refusal = null;
+                try { refusal = session.Provider.ResultEditRefusal(text, inBatch, snap); }
+                catch (Exception ex) { _log.LogDebug("Result shape check skipped: {Message}", ex.Message); refusal = "the query's shape could not be checked"; }
                 Func<IReadOnlyList<DbColumn>, Contract.Providers.ColumnOrigin?[]?> origins = cols =>
                 {
+                    if (refusal != null) return null;
                     try { return session.Provider.ResultOrigins(reader, cols, text, inBatch, snap); }
                     catch (Exception ex) { _log.LogDebug("Result origins skipped: {Message}", ex.Message); return null; }
                 };
-                var truncated = await StreamResultSetAsync(exec, reader, session.Provider, resultIndex, batchIndex, maxRows, ct, origins, snap).ConfigureAwait(false);
+                bool truncated;
+                // The index is spent once the set started, even when it fails part-way: the UI may already hold its schema.
+                try { truncated = await StreamResultSetAsync(exec, reader, session.Provider, resultIndex, batchIndex, maxRows, ct, origins, snap, refusal).ConfigureAwait(false); }
+                finally { exec.NextResultIndex = resultIndex + 1; }
                 truncatedAny |= truncated;
-                resultIndex++;
             } while (await reader.NextResultAsync(ct).ConfigureAwait(false));
-            return (reader.RecordsAffected, resultIndex, truncatedAny);
+            return (reader.RecordsAffected, truncatedAny);
         }
         finally
         {
@@ -661,7 +673,7 @@ public sealed class ExecutionService : IAsyncDisposable
     }
 
     async Task<bool> StreamResultSetAsync(Execution exec, DbDataReader reader, Contract.Providers.IDbProvider provider, int resultIndex, int batchIndex,
-        int maxRows, CancellationToken ct, Func<IReadOnlyList<DbColumn>, Contract.Providers.ColumnOrigin?[]?>? origins = null, SchemaSnapshot? snapshot = null)
+        int maxRows, CancellationToken ct, Func<IReadOnlyList<DbColumn>, Contract.Providers.ColumnOrigin?[]?>? origins = null, SchemaSnapshot? snapshot = null, string? editRefusal = null)
     {
         var enc = new ResultSetEncoder(reader, provider, exec.Cells, resultIndex, origins, snapshot);
         var ri = checked((ushort)resultIndex); // below MaxResultSets (L13), never wrapped
@@ -670,6 +682,9 @@ public sealed class ExecutionService : IAsyncDisposable
         {
             try { edit = decide(session, enc.Columns, enc.Origins, snapshot); }
             catch (Exception ex) { _log.LogDebug("Editability check skipped: {Message}", ex.Message); }
+            // The statement shape outranks the analyzer (which sees no origins), unless the engine refuses grid edits outright.
+            if (editRefusal != null && provider.FeatureRefusal(Contract.Providers.Feature.DataEdit) == null)
+                edit = new ResultEditInfo { Editable = false, Reason = "Read-only: " + editRefusal };
         }
         exec.Results[resultIndex] = new RecordedResult(enc.Columns, enc.Origins, snapshot?.ProfileId, snapshot?.Database, edit);
         await WriteFrame(FrameKind.Schema, exec, ri, ResultSetEncoder.ToIpc(enc.Schema, null), ct).ConfigureAwait(false);

@@ -119,15 +119,17 @@ public sealed class PostgresMetadata : IMetadataProvider
             {
                 cmd.CommandText = """
                     SELECT i.indrelid::bigint, ic.relname, i.indisunique, i.indisprimary,
-                           ARRAY(SELECT a.attname FROM unnest(i.indkey) WITH ORDINALITY k(attnum, ord)
-                                 JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum ORDER BY k.ord)::text[]
+                           ARRAY(SELECT COALESCE(a.attname::text, '(expression)') FROM unnest(i.indkey) WITH ORDINALITY k(attnum, ord)
+                                 LEFT JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum AND k.attnum <> 0 ORDER BY k.ord)::text[],
+                           -- Never a grid row key: partial (WHERE …), an expression key part (attnum 0) or not valid (a failed CONCURRENTLY build).
+                           (i.indpred IS NOT NULL OR NOT i.indisvalid OR EXISTS (SELECT 1 FROM unnest(i.indkey) z(attnum) WHERE z.attnum = 0))
                     FROM pg_index i JOIN pg_class ic ON ic.oid = i.indexrelid
                     WHERE i.indrelid = ANY(@ids::oid[])
                     """;
                 cmd.Parameters.AddWithValue("ids", ids);
                 await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
                 while (await r.ReadAsync(ct).ConfigureAwait(false))
-                    indexes.Add(new IndexRow(r.GetInt64(0), r.GetString(1), r.GetBoolean(2), r.GetBoolean(3), r.GetFieldValue<string[]>(4)));
+                    indexes.Add(new IndexRow(r.GetInt64(0), r.GetString(1), r.GetBoolean(2), r.GetBoolean(3), r.GetFieldValue<string[]>(4), NotAKey: r.GetBoolean(5)));
             }
             await using (var cmd = (NpgsqlCommand)c.CreateCommand())
             {

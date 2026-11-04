@@ -3,4 +3,9 @@
     <RootNamespace>Querithm.Contract</RootNamespace>
     <IsTrimmable>true</IsTrimmable>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- SnapObject.NoRollbackEngine: written by the metadata store, read by the edit analyzer; not part of the UI contract. -->
+    <InternalsVisibleTo Include="Querithm.Core" />
+    <InternalsVisibleTo Include="Querithm.Tests" />
+  </ItemGroup>
 </Project>

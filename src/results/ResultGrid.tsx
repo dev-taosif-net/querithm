@@ -11,7 +11,7 @@ import { StorageClass, type ArrowResultSet, type ColumnModel } from "./model";
 import type { Cell, GridStaging, RowRef } from "./staging";
 import { rpc } from "../ipc/client";
 import { useSettings } from "../store/settings";
-import { useUi } from "../store/ui";
+import { toast, useUi } from "../store/ui";
 import { selectionStats, type SelectionStats } from "./selectionStats";
 export { formatStatNumber, type SelectionStats } from "./selectionStats";
 import { clampLeft } from "./tipPosition";
@@ -186,6 +186,8 @@ export interface ResultGridHandle {
   copySelection(format?: CopyFormat | boolean): string | null;
   /** Grid rows (with their row refs) covered by the selection. */
   selectedRefs(): RowRef[];
+  /** Scrolls to a row and selects it (a duplicated or added row). */
+  revealRow?(ref: RowRef): void;
 }
 
 /** A cell's background in a read-only grid (data compare): changed / only in the source / only in the target / dimmed. */
@@ -433,7 +435,14 @@ export function ResultGrid({
   const stage = useCallback(
     (changes: { ref: RowRef; ordinal: number; cell: Cell }[], fullValue = false) => {
       if (!staging || !changes.length) return;
-      staging.setCells(changes, fullValue);
+      const n = staging.setCells(changes, fullValue);
+      // Locked cells (identity, computed, rows marked for deletion…) are skipped: say so instead of half-applying silently.
+      if (n < changes.length) {
+        const first = changes.find((c) => staging.lockReason(c.ref, c.ordinal, fullValue) != null);
+        const why = first ? staging.lockReason(first.ref, first.ordinal, fullValue) : null;
+        const skipped = changes.length - n;
+        toast("warn", `${skipped} cell${skipped === 1 ? " was" : "s were"} not changed${why ? `: ${why}` : ""}.`);
+      }
       if (changes.some((c) => c.ref.kind === "existing")) onStaged?.();
     },
     [staging, onStaged],
@@ -461,7 +470,13 @@ export function ResultGrid({
         useUi.getState().openDialog({
           kind: "cellViewer", title: `${c.name} (${c.typeName})`, value, language: lang,
           // The viewer holds the whole value, so a shortened display must not block the save (staging locks inline edits of it).
-          onSave: editable || truncated ? (v) => stage([{ ref, ordinal: c.ordinal, cell: { value: v } }], truncated) : undefined,
+          // A NULL or DEFAULT cell opens as empty text: saved unchanged it stays NULL / DEFAULT, never becomes ''.
+          onSave: editable || truncated
+            ? (v) => {
+                if (v === value && (cell.isDefault || cell.value == null)) return;
+                stage([{ ref, ordinal: c.ordinal, cell: { value: v } }], truncated);
+              }
+            : undefined,
         });
         return;
       }
@@ -517,14 +532,42 @@ export function ResultGrid({
     requestAnimationFrame(() => ref.current?.scrollTo(0, row));
   }, [staging, rs]);
 
+  /** Rows pasted, duplicated or added: show the first one and select it. */
+  const revealRow = useCallback(
+    (target: RowRef) => {
+      if (!staging) return;
+      const row = target.kind === "inserted" ? rs.visibleRows + staging.committed.length + target.index : undefined;
+      if (row == null) return;
+      requestAnimationFrame(() => {
+        ref.current?.scrollTo(0, row);
+        setSelection({ columns: CompactSelection.empty(), rows: CompactSelection.fromSingleSelection(row) });
+      });
+    },
+    [staging, rs],
+  );
+
+  const duplicate = useCallback(() => {
+    if (!staging?.canInsert) return;
+    const made = staging.duplicateRows(selectedRows().map(refAt));
+    if (made.length) revealRow({ kind: "inserted", index: made[0] });
+  }, [staging, selectedRows, refAt, revealRow]);
+
   const onKeyDown = useCallback(
     (e: GridKeyEventArgs) => {
       if (!staging) return;
       const mod = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
+      // Until every row has arrived only undo/redo work (the buttons are locked the same way; a key must not slip past).
+      const changes = (mod && (key === "0" || key === "d" || e.key === "Delete" || key === "s")) || (e.altKey && e.key === "Insert");
+      if (!rs.complete && changes) {
+        e.preventDefault();
+        e.cancel();
+        return;
+      }
       let handled = true;
       if (mod && key === "0") stage(selectedCells().map(([x, y]) => ({ ref: refAt(y), ordinal: rs.columns[x].ordinal, cell: { value: null } })));
       else if (e.altKey && e.key === "Insert") addRow();
+      else if (mod && key === "d" && !e.shiftKey) duplicate();
       else if (mod && e.key === "Delete") staging.toggleDelete(selectedRows().map(refAt));
       else if (mod && key === "z" && !e.shiftKey) staging.undo();
       else if (mod && (key === "y" || (key === "z" && e.shiftKey))) staging.redo();
@@ -535,13 +578,17 @@ export function ResultGrid({
         e.cancel();
       }
     },
-    [staging, stage, selectedCells, selectedRows, refAt, rs, addRow, onApply],
+    [staging, stage, selectedCells, selectedRows, refAt, rs, addRow, duplicate, onApply],
   );
 
   /** Pasting a TSV/Excel range stages edits; rows pasted past the end become new rows. */
   const onPaste = useCallback(
     (target: Item, values: readonly (readonly string[])[]): boolean => {
       if (!staging) return false;
+      if (!rs.complete) {
+        toast("info", "Wait for all rows to arrive before pasting.");
+        return false;
+      }
       const [x0, y0] = target;
       const changes: { ref: RowRef; ordinal: number; cell: Cell }[] = [];
       const fresh: Map<number, Cell>[] = [];
@@ -557,11 +604,19 @@ export function ResultGrid({
         });
         if (y >= totalRows) fresh.push(cells);
       });
-      stage(changes);
-      if (fresh.length && staging.canInsert) for (const cells of fresh) staging.addRow(cells);
+      // Under a filter or sort the rows below are not the table's next rows: never grow the table from there silently.
+      const grow = fresh.length > 0 && staging.canInsert && !rs.filter && !rs.sort;
+      if (fresh.length && !grow)
+        toast("info", `${fresh.length} pasted line${fresh.length === 1 ? " was" : "s were"} past the last row and not added${staging.canInsert ? " (clear the filter and sort to add them as new rows)" : ""}.`);
+      // The whole paste, new rows included, is one undo step.
+      staging.batch(() => {
+        stage(changes);
+        if (grow) for (const cells of fresh) staging.addRow(cells);
+      });
+      if (grow && !changes.length) revealRow({ kind: "inserted", index: staging.inserted.length - fresh.length });
       return false;
     },
-    [staging, rs, totalRows, refAt, stage],
+    [staging, rs, totalRows, refAt, stage, revealRow],
   );
 
   const textAt = useCallback(
@@ -651,6 +706,7 @@ export function ResultGrid({
       return lines.join("\n");
     },
     selectedRefs: () => selectedRows().map(refAt),
+    revealRow,
   };
 
   useEffect(() => {

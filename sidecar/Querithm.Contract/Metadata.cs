@@ -67,6 +67,13 @@ public sealed record SnapObject
     public long? ModifyDate { get; init; }
     /// <summary>Triggers: the table or view the trigger belongs to; null for every other kind.</summary>
     public long? ParentObjectId { get; init; }
+    /// <summary>
+    /// MySQL / MariaDB: the storage engine of a table that cannot roll its changes back (MyISAM, MEMORY, ARCHIVE, Aria …); null
+    /// for a transactional table and every other engine. Grid editing refuses such a table: Apply runs in a transaction that
+    /// is rolled back on any failure, which would leave the rows already written. Internal: sidecar-only, never in the UI
+    /// contract (ContractGen and the JSON context read public properties only).
+    /// </summary>
+    internal string? NoRollbackEngine { get; init; }
 }
 
 public sealed record SchemaSnapshot
@@ -155,6 +162,11 @@ public sealed record IndexInfo
     public bool IsUnique { get; init; }
     public bool IsPrimary { get; init; }
     public required string[] Columns { get; init; }
+    /// <summary>
+    /// The index cannot prove a row unique (partial / filtered, an expression key part, disabled or invalid): grid editing never
+    /// uses it as a row key. Internal: sidecar-only, never in the UI contract.
+    /// </summary>
+    internal bool NotAKey { get; init; }
 }
 
 public sealed record ObjectDetails

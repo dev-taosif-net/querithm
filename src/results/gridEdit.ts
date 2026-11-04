@@ -40,9 +40,11 @@ export function ensureTokens(executionId: string, staging: GridStaging): Promise
   if (running) return running.then(() => ensureTokens(executionId, staging));
   const need = staging.rowsNeedingTokens();
   const sessionId = sessionOf(executionId);
+  const resultIndex = indexOf(executionId, staging);
   if (!need.length || !sessionId) return Promise.resolve();
+  if (resultIndex < 0) return Promise.reject(new Error(CLOSED));
   const p = rpc("data.rowTokens", {
-    sessionId, executionId, resultIndex: indexOf(executionId, staging), keys: need.map((n) => staging.keyOf(n.row)), expect: need.map((n) => n.expect),
+    sessionId, executionId, resultIndex, keys: need.map((n) => staging.keyOf(n.row)), expect: need.map((n) => n.expect),
   })
     .then((r) => {
       staging.setTokens(need.map((n) => n.row), r.tokens);
@@ -54,17 +56,24 @@ export function ensureTokens(executionId: string, staging: GridStaging): Promise
   return p;
 }
 
+/** The result set a staging edits; -1 once its execution was disposed (never a guess: a patch must not reach another set). */
 function indexOf(executionId: string, staging: GridStaging): number {
   for (const [k, s] of stagings) if (s === staging && k.startsWith(`${executionId}:`)) return Number(k.slice(executionId.length + 1));
-  return 0;
+  return -1;
 }
 
-let tokenTimer: ReturnType<typeof setTimeout> | undefined;
+const CLOSED = "These results were closed. Re-run the query to edit them.";
+
+/** One pending token read per staging: an edit in another result set never cancels this one's. */
+const tokenTimers = new WeakMap<GridStaging, ReturnType<typeof setTimeout>>();
 
 /** Token reads after edits are batched (a paste of 500 cells is one roundtrip). */
 export function scheduleTokens(executionId: string, staging: GridStaging) {
-  clearTimeout(tokenTimer);
-  tokenTimer = setTimeout(() => void ensureTokens(executionId, staging).catch((e) => toast("error", (e as Error).message)), 300);
+  clearTimeout(tokenTimers.get(staging));
+  tokenTimers.set(staging, setTimeout(() => {
+    tokenTimers.delete(staging);
+    void ensureTokens(executionId, staging).catch((e) => toast("error", (e as Error).message));
+  }, 300));
 }
 
 /** Review SQL: the generated statements with literals (read-only). Resolves true when the user chose Apply. */
@@ -106,6 +115,10 @@ async function preparePatch(executionId: string, staging: GridStaging, force: bo
     toast("error", "The tab's session is closed. Re-run the query.");
     return null;
   }
+  if (indexOf(executionId, staging) < 0) {
+    toast("error", CLOSED);
+    return null;
+  }
   if (!force) {
     try {
       await ensureTokens(executionId, staging);
@@ -135,7 +148,12 @@ const applying = new WeakMap<GridStaging, Promise<boolean>>();
 export function applyChanges(tabId: string, executionId: string, staging: GridStaging, force = false, reviewed = false): Promise<boolean> {
   const running = applying.get(staging);
   if (running) return running;
-  const p = applyOnce(tabId, executionId, staging, force, reviewed).finally(() => applying.delete(staging));
+  // The edit row shows "Applying…" and locks its buttons for an Apply started anywhere (button, Ctrl+S, prompts).
+  staging.setBusy(true);
+  const p = applyOnce(tabId, executionId, staging, force, reviewed).finally(() => {
+    applying.delete(staging);
+    staging.setBusy(false);
+  });
   applying.set(staging, p);
   return p;
 }

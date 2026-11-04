@@ -176,7 +176,7 @@ public sealed class LocalStore
     }
 
     /// <summary>The schema version Schema.sql describes (PRAGMA user_version).</summary>
-    public const int Version = 5;
+    public const int Version = 6;
 
     /// <summary>
     /// Steps from version N-1 to N for files written by older builds, run before Schema.sql so its CREATE … IF NOT
@@ -216,6 +216,18 @@ public sealed class LocalStore
             if (!HasColumn(c, tx, "history", "preview")) c.Cmd("ALTER TABLE history ADD COLUMN preview TEXT;", tx).ExecuteNonQuery();
             if (!HasColumn(c, tx, "history", "sql_length")) c.Cmd("ALTER TABLE history ADD COLUMN sql_length INTEGER;", tx).ExecuteNonQuery();
             if (self._redactHistory is { } redact) self.RedactHistory(c, tx, redact);
+        }),
+        // Grid-edit audit: a MySQL / MariaDB table whose engine cannot roll back (MyISAM, MEMORY …) is read-only in the grid, and
+        // a partial / filtered / expression / disabled unique index is never a row key. Additive: an older build ignores both
+        // columns. Rows cached before them carry neither flag and an incremental refresh keeps unchanged objects, so every
+        // snapshot is marked empty: its next refresh is a full one (§8) that reads both flags. The cached rows stay shown.
+        (6, (_, c, tx) =>
+        {
+            if (HasTable(c, tx, "obj") && !HasColumn(c, tx, "obj", "no_rollback_engine"))
+                c.Cmd("ALTER TABLE obj ADD COLUMN no_rollback_engine TEXT;", tx).ExecuteNonQuery();
+            if (HasTable(c, tx, "idx") && !HasColumn(c, tx, "idx", "not_key"))
+                c.Cmd("ALTER TABLE idx ADD COLUMN not_key INTEGER;", tx).ExecuteNonQuery();
+            if (HasTable(c, tx, "schema_snapshot")) c.Cmd("UPDATE schema_snapshot SET status = 'empty';", tx).ExecuteNonQuery();
         }),
     ];
 

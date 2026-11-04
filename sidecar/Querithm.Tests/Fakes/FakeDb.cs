@@ -12,6 +12,8 @@ namespace Querithm.Tests.Fakes;
 public sealed record FakeResult(DataTable[]? Tables = null, object? Scalar = null, int Affected = 0)
 {
     public static readonly FakeResult None = new();
+    /// <summary>Thrown by the reader when the batch moves past its last table (a server error after the sets streamed).</summary>
+    public Exception? FailAfterTables { get; init; }
     public static FakeResult Value(object? v) => new(Scalar: v);
 
     public static FakeResult Rows(params (string Name, Type Type)[] columns) => new([Table(columns)]);
@@ -158,7 +160,8 @@ public sealed class FakeDbCommand(FakeDbConnection connection) : DbCommand
     protected override async Task<DbDataReader> ExecuteDbDataReaderAsync(CommandBehavior behavior, CancellationToken ct)
     {
         var r = await connection.RunAsync(this, ct).ConfigureAwait(false);
-        return new DataTableReader(r.Tables is { Length: > 0 } ts ? ts : [new DataTable()]);
+        var reader = new DataTableReader(r.Tables is { Length: > 0 } ts ? ts : [new DataTable()]);
+        return r.FailAfterTables is { } fail ? new FailingReader(reader, fail) : reader;
     }
 }
 
@@ -279,6 +282,9 @@ public sealed class FakeDbProvider : IDbProvider
     public (string Host, int Port, string? Refusal) TunnelTarget(Profile profile) => (profile.Host ?? "", profile.Port ?? 0, null);
     public ParseConnectionStringResult ParseConnectionString(string connectionString, Profile basis) => throw new NotSupportedException();
     public ColumnOrigin?[]? ResultOrigins(DbDataReader reader, IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot) => null;
+    /// <summary>Grid-edit audit tests: the statement-shape refusal this fake engine reports (null = none).</summary>
+    public Func<string, int, string?>? EditRefusal { get; set; }
+    public string? ResultEditRefusal(string batchText, int resultInBatch, SchemaSnapshot? snapshot) => EditRefusal?.Invoke(batchText, resultInBatch);
 
     public async Task<DbConnection> OpenAsync(Profile profile, string? secret, string? database, FileGrant? file, CancellationToken ct)
     {
@@ -448,4 +454,43 @@ public sealed class FakePgTransactions : ITransactionControl
         await Run(c, "SELECT pg_current_xact_id_if_assigned()", ct);
         return ((FakeDbConnection)c).TxDepth > 0 ? TxState.Open : TxState.None;
     }
+}
+
+/// <summary>A reader that streams its tables, then fails where the next result set would start (a later statement's error).</summary>
+public sealed class FailingReader(DataTableReader inner, Exception fail) : DbDataReader
+{
+    public override bool NextResult() => inner.NextResult() ? true : throw fail;
+    public override Task<bool> NextResultAsync(CancellationToken ct) => Task.FromResult(NextResult());
+    public override bool Read() => inner.Read();
+    public override Task<bool> ReadAsync(CancellationToken ct) => Task.FromResult(inner.Read());
+    public override object this[int ordinal] => inner[ordinal];
+    public override object this[string name] => inner[name];
+    public override int Depth => inner.Depth;
+    public override int FieldCount => inner.FieldCount;
+    public override bool HasRows => inner.HasRows;
+    public override bool IsClosed => inner.IsClosed;
+    public override int RecordsAffected => inner.RecordsAffected;
+    public override bool GetBoolean(int ordinal) => inner.GetBoolean(ordinal);
+    public override byte GetByte(int ordinal) => inner.GetByte(ordinal);
+    public override long GetBytes(int ordinal, long dataOffset, byte[]? buffer, int bufferOffset, int length) => inner.GetBytes(ordinal, dataOffset, buffer, bufferOffset, length);
+    public override char GetChar(int ordinal) => inner.GetChar(ordinal);
+    public override long GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length) => inner.GetChars(ordinal, dataOffset, buffer, bufferOffset, length);
+    public override string GetDataTypeName(int ordinal) => inner.GetDataTypeName(ordinal);
+    public override DateTime GetDateTime(int ordinal) => inner.GetDateTime(ordinal);
+    public override decimal GetDecimal(int ordinal) => inner.GetDecimal(ordinal);
+    public override double GetDouble(int ordinal) => inner.GetDouble(ordinal);
+    public override IEnumerator GetEnumerator() => ((IEnumerable)inner).GetEnumerator();
+    public override Type GetFieldType(int ordinal) => inner.GetFieldType(ordinal);
+    public override float GetFloat(int ordinal) => inner.GetFloat(ordinal);
+    public override Guid GetGuid(int ordinal) => inner.GetGuid(ordinal);
+    public override short GetInt16(int ordinal) => inner.GetInt16(ordinal);
+    public override int GetInt32(int ordinal) => inner.GetInt32(ordinal);
+    public override long GetInt64(int ordinal) => inner.GetInt64(ordinal);
+    public override string GetName(int ordinal) => inner.GetName(ordinal);
+    public override int GetOrdinal(string name) => inner.GetOrdinal(name);
+    public override string GetString(int ordinal) => inner.GetString(ordinal);
+    public override object GetValue(int ordinal) => inner.GetValue(ordinal);
+    public override int GetValues(object[] values) => inner.GetValues(values);
+    public override bool IsDBNull(int ordinal) => inner.IsDBNull(ordinal);
+    public override DataTable? GetSchemaTable() => inner.GetSchemaTable();
 }

@@ -473,6 +473,60 @@ describe("editable grid", () => {
     act(() => void P().onPaste([3, 0], [["{}", "extra"]]));
   });
 
+  it("paste is one undo step, new rows included; skipped locked cells are reported", () => {
+    const { staging } = setup();
+    act(() => void P().onPaste([1, 1], [["dos", "NULL"], ["tres", "31"], ["cuatro", "4"], ["cinco", "5"]]));
+    expect(staging.inserted).toHaveLength(2);
+    expect(useUi.getState().toasts.at(-1)?.text).toMatch(/^1 cell was not changed: The value is shortened in the grid/);
+    act(() => void staging.undo());
+    expect(staging.hasChanges).toBe(false);
+  });
+
+  it("paste under a filter never adds rows past the last shown one", () => {
+    const { staging, rs } = setup();
+    act(() => rs.setSort(1, "asc"));
+    act(() => void P().onPaste([2, 2], [["7"], ["8"]]));
+    expect(staging.inserted).toHaveLength(0);
+    expect(useUi.getState().toasts.at(-1)?.text).toMatch(/1 pasted line was past the last row and not added \(clear the filter and sort/);
+  });
+
+  it("Ctrl+D duplicates the selected rows as new rows and selects the first copy", () => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((f) => (f(0), 0));
+    const { staging } = setup();
+    act(() => P().onGridSelectionChange({ columns: CompactSelection.empty(), rows: CompactSelection.fromSingleSelection(0), current: undefined }));
+    const e = { key: "d", ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, preventDefault: vi.fn(), cancel: vi.fn() };
+    act(() => P().onKeyDown(e));
+    expect(e.preventDefault).toHaveBeenCalled();
+    expect(staging.inserted).toHaveLength(1);
+    expect(staging.cell({ kind: "inserted", index: 0 }, 1).value).toBe(staging.cell(ex(0), 1).value);
+    expect(scrollTo).toHaveBeenCalledWith(0, 3);
+  });
+
+  it("while rows are loading, editing keys and paste stage nothing (undo/redo still work)", () => {
+    const rs = new ArrowResultSet(0);
+    rs.append(build().batches[0]);
+    const staging = new GridStaging(editFor(), rs);
+    render(<ResultGrid rs={rs} executionId="e1" staging={staging} />);
+    act(() => P().onGridSelectionChange({ current: { cell: [2, 0], range: { x: 2, y: 0, width: 1, height: 1 }, rangeStack: [] }, columns: CompactSelection.empty(), rows: CompactSelection.fromSingleSelection(0) }));
+    for (const k of [{ key: "0", ctrlKey: true }, { key: "Delete", ctrlKey: true }, { key: "d", ctrlKey: true }, { key: "Insert", altKey: true }]) {
+      const e = { ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, preventDefault: vi.fn(), cancel: vi.fn(), ...k };
+      act(() => P().onKeyDown(e));
+      expect(e.preventDefault).toHaveBeenCalled();
+    }
+    act(() => void P().onPaste([1, 0], [["x"]]));
+    expect(staging.hasChanges).toBe(false);
+  });
+
+  it("the cell viewer keeps NULL when saved unchanged", async () => {
+    const { staging } = setup();
+    act(() => void staging.setCell(ex(0), 3, { value: null }));
+    await act(async () => P().onCellActivated([3, 0]));
+    const d = useUi.getState().dialogs.at(-1) as { onSave: (v: string) => void; value: string };
+    expect(d.value).toBe("");
+    act(() => d.onSave(""));
+    expect(staging.cell(ex(0), 3).value).toBeNull();
+  });
+
   it("edit mode keeps its own editors: onViewCell is not used while staging", async () => {
     const onViewCell = vi.fn();
     const rs = build();

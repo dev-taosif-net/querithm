@@ -159,6 +159,51 @@ describe("reviewChanges", () => {
     expect(toast).toHaveBeenLastCalledWith("error", "tokens down");
   });
 
+  it("a staging whose results were closed never sends a patch (never guesses result set 0)", async () => {
+    const { staging } = setup();
+    staging.setCell(ex(0), 1, { value: "uno" });
+    stagings.clear(); // disposeExecution dropped it while a dialog was open
+    rpc.mockResolvedValue(okResult);
+    expect(await applyChanges("tab1", EX, staging)).toBe(false);
+    expect(rpc).not.toHaveBeenCalledWith("data.applyPatch", expect.anything());
+    expect(toast).toHaveBeenLastCalledWith("error", "These results were closed. Re-run the query to edit them.");
+  });
+
+  it("an Apply marks the staging busy until it ends, whoever started it", async () => {
+    const { staging } = setup();
+    staging.setCell(ex(0), 1, { value: "uno" });
+    let finish!: (v: unknown) => void;
+    rpc.mockImplementation((m: string) => (m === "data.applyPatch" ? new Promise((r) => (finish = r)) : Promise.resolve({ tokens: ["t"] })));
+    const p = applyChanges("tab1", EX, staging);
+    expect(staging.busy).toBe(true);
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    finish(okResult);
+    await p;
+    expect(staging.busy).toBe(false);
+  });
+
+  it("token reads of two result sets do not cancel each other", async () => {
+    vi.useFakeTimers();
+    try {
+      const { rs, staging } = setup();
+      const rs1 = ordersSet(1);
+      executionData.get(EX)!.resultSets.push(rs1);
+      useExecutions.setState({ views: { [EX]: view(EX, { edits: { 0: editInfo(), 1: editInfo() } }) } });
+      const other = stagingFor(EX, rs1, "mssql")!;
+      expect(rs.index).toBe(0);
+      staging.setCell(ex(0), 1, { value: "a" });
+      other.setCell(ex(0), 1, { value: "b" });
+      rpc.mockResolvedValue({ tokens: ["t"] });
+      scheduleTokens(EX, staging);
+      scheduleTokens(EX, other);
+      await vi.advanceTimersByTimeAsync(350);
+      const indexes = rpc.mock.calls.filter((c) => c[0] === "data.rowTokens").map((c) => c[1].resultIndex).sort();
+      expect(indexes).toEqual([0, 1]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("lists many problems with an ellipsis", async () => {
     const { staging } = setup();
     staging.setCell(ex(0), 1, { value: "waytoolong" });

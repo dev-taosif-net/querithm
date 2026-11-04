@@ -10,8 +10,8 @@ namespace Querithm.Providers.MySql;
 
 /// <summary>
 /// MySQL / MariaDB catalog (Phase D2, §8): one information_schema query per refresh gives every table, view, routine and
-/// trigger of the session's database with a marker the server computes — SHA-256 (MySQL 9 has no MD5()) over the columns, indexes, foreign keys and
-/// triggers of a table, or a module's definition — because UPDATE_TIME and CREATE_TIME are not reliable change markers.
+/// trigger of the session's database with a marker the server computes — SHA-256 (MySQL 9 has no MD5()) over the columns, indexes, foreign keys,
+/// triggers and storage engine of a table, or a module's definition — because UPDATE_TIME and CREATE_TIME are not reliable change markers.
 /// Ids are stable hashes of (schema, kind, name); names are kept exactly. Routine bodies come from SHOW CREATE on demand.
 /// </summary>
 public sealed class MySqlMetadata : IMetadataProvider
@@ -39,16 +39,20 @@ public sealed class MySqlMetadata : IMetadataProvider
              ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION SEPARATOR '\n') FROM information_schema.KEY_COLUMN_USAGE k
              WHERE k.TABLE_SCHEMA = t.TABLE_SCHEMA AND k.TABLE_NAME = t.TABLE_NAME AND k.REFERENCED_TABLE_NAME IS NOT NULL),
           (SELECT GROUP_CONCAT(tr.TRIGGER_NAME ORDER BY tr.TRIGGER_NAME) FROM information_schema.TRIGGERS tr WHERE tr.EVENT_OBJECT_SCHEMA = t.TABLE_SCHEMA AND tr.EVENT_OBJECT_TABLE = t.TABLE_NAME),
-          (SELECT v.VIEW_DEFINITION FROM information_schema.VIEWS v WHERE v.TABLE_SCHEMA = t.TABLE_SCHEMA AND v.TABLE_NAME = t.TABLE_NAME)), 256) AS marker, NULL AS parent, NULL AS rtype
+          (SELECT v.VIEW_DEFINITION FROM information_schema.VIEWS v WHERE v.TABLE_SCHEMA = t.TABLE_SCHEMA AND v.TABLE_NAME = t.TABLE_NAME),
+          IFNULL(t.ENGINE, '')), 256) AS marker, NULL AS parent, NULL AS rtype,
+          CASE WHEN t.ENGINE IS NOT NULL AND t.TABLE_TYPE <> 'VIEW'
+                AND IFNULL((SELECT e.TRANSACTIONS FROM information_schema.ENGINES e WHERE e.ENGINE = t.ENGINE), 'NO') <> 'YES'
+               THEN t.ENGINE END AS no_rollback
         FROM information_schema.TABLES t WHERE t.TABLE_SCHEMA = DATABASE()
         UNION ALL
         SELECT r.ROUTINE_NAME, r.ROUTINE_TYPE, SHA2(CONCAT_WS('#', IFNULL(r.ROUTINE_DEFINITION, ''), IFNULL(r.DTD_IDENTIFIER, ''), r.SQL_MODE,
           (SELECT GROUP_CONCAT(CONCAT_WS('|', p.PARAMETER_MODE, p.PARAMETER_NAME, p.DTD_IDENTIFIER) ORDER BY p.ORDINAL_POSITION SEPARATOR '\n')
              FROM information_schema.PARAMETERS p WHERE p.SPECIFIC_SCHEMA = r.ROUTINE_SCHEMA AND p.SPECIFIC_NAME = r.SPECIFIC_NAME AND p.ORDINAL_POSITION > 0)), 256),
-          NULL, r.DTD_IDENTIFIER
+          NULL, r.DTD_IDENTIFIER, NULL
         FROM information_schema.ROUTINES r WHERE r.ROUTINE_SCHEMA = DATABASE()
         UNION ALL
-        SELECT tr.TRIGGER_NAME, 'TRIGGER', SHA2(CONCAT_WS('#', tr.ACTION_TIMING, tr.EVENT_MANIPULATION, tr.ACTION_STATEMENT, tr.SQL_MODE), 256), tr.EVENT_OBJECT_TABLE, NULL
+        SELECT tr.TRIGGER_NAME, 'TRIGGER', SHA2(CONCAT_WS('#', tr.ACTION_TIMING, tr.EVENT_MANIPULATION, tr.ACTION_STATEMENT, tr.SQL_MODE), 256), tr.EVENT_OBJECT_TABLE, NULL, NULL
         FROM information_schema.TRIGGERS tr WHERE tr.TRIGGER_SCHEMA = DATABASE()
         """;
 
@@ -82,7 +86,10 @@ public sealed class MySqlMetadata : IMetadataProvider
             var name = r.GetString(0);
             var marker = r.IsDBNull(2) ? "" : r.GetString(2);
             long? parent = r.IsDBNull(3) ? null : IdOf(schema, "rel", r.GetString(3));
-            list.Add(new ObjectStamp(IdOf(schema, k.Group, name), schema, name, k.Kind, Hash(marker), r.IsDBNull(4) ? null : r.GetString(4), parent));
+            // A table whose engine has no transactions (MyISAM, MEMORY, ARCHIVE, Aria …) keeps a failed grid Apply's earlier rows.
+            var noRollback = k.Kind == ObjectKind.Table && !r.IsDBNull(5) ? r.GetString(5) : null;
+            list.Add(new ObjectStamp(IdOf(schema, k.Group, name), schema, name, k.Kind, Hash(marker), r.IsDBNull(4) ? null : r.GetString(4), parent,
+                NoRollbackEngine: noRollback));
         }
         return list;
     }
@@ -124,7 +131,8 @@ public sealed class MySqlMetadata : IMetadataProvider
                 if (wanted.Contains(id)) rows.Add((id, r.GetString(1), Convert.ToInt64(r.GetValue(2), CultureInfo.InvariantCulture) == 0, r.IsDBNull(3) ? "(expression)" : r.GetString(3)));
             }
             foreach (var g in rows.GroupBy(x => (x.Id, x.Index)))
-                indexes.Add(new IndexRow(g.Key.Id, g.Key.Index, g.First().Unique, g.Key.Index == "PRIMARY", g.Select(x => x.Column).ToArray()));
+                indexes.Add(new IndexRow(g.Key.Id, g.Key.Index, g.First().Unique, g.Key.Index == "PRIMARY", g.Select(x => x.Column).ToArray(),
+                    NotAKey: g.Any(x => x.Column == "(expression)"))); // a functional key part is never a grid row key
         }
         var fks = new List<FkRow>();
         await using (var cmd = connection.CreateCommand())

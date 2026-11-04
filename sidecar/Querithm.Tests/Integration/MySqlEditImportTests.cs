@@ -196,6 +196,46 @@ public sealed class MySqlEditImportTests
 
     [IntegrationTheory]
     [MemberData(nameof(Products), MemberType = typeof(MySqlIntegrationTests))]
+    public async Task A_table_whose_engine_cannot_roll_back_is_read_only_and_says_why(string product)
+    {
+        // Grid-edit audit: Apply rolls back on any failure, which a MyISAM / MEMORY table ignores — it kept the rows written
+        // before the failure while the grid said "Nothing was written".
+        var (h, p, sid) = await OpenWithAsync(product, """
+            DROP TABLE IF EXISTS e_myisam; DROP TABLE IF EXISTS e_memory; DROP TABLE IF EXISTS e_innodb;
+            CREATE TABLE e_myisam (id INT PRIMARY KEY, v INT) ENGINE=MyISAM; INSERT INTO e_myisam VALUES (1, 1);
+            CREATE TABLE e_memory (id INT PRIMARY KEY, v INT) ENGINE=MEMORY; INSERT INTO e_memory VALUES (1, 1);
+            CREATE TABLE e_innodb (id INT PRIMARY KEY, v INT) ENGINE=InnoDB; INSERT INTO e_innodb VALUES (1, 1);
+            """);
+        await using var _ = h;
+        foreach (var (table, engine) in new[] { ("e_myisam", "MyISAM"), ("e_memory", "MEMORY") })
+        {
+            var (_, _, exec) = await Run(h, sid, $"SELECT id, v FROM {table}");
+            var edit = EditOf(h, exec);
+            Assert.False(edit.Editable);
+            Assert.Equal($"Read-only: {Db(product)}.{table} is a {engine} table — its changes can't be rolled back", edit.Reason);
+            await Assert.ThrowsAsync<Querithm.Core.QuerithmException>(() => h.Rpc.DataApplyPatch(new GridPatchParams
+            {
+                SessionId = sid, ExecutionId = exec,
+                Updates = [new GridRowUpdate { RowIndex = 0, Key = [V("1")], Changes = new() { ["v"] = V("2") }, Original = new() { ["v"] = V("1") } }],
+            }));
+        }
+        var (_, _, inno) = await Run(h, sid, "SELECT id, v FROM e_innodb");
+        Assert.True(EditOf(h, inno).Editable, EditOf(h, inno).Reason);
+        // ALTER … ENGINE changes the catalog marker, so a refresh picks the new engine up.
+        await ScalarAsync(product, "ALTER TABLE e_innodb ENGINE=MyISAM");
+        await h.Rpc.MetaRefresh(new RefreshParams { ProfileId = p.Id, Database = Db(product), SessionId = sid });
+        ResultEditInfo? after = null;
+        for (var i = 0; i < 50 && after is not { Editable: false }; i++)
+        {
+            await Task.Delay(100);
+            var (_, _, now) = await Run(h, sid, "SELECT id, v FROM e_innodb");
+            after = EditOf(h, now);
+        }
+        Assert.Equal($"Read-only: {Db(product)}.e_innodb is a MyISAM table — its changes can't be rolled back", after!.Reason);
+    }
+
+    [IntegrationTheory]
+    [MemberData(nameof(Products), MemberType = typeof(MySqlIntegrationTests))]
     public async Task A_csv_imports_with_multi_row_inserts_and_a_failure_leaves_nothing_behind(string product)
     {
         var (h, p, sid) = await OpenWithAsync(product, "DROP TABLE IF EXISTS i_items;" + Orders);

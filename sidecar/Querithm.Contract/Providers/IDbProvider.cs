@@ -112,6 +112,14 @@ public interface IDbProvider
     ColumnOrigin?[]? ResultOrigins(DbDataReader reader, IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot);
 
     /// <summary>
+    /// Why data result set <paramref name="resultInBatch"/> of <paramref name="batchText"/> cannot be edited in the grid
+    /// whatever <see cref="ResultOrigins"/> reports (without the "Read-only: " prefix), or null. Grid-edit audit: a
+    /// self-join gives both aliases one table id and SQLite names the leftmost table for a UNION's columns, so a row key
+    /// could update another row than the one shown. Read from the engine's tokens or AST, never a regular expression.
+    /// </summary>
+    string? ResultEditRefusal(string batchText, int resultInBatch, SchemaSnapshot? snapshot) => null;
+
+    /// <summary>
     /// Creates and opens a physical connection. <paramref name="file"/> is the injected grant of a file profile (Phase
     /// D0c): the provider opens exactly that path in exactly that mode and never creates a file; Core checks the file's
     /// identity before and after. Server providers ignore it.

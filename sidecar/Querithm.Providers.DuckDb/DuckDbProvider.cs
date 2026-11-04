@@ -74,6 +74,10 @@ public sealed class DuckDbProvider(string? dataDir = null, long? memoryLimitByte
         throw new ArgumentException("A DuckDB database is picked with the file dialog, not read from a connection string.");
 
     /// <summary>The driver reports no base table or column: origins are predicted from the statement's tokens.</summary>
+    /// <summary>The origins already refuse every shape but one plain table; this names why for a self-join or a set operator.</summary>
+    public string? ResultEditRefusal(string batchText, int resultInBatch, SchemaSnapshot? snapshot) =>
+        ResultShape.EditRefusal(Querithm.Intelligence.PgSql.PgResultShape.Shape(DuckDbTokenizer.Tokenize(batchText)));
+
     public ColumnOrigin?[]? ResultOrigins(DbDataReader reader, IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot) =>
         snapshot == null || resultInBatch != 0 ? null
             : DuckDbResultSources.Predict(batchText, snapshot, Traits.DefaultSchema!, columns.Select(c => c.ColumnName).ToList());

@@ -310,6 +310,9 @@ public sealed class PostgresProvider : IDbProvider
     }
 
     // The protocol's RowDescription names each column's table OID and attnum, so origins are exact and free.
+    /// <summary>A self-join (one table OID for every alias) or a set operator: the row a key names may not be the one shown.</summary>
+    public string? ResultEditRefusal(string batchText, int resultInBatch, SchemaSnapshot? snapshot) => PgResultShape.EditRefusal(batchText);
+
     public ColumnOrigin?[]? ResultOrigins(DbDataReader reader, IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot)
     {
         if (snapshot == null) return null;

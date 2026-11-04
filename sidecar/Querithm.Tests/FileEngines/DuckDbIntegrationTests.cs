@@ -500,6 +500,33 @@ public class DuckDbIntegrationTests
     }
 
     [Fact]
+    public async Task A_self_join_and_a_union_are_read_only_and_an_expression_unique_index_is_not_a_key()
+    {
+        // Grid-edit audit: shapes whose rows a key cannot name exactly, and a unique index on lower(code) that proves nothing.
+        await using var h = new DuckDbHost();
+        var path = h.NewDatabase("audit.duckdb", """
+            CREATE TABLE t (id INTEGER PRIMARY KEY, v INTEGER); INSERT INTO t VALUES (1, 10), (2, 20);
+            CREATE TABLE u (id INTEGER PRIMARY KEY, v INTEGER); INSERT INTO u VALUES (3, 30);
+            CREATE TABLE codes (code VARCHAR NOT NULL, label VARCHAR); CREATE UNIQUE INDEX ux_lower_code ON codes (lower(code)); INSERT INTO codes VALUES ('a', 'x');
+            """);
+        var (p, sid) = await h.OpenFileAsync(path, FileAccessMode.ReadWrite);
+        await RefreshAsync(h, p, sid, "audit", s => s.Objects.Any(o => o.Name == "codes"));
+        ResultEditInfo EditOf(string exec) => h.Notifier.Of<QueryResultSetEvent>().Single(e => e.ExecutionId == exec).Edit!;
+
+        var (_, _, plain) = await h.RunAsync(sid, "SELECT id, v FROM t");
+        Assert.True(EditOf(plain).Editable, EditOf(plain).Reason);
+        var (_, _, self) = await h.RunAsync(sid, "SELECT a.id, a.v FROM t a JOIN t b ON b.id = a.id + 1");
+        Assert.False(EditOf(self).Editable);
+        Assert.Equal("Read-only: the same table (t) appears more than once in the query", EditOf(self).Reason);
+        var (_, _, union) = await h.RunAsync(sid, "SELECT id, v FROM t UNION ALL SELECT id, v FROM u");
+        Assert.False(EditOf(union).Editable);
+        Assert.Equal("Read-only: the query combines several queries (UNION)", EditOf(union).Reason);
+        var (_, _, codes) = await h.RunAsync(sid, "SELECT code, label FROM codes");
+        Assert.False(EditOf(codes).Editable);
+        Assert.Contains("no primary key", EditOf(codes).Reason);
+    }
+
+    [Fact]
     public async Task Inside_an_open_transaction_grid_edits_and_imports_are_refused_up_front_because_duckdb_has_no_savepoints()
     {
         // L15: undoing a failed grid patch or import inside the user's transaction needs a savepoint, which DuckDB lacks.

@@ -149,6 +149,145 @@ describe("GridStaging", () => {
     expect(s.rowsNeedingTokens()).toEqual([]);
   });
 
+  it("an invalid edit on a row marked for deletion never blocks Apply (that edit is never sent)", () => {
+    const s = new GridStaging(edit(), source(rows()));
+    s.setCell(ex(1), 2, { value: "abc" });
+    expect(s.problems()).toHaveLength(1);
+    s.toggleDelete([ex(1)]);
+    expect(s.problems()).toEqual([]);
+    s.toggleDelete([ex(1)]); // unmarked: the edit counts again
+    expect(s.problems()).toHaveLength(1);
+  });
+
+  it("counts every invalid cell, even when the messages are the same", () => {
+    const s = new GridStaging(edit(), source(rows()));
+    s.setCells([
+      { ref: ex(0), ordinal: 2, cell: { value: "x" } },
+      { ref: ex(1), ordinal: 2, cell: { value: "y" } },
+    ]);
+    expect(s.problems()).toEqual(["Row 1: Not a whole number (int)", "Row 2: Not a whole number (int)"]);
+  });
+
+  it("a new row's missing required value marks its cell", () => {
+    const s = new GridStaging(edit(), source(rows()));
+    s.addRow();
+    expect(s.errorFor(ins(0), 1)).toBe("name needs a value");
+    expect(s.errorFor(ins(0), 2)).toBeUndefined(); // nullable
+    s.setCell(ins(0), 1, { value: "n" });
+    expect(s.errorFor(ins(0), 1)).toBeUndefined();
+  });
+
+  it("revert with nothing to revert keeps redo; reverting a new row empties it", () => {
+    const s = new GridStaging(edit(), source(rows()));
+    s.setCell(ex(0), 1, { value: "uno" });
+    s.undo();
+    s.revert([]);
+    s.revert([ex(2)]);
+    expect(s.canRedo).toBe(true);
+    s.addRow();
+    s.setCell(ins(0), 2, { value: "5" });
+    s.revert([ins(0)]);
+    expect(s.cell(ins(0), 2).value).toBeNull();
+    expect(s.inserted).toHaveLength(1);
+  });
+
+  it("batch: several changes and new rows are one undo step; a batch that changes nothing records none", () => {
+    const s = new GridStaging(edit(), source(rows()));
+    s.batch(() => {
+      s.setCell(ex(0), 1, { value: "a" });
+      s.addRow(new Map([[1, { value: "b" }]]));
+      s.addRow(new Map([[1, { value: "c" }]]));
+    });
+    expect(s.counts).toEqual({ updates: 1, inserts: 2, deletes: 0 });
+    s.undo();
+    expect(s.hasChanges).toBe(false);
+    expect(s.canUndo).toBe(false);
+    s.batch(() => s.setCell(ex(0), 1, { value: "one" })); // same as the original
+    expect(s.canUndo).toBe(false);
+    expect(s.canRedo).toBe(true);
+  });
+
+  it("busy notifies subscribers once per change", () => {
+    const s = new GridStaging(edit(), source(rows()));
+    const seen: number[] = [];
+    s.subscribe(() => seen.push(s.version));
+    s.setBusy(true);
+    s.setBusy(true);
+    s.setBusy(false);
+    expect(seen).toHaveLength(2);
+    expect(s.busy).toBe(false);
+  });
+
+  describe("duplicateRows", () => {
+    it("copies values (staged ones win) into new rows, leaving a server-generated key to the server; one undo step", () => {
+      const s = new GridStaging(edit(), source(rows()));
+      s.setCell(ex(0), 2, { value: "9" });
+      const made = s.duplicateRows([ex(0), ex(1)]);
+      expect(made).toEqual([0, 1]);
+      expect(s.cell(ins(0), 0)).toMatchObject({ isDefault: true }); // identity
+      expect(s.cell(ins(0), 1).value).toBe("one");
+      expect(s.cell(ins(0), 2).value).toBe("9"); // the staged edit, not the original 1
+      expect(s.cell(ins(0), 4)).toMatchObject({ isDefault: true }); // computed: left to the server
+      expect(s.cell(ins(1), 2).value).toBeNull();
+      expect(s.problems()).toEqual([]);
+      s.undo();
+      expect(s.inserted).toHaveLength(0);
+      s.redo();
+      expect(s.inserted).toHaveLength(2);
+    });
+
+    // How each engine reports its key: SQL Server IDENTITY / MySQL AUTO_INCREMENT / SQLite INTEGER PRIMARY KEY are
+    // generated+locked; PostgreSQL serial / identity and DuckDB sequences are a key with a default; a natural key has neither.
+    const keyCols = {
+      mssql: { generated: true, locked: true, hasDefault: true },
+      mySql: { generated: true, locked: true, hasDefault: true },
+      sqlite: { generated: true, locked: true, hasDefault: true },
+      pg: { generated: false, locked: false, hasDefault: true },
+      duckDb: { generated: false, locked: false, hasDefault: true },
+    } as const;
+    for (const [engine, k] of Object.entries(keyCols)) {
+      it(`an auto key is never copied: it comes out DEFAULT (${engine})`, () => {
+        const e = edit();
+        e.columns[0] = { ...e.columns[0], ...k, lockReason: k.locked ? "generated" : null };
+        const s = new GridStaging(e, source(rows()), engine as never);
+        s.duplicateRows([ex(1)]);
+        expect(s.cell(ins(0), 0)).toMatchObject({ isDefault: true });
+        expect(s.cell(ins(0), 1).value).toBe("two");
+        expect(s.problems()).toEqual([]);
+      });
+
+      it(`a natural key is left empty and must be filled in before Apply (${engine})`, () => {
+        const e = edit();
+        e.columns[0] = { ...e.columns[0], generated: false, locked: false, hasDefault: false, lockReason: null };
+        const s = new GridStaging(e, source(rows()), engine as never);
+        s.duplicateRows([ex(0)]);
+        expect(s.cell(ins(0), 0).value).toBeNull();
+        expect(s.errorFor(ins(0), 0)).toBe("id does not allow NULL");
+        expect(s.problems()).toHaveLength(1);
+        s.setCell(ins(0), 0, { value: "99" });
+        expect(s.problems()).toEqual([]);
+      });
+    }
+
+    it("a value the grid holds only shortened is not copied", () => {
+      const s = new GridStaging(edit(), source(rows(), new Set(["2:3"])));
+      s.duplicateRows([ex(2)]);
+      expect(s.cell(ins(0), 3).value).toBeNull();
+      expect(s.cell(ins(0), 1).value).toBe("three");
+    });
+
+    it("duplicating a new row copies it; deleted-on-server rows and repeats are skipped; insert blocked copies nothing", () => {
+      const s = new GridStaging(edit(), source(rows()));
+      s.addRow(new Map([[1, { value: "n" }]]));
+      s.appliedDeleted.add(2);
+      expect(s.duplicateRows([ins(0), ins(0), ex(2)])).toEqual([1]);
+      expect(s.cell(ins(1), 1).value).toBe("n");
+      const blocked = new GridStaging(edit({ insertBlockedReason: "no" }), source(rows()));
+      expect(blocked.duplicateRows([ex(0)])).toEqual([]);
+      expect(blocked.canUndo).toBe(false);
+    });
+  });
+
   it("builds the patch from keys, tokens, original and staged values", () => {
     const s = new GridStaging(edit(), source(rows()));
     s.setCell(ex(1), 2, { value: "7" });

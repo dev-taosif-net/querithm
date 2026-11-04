@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS obj (
   schema_name TEXT, name TEXT, kind TEXT,                                 -- 'table','view','proc','func','tvf','type','sequence','synonym','trigger'
   modify_date INTEGER, definition_hash TEXT, return_type TEXT,
   parent_object_id INTEGER,                                               -- a trigger's table or view (v2)
+  no_rollback_engine TEXT,                                                -- MySQL / MariaDB: a table engine without transactions (v6)
   PRIMARY KEY (profile_id, database, object_id)
 );
 CREATE INDEX IF NOT EXISTS obj_name ON obj (profile_id, database, name COLLATE NOCASE);
@@ -47,7 +48,9 @@ CREATE TABLE IF NOT EXISTS fk (
 
 CREATE TABLE IF NOT EXISTS idx (
   profile_id TEXT, database TEXT, object_id INTEGER, name TEXT, is_unique INTEGER, is_primary INTEGER,
-  columns_json TEXT, PRIMARY KEY (profile_id, database, object_id, name)
+  columns_json TEXT,
+  not_key INTEGER,                                                        -- partial / filtered, expression part, disabled: never a grid row key (v6)
+  PRIMARY KEY (profile_id, database, object_id, name)
 );
 
 CREATE TABLE IF NOT EXISTS definition_cache (

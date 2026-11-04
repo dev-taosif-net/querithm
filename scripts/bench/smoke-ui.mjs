@@ -326,7 +326,7 @@ try {
   await page.waitForFunction(() => !!document.querySelector("[data-q-edit-toggle]"), { timeout: 15_000 }).catch(() => errors.push("grid Edit button did not appear"));
   if (await page.evaluate(() => !!document.querySelector("[data-q-grid-edit]"))) errors.push("grid was editable before Edit was clicked");
   await page.evaluate(() => document.querySelector("[data-q-edit-toggle]")?.click());
-  await page.waitForFunction(() => document.body.innerText.includes("Double-click a cell to edit"), { timeout: 5_000 }).catch(() => errors.push("grid edit bar did not appear"));
+  await page.waitForFunction(() => document.body.innerText.includes("Type or double-click to edit"), { timeout: 5_000 }).catch(() => errors.push("grid edit bar did not appear"));
   await sleep(500);
   const grid = await page.evaluate(() => {
     const c = document.querySelector("[data-q-grid-edit] canvas")?.getBoundingClientRect();
@@ -355,9 +355,31 @@ try {
     await page.waitForFunction(() => document.body.innerText.includes("Changes to dbo.Customers: 1 updated"), { timeout: 10_000 }).catch(() => errors.push("grid review did not open"));
     await sleep(800);
     await shot("03b-grid-review");
-    await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "Cancel")?.click());
+    await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent === "Cancel")?.click());
     await sleep(200);
+    // Cancel is the edit row's one way out (no Done); with a staged change it asks first, and Keep editing keeps it.
+    if (await page.evaluate(() => [...document.querySelectorAll("[data-q-panel-row] button")].some((b) => b.textContent?.trim() === "Done")))
+      errors.push("the edit row still shows a Done button");
+    await page.evaluate(() => document.querySelector("[data-q-edit-cancel]")?.click());
+    await page.waitForFunction(() => document.body.innerText.includes("Discard 1 staged change to dbo.Customers?"), { timeout: 5_000 })
+      .catch(() => errors.push("Cancel did not ask before discarding"));
+    await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent === "Keep editing")?.click());
+    await sleep(200);
+    if (!(await page.evaluate(() => document.body.innerText.includes("1 changed")))) errors.push("Keep editing lost the staged change");
     await editMenu("Discard all");
+    await sleep(200);
+    // Duplicate: select the first row by its number, Ctrl+D copies it as a new row (one undo step).
+    await page.mouse.click(grid.x + 10, grid.y + 28 + 12);
+    await sleep(150);
+    await page.keyboard.down("Control"); await page.keyboard.press("d"); await page.keyboard.up("Control");
+    await page.waitForFunction(() => document.body.innerText.includes("1 new"), { timeout: 5_000 }).catch(() => errors.push("Ctrl+D did not duplicate the row"));
+    await shot("03c-grid-duplicate");
+    await page.evaluate(() => document.querySelector("[data-q-edit-cancel]")?.click());
+    await sleep(200);
+    await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent === "Discard and leave")?.click());
+    await page.waitForFunction(() => !document.querySelector("[data-q-grid-edit]"), { timeout: 5_000 }).catch(() => errors.push("Cancel → Discard and leave did not leave edit mode"));
+    // Leaving edit mode is not sticky: the grid is read-only until Edit is clicked again.
+    await page.evaluate(() => document.querySelector("[data-q-edit-toggle]")?.click());
     await sleep(200);
   } else errors.push("editable grid canvas not found");
   // Reviewed Gemini workflows: header selection must not crash; a query error is shown without hiding the results.
@@ -489,7 +511,7 @@ try {
       .catch(() => errors.push("rename preview did not appear"));
     await sleep(800);
     await shot("03l-rename");
-    await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "Cancel")?.click());
+    await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent === "Cancel")?.click());
     await sleep(300);
   }
   console.log("[step] Import wizard");
@@ -940,7 +962,7 @@ try {
         await page.waitForFunction(() => !!document.querySelector("[data-q-edit-toggle]"), { timeout: 15_000 })
           .catch(() => errors.push(`${e.key}: the grid Edit button did not appear (the keyed table should be editable)`));
         await page.evaluate(() => document.querySelector("[data-q-edit-toggle]")?.click());
-        await page.waitForFunction(() => document.body.innerText.includes("Double-click a cell to edit"), { timeout: 5_000 }).catch(() => errors.push(`${e.key}: grid edit bar did not appear`));
+        await page.waitForFunction(() => document.body.innerText.includes("Type or double-click to edit"), { timeout: 5_000 }).catch(() => errors.push(`${e.key}: grid edit bar did not appear`));
         await sleep(1000);
         const sqGrid = await page.evaluate(() => {
           const c = document.querySelector("[data-q-grid-edit] canvas")?.getBoundingClientRect();
@@ -1034,7 +1056,7 @@ try {
     await page.waitForFunction(() => !!document.querySelector("[data-q-edit-toggle]"), { timeout: 15_000 })
       .catch(() => errors.push("mysql: the grid Edit button did not appear (the result should be editable)"));
     await page.evaluate(() => document.querySelector("[data-q-edit-toggle]")?.click());
-    await page.waitForFunction(() => document.body.innerText.includes("Double-click a cell to edit"), { timeout: 5_000 }).catch(() => errors.push("mysql: grid edit bar did not appear"));
+    await page.waitForFunction(() => document.body.innerText.includes("Type or double-click to edit"), { timeout: 5_000 }).catch(() => errors.push("mysql: grid edit bar did not appear"));
     await sleep(500);
     const myGrid = await page.evaluate(() => {
       const c = document.querySelector("[data-q-grid-edit] canvas")?.getBoundingClientRect();
@@ -1090,7 +1112,7 @@ try {
         .catch(() => errors.push("mysql: rename preview did not appear"));
       await sleep(500);
       await shot("26c-mysql-rename");
-      await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "Cancel")?.click());
+      await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent === "Cancel")?.click());
       await sleep(300);
     }
 

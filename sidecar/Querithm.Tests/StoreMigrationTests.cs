@@ -80,13 +80,13 @@ public class StoreMigrationTests : IDisposable
         Assert.Equal((long)LocalStore.Version, Scalar(path, "PRAGMA user_version"));
         Assert.True(HasColumn(path, "obj", "parent_object_id"));
         Assert.True(HasTable(path, "snippet"));
-        // Triggers were never read into these snapshots, so the next open refreshes them.
-        Assert.Equal("stale", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'p'"));
+        // Triggers (v2) and the grid-edit flags (v6) were never read into these snapshots, so the next open refreshes them in full.
+        Assert.Equal("empty", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'p'"));
         Assert.Equal("\"dark\"", Scalar(path, "SELECT value_json FROM setting WHERE key = 'theme'"));
         var snap = new MetadataStore(store).Load("p", "db");
         var o = Assert.Single(snap.Objects);
         Assert.Equal(("Orders", ObjectKind.Table, (long?)null), (o.Name, o.Kind, o.ParentObjectId));
-        Assert.Equal(SnapshotStatus.Stale, snap.Status);
+        Assert.Equal(SnapshotStatus.Empty, snap.Status);
     }
 
     [Fact]
@@ -101,8 +101,8 @@ public class StoreMigrationTests : IDisposable
         var store = new LocalStore(path);
         Assert.Equal((long)LocalStore.Version, Scalar(path, "PRAGMA user_version"));
         Assert.True(HasTable(path, "snippet"));
-        // Only the v1 → v2 step marks snapshots stale.
-        Assert.Equal("fresh", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'p'"));
+        // The v6 step (grid-edit flags) asks for a full refresh of every snapshot.
+        Assert.Equal("empty", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'p'"));
         var trigger = new MetadataStore(store).Load("p", "db").Objects.Single(x => x.Kind == ObjectKind.Trigger);
         Assert.Equal(1L, trigger.ParentObjectId);
     }
@@ -120,7 +120,8 @@ public class StoreMigrationTests : IDisposable
         _ = new LocalStore(path);
         Assert.Equal((long)LocalStore.Version, Scalar(path, "PRAGMA user_version"));
         Assert.True(HasColumn(path, "obj", "parent_object_id"));
-        Assert.Equal("stale", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'p'"));
+        // v2 marks it stale, then v6 (grid-edit flags) asks for a full refresh.
+        Assert.Equal("empty", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'p'"));
     }
 
     [Fact]
@@ -172,6 +173,32 @@ public class StoreMigrationTests : IDisposable
         // A new row stores its preview.
         var id = history.Add("p", "db", longSql, 1, null, "done", null);
         Assert.Equal((long)HistoryLimits.PreviewChars, Scalar(path, $"SELECT length(preview) FROM history WHERE id = {id}"));
+    }
+
+    [Fact]
+    public void A_v5_file_gains_the_grid_edit_flags_keeps_its_rows_and_asks_for_a_full_refresh()
+    {
+        // Grid-edit audit: rows cached before v6 carry neither flag, and an incremental refresh would keep them as they are.
+        var path = Path.Combine(_dir, "v5.db");
+        _ = new LocalStore(path);
+        Exec(path, """
+            ALTER TABLE obj DROP COLUMN no_rollback_engine;
+            ALTER TABLE idx DROP COLUMN not_key;
+            INSERT INTO schema_snapshot VALUES ('p', 'db', 1000, '8.4', 'fresh', NULL);
+            INSERT INTO obj (profile_id, database, object_id, schema_name, name, kind, modify_date) VALUES ('p', 'db', 1, 'app', 't', 'table', 5);
+            INSERT INTO idx (profile_id, database, object_id, name, is_unique, is_primary, columns_json) VALUES ('p', 'db', 1, 'PRIMARY', 1, 1, '["id"]');
+            PRAGMA user_version = 5;
+            """);
+        SqliteConnection.ClearAllPools();
+        var store = new LocalStore(path);
+        Assert.Equal(6L, Scalar(path, "PRAGMA user_version"));
+        Assert.True(HasColumn(path, "obj", "no_rollback_engine"));
+        Assert.True(HasColumn(path, "idx", "not_key"));
+        Assert.Equal("empty", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'p'"));
+        var meta = new MetadataStore(store);
+        var t = Assert.Single(meta.Load("p", "db").Objects);
+        Assert.Null(t.NoRollbackEngine);
+        Assert.False(Assert.Single(meta.Details("p", "db", 1).Indexes).NotAKey);
     }
 
     [Fact]

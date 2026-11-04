@@ -90,6 +90,9 @@ public sealed class SqliteDataEdit : IDataEditDialect
 
     public string ValuesRelation(IReadOnlyList<IReadOnlyList<string>> rows, IReadOnlyList<string> names, string alias) =>
         IDataEditDialect.UnionAllRelation(rows, names, alias);
+
+    /// <summary>A compound SELECT holds at most 500 terms (SQLITE_MAX_COMPOUND_SELECT): one per row of the relation.</summary>
+    public int MaxRelationRows => 500;
 }
 
 /// <summary>

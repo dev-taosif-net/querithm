@@ -82,6 +82,9 @@ public sealed class SqliteProvider : IDbProvider
     /// the snapshot's table of that name. The schema (main / temp) is not reported: a name in both gives no origin, so such a
     /// result stays read-only rather than editing the wrong table.
     /// </summary>
+    /// <summary>A self-join (one base table for every alias) or a compound SELECT (the leftmost table for every column).</summary>
+    public string? ResultEditRefusal(string batchText, int resultInBatch, SchemaSnapshot? snapshot) => SqliteResultShape.EditRefusal(batchText);
+
     public ColumnOrigin?[]? ResultOrigins(DbDataReader reader, IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot)
     {
         if (snapshot == null) return null;

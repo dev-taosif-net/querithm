@@ -260,6 +260,30 @@ describe("commands: keyboard dispatch", () => {
     handler(key({ key: "s", code: "KeyS", ctrlKey: true, target: { tagName: "DIV", closest: () => null } }));
     expect(persistence.saveFile).toHaveBeenCalledTimes(1);
   });
+  it("in the grid's cell editor (Glide's #portal) Ctrl+S and Ctrl+0 never save the script or reset the zoom", async () => {
+    const persistence = await import("../persistence");
+    useSettings.setState({ uiScale: 110 });
+    const editor = { tagName: "TEXTAREA", closest: (sel: string) => (sel === "#portal" ? {} : null) };
+    const saves = vi.mocked(persistence.saveFile).mock.calls.length;
+    let gridOpen = true;
+    vi.stubGlobal("document", { querySelector: (sel: string) => (sel === "[data-q-grid-edit]" && gridOpen ? {} : null) });
+    try {
+      for (const k of [{ key: "s", code: "KeyS", ctrlKey: true }, { key: "0", code: "Digit0", ctrlKey: true }, { key: "d", code: "KeyD", ctrlKey: true }]) {
+        const e = key({ ...k, target: editor });
+        handler(e);
+        expect(e.preventDefault).not.toHaveBeenCalled();
+      }
+      expect(vi.mocked(persistence.saveFile).mock.calls.length).toBe(saves);
+      expect(useSettings.getState().uiScale).toBe(110);
+      // With no editable grid open, #portal (other popups) keeps the app keys.
+      gridOpen = false;
+      handler(key({ key: "0", code: "Digit0", ctrlKey: true, target: editor }));
+      expect(useSettings.getState().uiScale).toBe(100);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.stubGlobal("window", win);
+    }
+  });
   it("Ctrl+= / Ctrl+- / Ctrl+0 change the interface scale, also in the editor; Ctrl+0 in an editable grid stays the grid's NULL (L26)", () => {
     useSettings.setState({ uiScale: 100 });
     const monaco = { tagName: "TEXTAREA", closest: (s: string) => (s === ".monaco-editor" ? {} : null) };

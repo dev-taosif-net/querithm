@@ -140,6 +140,65 @@ public sealed class SqliteEditImportTests
     }
 
     [Fact]
+    public async Task Row_checks_for_more_keys_than_a_compound_select_may_hold_are_split()
+    {
+        // Grid-edit audit: the keys travel as SELECT … UNION ALL SELECT …, which SQLite caps at 500 terms; 1000 per statement
+        // failed with "too many terms in compound SELECT".
+        var (h, _, sid, _) = await OpenAsync("""
+            CREATE TABLE blobs (id INTEGER PRIMARY KEY, data BLOB);
+            WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 600) INSERT INTO blobs SELECT i, randomblob(4) FROM n;
+            """);
+        await using var _ = h;
+        var (_, _, exec) = await h.RunAsync(sid, "SELECT id, data FROM blobs");
+        Assert.True(ResultSet(h, exec).Edit!.Editable, ResultSet(h, exec).Edit!.Reason);
+        var r = await h.Rpc.DataRowTokens(new RowTokensParams
+        {
+            SessionId = sid, ExecutionId = exec, Keys = Enumerable.Range(1, 600).Select(i => new[] { V(i.ToString()) }).ToArray(),
+        });
+        Assert.Equal(600, r.Tokens.Length);
+        Assert.All(r.Tokens, t => Assert.Equal("", t)); // every row found
+    }
+
+    [Fact]
+    public async Task A_self_join_and_a_compound_select_are_read_only()
+    {
+        // Grid-edit audit: SQLite names one base table for both aliases of a self-join, and the leftmost table for every
+        // column of a UNION, so a key could update another row than the one shown.
+        var (h, _, sid, _) = await OpenAsync(Orders + "CREATE TABLE archive (id INTEGER PRIMARY KEY, name TEXT NOT NULL, qty INTEGER); INSERT INTO archive VALUES (9, 'old', 1);");
+        await using var _ = h;
+        var (_, _, plain) = await h.RunAsync(sid, "SELECT id, name FROM orders");
+        Assert.True(ResultSet(h, plain).Edit!.Editable, ResultSet(h, plain).Edit!.Reason);
+        var (_, _, self) = await h.RunAsync(sid, "SELECT a.id, b.name FROM orders a JOIN orders b ON b.id = a.id + 1");
+        Assert.False(ResultSet(h, self).Edit!.Editable);
+        Assert.Equal("Read-only: the same table (orders) appears more than once in the query", ResultSet(h, self).Edit!.Reason);
+        var (_, _, union) = await h.RunAsync(sid, "SELECT id, name FROM orders UNION ALL SELECT id, name FROM archive");
+        Assert.False(ResultSet(h, union).Edit!.Editable);
+        Assert.Equal("Read-only: the query combines several queries (UNION)", ResultSet(h, union).Edit!.Reason);
+    }
+
+    [Fact]
+    public async Task A_partial_or_expression_unique_index_is_not_a_row_key()
+    {
+        var (h, _, sid, _) = await OpenAsync("""
+            CREATE TABLE p (code TEXT NOT NULL, active INTEGER NOT NULL, label TEXT); CREATE UNIQUE INDEX ux_active ON p (code) WHERE active = 1;
+            INSERT INTO p VALUES ('a', 0, 'x'), ('a', 0, 'y'), ('a', 1, 'z');
+            CREATE TABLE e (code TEXT NOT NULL, label TEXT); CREATE UNIQUE INDEX ux_lower ON e (lower(code), code);
+            INSERT INTO e VALUES ('a', 'x'), ('A', 'y');
+            CREATE TABLE ok (code TEXT NOT NULL, label TEXT); CREATE UNIQUE INDEX ux_code ON ok (code); INSERT INTO ok VALUES ('a', 'x');
+            """);
+        await using var _ = h;
+        foreach (var t in new[] { "p", "e" })
+        {
+            var (_, _, id) = await h.RunAsync(sid, $"SELECT code, label FROM {t}");
+            var edit = ResultSet(h, id).Edit!;
+            Assert.False(edit.Editable, $"{t} is editable with key {string.Join(",", edit.KeyColumns)}");
+            Assert.Contains("no primary key", edit.Reason);
+        }
+        var (_, _, ok) = await h.RunAsync(sid, "SELECT code, label FROM ok");
+        Assert.Equal(["code"], ResultSet(h, ok).Edit!.KeyColumns);
+    }
+
+    [Fact]
     public async Task A_table_created_in_the_tab_is_editable_on_the_next_run_untyped_columns_included()
     {
         // The UI flow: no explicit refresh — the DDL-triggered one must be enough, and an untyped column stays writable.

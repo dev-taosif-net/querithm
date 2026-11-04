@@ -93,14 +93,16 @@ public sealed class SqlServerMetadata : IMetadataProvider
                     SELECT i.object_id, i.name, i.is_unique, i.is_primary_key,
                            STUFF((SELECT ',' + col.name FROM sys.index_columns ic JOIN sys.columns col ON col.object_id = ic.object_id AND col.column_id = ic.column_id
                                   WHERE ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.is_included_column = 0
-                                  ORDER BY ic.key_ordinal FOR XML PATH(''), TYPE).value('.', 'nvarchar(max)'), 1, 1, '')
+                                  ORDER BY ic.key_ordinal FOR XML PATH(''), TYPE).value('.', 'nvarchar(max)'), 1, 1, ''),
+                           -- Never a grid row key: filtered (WHERE …), disabled (enforces nothing) or hypothetical.
+                           CAST(CASE WHEN i.has_filter = 1 OR i.is_disabled = 1 OR i.is_hypothetical = 1 THEN 1 ELSE 0 END AS bit)
                     FROM sys.indexes i
                     WHERE i.object_id IN ({ids}) AND i.name IS NOT NULL AND i.type > 0
                     """;
                 await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
                 while (await r.ReadAsync(ct).ConfigureAwait(false))
                     indexes.Add(new IndexRow(r.GetInt32(0), r.GetString(1), r.GetBoolean(2), r.GetBoolean(3),
-                        r.IsDBNull(4) ? [] : r.GetString(4).Split(',', StringSplitOptions.RemoveEmptyEntries)));
+                        r.IsDBNull(4) ? [] : r.GetString(4).Split(',', StringSplitOptions.RemoveEmptyEntries), NotAKey: r.GetBoolean(5)));
             }
             await using (var cmd = c.CreateCommand())
             {

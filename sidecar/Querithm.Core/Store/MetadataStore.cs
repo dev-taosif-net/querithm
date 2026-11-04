@@ -67,14 +67,15 @@ public sealed class MetadataStore(LocalStore store)
             }
         }
 
-        using (var cmd = c.Cmd("INSERT OR REPLACE INTO obj (profile_id, database, object_id, schema_name, name, kind, modify_date, return_type, parent_object_id) VALUES ($p,$d,$id,$s,$n,$k,$m,$rt,$par)", tx))
+        using (var cmd = c.Cmd("INSERT OR REPLACE INTO obj (profile_id, database, object_id, schema_name, name, kind, modify_date, return_type, parent_object_id, no_rollback_engine) VALUES ($p,$d,$id,$s,$n,$k,$m,$rt,$par,$nr)", tx))
         {
             var pId = Param(cmd, "$p", profileId); var pDb = Param(cmd, "$d", database);
-            var id = Param(cmd, "$id"); var s = Param(cmd, "$s"); var n = Param(cmd, "$n"); var k = Param(cmd, "$k"); var m = Param(cmd, "$m"); var rt = Param(cmd, "$rt"); var par = Param(cmd, "$par");
+            var id = Param(cmd, "$id"); var s = Param(cmd, "$s"); var n = Param(cmd, "$n"); var k = Param(cmd, "$k"); var m = Param(cmd, "$m"); var rt = Param(cmd, "$rt"); var par = Param(cmd, "$par"); var nr = Param(cmd, "$nr");
             foreach (var o in changed)
             {
                 id.Value = o.Id; s.Value = o.Schema; n.Value = o.Name; k.Value = EnumText.Of(o.Kind); m.Value = o.Marker; rt.Value = (object?)o.ReturnType ?? DBNull.Value;
                 par.Value = (object?)o.ParentObjectId ?? DBNull.Value;
+                nr.Value = (object?)o.NoRollbackEngine ?? DBNull.Value;
                 cmd.ExecuteNonQuery();
             }
         }
@@ -104,13 +105,13 @@ public sealed class MetadataStore(LocalStore store)
                 cmd.ExecuteNonQuery();
             }
         }
-        using (var cmd = c.Cmd("INSERT OR REPLACE INTO idx (profile_id, database, object_id, name, is_unique, is_primary, columns_json) VALUES ($p,$d,$o,$n,$u,$pk,$cols)", tx))
+        using (var cmd = c.Cmd("INSERT OR REPLACE INTO idx (profile_id, database, object_id, name, is_unique, is_primary, columns_json, not_key) VALUES ($p,$d,$o,$n,$u,$pk,$cols,$nk)", tx))
         {
             Param(cmd, "$p", profileId); Param(cmd, "$d", database);
-            var o = Param(cmd, "$o"); var n = Param(cmd, "$n"); var u = Param(cmd, "$u"); var pk = Param(cmd, "$pk"); var cols = Param(cmd, "$cols");
+            var o = Param(cmd, "$o"); var n = Param(cmd, "$n"); var u = Param(cmd, "$u"); var pk = Param(cmd, "$pk"); var cols = Param(cmd, "$cols"); var nk = Param(cmd, "$nk");
             foreach (var i in details.Indexes)
             {
-                o.Value = i.ObjectId; n.Value = i.Name; u.Value = i.Unique ? 1 : 0; pk.Value = i.Primary ? 1 : 0; cols.Value = JsonSerializer.Serialize(i.Columns, StoreJsonContext.Default.StringArray);
+                o.Value = i.ObjectId; n.Value = i.Name; u.Value = i.Unique ? 1 : 0; pk.Value = i.Primary ? 1 : 0; cols.Value = JsonSerializer.Serialize(i.Columns, StoreJsonContext.Default.StringArray); nk.Value = i.NotAKey ? 1 : 0;
                 cmd.ExecuteNonQuery();
             }
         }
@@ -182,7 +183,7 @@ public sealed class MetadataStore(LocalStore store)
             }
 
         var objects = new List<SnapObject>();
-        using (var cmd = c.Cmd($"SELECT object_id, schema_name, name, kind, return_type, modify_date, parent_object_id FROM obj WHERE profile_id=$p AND database=$d{filter} ORDER BY schema_name, name", null, key))
+        using (var cmd = c.Cmd($"SELECT object_id, schema_name, name, kind, return_type, modify_date, parent_object_id, no_rollback_engine FROM obj WHERE profile_id=$p AND database=$d{filter} ORDER BY schema_name, name", null, key))
         using (var r = cmd.ExecuteReader())
             while (r.Read())
             {
@@ -191,6 +192,7 @@ public sealed class MetadataStore(LocalStore store)
                 {
                     Id = oid, Schema = r.Str(1) ?? "", Name = r.Str(2) ?? "", Kind = EnumText.Parse(r.Str(3), ObjectKind.Table), ReturnType = r.Str(4),
                     ModifyDate = r.Long(5), ParentObjectId = r.Long(6),
+                    NoRollbackEngine = r.Str(7),
                     Columns = columns.TryGetValue(oid, out var cl) ? cl.ToArray() : null,
                     Params = parms.TryGetValue(oid, out var pl) ? pl.ToArray() : null,
                 });
@@ -230,10 +232,10 @@ public sealed class MetadataStore(LocalStore store)
         using var c = store.Open();
         (string, object?)[] key = [("$p", profileId), ("$d", database), ("$o", objectId)];
         var indexes = new List<IndexInfo>();
-        using (var cmd = c.Cmd("SELECT name, is_unique, is_primary, columns_json FROM idx WHERE profile_id=$p AND database=$d AND object_id=$o ORDER BY is_primary DESC, name", null, key))
+        using (var cmd = c.Cmd("SELECT name, is_unique, is_primary, columns_json, not_key FROM idx WHERE profile_id=$p AND database=$d AND object_id=$o ORDER BY is_primary DESC, name", null, key))
         using (var r = cmd.ExecuteReader())
             while (r.Read())
-                indexes.Add(new IndexInfo { Name = r.GetString(0), IsUnique = r.Bool(1), IsPrimary = r.Bool(2), Columns = JsonSerializer.Deserialize(r.GetString(3), StoreJsonContext.Default.StringArray) ?? [] });
+                indexes.Add(new IndexInfo { Name = r.GetString(0), IsUnique = r.Bool(1), IsPrimary = r.Bool(2), Columns = JsonSerializer.Deserialize(r.GetString(3), StoreJsonContext.Default.StringArray) ?? [], NotAKey = r.Bool(4) });
         var fks = new List<SnapFk>();
         var refBy = new List<SnapFk>();
         using (var cmd = c.Cmd("SELECT name, parent_object_id, referenced_object_id, columns_json FROM fk WHERE profile_id=$p AND database=$d AND (parent_object_id=$o OR referenced_object_id=$o)", null, key))
