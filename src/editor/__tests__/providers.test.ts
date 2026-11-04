@@ -244,9 +244,10 @@ describe("completion provider", () => {
     const r = completion("pgsql").provideCompletionItems(pg, pos(pg, 24));
     expect(r.suggestions.map((s: any) => s.label.label)).toContain("orders");
     await vi.advanceTimersByTimeAsync(500);
-    // Only tier 2's own request counts: on a slow runner (macos-15-intel) the previous test's schema load, on real
-    // timers, could still reach the mock after this test's reset.
-    expect(rpc.mock.calls.filter((c) => c[0] === "lang.complete"), JSON.stringify(rpc.mock.calls)).toEqual([]);
+    // Only this test's documents count: on a slow runner (macos-15-intel) an earlier test's tier-2 debounce, on real
+    // timers, fired during this one (seen: lang.complete for another tab's "select * from ").
+    const mine = new Set([m.tabId, pg.tabId]);
+    expect(rpc.mock.calls.filter((c) => c[0] === "lang.complete" && mine.has((c[1] as { docId?: string })?.docId ?? "")), JSON.stringify(rpc.mock.calls)).toEqual([]);
   });
 
   it("PostgreSQL: tier 1 answers first, then the sidecar's PL/pgSQL tier 2 merges in like T-SQL's", async () => {
