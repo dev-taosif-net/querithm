@@ -165,6 +165,8 @@ export class Splitter {
     if (!u) return CONT;
     if (u === "CASE") { this.caseDepth++; return CONT; }
     if (u === "END" && this.caseDepth > 0) { this.caseDepth--; return CONT; }
+    // CASE … ELSE … END: that ELSE is the expression's, never T-SQL / PL/pgSQL / MySQL IF … ELSE starting a statement.
+    if (u === "ELSE" && this.caseDepth > 0) return CONT;
     if (this.depth > 0 || this.merge) return CONT;
     if (this.header && u === "AS") {
       const prev = T[i - 1];
@@ -214,6 +216,7 @@ export class Splitter {
       case "INSERT": case "UPDATE": case "DELETE": case "MERGE":
         if (this.withPending || this.explainPending) return false;
         if (pu === "ON" && FK_ACTION.has(nu)) return false;
+        if (u === "UPDATE" && pu === "KEY") return false; // MySQL INSERT … ON DUPLICATE KEY UPDATE
         return pu !== "COMMIT";
       case "SET": return !this.updateSetPending && !this.ddl && pu !== "DELETE" && pu !== "UPDATE";
       case "ALTER": return !(this.ddl && nu === "COLUMN");
@@ -543,7 +546,8 @@ interface InsertInfo {
 }
 
 type FrameFn = "" | "cast" | "convert" | "call" | "values" | "colDefs" | "insertCols" | "execCall" | "sub";
-interface WFrame { clause: Clause; fn: FrameFn; open: number; execKw: number }
+/** `cases`: CASE expressions open in this frame; their WHEN / THEN / ELSE / END never change the clause. */
+interface WFrame { clause: Clause; fn: FrameFn; open: number; execKw: number; cases?: number }
 
 class Analyzer {
   readonly pm: Int32Array;
@@ -580,6 +584,16 @@ class Analyzer {
 
   match(i: number): number {
     return i >= this.a && i <= this.b ? this.pm[i - this.a] : -1;
+  }
+
+  /**
+   * The `(` at `i` opens a query (`EXISTS (SELECT`, `ARRAY(SELECT`, `name(WITH …`): never a function's argument list,
+   * whatever word precedes it. PostgreSQL and DuckDB do not reserve EXISTS, so it lexes as a name like a function's.
+   */
+  opensQuery(i: number): boolean {
+    if (i + 1 > this.b || i + 1 === this.skip) return false;
+    const n = W(this.T[i + 1]);
+    return n === "SELECT" || n === "WITH";
   }
 
   private tok(i: number): Token | undefined {
@@ -875,7 +889,10 @@ class Analyzer {
     const prev = T[i - 1];
     const pu = i - 1 >= this.a ? W(prev) : "";
     const nu = W(T[i + 1]);
-    if (nu === "SET" || nu === "STATISTICS" || FK_ACTION.has(nu)) return false;
+    // `UPDATE SET …` with no target is MERGE's `THEN UPDATE SET`, PostgreSQL's `DO UPDATE SET`, MySQL's `KEY UPDATE`
+    // (ruled out by the previous word below) or a table name the user has not written yet: `UPDATE | SET x = 1`.
+    if (nu === "STATISTICS" || (nu !== "SET" && FK_ACTION.has(nu))) return false;
+    if (pu === "KEY" || (nu === "SET" && pu === "THEN")) return false;
     return !(pu === "ON" || pu === "FOR" || pu === "OF" || pu === "OR" || pu === "DO" || pu === "AFTER" ||
       pu === "BEFORE" || pu === "INSTEAD" || pu === "GRANT" || pu === "REVOKE" || pu === "DENY" || isPunct(prev, ","));
   }
@@ -889,7 +906,7 @@ class Analyzer {
       if (t.kind === "punct") {
         if (t.value === "(") {
           const prev = T[i - 1];
-          frames.push(i > this.a && (isNameTok(prev) || FUNC_KEYWORDS.has(W(prev))) ? "call" : "other");
+          frames.push(i > this.a && !this.opensQuery(i) && (isNameTok(prev) || FUNC_KEYWORDS.has(W(prev))) ? "call" : "other");
         } else if (t.value === ")") { if (frames.length > 1) frames.pop(); }
         else if (t.value === "," && frames[frames.length - 1] === "from") this.parseRefWithHints(i + 1);
         continue;
@@ -1029,7 +1046,7 @@ class Analyzer {
           else if (top.clause === "values" && top.fn !== "values" && (pu === "VALUES" || isPunct(prev, ","))) { f.fn = "values"; f.clause = "values"; }
           else if (top.clause === "exec" && top.execKw >= 0 && this.pg) { f.fn = "execCall"; f.clause = "execArgs"; f.execKw = top.execKw; }
           else if (pu === "TABLE" || (createTable && st.length === 1 && !rootParenSeen)) { f.fn = "colDefs"; f.clause = "unknown"; }
-          else if (prev && (isNameTok(prev) || FUNC_KEYWORDS.has(pu))) {
+          else if (prev && !this.opensQuery(i) && (isNameTok(prev) || FUNC_KEYWORDS.has(pu))) {
             f.fn = "call";
             if (TABLE_CLAUSES.has(top.clause)) f.clause = "select";
           }
@@ -1052,6 +1069,13 @@ class Analyzer {
       }
       const u = W(t);
       if (!u) continue;
+      // A CASE expression stays in its clause: `SELECT CASE … END, c.|` is still the select list (END / ELSE there
+      // would otherwise read as a block's END / IF … ELSE).
+      if (u === "CASE") { top.cases = (top.cases ?? 0) + 1; continue; }
+      if (top.cases) {
+        if (u === "END") { top.cases--; if (W(T[i + 1]) === "CASE") i++; continue; } // END CASE (a procedure's CASE)
+        if (u === "WHEN" || u === "THEN" || u === "ELSE") continue;
+      }
       const next = T[i + 1];
       switch (u) {
         case "SELECT": top.clause = "select"; break;
@@ -1069,7 +1093,10 @@ class Analyzer {
         case "ORDER": top.clause = "orderBy"; break;
         case "HAVING": top.clause = "having"; break;
         case "PARTITION": if (W(next) === "BY") top.clause = "groupBy"; break;
-        case "UPDATE": if (this.updateOk(i)) top.clause = "update"; break;
+        case "UPDATE":
+          if (W(T[i - 1]) === "KEY") top.clause = "set"; // ON DUPLICATE KEY UPDATE col = …: the insert target's columns
+          else if (this.updateOk(i)) top.clause = "update";
+          break;
         case "SET": top.clause = "set"; break;
         case "INSERT": top.clause = "insertInto"; break;
         case "INTO": top.clause = W(T[i - 1]) === "MERGE" ? "from" : "insertInto"; break;

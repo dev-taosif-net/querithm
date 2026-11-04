@@ -15,7 +15,7 @@ import { monaco } from "./monaco";
 import { modelOwner, onEditorCreated, onModelContent, onModelDisposed, tabIdOfModel } from "./editors";
 import { useTabs } from "../store/tabs";
 import { useProfiles } from "../store/profiles";
-import { tabScope, tabSnapshot } from "../store/snapshots";
+import { ensureTabSnapshot, tabScope, tabSnapshot } from "../store/snapshots";
 import { isDisconnected } from "../store/connections";
 import { useSettings } from "../store/settings";
 import { snippetsFor, useSnippets } from "../snippets/snippetStore";
@@ -179,6 +179,9 @@ function toMonaco(item: Tier1Item | CompletionItem, range: monaco.IRange, tier: 
 function provideCompletion(model: monaco.editor.ITextModel, position: monaco.Position): monaco.languages.CompletionList {
   const ctx = docContext(model);
   if (!ctx) return { suggestions: [] };
+  // No schema cached for a connected tab (never loaded, or the load failed): load it now, so the next request —
+  // `incomplete: true` re-asks on every keystroke — has its tables. ensure() is a no-op while a load is in flight.
+  if (!ctx.schema && ctx.profileId) ensureTabSnapshot(useTabs.getState().tabs[ctx.tabId]);
   const t0 = performance.now();
   const offset = model.getOffsetAt(position);
   const text = model.getValue();

@@ -26,7 +26,12 @@ export interface SnapEntry {
   index?: SchemaIndex;
   version: number;
   error?: string | null;
+  /** When the last load failed (Date.now()); ensure() retries an entry with nothing cached after RETRY_MS. */
+  failedAt?: number;
 }
+
+/** Least time between two retries of a schema load that failed with nothing cached. */
+export const RETRY_MS = 5000;
 
 /**
  * A database's cache key, by its exact name (Phase D0e identity): PostgreSQL's "Sales" and "sales" are two databases,
@@ -179,7 +184,11 @@ export const useSnapshots = create<SnapStore>((set, get) => {
     entries: {},
     ensure(profileId, database, sessionId) {
       const k = snapKey(profileId, database, sessionId);
-      if (!get().entries[k] && !isDisconnected(profileId)) void get().load(profileId, database, sessionId);
+      if (isDisconnected(profileId)) return;
+      const e = get().entries[k];
+      // A load that failed with nothing cached is retried, at most once per RETRY_MS (completion calls this per request).
+      const retry = !!e && !e.index && e.status === "error" && e.failedAt !== undefined && Date.now() - e.failedAt >= RETRY_MS;
+      if (!e || retry) void get().load(profileId, database, sessionId);
     },
     async load(profileId, database, sessionId) {
       if (isDisconnected(profileId)) return;
@@ -192,8 +201,14 @@ export const useSnapshots = create<SnapStore>((set, get) => {
         if (!get().entries[k] || isDisconnected(profileId)) return; // forgotten (disconnected, session closed) while loading
         put({ key: k, ...scope, status: snapshot.status, snapshot, index: index(snapshot), version: (get().entries[k]?.version ?? 0) + 1, error: snapshot.error });
       } catch (e) {
-        if (!get().entries[k] || isDisconnected(profileId)) return;
-        put({ key: k, ...scope, status: "error", version: (get().entries[k]?.version ?? 0) + 1, error: e instanceof Error ? e.message : String(e) });
+        const now = get().entries[k];
+        if (!now || isDisconnected(profileId)) return;
+        // A failed reload keeps the schema already cached: completion and the explorer go on with it (§9) instead of
+        // losing every table until the next successful load.
+        put({
+          key: k, ...scope, status: "error", snapshot: now.snapshot, index: now.index, version: now.version + 1,
+          error: e instanceof Error ? e.message : String(e), failedAt: Date.now(),
+        });
       }
     },
     async refresh(profileId, database, full = false, sessionId) {

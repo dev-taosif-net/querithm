@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { MetaUpdatedEvent, SchemaSnapshot, SnapObject } from "../../ipc/contract";
-import { installSnapshotListeners, snapKey, useSnapshots } from "../snapshots";
+import { installSnapshotListeners, RETRY_MS, snapKey, useSnapshots } from "../snapshots";
 import { useConnections } from "../connections";
 import { useTabs } from "../tabs";
 
@@ -83,15 +83,47 @@ describe("snapshots store", () => {
     expect(s().get("p1", "Sales")).toMatchObject({ status: "error", error: "login failed" });
     expect(s().get("p1", "Sales")?.snapshot).toBeUndefined();
   });
-  it("a failed reload drops the previously cached snapshot and index (documents current behaviour)", async () => {
+  it("a failed reload keeps the previously cached snapshot and index, so completion keeps its tables", async () => {
     rpc.mockResolvedValueOnce(snapshot([obj(1, "dbo", "A")]));
     await s().load("p1", "Sales");
     rpc.mockRejectedValueOnce(new Error("network"));
     await s().load("p1", "Sales");
     const e = s().get("p1", "Sales")!;
-    expect(e.status).toBe("error");
-    expect(e.snapshot).toBeUndefined();
-    expect(e.index).toBeUndefined();
+    expect(e).toMatchObject({ status: "error", error: "network" });
+    expect(e.snapshot?.objects[0].name).toBe("A");
+    expect(e.index?.byName.get("a")?.[0].id).toBe(1);
+  });
+  it("ensure retries a failed load that cached nothing, at most once per RETRY_MS", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      rpc.mockRejectedValueOnce(new Error("timeout"));
+      await s().load("p1", "Sales");
+      expect(rpc).toHaveBeenCalledTimes(1);
+      s().ensure("p1", "Sales"); // too soon
+      expect(rpc).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(Date.now() + RETRY_MS);
+      rpc.mockResolvedValueOnce(snapshot([obj(1, "dbo", "A")]));
+      s().ensure("p1", "Sales");
+      await flush();
+      expect(rpc).toHaveBeenCalledTimes(2);
+      expect(s().get("p1", "Sales")?.index?.byName.get("a")?.[0].id).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("ensure does not retry a failed reload that still has a cached schema", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      rpc.mockResolvedValueOnce(snapshot([obj(1, "dbo", "A")]));
+      await s().load("p1", "Sales");
+      rpc.mockRejectedValueOnce(new Error("network"));
+      await s().load("p1", "Sales");
+      vi.setSystemTime(Date.now() + RETRY_MS);
+      s().ensure("p1", "Sales");
+      expect(rpc).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
   it("a failed load bumps the version past the loading entry", async () => {
     rpc.mockRejectedValueOnce("boom");

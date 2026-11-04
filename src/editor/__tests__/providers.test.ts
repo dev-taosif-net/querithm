@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeEditor, FakeModel, fake } from "./fakeMonaco";
-import { IDX, PG_IDX } from "../completion/__tests__/fixture";
+import { IDX, PG_IDX, PG_SNAPSHOT, SNAPSHOT } from "../completion/__tests__/fixture";
 import { useTabs } from "../../store/tabs";
 import { useProfiles } from "../../store/profiles";
 import { useSettings } from "../../store/settings";
@@ -167,6 +167,73 @@ describe("completion provider", () => {
     await vi.advanceTimersByTimeAsync(130);
     expect(rpc).toHaveBeenCalledTimes(1);
   });
+
+  for (const engine of ["tsql", "pg"] as const) {
+    const c = CONF[engine];
+    const table = engine === "pg" ? "orders" : "Orders";
+    const tablesIn = (r: { suggestions: any[] }) => r.suggestions.filter((s) => s.kind === fake.monaco.languages.CompletionItemKind.Struct).map((s) => s.label.label);
+
+    it(`${engine}: tier 2 can only add to tier 1's tables — empty, conflicting or failing answers never remove one`, async () => {
+      vi.useFakeTimers();
+      const answers: unknown[] = [
+        [],
+        [{ label: table, kind: "keyword", isSnippet: false }], // same label, another kind
+        [{ label: "zzz", kind: "column", isSnippet: false }],
+        new Error("sidecar down"),
+      ];
+      for (const a of answers) {
+        const text = "select * from ";
+        const m = doc(engine, text);
+        if (a instanceof Error) rpc.mockRejectedValueOnce(a); else rpc.mockResolvedValueOnce(a);
+        expect(tablesIn(completion(c.lang).provideCompletionItems(m, pos(m, text.length)))).toContain(table);
+        await vi.advanceTimersByTimeAsync(130);
+        const after = completion(c.lang).provideCompletionItems(m, pos(m, text.length));
+        expect(tablesIn(after), JSON.stringify(a)).toContain(table);
+      }
+    });
+    it(`${engine}: a large document (thousands of lines) still offers tables at its end and in its middle`, () => {
+      useSettings.setState({ tier2: false });
+      const stmt = "SELECT o.a, CASE WHEN o.b = 'x; y' THEN 1 ELSE 0 END AS c -- FROM x\nFROM t1 o JOIN t2 p ON p.id = o.id\nWHERE EXISTS (SELECT 1 FROM t3 WHERE t3.id = o.id);\n";
+      const body = stmt.repeat(1500);
+      for (const text of [body + "SELECT * FROM ", body + "SELECT * FROM o", "SELECT * FROM o"]) {
+        const m = doc(engine, text + (text.startsWith("SELECT * FROM o") ? "\n" + body : ""));
+        expect(tablesIn(completion(c.lang).provideCompletionItems(m, pos(m, text.length))).length, text.slice(-20)).toBeGreaterThan(0);
+      }
+    });
+    it(`${engine}: a disconnected server offers no tables and does not throw`, () => {
+      const text = "select * from ";
+      const m = doc(engine, text);
+      useConnections.setState({ disconnected: { [c.profile]: true } });
+      const r = completion(c.lang).provideCompletionItems(m, pos(m, text.length));
+      expect(tablesIn(r)).toEqual([]);
+      expect(rpc).not.toHaveBeenCalledWith("meta.snapshot", expect.anything());
+    });
+    it(`${engine}: a snippet whose prefix equals a table name sits beside the table, never replaces it`, () => {
+      useSettings.setState({ tier2: false });
+      useSnippets.setState({ loaded: true, error: undefined, snippets: [{ id: "s", prefix: table.toLowerCase(), title: "t", body: "x", dialect: null, tags: [], updatedAt: 0, builtIn: false }] });
+      const text = `select * from ${table.slice(0, 3)}`;
+      const m = doc(engine, text);
+      const r = completion(c.lang).provideCompletionItems(m, pos(m, text.length));
+      expect(tablesIn(r)).toContain(table);
+    });
+
+    it(`${engine}: a tab with no cached schema loads it on the completion request, and the next request has the tables`, async () => {
+      const c = CONF[engine];
+      useSettings.setState({ tier2: false });
+      const text = "select * from ";
+      const m = doc(engine, text);
+      // The schema was never loaded (or its load failed and cached nothing).
+      useSnapshots.setState({ entries: {} });
+      rpc.mockImplementation(async (method: string) => (method === "meta.snapshot" ? (engine === "pg" ? PG_SNAPSHOT : SNAPSHOT) : []));
+      const first = completion(c.lang).provideCompletionItems(m, pos(m, text.length));
+      expect(first.incomplete).toBe(true);
+      expect(rpc).toHaveBeenCalledWith("meta.snapshot", { profileId: c.profile, database: c.db });
+      await vi.waitFor(() => expect(useSnapshots.getState().entries[snapKey(c.profile, c.db)]?.index).toBeDefined());
+      const next = completion(c.lang).provideCompletionItems(m, pos(m, text.length));
+      const kinds = next.suggestions.map((s: { kind: number }) => s.kind);
+      expect(kinds).toContain(fake.monaco.languages.CompletionItemKind.Struct);
+    });
+  }
 
   it("does not ask the sidecar when tier 2 is turned off, for either dialect", async () => {
     vi.useFakeTimers();

@@ -437,3 +437,39 @@ describe("complete: SQLite and MySQL", () => {
     expect(labels(itemsOf("|", "mySql", mysqlIdx))).toContain("CALL …");
   });
 });
+
+// Regression: PostgreSQL and DuckDB do not reserve EXISTS, so `EXISTS (` lexed as a function call and the FROM inside
+// it was skipped — no table suggestions in `WHERE EXISTS (SELECT 1 FROM |`.
+describe("complete: tables in a subquery opened after a non-reserved word, every engine", () => {
+  const ENGINES = ["tsql", "pg", "mySql", "sqlite", "duckDb"] as const;
+  const tableName = (d: (typeof ENGINES)[number]) => (d === "pg" ? "orders" : "Orders");
+  const outer = (d: (typeof ENGINES)[number]) => (d === "pg" ? "customers c" : "dbo.Customers c");
+  const SHAPES = [
+    (o: string) => `SELECT * FROM ${o} WHERE EXISTS (SELECT 1 FROM |`,
+    (o: string) => `SELECT * FROM ${o} WHERE EXISTS (SELECT 1 FROM |)`,
+    (o: string) => `SELECT * FROM ${o} WHERE NOT EXISTS (SELECT 1 FROM | WHERE 1 = 1)`,
+    (o: string) => `SELECT * FROM ${o} WHERE EXISTS (SELECT 1 FROM dbo.Orders x JOIN |`,
+    (o: string) => `SELECT * FROM ${o}\nWHERE EXISTS (\n  SELECT 1\n  FROM |\n)\nORDER BY 1`,
+  ];
+  for (const d of ENGINES) {
+    it(`${d}: EXISTS (SELECT … FROM |) offers tables`, () => {
+      for (const shape of SHAPES) {
+        const sql = shape(outer(d));
+        const items = itemsOf(d === "pg" ? sql.replace("dbo.Orders", "orders") : sql, d);
+        expect(labels(items.filter((i) => i.kind === "table")), sql).toContain(tableName(d));
+      }
+    });
+    it(`${d}: a FROM inside a real function call still is not a table slot`, () => {
+      const sql = "SELECT EXTRACT(YEAR FROM |) FROM t";
+      expect(itemsOf(sql, d).some((i) => i.kind === "table" && i.label === tableName(d))).toBe(false);
+    });
+  }
+  it("pg: a name before a subquery paren (ARRAY(SELECT …), my_fn((SELECT …))) keeps the subquery's FROM", () => {
+    expect(labels(itemsOf("SELECT ARRAY(SELECT 1 FROM |)", "pg"))).toContain("orders");
+    expect(labels(itemsOf("SELECT my_fn((SELECT 1 FROM |))", "pg"))).toContain("orders");
+  });
+  it("pg: the subquery's table alias is in scope for its columns", () => {
+    const items = itemsOf("SELECT * FROM customers c WHERE EXISTS (SELECT 1 FROM orders o WHERE o.|)", "pg");
+    expect(labels(items)).toContain("order_id");
+  });
+});
