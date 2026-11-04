@@ -13,7 +13,7 @@ import { applyProcedure, changeDatabase, closeTab, compareWithServer, keepPrevie
 import { BottomPanel } from "./BottomPanel";
 import { bandColor, useThemeKey } from "./tabStyle";
 import { Icon } from "./icons";
-import { TabLine1, TabLine2, tooltipText, useTabSemantics, type TabFacts } from "./TabIdentity";
+import { TabLine1, TabLine2, tooltipText, useFullDatabase, useTabSemantics, type TabFacts } from "./TabIdentity";
 import { TabContextMenu } from "./TabMenu";
 import { folderSuffix, tabTitleText } from "./tabTitle";
 import { middleClickClose } from "./tabActions";
@@ -249,6 +249,7 @@ export function QueryTabHeader(props: IDockviewPanelHeaderProps<Params>) {
   const tabEl = useRef<HTMLElement | null>(null);
   const facts: TabFacts | undefined = v && { kind: "query", ...v, profile, disconnected: !!profile && disconnected, suffix };
   useTabSemantics(root, tabEl, facts, setMenu, () => setEditing(true));
+  useFullDatabase(root, tabEl, `${profile?.id ?? ""}|${facts?.database ?? ""}|${facts?.disconnected ?? false}`);
   if (!v || !facts) return null;
   const finishRename = (value: string | null) => {
     setEditing(false);
@@ -311,7 +312,7 @@ export function QueryTabHeader(props: IDockviewPanelHeaderProps<Params>) {
             )}
           </span>
         </span>
-        <TabLine2 f={facts} />
+        <TabLine2 f={facts} fullDatabase />
       </span>
       {menu && <TabContextMenu tabId={tabId} at={menu} anchor={tabEl} onClose={() => setMenu(null)} onRename={() => setEditing(true)} />}
     </div>

@@ -258,6 +258,56 @@ describe("QueryTabHeader", () => {
     expect(!!container.querySelector(".q-tab-band")).toBe(prod);
   });
 
+  it.each([
+    ["connected", false],
+    ["disconnected", true],
+  ])("the database is never cut (%s): the server takes the …, and the tab widens to the whole name", (_s, disc) => {
+    setTab({ profileId: "pg1", database: "AdventureWorks2022_Archive_Reporting" });
+    if (disc) useConnections.setState({ disconnected: { pg1: true } });
+    const rect = (left: number, right: number) => ({ left, right, width: right - left, top: 0, bottom: 14, height: 14, x: left, y: 0, toJSON() {} }) as DOMRect;
+    const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.matches("[data-q-tab-db-full]")) return rect(30, 260);
+      if (this.matches(".dv-tab")) return rect(10, 130);
+      return rect(0, 0);
+    });
+    try {
+      const { container } = header(fakeApi().api);
+      const db = container.querySelector("[data-q-tab-db-full]") as HTMLElement;
+      expect(db.textContent).toBe("AdventureWorks2022_Archive_Reporting");
+      expect(db.querySelector(".q-cut-head, .q-cut-tail")).toBeNull();
+      expect(container.querySelector(".q-tab-server")!.textContent).toBe("· Analytics");
+      // 260 − 10 + the header's right padding (none in jsdom): over the stylesheet minimum, so it is set inline.
+      const tab = container.querySelector(".dv-tab") as HTMLElement;
+      expect(tab.style.getPropertyValue("min-width")).toBe("250px");
+      expect(tab.style.getPropertyPriority("min-width")).toBe("important");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("a tab whose database fits keeps the stylesheet minimum, and the inline one goes when the database does", () => {
+    setTab({ profileId: "pg1", database: "db" });
+    const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const r = this.matches("[data-q-tab-db-full]") ? [30, 50] : [10, 130];
+      return { left: r[0], right: r[1], width: r[1] - r[0], top: 0, bottom: 0, height: 0, x: 0, y: 0, toJSON() {} } as DOMRect;
+    });
+    const style = document.createElement("style");
+    style.textContent = ".dv-tab { min-width: 120px; }";
+    document.head.appendChild(style);
+    try {
+      const { container } = header(fakeApi().api);
+      const tab = container.querySelector(".dv-tab") as HTMLElement;
+      expect(tab.style.getPropertyValue("min-width")).toBe("");
+      act(() => useTabs.setState((s) => ({ tabs: { ...s.tabs, t1: { ...s.tabs.t1, database: "a_much_longer_database_name" } } })));
+      expect(container.querySelector("[data-q-tab-db-full]")!.textContent).toBe("a_much_longer_database_name");
+      act(() => useTabs.setState((s) => ({ tabs: { ...s.tabs, t1: { ...s.tabs.t1, profileId: undefined } } })));
+      expect(tab.style.getPropertyValue("min-width")).toBe("");
+    } finally {
+      spy.mockRestore();
+      style.remove();
+    }
+  });
+
   it("without a connection says so, in words and in the spoken name", () => {
     setTab({ profileId: undefined });
     const { container } = header(fakeApi().api);

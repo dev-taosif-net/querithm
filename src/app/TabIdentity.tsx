@@ -167,7 +167,11 @@ function useConnectionColor(profile: Profile | undefined, surfaces: readonly str
   return profile ? connectionText(envColor(profile, groups), surfaces) : undefined;
 }
 
-export function TabLine2({ f, surfaces = TAB_SURFACES }: { f: TabFacts; surfaces?: readonly string[] }) {
+/**
+ * `fullDatabase` (a query tab on the strip): the database is never cut; the tab widens to fit it (useFullDatabase) and
+ * the server after it takes the "…". Compare tabs and the Ctrl+P / Ctrl+Tab rows keep the middle cut.
+ */
+export function TabLine2({ f, surfaces = TAB_SURFACES, fullDatabase = false }: { f: TabFacts; surfaces?: readonly string[]; fullDatabase?: boolean }) {
   const color = useConnectionColor(f.profile, surfaces);
   const targetColor = useConnectionColor(f.target?.profile, surfaces);
   if (!f.profile && !f.target) {
@@ -183,7 +187,9 @@ export function TabLine2({ f, surfaces = TAB_SURFACES }: { f: TabFacts; surfaces
       {f.disconnected && <Icon name="plugOff" size={11} strokeWidth={1.9} className="q-tab-icon" />}
       {engine && !f.disconnected && <span className="q-tab-mark"><EngineLogo engine={engine} size={10} mono decorative /></span>}
       {f.disconnected && <span className="shrink-0">disconnected</span>}
-      {place ? (
+      {place && fullDatabase && !f.target ? (
+        <span className="q-tab-db q-tab-db-full" style={{ color }} data-q-tab-db-full>{place}</span>
+      ) : place ? (
         <span className="q-tab-db" style={{ color }}><Cut text={place} keep={f.disconnected ? 0 : 5} /></span>
       ) : f.profile && !f.target ? (
         <span className="q-tab-server" style={{ color }}>{f.profile.name}</span>
@@ -200,6 +206,40 @@ export function TabLine2({ f, surfaces = TAB_SURFACES }: { f: TabFacts; surfaces
       {!f.target && f.profile && place && <span className="q-tab-server">{`· ${f.profile.name}`}</span>}
     </span>
   );
+}
+
+/**
+ * Keeps a tab at least as wide as its whole database name (line 2 is clipped, so without this a long name would be cut
+ * with no "…"): an inline min-width on Dockview's tab element, over the stylesheet's 120 / 128 / 150 px. Measured when
+ * the database text changes size (a new name, a UI scale step, the font arriving), never per frame; the database span
+ * does not grow with the tab, so the observer cannot loop.
+ */
+export function useFullDatabase(root: RefObject<HTMLElement | null>, tabEl: MutableRefObject<HTMLElement | null>, key: string) {
+  useLayoutEffect(() => {
+    const el = tabEl.current;
+    const db = root.current?.querySelector<HTMLElement>("[data-q-tab-db-full]");
+    if (!el) return;
+    if (!db) {
+      el.style.removeProperty("min-width");
+      return;
+    }
+    const fit = () => {
+      const r = db.getBoundingClientRect();
+      if (!r.width) return; // not laid out (hidden group, tests)
+      el.style.removeProperty("min-width");
+      const base = parseFloat(getComputedStyle(el).minWidth) || 0;
+      const pad = root.current ? parseFloat(getComputedStyle(root.current).paddingRight) || 0 : 0;
+      const need = Math.ceil(r.right - el.getBoundingClientRect().left + pad);
+      if (need > base) el.style.setProperty("min-width", `${need}px`, "important");
+    };
+    fit();
+    const ro = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(fit);
+    ro?.observe(db);
+    return () => {
+      ro?.disconnect();
+      el.style.removeProperty("min-width");
+    };
+  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps -- refs; re-measured when line 2's text changes
 }
 
 /** The transaction's age for the accessible description (D22): "Transaction open 12 min", or nothing. */

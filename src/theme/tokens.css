@@ -479,8 +479,8 @@ select {
 .dockview-theme-querithm .dv-tab {
   padding: 0 !important;
   position: relative;
-  /* As wide as the name needs (line 2 never widens a tab), 120–184 px; a full strip shrinks tabs to the minimum,
-     then scrolls (owner revision 1). */
+  /* As wide as the name needs, 120–184 px; a full strip shrinks tabs to the minimum, then scrolls (owner revision 1).
+     Line 2 widens a query tab only to fit its whole database name (an inline min-width, useFullDatabase). */
   flex: 0 1 auto !important;
   min-width: 120px !important;
   max-width: 184px !important;
@@ -790,6 +790,12 @@ select {
   min-width: 0;
   display: flex;
   font-weight: 500;
+}
+/* A query tab's database is never cut (owner revision, 2026-11-04): the tab widens to it (useFullDatabase) and the
+   server after it takes the "…". */
+.q-tab-db-full {
+  flex: none;
+  white-space: pre;
 }
 .q-tab-server {
   flex: 1 1 0;
