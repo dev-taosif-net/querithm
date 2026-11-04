@@ -20,7 +20,7 @@ public class SqliteIntegrationTests
         var (q, batches, _) = await h.RunAsync(sid, "SELECT id, v FROM t ORDER BY id");
         Assert.Null(q.Error);
         var b = Assert.Single(batches);
-        Assert.Equal(["2", "10", "2", "2.5", "0aff", null], Texts(b, "v"));
+        Assert.Equal((string?[])["2", "10", "2", "2.5", "0aff", null], Texts(b, "v"));
         Assert.Equal([1, 1, 3, 2, 4, 0], Enumerable.Range(0, 6).Select(i => (int)((UInt8Array)b.Column("v__class")).GetValue(i)!.Value));
         Assert.Equal(["1", "2", "3", "4", "5", "6"], Texts(b, "id")); // even the rowid travels as dynamic text
     }

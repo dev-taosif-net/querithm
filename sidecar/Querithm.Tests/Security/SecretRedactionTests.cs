@@ -163,6 +163,7 @@ public class SecretRedactionTests
 
     // ---------------------------------------------------------------------------------------------- permissions (Unix)
 
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     static UnixFileMode Mode(string path) => File.GetUnixFileMode(path) & (UnixFileMode)0x1FF;
 
     [Fact]

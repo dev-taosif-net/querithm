@@ -54,8 +54,8 @@ public class DuckDbIntegrationTests
         Assert.Null(q.Error);
         var b = Assert.Single(batches);
         Assert.IsType<Int32Array>(b.Column("id"));
-        Assert.Equal(["1", "2"], Texts(b, "id"));
-        Assert.Equal(["a", null], Texts(b, "v"));
+        Assert.Equal((string?[])["1", "2"], Texts(b, "id"));
+        Assert.Equal((string?[])["a", null], Texts(b, "v"));
     }
 
     [Fact]
@@ -104,8 +104,8 @@ public class DuckDbIntegrationTests
         Assert.Contains("infinite", inf.Error?.Message);
         var (ok, b, _) = await h.RunAsync(sid, "SELECT union_value(n := 1)::UNION(n INT, s VARCHAR)::VARCHAR AS x, 'infinity'::TIMESTAMP::VARCHAR AS y");
         Assert.Null(ok.Error);
-        Assert.Equal(["1"], Texts(b.Single(), "x"));
-        Assert.Equal(["infinity"], Texts(b.Single(), "y"));
+        Assert.Equal((string?[])["1"], Texts(b.Single(), "x"));
+        Assert.Equal((string?[])["infinity"], Texts(b.Single(), "y"));
     }
 
     [Fact]
@@ -117,7 +117,7 @@ public class DuckDbIntegrationTests
         var (_, sid) = await h.OpenFileAsync(path);
         var (q, batches, _) = await h.RunAsync(sid, "SELECT v FROM t");
         Assert.Null(q.Error);
-        Assert.Equal(["a"], Texts(batches.Single(), "v"));
+        Assert.Equal((string?[])["a"], Texts(batches.Single(), "v"));
         var (w, _, _) = await h.RunAsync(sid, "INSERT INTO t VALUES (2, 'b')");
         Assert.Contains("read-only", w.Error?.Message);
         await h.Rpc.SessionClose(new SessionCloseParams { SessionId = sid });
@@ -211,7 +211,7 @@ public class DuckDbIntegrationTests
         Assert.True(sw.ElapsedMilliseconds < 1000, $"cancel took {sw.ElapsedMilliseconds} ms");
         var (again, b, _) = await h.RunAsync(sid, "SELECT 41 + 1 AS x");
         Assert.Null(again.Error);
-        Assert.Equal(["42"], Texts(b.Single(), "x"));
+        Assert.Equal((string?[])["42"], Texts(b.Single(), "x"));
     }
 
     [Fact]
@@ -230,7 +230,7 @@ public class DuckDbIntegrationTests
         Assert.Equal(ExecState.Cancelled, (await h.Notifier.WaitDone(write.ExecutionId!)).State);
         var (n, b, _) = await h.RunAsync(sid, "SELECT count(*) AS n FROM t");
         Assert.Null(n.Error);
-        Assert.Equal(["0"], Texts(b.Single(), "n"));
+        Assert.Equal((string?[])["0"], Texts(b.Single(), "n"));
         await h.Rpc.SessionClose(new SessionCloseParams { SessionId = sid });
         Assert.Equal(3000000L, Convert.ToInt64(Scalar(path, "SELECT count(*) FROM big")));
     }
@@ -249,7 +249,7 @@ public class DuckDbIntegrationTests
         await h.RunAsync(sid, "INSERT INTO t VALUES (2, 'kept')");
         Assert.Equal(TxState.None, (await h.Rpc.TxCommit(new SessionRef { SessionId = sid })).TxState);
         var (_, b, _) = await h.RunAsync(sid, "SELECT v FROM t");
-        Assert.Equal(["kept"], Texts(b.Single(), "v"));
+        Assert.Equal((string?[])["kept"], Texts(b.Single(), "v"));
         // A script's own BEGIN is followed; an error inside it leaves the transaction open (aborted) until ROLLBACK.
         await h.RunAsync(sid, "BEGIN TRANSACTION; INSERT INTO t VALUES (3, 'x');");
         var (dup, _, _) = await h.RunAsync(sid, "INSERT INTO t VALUES (2, 'duplicate key')");
@@ -343,7 +343,7 @@ public class DuckDbIntegrationTests
         Assert.StartsWith("CREATE OR REPLACE MACRO", macro.Sql);
         Assert.Null((await h.RunAsync(sid, macro.Sql.Replace("sum(qty)", "sum(qty) * 10"))).Done.Error);
         var (_, total, _) = await h.RunAsync(sid, "SELECT item_total()::VARCHAR AS t");
-        Assert.Equal(["60"], Texts(total.Single(), "t"));
+        Assert.Equal((string?[])["60"], Texts(total.Single(), "t"));
     }
 
     [Fact]
@@ -417,7 +417,7 @@ public class DuckDbIntegrationTests
         var (_, sid) = await h.OpenMemoryAsync();
         var (done, b, _) = await h.RunAsync(sid, sql, null, [new QueryParameter { Name = name, Value = "bound" }]);
         Assert.Null(done.Error);
-        Assert.Equal(["bound"], Texts(b.Single(), "x"));
+        Assert.Equal((string?[])["bound"], Texts(b.Single(), "x"));
     }
 
     [Fact]
@@ -429,7 +429,7 @@ public class DuckDbIntegrationTests
         var (done, b, _) = await h.RunAsync(sid, "SELECT count(*) AS n FROM t WHERE id = $id AND d = $d", null,
             [new QueryParameter { Name = "$id", Value = "5" }, new QueryParameter { Name = "$d", Value = "2026-10-31" }]);
         Assert.Null(done.Error);
-        Assert.Equal(["1"], Texts(b.Single(), "n"));
+        Assert.Equal((string?[])["1"], Texts(b.Single(), "n"));
     }
 
     [Fact]

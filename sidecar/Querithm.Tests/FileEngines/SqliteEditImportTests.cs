@@ -136,7 +136,7 @@ public sealed class SqliteEditImportTests
             Keys = [[V("1")], [V("2")], [V("9")]],
             Expect = [new() { ["qty"] = V("1") }, new() { ["qty"] = V("2") }, new() { ["qty"] = V("1") }],
         });
-        Assert.Equal(["", null, null], r.Tokens); // unchanged, changed on disk, gone
+        Assert.Equal((string?[])["", null, null], r.Tokens); // unchanged, changed on disk, gone
     }
 
     [Fact]

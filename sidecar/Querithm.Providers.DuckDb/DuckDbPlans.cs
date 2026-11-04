@@ -41,7 +41,7 @@ public sealed class DuckDbPlans : IPlanProvider
             // DuckDB 1.5.6 cannot print some profiles as JSON (count(*) answered from a file table's statistics): it says only "error".
             if (node is JsonObject o && o.Count == 1 && o["result"]?.GetValue<string>() == "error")
                 throw new NotSupportedException("DuckDB could not report the actual plan of this statement (a limitation of DuckDB 1.5.6 for some queries on database files). The estimated plan is available.");
-            statements.Add(new JsonObject { ["text"] = text, ["actual"] = actual, ["plan"] = node });
+            statements.Add((JsonNode)new JsonObject { ["text"] = text, ["actual"] = actual, ["plan"] = node });
         }
         var raw = statements.ToJsonString();
         return new PlanResult { Plan = Parse(raw), Raw = raw, Format = Format };

@@ -132,15 +132,15 @@ public sealed class ImportOutcomeTests : IDisposable
     }
 
     [Fact]
-    public void InCommit_is_set_while_the_commit_runs_and_stays_set_when_it_throws()
+    public async Task InCommit_is_set_while_the_commit_runs_and_stays_set_when_it_throws()
     {
         var tx = new BulkTransaction(BulkTxMode.Own);
         Assert.False(tx.InCommit);
         var seen = false;
-        tx.CommitAsync(() => { seen = tx.InCommit; return Task.CompletedTask; }).GetAwaiter().GetResult();
+        await tx.CommitAsync(() => { seen = tx.InCommit; return Task.CompletedTask; });
         Assert.True(seen);
         Assert.False(tx.InCommit);
-        Assert.Throws<InvalidOperationException>(() => tx.CommitAsync(() => throw new InvalidOperationException("lost")).GetAwaiter().GetResult());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => tx.CommitAsync(() => throw new InvalidOperationException("lost")));
         Assert.True(tx.InCommit);
     }
 }

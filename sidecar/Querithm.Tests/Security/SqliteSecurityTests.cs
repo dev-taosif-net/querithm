@@ -114,7 +114,7 @@ public sealed class SqliteSecurityTests : IAsyncDisposable
         }
         // The engine may keep its own -wal / -shm beside the file (the journal files the grant covers); the database is untouched.
         Assert.Equal(before, await File.ReadAllBytesAsync(path));
-        Assert.Empty(Directory.GetFiles(_h.Dir).Where(f => !f.StartsWith(path, StringComparison.Ordinal) && Path.GetFileName(f) != "sales.db" && !Directory.Exists(f)));
+        Assert.DoesNotContain(Directory.GetFiles(_h.Dir), f => !f.StartsWith(path, StringComparison.Ordinal) && Path.GetFileName(f) != "sales.db" && !Directory.Exists(f));
     }
 
     [Fact]
