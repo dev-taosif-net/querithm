@@ -320,12 +320,14 @@ try {
   // The chip click took the keyboard into the panel: give it back to the editor for the next query.
   await page.click(".monaco-editor .view-lines");
   // Grid editing: a single-table result is editable; stage a value, review the SQL, discard.
+  // The Read-only button carries data-q-edit-toggle too (focus returns to it), so every wait here asks for the enabled one:
+  // otherwise the previous run's Read-only button matches before the new result arrives.
   await page.keyboard.down("Control"); await page.keyboard.press("A"); await page.keyboard.up("Control");
   await page.keyboard.type("SELECT CustomerId, FullName, Email FROM dbo.Customers ORDER BY CustomerId;");
   await page.keyboard.press("F5");
-  await page.waitForFunction(() => !!document.querySelector("[data-q-edit-toggle]"), { timeout: 15_000 }).catch(() => errors.push("grid Edit button did not appear"));
+  await page.waitForFunction(() => !!document.querySelector("[data-q-edit-toggle]:not([aria-disabled])"), { timeout: 15_000 }).catch(() => errors.push("grid Edit button did not appear"));
   if (await page.evaluate(() => !!document.querySelector("[data-q-grid-edit]"))) errors.push("grid was editable before Edit was clicked");
-  await page.evaluate(() => document.querySelector("[data-q-edit-toggle]")?.click());
+  await page.evaluate(() => document.querySelector("[data-q-edit-toggle]:not([aria-disabled])")?.click());
   await page.waitForFunction(() => document.body.innerText.includes("Type or double-click to edit"), { timeout: 5_000 }).catch(() => errors.push("grid edit bar did not appear"));
   await sleep(500);
   const grid = await page.evaluate(() => {
@@ -363,7 +365,10 @@ try {
     await page.evaluate(() => document.querySelector("[data-q-edit-cancel]")?.click());
     await page.waitForFunction(() => document.body.innerText.includes("Discard 1 staged change to dbo.Customers?"), { timeout: 5_000 })
       .catch(() => errors.push("Cancel did not ask before discarding"));
-    await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent === "Keep editing")?.click());
+    // The discard question is an alert dialog (role=alertdialog): a [role=dialog] selector missed it, the dialog stayed
+    // open and swallowed the next click.
+    await page.evaluate(() => [...document.querySelectorAll('[role="alertdialog"] button')].find((b) => b.textContent === "Keep editing")?.click());
+    await page.waitForFunction(() => !document.querySelector('[role="alertdialog"]'), { timeout: 5_000 }).catch(() => errors.push("Keep editing did not close the question"));
     await sleep(200);
     if (!(await page.evaluate(() => document.body.innerText.includes("1 changed")))) errors.push("Keep editing lost the staged change");
     await editMenu("Discard all");
@@ -376,10 +381,10 @@ try {
     await shot("03c-grid-duplicate");
     await page.evaluate(() => document.querySelector("[data-q-edit-cancel]")?.click());
     await sleep(200);
-    await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent === "Discard and leave")?.click());
+    await page.evaluate(() => [...document.querySelectorAll('[role="alertdialog"] button')].find((b) => b.textContent === "Discard and leave")?.click());
     await page.waitForFunction(() => !document.querySelector("[data-q-grid-edit]"), { timeout: 5_000 }).catch(() => errors.push("Cancel → Discard and leave did not leave edit mode"));
     // Leaving edit mode is not sticky: the grid is read-only until Edit is clicked again.
-    await page.evaluate(() => document.querySelector("[data-q-edit-toggle]")?.click());
+    await page.evaluate(() => document.querySelector("[data-q-edit-toggle]:not([aria-disabled])")?.click());
     await sleep(200);
   } else errors.push("editable grid canvas not found");
   // Reviewed Gemini workflows: header selection must not crash; a query error is shown without hiding the results.
@@ -959,9 +964,9 @@ try {
         await page.keyboard.type("SELECT id, v FROM t ORDER BY id;");
         await page.keyboard.press("Escape");
         await page.keyboard.press("F5");
-        await page.waitForFunction(() => !!document.querySelector("[data-q-edit-toggle]"), { timeout: 15_000 })
+        await page.waitForFunction(() => !!document.querySelector("[data-q-edit-toggle]:not([aria-disabled])"), { timeout: 15_000 })
           .catch(() => errors.push(`${e.key}: the grid Edit button did not appear (the keyed table should be editable)`));
-        await page.evaluate(() => document.querySelector("[data-q-edit-toggle]")?.click());
+        await page.evaluate(() => document.querySelector("[data-q-edit-toggle]:not([aria-disabled])")?.click());
         await page.waitForFunction(() => document.body.innerText.includes("Type or double-click to edit"), { timeout: 5_000 }).catch(() => errors.push(`${e.key}: grid edit bar did not appear`));
         await sleep(1000);
         const sqGrid = await page.evaluate(() => {
@@ -1053,9 +1058,9 @@ try {
     await page.keyboard.press("F5");
     await page.waitForFunction(() => /\b2 rows\b/.test(document.body.innerText), { timeout: 20_000 })
       .catch(async () => errors.push(`mysql: the grid did not show 2 rows: ${await page.evaluate(() => document.querySelector("[data-q-messages]")?.textContent?.slice(0, 300) ?? document.body.innerText.slice(-300))}`));
-    await page.waitForFunction(() => !!document.querySelector("[data-q-edit-toggle]"), { timeout: 15_000 })
+    await page.waitForFunction(() => !!document.querySelector("[data-q-edit-toggle]:not([aria-disabled])"), { timeout: 15_000 })
       .catch(() => errors.push("mysql: the grid Edit button did not appear (the result should be editable)"));
-    await page.evaluate(() => document.querySelector("[data-q-edit-toggle]")?.click());
+    await page.evaluate(() => document.querySelector("[data-q-edit-toggle]:not([aria-disabled])")?.click());
     await page.waitForFunction(() => document.body.innerText.includes("Type or double-click to edit"), { timeout: 5_000 }).catch(() => errors.push("mysql: grid edit bar did not appear"));
     await sleep(500);
     const myGrid = await page.evaluate(() => {
