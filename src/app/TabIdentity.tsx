@@ -7,6 +7,7 @@ import type { EnvironmentKind, Profile } from "../ipc/contract";
 import type { ToolKind } from "../store/toolTabs";
 import { envColor, envLabel, useProfiles } from "../store/profiles";
 import { EngineLogo } from "../connections/EngineLogo";
+import { serverAddress, serverAddressLine } from "../connections/serverAddress";
 import { Icon, type IconName } from "./icons";
 import { connectionText, TAB_SURFACES, useThemeKey } from "./tabStyle";
 import { isDebugTitle, middleCut, tabName, tabTitleText } from "./tabTitle";
@@ -102,8 +103,18 @@ export function tooltipText(f: TabFacts, now = Date.now()): string {
   if (f.filePath) lines.push(f.filePath);
   const where = (t: TabTarget) =>
     t.profile ? `${envLabel[t.profile.environment]?.toUpperCase() ?? ""} ${t.profile.name}${t.database ? ` › ${t.database}` : ""}`.trim() : t.file ?? "";
-  if (f.profile) lines.push(where(f) + (f.target ? ` → ${where(f.target)}` : "") + (f.disconnected ? " (disconnected)" : ""));
-  else if (f.kind === "query") lines.push("No connection");
+  if (f.profile) {
+    lines.push(where(f) + (f.target ? ` → ${where(f.target)}` : "") + (f.disconnected ? " (disconnected)" : ""));
+    // The address the profile points at: its name can say "dev" while it points at production.
+    if (!f.target) {
+      const line = serverAddressLine(f.profile);
+      if (line) lines.push(line);
+    } else {
+      const from = serverAddress(f.profile);
+      const to = f.target.profile ? serverAddress(f.target.profile) : undefined;
+      if (from || to) lines.push(`Server ${from ?? "(none)"} → ${to ?? "(none)"}`);
+    }
+  } else if (f.kind === "query") lines.push("No connection");
   if (f.txOpen) lines.push([`Transaction open${f.txStartedAt ? ` ${txAgeLong(now - f.txStartedAt)}` : ""}`, f.spid ? `SPID ${f.spid}` : ""].filter(Boolean).join(" · "));
   else if (f.spid) lines.push(`SPID ${f.spid}`);
   if (f.busy) lines.push("Query running");

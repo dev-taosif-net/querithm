@@ -515,6 +515,37 @@ describe("StatusBar", () => {
     expect((container.firstChild as HTMLElement).style.borderTop).toBe(border);
   });
 
+  it.each([
+    ["mssql", "prod", 1444, "10.0.4.12:1444", "max-[1279px]:hidden"],
+    ["pg", "staging", 5432, "10.0.4.12", "max-[1279px]:hidden"],
+    ["mySql", "dev", 3307, "10.0.4.12:3307", "max-[1439px]:hidden"],
+  ])("%s on %s shows the server address, which drops at its width and stays in the connection's tooltip", (engine, environment, port, text, narrow) => {
+    useProfiles.setState({ profiles: [{ id: "x1", name: "Box", engine, environment, auth: "sql", host: "10.0.4.12", port } as any], groups: [] });
+    setTab({ profileId: "x1" });
+    const { container } = render(<StatusBar />);
+    const addr = container.querySelector("[data-q-server-address]") as HTMLElement;
+    expect(addr.textContent).toBe(text);
+    expect(addr.className).toContain(narrow);
+    expect(screen.getByText(/ - Box/)).toHaveAttribute("title", `Server ${text}`);
+  });
+
+  it("an SSH profile marks the address and names the bastion in the tooltip", () => {
+    useProfiles.setState({ profiles: [{ id: "x1", name: "Box", engine: "pg", environment: "dev", auth: "sql", host: "10.0.4.12", ssh: { host: "jump-01" } } as any], groups: [] });
+    setTab({ profileId: "x1" });
+    const { container } = render(<StatusBar />);
+    const addr = container.querySelector("[data-q-server-address]") as HTMLElement;
+    expect(addr.textContent).toBe("10.0.4.12 · SSH");
+    expect(addr).toHaveAttribute("title", "Server 10.0.4.12 via SSH jump-01");
+  });
+
+  it.each(["sqlite", "duckDb"])("%s: a local database shows no server address", (engine) => {
+    useProfiles.setState({ profiles: [{ id: "x1", name: "Box", engine, environment: "local", auth: "none", location: "file", host: "localhost" } as any], groups: [] });
+    setTab({ profileId: "x1" });
+    const { container } = render(<StatusBar />);
+    expect(container.querySelector("[data-q-server-address]")).toBeNull();
+    expect(screen.getByText(/ - Box/)).not.toHaveAttribute("title");
+  });
+
   it("a tab without a connection has no coloured border", () => {
     setTab({ profileId: undefined });
     const { container } = render(<StatusBar />);

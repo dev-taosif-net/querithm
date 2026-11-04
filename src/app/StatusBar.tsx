@@ -5,6 +5,7 @@ import { EngineLogo } from "../connections/EngineLogo";
 import { useExecutions } from "../store/executions";
 import { useConnections } from "../store/connections";
 import { repickFile } from "../connections/fileAccess";
+import { serverAddress, serverAddressLine } from "../connections/serverAddress";
 import { executionData } from "../results/model";
 import { fmtMs } from "../results/MessagesPanel";
 import { useEngineStatus } from "./engineStatus";
@@ -42,12 +43,15 @@ export function StatusBar() {
   const color = envColor(profile, groups);
   const elapsed = running ? now - view!.startedAt : view?.elapsedMs;
   const rows = data?.totalRows ?? 0;
+  const address = serverAddress(profile);
+  const addressLine = serverAddressLine(profile);
+  const risky = profile?.environment === "prod" || profile?.environment === "staging";
 
   return (
     <div className="h-[24px] bg-panel border-t border-line px-3 flex items-center justify-between text-[11px] shrink-0 gap-3" style={profile ? { borderTop: `4px solid ${color}` } : undefined}>
       <div className="flex items-center gap-3 min-w-0">
         {profile ? (
-          <span className="font-semibold flex items-center gap-1 text-fg whitespace-nowrap">
+          <span className="font-semibold flex items-center gap-1 text-fg whitespace-nowrap" title={addressLine}>
             <EngineLogo engine={profile.engine} size={12} /> {envLabel[profile.environment].toUpperCase()} - {profile.name}
             {tab?.spid ? ` (SPID ${tab.spid})` : ""}
           </span>
@@ -57,6 +61,17 @@ export function StatusBar() {
         {tab?.profileId && (
           <span className="text-fg whitespace-nowrap">
             DB: {tab.database ?? "(default)"}{disconnected ? " (disconnected)" : ""}
+          </span>
+        )}
+        {address && (
+          // Prod and Staging keep it down to 1280 px (a wrong server costs most there); the rest drop it below 1440 px.
+          // Narrower, it stays in the connection's tooltip.
+          <span
+            className={`text-muted q-mono text-[10.5px] whitespace-nowrap truncate max-w-[240px] min-w-0 ${risky ? "max-[1279px]:hidden" : "max-[1439px]:hidden"}`}
+            title={addressLine}
+            data-q-server-address
+          >
+            {address}{profile?.ssh ? " · SSH" : ""}
           </span>
         )}
         {tab?.txState === "open" && <span className="text-warn font-semibold whitespace-nowrap">TX · connection pinned</span>}
