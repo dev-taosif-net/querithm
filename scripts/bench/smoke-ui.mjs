@@ -24,7 +24,9 @@ const uiPort = Number(process.env.QUERITHM_UI_PORT ?? 1420);
 const bridgePort = Number(process.env.QUERITHM_BRIDGE_PORT ?? 1421);
 // The SQL Server fixture's host, as for the integration tests (ARCHITECTURE §16).
 const mssqlHost = process.env.QUERITHM_IT_MSSQL_HOST || "localhost";
-if (!process.argv.includes("--no-build"))
+// --no-build reuses the bench's dist/; when there is none (CI skips the bench after a failed step) it builds anyway, or
+// vite preview exits at once and the run reports a busy port it never had.
+if (!process.argv.includes("--no-build") || !existsSync(path.join(root, "dist", "index.html")))
   spawnSync("pnpm", ["build:web"], { cwd: root, stdio: "inherit", env: { ...process.env, VITE_BRIDGE_URL: `ws://127.0.0.1:${bridgePort}` } });
 
 const bridge = spawn(process.execPath, [path.join(root, "scripts", "dev-bridge.mjs")], {
