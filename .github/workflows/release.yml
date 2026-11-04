@@ -78,7 +78,8 @@ jobs:
         include:
           - { os: windows-latest, rid: win-x64, target: x86_64-pc-windows-msvc }
           - { os: ubuntu-22.04, rid: linux-x64, target: x86_64-unknown-linux-gnu }
-          - { os: macos-15-intel, rid: osx-x64, target: x86_64-apple-darwin }
+          # Several times slower than the others: upper-bound test time limits scale ×4 there (sidecar/Querithm.Tests/TestTime.cs).
+          - { os: macos-15-intel, rid: osx-x64, target: x86_64-apple-darwin, timeScale: 4 }
           - { os: macos-15, rid: osx-arm64, target: aarch64-apple-darwin }
     runs-on: ${{ matrix.os }}
     steps:
@@ -101,6 +102,7 @@ jobs:
           app=$(node -p "require('./src-tauri/tauri.conf.json').version")
           if [ "v$app" != "$GITHUB_REF_NAME" ]; then echo "::error::tag $GITHUB_REF_NAME but tauri.conf.json is $app"; exit 1; fi
       - run: pnpm test
+        env: { QUERITHM_TEST_TIME_SCALE: "${{ matrix.timeScale || 1 }}" }
       - if: runner.os == 'Linux'
         name: contract.ts is generated, never hand-edited (§15 rule 5)
         run: pnpm gen:contract && git diff --exit-code src/ipc/contract.ts

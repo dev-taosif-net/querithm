@@ -124,7 +124,7 @@ public class MonitorServiceTests
             try { await Task.Delay(Timeout.Infinite, ct); } catch (OperationCanceledException) { cancelled = true; throw; }
         };
         rig.Clock.Advance(1_000);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await entered.Task.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(5)));
         var monitorConn = rig.Provider.Opened.Single(c => rig.Sessions.Registry.KeyOf(c) is { } k && k == rig.Activity.Session!.Self);
         await rig.Monitors.StopAsync(id);
         Assert.True(cancelled);
@@ -144,7 +144,7 @@ public class MonitorServiceTests
         foreach (var s in rig.Activity.Session is { } ? new[] { rig.Activity.Session } : []) s!.OnTick = async (_, ct) => await Task.Delay(Timeout.Infinite, ct);
         var sw = System.Diagnostics.Stopwatch.StartNew();
         await rig.Monitors.DisposeAsync();
-        Assert.True(sw.ElapsedMilliseconds < 2_000, $"{sw.ElapsedMilliseconds} ms");
+        Assert.True(sw.ElapsedMilliseconds < TestTime.Budget(2_000), $"{sw.ElapsedMilliseconds} ms");
         Assert.All(rig.Provider.Opened, c => Assert.Equal(1, c.DisposeCount));
         await rig.DisposeAsync();
     }
@@ -293,7 +293,7 @@ public class MonitorServiceTests
         Assert.Equal(KillOutcome.Done, r.Outcome);
         Assert.Equal("fallback", r.Path);
         Assert.True(cancelled.Task.IsCompleted);
-        Assert.True(sw.ElapsedMilliseconds <= ActivityMonitor.ControlConnectTimeoutMs + 1_000);
+        Assert.True(sw.ElapsedMilliseconds <= ActivityMonitor.ControlConnectTimeoutMs + TestTime.Budget(1_000)); // only the slack scales
     });
 
     [Fact]

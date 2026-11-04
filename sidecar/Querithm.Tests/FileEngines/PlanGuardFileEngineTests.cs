@@ -98,7 +98,7 @@ public class PlanGuardFileEngineTests
         var r = await h.Rpc.PlanGet(new PlanParams { SessionId = sid, Sql = slow, Mode = PlanMode.Actual, ConfirmedRun = true });
         await Task.Delay(300);
         Assert.True((await h.Rpc.QueryCancel(new ExecutionRef { ExecutionId = r.ExecutionId! })).Cancelled);
-        var done = await h.Notifier.WaitDone(r.ExecutionId!, 15_000);
+        var done = await h.Notifier.WaitDone(r.ExecutionId!, TestTime.Ms(15_000));
         Assert.Equal(ExecState.Cancelled, done.State);
         Assert.Equal(TxState.None, h.Services.Sessions.Get(sid).TxState);
         Assert.Equal(3, Count((await h.RunAsync(sid, "SELECT count(*) FROM t")).Batches));

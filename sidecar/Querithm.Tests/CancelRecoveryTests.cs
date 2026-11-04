@@ -18,7 +18,7 @@ namespace Querithm.Tests;
 /// </summary>
 public class CancelRecoveryTests
 {
-    static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan Wait = TestTime.Of(TimeSpan.FromSeconds(10));
     static readonly TimeSpan Grace = TimeSpan.FromMilliseconds(300);
     const string Stuck = "WAITFOR DELAY '01:00:00'";
 
@@ -368,7 +368,7 @@ public class CancelRecoveryTests
         var sw = System.Diagnostics.Stopwatch.StartNew();
         rig.Executions.Cancel(big);
         Assert.Equal(ExecState.Cancelled, (await rig.Done(big)).State);
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), $"took {sw.Elapsed}");
+        Assert.True(sw.Elapsed < TestTime.Of(TimeSpan.FromSeconds(5)), $"took {sw.Elapsed}");
         Assert.Equal(1, s1.ExecLock.CurrentCount);
 
         // The torn connection was dropped, not reused: only whole frames, then the cut one, and nothing after it.
@@ -830,7 +830,7 @@ public class CancelRecoveryTests
 
         Assert.Equal("timeout", ex.Code);
         Assert.Contains("did not finish within", ex.Message);
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), $"took {sw.Elapsed}");
+        Assert.True(sw.Elapsed < TestTime.Of(TimeSpan.FromSeconds(5)), $"took {sw.Elapsed}");
         // The connection under the stuck read was closed, so the pool slot is not held for good.
         Assert.Contains(h.Provider.Opened, c => c.State != ConnectionState.Open);
     }

@@ -20,7 +20,7 @@ namespace Querithm.Tests;
 /// </summary>
 public class GridApplyRecoveryTests
 {
-    static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan Wait = TestTime.Of(TimeSpan.FromSeconds(10));
 
     public static TheoryData<string> Engines => new() { "mssql", "pg", "mysql" };
 

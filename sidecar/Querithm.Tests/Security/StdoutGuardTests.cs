@@ -20,7 +20,7 @@ public class StdoutGuardTests
         using var p = Process.Start(psi)!;
         var stdout = p.StandardOutput.ReadToEndAsync();
         var stderr = p.StandardError.ReadToEndAsync();
-        await p.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        await p.WaitForExitAsync().WaitAsync(TestTime.Of(TimeSpan.FromSeconds(30)));
         Assert.Equal(0, p.ExitCode);
         Assert.Equal("rpc\n", await stdout);
         Assert.Contains("native", await stderr);

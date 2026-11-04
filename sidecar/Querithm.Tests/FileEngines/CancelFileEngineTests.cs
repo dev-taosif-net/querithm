@@ -15,7 +15,7 @@ public class CancelFileEngineTests
         await Task.Delay(500); // running inside the engine
         Assert.False(executions.CloseConnectionOf(r.ExecutionId!));
         Assert.True(executions.Cancel(r.ExecutionId!).Cancelled);
-        Assert.Equal(ExecState.Cancelled, (await notifier.WaitDone(r.ExecutionId!, 10_000)).State);
+        Assert.Equal(ExecState.Cancelled, (await notifier.WaitDone(r.ExecutionId!, TestTime.Ms(10_000))).State);
     }
 
     [Fact]

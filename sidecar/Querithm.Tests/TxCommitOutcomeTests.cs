@@ -17,7 +17,7 @@ namespace Querithm.Tests;
 /// </summary>
 public class TxCommitOutcomeTests
 {
-    static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan Wait = TestTime.Of(TimeSpan.FromSeconds(10));
 
     /// <summary>Transaction control over fake connections; whether COMMIT outside a transaction succeeds is the engine's.</summary>
     sealed class EngineLikeTx(bool commitWithoutTransactionSucceeds) : ITransactionControl

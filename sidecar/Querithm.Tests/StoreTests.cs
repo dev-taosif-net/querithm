@@ -277,7 +277,7 @@ public class HistoryStoreTests
         _history.Now = () => now;
         _history.SetRetention(new HistoryRetention { Days = 90, MaxEntries = 1_000 });
         // SetRetention starts a pass of its own; this one runs after it (or is the same).
-        await _history.SchedulePrune().WaitAsync(TimeSpan.FromSeconds(30));
+        await _history.SchedulePrune().WaitAsync(TestTime.Of(TimeSpan.FromSeconds(30)));
         Assert.Equal(0, _history.Prune());
         var left = _history.List(new HistoryListParams { Limit = 2000 }).Select(h => h.Id).ToArray();
         Assert.Equal(1_000, left.Length);

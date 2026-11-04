@@ -208,7 +208,7 @@ public class DuckDbIntegrationTests
         await h.Rpc.QueryCancel(new ExecutionRef { ExecutionId = r.ExecutionId! });
         var done = await h.Notifier.WaitDone(r.ExecutionId!);
         Assert.Equal(ExecState.Cancelled, done.State);
-        Assert.True(sw.ElapsedMilliseconds < 1000, $"cancel took {sw.ElapsedMilliseconds} ms");
+        Assert.True(sw.ElapsedMilliseconds < TestTime.Budget(1000), $"cancel took {sw.ElapsedMilliseconds} ms");
         var (again, b, _) = await h.RunAsync(sid, "SELECT 41 + 1 AS x");
         Assert.Null(again.Error);
         Assert.Equal((string?[])["42"], Texts(b.Single(), "x"));
@@ -660,11 +660,11 @@ public class DuckDbIntegrationTests
             reading.TrySetResult();
             await Task.Delay(Timeout.Infinite, lease.Token); // a slow consumer: the reader stays open until the close
         });
-        await reading.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await reading.Task.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
 
-        await h.Rpc.SessionClose(new SessionCloseParams { SessionId = sid }).WaitAsync(TimeSpan.FromSeconds(10));
+        await h.Rpc.SessionClose(new SessionCloseParams { SessionId = sid }).WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => helper.WaitAsync(TimeSpan.FromSeconds(10)));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => helper.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10))));
         Assert.Equal(42, Convert.ToInt32(Scalar(path, "SELECT 42")));
     }
 }

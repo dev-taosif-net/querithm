@@ -15,7 +15,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-latest, macos-15]
+        # macos-15-intel: the osx-x64 build's only full-suite run outside a release tag, so a slow-runner failure shows
+        # on push, not on the tag. It is several times slower: test time limits scale there (sidecar/Querithm.Tests/TestTime.cs).
+        os: [ubuntu-24.04, windows-latest, macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -33,6 +35,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm gen:contract && git diff --exit-code src/ipc/contract.ts   # contract.ts is generated, never hand-edited (§15 rule 5)
       - run: pnpm test
+        env: { QUERITHM_TEST_TIME_SCALE: "${{ matrix.os == 'macos-15-intel' && '4' || '1' }}" }
       - run: node scripts/run.mjs build-sidecar --debug
       - run: cargo check --locked --manifest-path src-tauri/Cargo.toml
       # The shell's own tests (relay, grants, injection, keyring, updater): `pnpm test` covers only Vitest and xUnit.

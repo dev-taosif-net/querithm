@@ -425,7 +425,7 @@ public sealed class SqliteEditImportTests
         await Task.Delay(300);
         await h.Rpc.QueryCancel(new ExecutionRef { ExecutionId = id! });
 
-        var ex = await Assert.ThrowsAsync<Querithm.Core.QuerithmException>(() => apply.WaitAsync(TimeSpan.FromSeconds(30)));
+        var ex = await Assert.ThrowsAsync<Querithm.Core.QuerithmException>(() => apply.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(30))));
         Assert.Equal("cancelled", ex.Code);
         Assert.Equal(ExecState.Cancelled, (await h.Notifier.WaitDone(id!)).State);
         Assert.Equal(TxState.None, (await h.Rpc.SessionStateGet(new SessionRef { SessionId = sid })).TxState);

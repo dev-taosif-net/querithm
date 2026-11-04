@@ -91,7 +91,7 @@ public class RpcSurfaceTests
         await using var h = new TestHost();
         var server = new RpcServer(h.Services, () => asked.TrySetResult());
         await server.Shutdown();
-        await asked.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await asked.Task.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
         var ping = await server.Ping();
         Assert.Equal(Environment.ProcessId, ping.Pid);
         Assert.True(ping.WorkingSetBytes > 0);

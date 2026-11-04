@@ -360,7 +360,7 @@ public class SessionOwnedTests
 
     // ---------------------------------------------------------------------------------------------- closing the tab
 
-    static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan Wait = TestTime.Of(TimeSpan.FromSeconds(10));
 
     [Theory]
     [InlineData(false)]
