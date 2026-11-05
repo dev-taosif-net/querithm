@@ -222,7 +222,7 @@ export function DropMenu({ anchor, at, label, header, items, onClose }: {
         ref={box}
         role="menu"
         aria-label={label}
-        className="fixed z-50 bg-raised border border-line rounded-lg shadow-2xl p-1 min-w-[260px] text-[12px] flex flex-col overflow-y-auto"
+        className="q-popover-in fixed z-50 bg-raised border border-line rounded-lg shadow-2xl p-1 min-w-[260px] text-[12px] flex flex-col overflow-y-auto"
         style={pos}
         onKeyDown={onKeyDown}
         onContextMenu={(e) => e.preventDefault()}
@@ -232,10 +232,11 @@ export function DropMenu({ anchor, at, label, header, items, onClose }: {
       </div>
       {subItems && (
         <div
+          key={sub}
           ref={subBox}
           role="menu"
           aria-label={(items[sub!] as Exclude<MenuEntry, "sep">).label}
-          className="fixed z-50 bg-raised border border-line rounded-lg shadow-2xl p-1 min-w-[200px] text-[12px] flex flex-col"
+          className="q-submenu-in fixed z-50 bg-raised border border-line rounded-lg shadow-2xl p-1 min-w-[200px] text-[12px] flex flex-col"
           style={subPos}
           onKeyDown={onSubKeyDown}
           onContextMenu={(e) => e.preventDefault()}

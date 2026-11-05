@@ -256,7 +256,7 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
       <PanelRow label="Result tools" ledger={ledger} tools={tools} fill={!!staging} />
       {staging && <EnvRule profileId={tab.profileId} />}
       <RunNotice tab={tab} view={view} data={data} />
-      <div className="flex-1 min-h-0 flex">
+      <div key={executionId ?? "empty"} className="q-panel-view-in flex-1 min-h-0 flex">
         <div className={`flex-1 min-h-0 min-w-0 relative ${chartOn ? "flex flex-col" : "flex"}`}>
           {!rs ? (
             item?.kind === "error" ? <ErrorCard tab={tab} item={item} /> : <RunSummary tab={tab} view={view} />

@@ -847,6 +847,18 @@ function TreeView({ rows, selIndex, view, handlers, treeRef, onKeyDown, label }:
   const pointer = useRef(false);
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
+  const prevKeysRef = useRef<Set<string> | null>(null);
+  const freshKeys = useMemo(() => {
+    const prev = prevKeysRef.current;
+    const next = new Set(rows.map((r) => r.key));
+    prevKeysRef.current = next;
+    if (!prev || prev.size === 0) return null;
+    const added = new Set<string>();
+    for (const r of rows) {
+      if (!prev.has(r.key)) added.add(r.key);
+    }
+    return added.size > 0 && added.size <= 80 ? added : null;
+  }, [rows]);
 
   useEffect(() => {
     const el = treeRef.current;
@@ -914,7 +926,7 @@ function TreeView({ rows, selIndex, view, handlers, treeRef, onKeyDown, label }:
       >
         <div style={{ height: rows.length * ROW, position: "relative" }}>
           {indices.map((i) => (
-            <Row key={rows[i].key} row={rows[i]} index={i} selected={i === selIndex} focused={focused && i === selIndex} view={view} handlers={handlers} />
+            <Row key={rows[i].key} row={rows[i]} index={i} selected={i === selIndex} focused={focused && i === selIndex} fresh={!!freshKeys?.has(rows[i].key)} view={view} handlers={handlers} />
           ))}
         </div>
       </div>
@@ -949,8 +961,8 @@ const OBJ_COLOR: Record<string, string> = {
 };
 const TONE: Record<string, string> = { warn: "text-warn", muted: "text-muted", ident: "text-ident", "obj.index": "text-obj-index", "obj.table": "text-obj-table" };
 
-const Row = memo(function Row({ row: r, index: i, selected, focused, view, handlers }: {
-  row: TreeRow; index: number; selected: boolean; focused: boolean; view: RowView; handlers: Handlers;
+const Row = memo(function Row({ row: r, index: i, selected, focused, fresh, view, handlers }: {
+  row: TreeRow; index: number; selected: boolean; focused: boolean; fresh?: boolean; view: RowView; handlers: Handlers;
 }) {
   const style: CSSProperties = { top: i * ROW, height: ROW, paddingLeft: 6 + (r.level - 1) * view.indent };
   const label = ariaLabelOf(r, view);
@@ -974,10 +986,10 @@ const Row = memo(function Row({ row: r, index: i, selected, focused, view, handl
       handlers.menu(i, e.clientX, e.clientY);
     },
   };
-  const cls = `q-tree-row group absolute left-0 right-0 flex items-center gap-1.5 pr-2 whitespace-nowrap overflow-hidden ${header ? "bg-panel-2" : selected ? "bg-row-sel q-hl shadow-[inset_2px_0_0_var(--q-accent)]" : "hover:bg-hover"} ${focused ? "outline outline-2 -outline-offset-2 outline-accent" : ""}`;
+  const cls = `q-tree-row ${fresh ? "q-tree-row-reveal " : ""}group absolute left-0 right-0 flex items-center gap-1.5 pr-2 whitespace-nowrap overflow-hidden ${header ? "bg-panel-2" : selected ? "bg-row-sel q-hl shadow-[inset_2px_0_0_var(--q-accent)]" : "hover:bg-hover"} ${focused ? "outline outline-2 -outline-offset-2 outline-accent" : ""}`;
   const caret = r.expandable || (r.t === "server" && r.status === "off") ? (
     <span aria-hidden className="w-3 shrink-0 flex items-center justify-center text-muted" onClick={(e) => { e.stopPropagation(); handlers.select(i); handlers.caret(i); }}>
-      <Icon name="chevron" size={10} strokeWidth={2.5} className={r.expanded ? "" : "-rotate-90"} />
+      <Icon name="chevron" size={10} strokeWidth={2.5} className={`q-tree-caret ${r.expanded ? "" : "-rotate-90"}`} />
     </span>
   ) : (
     <span aria-hidden className="w-3 shrink-0" />

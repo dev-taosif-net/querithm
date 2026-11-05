@@ -184,7 +184,7 @@ function ContextBar({ tab }: { tab: TabState }) {
   const showUse = useDb && tab.database && useDb.toLowerCase() !== tab.database.toLowerCase();
   if (!b && !tab.readOnly && !showUse) return null;
   return (
-    <div className={`h-[30px] border-b border-line px-3.5 flex items-center justify-between text-xs shrink-0 ${prod ? "bg-err/10 q-hl" : "bg-panel-2"}`}>
+    <div className={`q-banner-in h-[30px] border-b border-line px-3.5 flex items-center justify-between text-xs shrink-0 ${prod ? "bg-err/10 q-hl" : "bg-panel-2"}`}>
       <div className="flex items-center gap-2 min-w-0">
         {b && (
           <>

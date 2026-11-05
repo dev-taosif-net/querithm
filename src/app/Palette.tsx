@@ -140,8 +140,8 @@ export function Palette() {
     }
   };
   return (
-    <div className="fixed inset-0 z-40" onMouseDown={(e) => e.target === e.currentTarget && close()}>
-      <div className="absolute left-1/2 top-[64px] -translate-x-1/2 w-[620px] max-w-[92vw] bg-raised border border-line rounded-lg shadow-2xl overflow-hidden">
+    <div className="q-modal-backdrop fixed inset-0 z-40" onMouseDown={(e) => e.target === e.currentTarget && close()}>
+      <div className="q-palette-in absolute left-1/2 top-[64px] -translate-x-1/2 w-[620px] max-w-[92vw] bg-raised border border-line rounded-lg shadow-2xl overflow-hidden">
         <input
           ref={input}
           className="w-full bg-panel px-3 py-2.5 text-[13px] text-fg outline-none border-b border-line-strong"
@@ -227,7 +227,7 @@ export function Toasts() {
             if (e.target instanceof Element && e.target.closest("button")) return;
             if (window.getSelection()?.isCollapsed !== false) useUi.getState().dismissToast(t.id);
           }}
-          className={`pl-3 pr-1 py-1.5 rounded-lg shadow-xl border text-[12px] select-text cursor-default flex items-start gap-2 ${TOAST_TONE[t.kind]}`}
+          className={`q-toast-in pl-3 pr-1 py-1.5 rounded-lg shadow-xl border text-[12px] select-text cursor-default flex items-start gap-2 ${TOAST_TONE[t.kind]}`}
           style={{ backdropFilter: "blur(6px)" }}
         >
           <span className="flex-1 min-w-0 py-0.5 break-words">
@@ -263,7 +263,7 @@ export function Banner() {
     <div
       role="region"
       aria-label={banner.kind === "error" ? "Error notice" : "Notice"}
-      className={`min-h-[30px] py-1 px-4 flex items-center justify-between gap-3 text-xs shrink-0 border-b ${banner.kind === "error" ? "bg-err/15 border-err/40 text-err" : "bg-warn/15 border-warn/40 text-warn"}`}
+      className={`q-banner-in min-h-[30px] py-1 px-4 flex items-center justify-between gap-3 text-xs shrink-0 border-b ${banner.kind === "error" ? "bg-err/15 border-err/40 text-err" : "bg-warn/15 border-warn/40 text-warn"}`}
     >
       <span className="min-w-0 select-text">{banner.text}</span>
       <div className="flex gap-2 shrink-0">

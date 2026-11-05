@@ -20,7 +20,7 @@ export function BlockingBanner({ tab }: { tab: TabState }) {
   if (!tab.sessionId || !state || state.unavailable || state.blockedCount <= 0 || tab.txState !== "open") return null;
   if (mutedUntil > now) return null;
   return (
-    <div className="px-3 py-1.5 border-b border-warn/50 bg-warn/15 q-hl text-[11.5px] flex items-center gap-3 shrink-0 [&>button]:shrink-0" role="status" data-testid="blocking-banner">
+    <div className="q-banner-in px-3 py-1.5 border-b border-warn/50 bg-warn/15 q-hl text-[11.5px] flex items-center gap-3 shrink-0 [&>button]:shrink-0" role="status" data-testid="blocking-banner">
       <span className="text-fg min-w-0">
         This tab&apos;s open transaction is blocking <b>{state.blockedCount}</b> session{state.blockedCount === 1 ? "" : "s"} for <b>{ms(state.maxWaitMs)}</b>.
       </span>
