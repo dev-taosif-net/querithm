@@ -537,6 +537,8 @@ grid/export; first-run native extraction location.
 
 ## D4 — Oracle
 
+Session-by-session plan and progress: [D4-ORACLE/](D4-ORACLE/README.md).
+
 | Area | Plan |
 |---|---|
 | Projects | `Querithm.Providers.Oracle`, `Querithm.Intelligence.Oracle` |
