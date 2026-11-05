@@ -91,13 +91,22 @@ public class SessionLifecycleIntegrationTests
         {
             await using var h = new TestHost();
             var (_, sid) = await Open(h);
-            var slow = Engine == "pg" ? "SELECT pg_sleep(1)" : "WAITFOR DELAY '00:00:01'";
+            var slow = Engine == "pg" ? "SELECT pg_sleep(2)" : "WAITFOR DELAY '00:00:02'";
             var first = await h.Rpc.QueryExecute(new QueryExecuteParams { SessionId = sid, Sql = slow });
-            await Task.Delay(300);
+            // The second goes in once the first holds the session (query.started), not after a fixed delay: on a cold CI
+            // runner the first run's parse could outlast the delay and let the second take the session first.
+            var started = DateTime.UtcNow;
+            while (!h.Notifier.Of<QueryStartedEvent>().Any(e => e.ExecutionId == first.ExecutionId))
+            {
+                Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(10), "the first query never started");
+                await Task.Delay(20);
+            }
             var second = await h.Rpc.QueryExecute(new QueryExecuteParams { SessionId = sid, Sql = "SELECT 42 AS n" });
-            Assert.Equal(ExecState.Done, (await h.Notifier.WaitDone(first.ExecutionId!)).State);
+            var firstDone = await h.Notifier.WaitDone(first.ExecutionId!);
+            Assert.Equal(ExecState.Done, firstDone.State);
             Assert.Equal(ExecState.Done, (await h.Notifier.WaitDone(second.ExecutionId!)).State);
-            Assert.Contains(h.Notifier.Of<QueryQueuedEvent>(), q => q.ExecutionId == second.ExecutionId);
+            Assert.True(h.Notifier.Of<QueryQueuedEvent>().Any(q => q.ExecutionId == second.ExecutionId),
+                $"second not queued; first ran {firstDone.ElapsedMs:0} ms; queued: [{string.Join(", ", h.Notifier.Of<QueryQueuedEvent>().Select(q => q.ExecutionId == first.ExecutionId ? "first" : q.ExecutionId))}]");
         }
 
         [IntegrationFact]

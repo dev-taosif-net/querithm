@@ -78,7 +78,7 @@ public class MonitorHardeningTests
         };
         rig.Start();
         Assert.NotNull(stop);
-        await stop!.WaitAsync(TimeSpan.FromSeconds(5));
+        await stop!.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(5)));
         var ticks = rig.TickCalls;
         rig.Clock.Run(10_000);
         Assert.Equal(ticks, rig.TickCalls);
@@ -252,7 +252,7 @@ public class MonitorHardeningTests
             if (hang && cmd.CommandText.StartsWith("FAKE blockedBy", StringComparison.Ordinal)) await Task.Delay(Timeout.Infinite, ct);
             return FakeResult.None;
         };
-        await banner.RunCycleAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+        await banner.RunCycleAsync(CancellationToken.None).WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
         Assert.Contains("did not finish", banner.LastError);
         var checkConn = Assert.Single(rig.Provider.Opened, c => c.Log.Any(l => l.StartsWith("FAKE blockedBy", StringComparison.Ordinal)));
         Assert.Equal(1, checkConn.DisposeCount);
@@ -401,12 +401,12 @@ public class MonitorHardeningTests
         session.Rows.Add(Row(701));
         rig.Clock.Run(1_000);
         var kill = rig.Monitors.KillAsync(new MonitorKillParams { MonitorId = id, Target = target, Mode = KillMode.TerminateSession, ConfirmedKill = true });
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await entered.Task.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(5)));
         // A second kill waits for the per-server kill lock behind the first.
         var queued = rig.Monitors.KillAsync(new MonitorKillParams { MonitorId = id, Target = Row(701).Key, Mode = KillMode.TerminateSession, ConfirmedKill = true });
-        await rig.Monitors.StopAsync(id).WaitAsync(TimeSpan.FromSeconds(10));
-        var result = await kill.WaitAsync(TimeSpan.FromSeconds(5));
-        var second = await queued.WaitAsync(TimeSpan.FromSeconds(10));
+        await rig.Monitors.StopAsync(id).WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
+        var result = await kill.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(5)));
+        var second = await queued.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
         Assert.Equal(0, disposedWhileRunning); // the kill ended (cancelled by the stop) before its connection was closed
         Assert.Equal(1, monitorConn.DisposeCount);
         Assert.Equal("monitorStopped", result.Code);

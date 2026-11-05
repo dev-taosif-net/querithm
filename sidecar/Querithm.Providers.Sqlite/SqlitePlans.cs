@@ -40,10 +40,12 @@ public sealed class SqlitePlans : IPlanProvider
                 rows.Add(new Row(Convert.ToInt32(r.GetValue(0), CultureInfo.InvariantCulture), Convert.ToInt32(r.GetValue(1), CultureInfo.InvariantCulture), r.GetString(3)));
             statements.Add((text, rows));
         }
-        var raw = JsonSerializer.Serialize(statements.Select(s => new Dictionary<string, object>
+        // Built as nodes, not serialized by reflection: the trimmed sidecar keeps no metadata for these shapes.
+        var raw = new System.Text.Json.Nodes.JsonArray([.. statements.Select(s => (System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
         {
-            ["text"] = s.Text, ["rows"] = s.Rows.Select(x => new object[] { x.Id, x.Parent, x.Detail }).ToArray(),
-        }).ToArray());
+            ["text"] = s.Text,
+            ["rows"] = new System.Text.Json.Nodes.JsonArray([.. s.Rows.Select(x => (System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonArray(x.Id, x.Parent, x.Detail))]),
+        })]).ToJsonString();
         return new PlanResult { Plan = Parse(raw), Raw = raw, Format = Format };
     }
 

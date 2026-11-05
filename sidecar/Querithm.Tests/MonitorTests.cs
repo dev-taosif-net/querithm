@@ -250,7 +250,7 @@ public class MonitorTests
         var g = BlockingGraph.Build(rows);
         sw.Stop();
         Assert.Equal([1L], g.HeadBlockers);
-        Assert.True(sw.Elapsed.TotalMilliseconds <= 5, $"{sw.Elapsed.TotalMilliseconds:0.00} ms");
+        Assert.True(sw.Elapsed.TotalMilliseconds <= TestTime.Budget(5), $"{sw.Elapsed.TotalMilliseconds:0.00} ms");
     }
 
     // ------------------------------------------------------------------ kill guard

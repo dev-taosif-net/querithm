@@ -266,7 +266,7 @@ public class HistoryStoreTests
     }
 
     [Fact]
-    public void Retention_deletes_entries_past_the_age_limit_and_the_oldest_past_the_count_limit_and_their_index_rows()
+    public async Task Retention_deletes_entries_past_the_age_limit_and_the_oldest_past_the_count_limit_and_their_index_rows()
     {
         var now = 1_800_000_000_000L;
         var clock = now - 100 * 86_400_000L; // 100 days ago
@@ -277,7 +277,7 @@ public class HistoryStoreTests
         _history.Now = () => now;
         _history.SetRetention(new HistoryRetention { Days = 90, MaxEntries = 1_000 });
         // SetRetention starts a pass of its own; this one runs after it (or is the same).
-        _history.SchedulePrune().Wait(TimeSpan.FromSeconds(30));
+        await _history.SchedulePrune().WaitAsync(TestTime.Of(TimeSpan.FromSeconds(30)));
         Assert.Equal(0, _history.Prune());
         var left = _history.List(new HistoryListParams { Limit = 2000 }).Select(h => h.Id).ToArray();
         Assert.Equal(1_000, left.Length);

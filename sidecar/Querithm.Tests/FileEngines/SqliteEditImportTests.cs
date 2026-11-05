@@ -136,7 +136,7 @@ public sealed class SqliteEditImportTests
             Keys = [[V("1")], [V("2")], [V("9")]],
             Expect = [new() { ["qty"] = V("1") }, new() { ["qty"] = V("2") }, new() { ["qty"] = V("1") }],
         });
-        Assert.Equal(["", null, null], r.Tokens); // unchanged, changed on disk, gone
+        Assert.Equal((string?[])["", null, null], r.Tokens); // unchanged, changed on disk, gone
     }
 
     [Fact]
@@ -425,7 +425,7 @@ public sealed class SqliteEditImportTests
         await Task.Delay(300);
         await h.Rpc.QueryCancel(new ExecutionRef { ExecutionId = id! });
 
-        var ex = await Assert.ThrowsAsync<Querithm.Core.QuerithmException>(() => apply.WaitAsync(TimeSpan.FromSeconds(30)));
+        var ex = await Assert.ThrowsAsync<Querithm.Core.QuerithmException>(() => apply.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(30))));
         Assert.Equal("cancelled", ex.Code);
         Assert.Equal(ExecState.Cancelled, (await h.Notifier.WaitDone(id!)).State);
         Assert.Equal(TxState.None, (await h.Rpc.SessionStateGet(new SessionRef { SessionId = sid })).TxState);

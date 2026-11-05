@@ -336,7 +336,8 @@ public sealed class MySqlPlans : IPlanProvider
             cmd.CommandText = prefix + text;
             raws.Add((text, Convert.ToString(await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false), CultureInfo.InvariantCulture) ?? ""));
         }
-        var raw = JsonSerializer.Serialize(raws.Select(x => new Dictionary<string, string> { ["text"] = x.Text, ["plan"] = x.Plan }).ToArray());
+        // Built as nodes, not serialized by reflection: the trimmed sidecar keeps no metadata for these shapes.
+        var raw = new System.Text.Json.Nodes.JsonArray([.. raws.Select(x => (System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject { ["text"] = x.Text, ["plan"] = x.Plan })]).ToJsonString();
         return new PlanResult { Plan = Parse(raw), Raw = raw, Format = "mysql-json" };
     }
 

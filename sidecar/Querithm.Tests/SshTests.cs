@@ -72,7 +72,7 @@ public sealed class SshTests : IDisposable
         using var child = Process.Start(new ProcessStartInfo("/bin/bash", ["-c", $"exec 3<>/dev/tcp/127.0.0.1/{server.Port}; sleep 5"]) { UseShellExecute = false })!;
         try
         {
-            using var foreign = await listener.AcceptTcpClientAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            using var foreign = await listener.AcceptTcpClientAsync().WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
             Assert.False(PeerOwnership.IsOwnConnection((IPEndPoint)foreign.Client.RemoteEndPoint!, server));
         }
         finally { child.Kill(); }

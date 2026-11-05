@@ -378,7 +378,7 @@ public class ProfileModelTests
     static async Task<int> SnapshotReads(Readiness r, Profile p)
     {
         _ = r.Metadata.Snapshot(new SnapshotParams { ProfileId = p.Id, Database = "db" });
-        await r.Metadata.WaitAsync(p.Id, "db").WaitAsync(TimeSpan.FromSeconds(10));
+        await r.Metadata.WaitAsync(p.Id, "db").WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
         return r.Counter.Reads;
     }
 

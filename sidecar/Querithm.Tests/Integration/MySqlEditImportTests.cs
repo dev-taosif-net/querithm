@@ -127,7 +127,7 @@ public sealed class MySqlEditImportTests
             SessionId = sid, ExecutionId = exec, Keys = [[V("1")], [V("2")], [V("99")]],
             Expect = [new() { ["name"] = V("one") }, new() { ["name"] = V("two") }, new() { ["name"] = V("x") }],
         });
-        Assert.Equal(["", null, null], tokens.Tokens);
+        Assert.Equal((string?[])["", null, null], tokens.Tokens);
         var r = await h.Rpc.DataApplyPatch(new GridPatchParams
         {
             SessionId = sid, ExecutionId = exec,

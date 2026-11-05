@@ -13,6 +13,9 @@ public static class Json
     /// <summary>Source-generated <see cref="Options"/> metadata for what the stores persist; the trimmed sidecar can't rely on reflection.</summary>
     public static readonly WireJsonContext Context = new(Create());
 
+    /// <summary>Source-generated <see cref="Options"/> metadata for the activity monitor's history and its export.</summary>
+    internal static readonly MonitorJsonContext Monitor = new(Create());
+
     public static JsonSerializerOptions Create()
     {
         var o = new JsonSerializerOptions(JsonSerializerDefaults.Web)
@@ -95,6 +98,11 @@ public sealed class StrictEnumConverter(JsonNamingPolicy policy) : JsonConverter
 [JsonSerializable(typeof(Querithm.Contract.Providers.SchemaModel))]
 [JsonSerializable(typeof(HistoryRetention))]
 public sealed partial class WireJsonContext : JsonSerializerContext;
+
+[JsonSerializable(typeof(MonitorSnapshot))]
+[JsonSerializable(typeof(ActivityRow[]))]
+[JsonSerializable(typeof(SessionKey[]))]
+internal sealed partial class MonitorJsonContext : JsonSerializerContext;
 
 /// <summary>Columns that were always written with the reflection defaults (PascalCase, nulls kept); existing rows depend on it.</summary>
 [JsonSerializable(typeof(ProfileStore.StoredOptions))]

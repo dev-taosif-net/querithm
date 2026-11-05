@@ -15,7 +15,7 @@ namespace Querithm.Tests;
 /// </summary>
 public class PinnedReadTests
 {
-    static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan Wait = TestTime.Of(TimeSpan.FromSeconds(10));
     const string Read = "SELECT definition FROM catalog";
 
     sealed class Catalog : IMetadataProvider

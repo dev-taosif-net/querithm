@@ -20,7 +20,7 @@ public class SqliteIntegrationTests
         var (q, batches, _) = await h.RunAsync(sid, "SELECT id, v FROM t ORDER BY id");
         Assert.Null(q.Error);
         var b = Assert.Single(batches);
-        Assert.Equal(["2", "10", "2", "2.5", "0aff", null], Texts(b, "v"));
+        Assert.Equal((string?[])["2", "10", "2", "2.5", "0aff", null], Texts(b, "v"));
         Assert.Equal([1, 1, 3, 2, 4, 0], Enumerable.Range(0, 6).Select(i => (int)((UInt8Array)b.Column("v__class")).GetValue(i)!.Value));
         Assert.Equal(["1", "2", "3", "4", "5", "6"], Texts(b, "id")); // even the rowid travels as dynamic text
     }
@@ -105,7 +105,7 @@ public class SqliteIntegrationTests
         await h.Rpc.QueryCancel(new ExecutionRef { ExecutionId = r.ExecutionId! });
         var done = await h.Notifier.WaitDone(r.ExecutionId!);
         Assert.Equal(ExecState.Cancelled, done.State);
-        Assert.True(sw.ElapsedMilliseconds < 500, $"cancel took {sw.ElapsedMilliseconds} ms");
+        Assert.True(sw.ElapsedMilliseconds < TestTime.Budget(500), $"cancel took {sw.ElapsedMilliseconds} ms");
         var (again, b, _) = await h.RunAsync(sid, "SELECT 41 + 1 AS x");
         Assert.Null(again.Error);
         Assert.Equal(["42"], Texts(b.Single(), "x"));
@@ -383,11 +383,11 @@ public class SqliteIntegrationTests
             reading.TrySetResult();
             await Task.Delay(Timeout.Infinite, lease.Token); // a slow consumer: the reader stays open until the close
         });
-        await reading.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await reading.Task.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
 
-        await h.Rpc.SessionClose(new SessionCloseParams { SessionId = sid }).WaitAsync(TimeSpan.FromSeconds(10));
+        await h.Rpc.SessionClose(new SessionCloseParams { SessionId = sid }).WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => helper.WaitAsync(TimeSpan.FromSeconds(10)));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => helper.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10))));
         using var c = new SqliteConnection($"Data Source={path};Pooling=False");
         c.Open();
         using var write = c.CreateCommand();

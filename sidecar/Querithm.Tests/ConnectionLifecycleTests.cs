@@ -15,7 +15,7 @@ namespace Querithm.Tests;
 /// </summary>
 public class ConnectionLifecycleTests
 {
-    static readonly TimeSpan Wait = TimeSpan.FromSeconds(5);
+    static readonly TimeSpan Wait = TestTime.Of(TimeSpan.FromSeconds(5));
 
     sealed class Rig : IAsyncDisposable
     {
@@ -266,8 +266,8 @@ public class ConnectionLifecycleTests
             await using (var cmd = c.Db.CreateCommand()) { cmd.CommandText = "SELECT 2"; await cmd.ExecuteScalarAsync(); }
             rig.Pool.Return(c);
         });
-        await Task.WhenAll(done).WaitAsync(TimeSpan.FromSeconds(30));
-        await Task.WhenAll(background).WaitAsync(TimeSpan.FromSeconds(30));
+        await Task.WhenAll(done).WaitAsync(TestTime.Of(TimeSpan.FromSeconds(30)));
+        await Task.WhenAll(background).WaitAsync(TestTime.Of(TimeSpan.FromSeconds(30)));
 
         Assert.All(done, t => Assert.Equal(ExecState.Done, t.Result.State));
         Assert.True(rig.Pool.Total <= 3);

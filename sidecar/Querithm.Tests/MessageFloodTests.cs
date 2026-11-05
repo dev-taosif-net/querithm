@@ -18,7 +18,7 @@ namespace Querithm.Tests;
 /// </summary>
 public class MessageFloodTests
 {
-    static readonly TimeSpan Wait = TimeSpan.FromSeconds(30);
+    static readonly TimeSpan Wait = TestTime.Of(TimeSpan.FromSeconds(30));
 
     static ServerMessage Msg(int i, string id = "e1") => new() { ExecutionId = id, Message = $"m{i}", Ts = i };
 

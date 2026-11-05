@@ -20,7 +20,7 @@ namespace Querithm.Tests.Security;
 /// </summary>
 public class PlanDebugGuardTests
 {
-    static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan Wait = TestTime.Of(TimeSpan.FromSeconds(10));
 
     const string PgPlanJson = """[{"Plan": {"Node Type": "Delete", "Total Cost": 1.5, "Plans": [{"Node Type": "Seq Scan", "Total Cost": 1.0}]}}]""";
     const string MySqlPlanJson = """{"query_block": {"select_id": 1, "table": {"table_name": "t", "access_type": "ALL"}}}""";

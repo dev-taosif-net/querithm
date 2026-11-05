@@ -387,7 +387,7 @@ public class StoreRecoveryTests : IDisposable
                 go.SignalAndWait();
                 return new LocalStore(path);
             })).ToArray();
-            await Task.WhenAll(opens).WaitAsync(TimeSpan.FromSeconds(60));
+            await Task.WhenAll(opens).WaitAsync(TestTime.Of(TimeSpan.FromSeconds(60)));
         }
         finally { LocalStore.AfterMigrationStep = null; }
         Assert.Equal(1, steps);
