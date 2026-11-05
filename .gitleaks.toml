@@ -13,10 +13,11 @@ paths = ['''^scripts/bench/docker/ssh/test_(ed25519|rsa_pass)$''']
 [[rules]]
 id = "generic-api-key"
   [[rules.allowlists]]
-  description = "Fake values in tests: a deliberately wrong password and a placeholder launch token"
+  description = "Fake values in tests: a deliberately wrong password, a placeholder launch token and a fake saved secret"
   condition = "AND"
   paths = [
     '''^sidecar/Querithm\.Tests/Integration/CoverageSessionIntegrationTests\.cs$''',
     '''^src-tauri/src/shell_log\.rs$''',
+    '''^scripts/__tests__/dev-bridge\.test\.ts$''',
   ]
-  regexes = ['''^wrong\-pw\-xyz\-123$''', '''^0123456789abcdef0123456789abcdef$''']
+  regexes = ['''^wrong\-pw\-xyz\-123$''', '''^0123456789abcdef0123456789abcdef$''', '''^private\-db\-zz1$''']
