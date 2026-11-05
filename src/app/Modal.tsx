@@ -96,7 +96,7 @@ export function Modal({
     return () => window.removeEventListener("keydown", h, true);
   }, [token]);
   return (
-    <div className="fixed inset-0 z-40 bg-black/50 flex items-center justify-center p-6" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="q-modal-backdrop fixed inset-0 z-40 bg-black/50 flex items-center justify-center p-6" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
         ref={box}
         role={alert ? "alertdialog" : "dialog"}
@@ -104,7 +104,7 @@ export function Modal({
         aria-labelledby={`${id}-title`}
         aria-describedby={subtitle ? `${id}-subtitle` : undefined}
         tabIndex={-1}
-        className={`bg-panel rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-full outline-none ${danger ? "border-2 border-err shadow-[0_0_50px_rgba(239,68,68,0.3)]" : "border border-line"}`}
+        className={`q-modal-dialog bg-panel rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-full outline-none ${danger ? "border-2 border-err shadow-[0_0_50px_rgba(239,68,68,0.3)]" : "border border-line"}`}
         style={{ width, maxWidth: "100%" }}
       >
         <div className={`px-4 py-3 ${danger ? "bg-err-solid text-white" : "border-b border-line"}`}>
@@ -114,7 +114,7 @@ export function Modal({
           {subtitle && <div id={`${id}-subtitle`} className={`text-[11px] mt-0.5 ${danger ? "text-white" : "text-muted"}`}>{subtitle}</div>}
         </div>
         <div className={`${bodyClassName} text-xs`}>{children}</div>
-        {footer && <div className="px-4 py-3 bg-panel-2 border-t border-line flex justify-end gap-2.5">{footer}</div>}
+        {footer && <div className="q-profile-reveal px-4 py-3 bg-panel-2 border-t border-line flex justify-end gap-2.5">{footer}</div>}
       </div>
     </div>
   );

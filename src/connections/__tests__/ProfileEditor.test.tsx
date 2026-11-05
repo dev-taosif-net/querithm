@@ -81,36 +81,43 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("ProfileEditor: a new profile preselects nothing", () => {
-  it("names no server type and no environment, and shows no connection fields until a type is chosen", () => {
+  it("names no server type and no environment, and hides connection fields, environment, status and footer until a type is chosen", async () => {
     render(<ProfileEditor onClose={() => {}} />);
     expect(screen.getByText("New connection profile")).toBeTruthy();
     expect(combo().textContent).toContain("Choose a server type…");
     expect(screen.getByText("No environment")).toBeTruthy();
-    expect(screen.getAllByRole("radio").filter((r) => (r as HTMLInputElement).checked)).toEqual([]);
+    expect(screen.queryByRole("radiogroup", { name: "Environment" })).toBeNull();
     expect(screen.queryByLabelText("Host")).toBeNull();
     expect(screen.queryByLabelText("Name")).toBeNull();
-    expect(screen.getByText(/Choose a server type first/)).toBeTruthy();
+    expect(screen.getByText("Choose a server type first: its connection fields appear here.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Paste a connection string…" })).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText(/Not tested yet/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Test connection" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+
+    await chooseEngine("PostgreSQL");
     expect(screen.getByRole("button", { name: "Paste a connection string…" })).toBeTruthy();
+    expect(screen.getByRole("radiogroup", { name: "Environment" })).toBeTruthy();
+    expect(status().textContent).toContain("Not tested yet. You can save without testing.");
+    expect(testBtn()).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+    expect(saveBtn()).toBeTruthy();
   });
 
-  it("Save lists what is missing, marks the server type and focuses it; nothing is saved", async () => {
+  it("Save lists what is missing and focuses the field when clicked in the alert; nothing is saved", async () => {
+    m.engines = ALL();
     render(<ProfileEditor onClose={() => {}} />);
+    await chooseEngine("SQLite");
     await userEvent.click(saveBtn());
     expect(saveSpy).not.toHaveBeenCalled();
     const alert = screen.getByRole("alert");
-    expect(alert.textContent).toContain("Choose a server type.");
+    expect(alert.textContent).toContain("Pick the database file first.");
     expect(alert.textContent).toContain("Choose the environment");
-    expect(combo().getAttribute("aria-invalid")).toBe("true");
-    await waitFor(() => expect(document.activeElement).toBe(combo()));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Pick file…" })));
     await userEvent.click(within(alert).getByRole("button", { name: /Choose the environment/ }));
     await waitFor(() => expect(document.activeElement).toBe(env("Local")));
-  });
-
-  it("Test asks for a server type first and connects to nothing", async () => {
-    render(<ProfileEditor onClose={() => {}} />);
-    await userEvent.click(testBtn());
-    expect(status().textContent).toContain("Choose a server type first.");
-    expect(m.rpc).not.toHaveBeenCalledWith("profile.test", expect.anything());
   });
 
   it("offers the most recently used server types as one-click shortcuts", async () => {
@@ -143,8 +150,8 @@ describe("ProfileEditor: a new profile preselects nothing", () => {
     "the first type chosen (%s) starts from its own defaults, not another engine's", async (label, user, db) => {
       m.engines = ALL();
       render(<ProfileEditor onClose={() => {}} />);
-      await pickEnv("Test");
       await chooseEngine(label);
+      await pickEnv("Test");
       expect((screen.getByLabelText("User name") as HTMLInputElement).value).toBe(user);
       expect((screen.getByLabelText("Database") as HTMLInputElement).value).toBe(db);
       expect(env("Test").checked).toBe(true);
@@ -157,6 +164,15 @@ describe("ProfileEditor: a new profile preselects nothing", () => {
     expect(combo().textContent).toContain("PostgreSQL");
     expect(env("Staging").checked).toBe(true);
     expect(nameBox().value).toBe("Name-a (copy)");
+  });
+
+  it("reveals sections and footer controls with smooth reveal classes when a server type is chosen", async () => {
+    render(<ProfileEditor onClose={() => {}} />);
+    await chooseEngine("PostgreSQL");
+    expect(screen.getByLabelText("Host").closest(".q-profile-reveal")).not.toBeNull();
+    expect(screen.getByRole("radiogroup", { name: "Environment" }).closest(".q-profile-reveal")).not.toBeNull();
+    expect(screen.getByRole("status").classList.contains("q-profile-reveal")).toBe(true);
+    expect(saveBtn().classList.contains("q-profile-reveal")).toBe(true);
   });
 });
 
@@ -1095,7 +1111,7 @@ describe.each<[Engine, string]>([
 
   it("a paste fills the fields at once and names the server type; the string is masked, then cleared", async () => {
     m.rpc.mockResolvedValue(result());
-    render(<ProfileEditor onClose={() => {}} />);
+    render(<ProfileEditor preset={engine} onClose={() => {}} />);
     await openBox();
     expect(box().type).toBe("password");
     paste(box(), cs);
@@ -1211,10 +1227,10 @@ describe("ProfileEditor timeouts and closing", () => {
   });
 
   it("a new dialog starts at the server type, and the discard question takes focus", async () => {
-    render(<ProfileEditor preset="pg" onClose={() => {}} />);
-    cleanup();
     render(<ProfileEditor onClose={() => {}} />);
     await waitFor(() => expect(document.activeElement).toBe(combo()));
+    cleanup();
+    render(<ProfileEditor preset="pg" onClose={() => {}} />);
     await pickEnv("Dev");
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Keep editing" })));
@@ -1222,7 +1238,7 @@ describe("ProfileEditor timeouts and closing", () => {
 
   it("Cancel on an untouched dialog closes at once", async () => {
     const onClose = vi.fn();
-    render(<ProfileEditor onClose={onClose} />);
+    render(<ProfileEditor preset="pg" onClose={onClose} />);
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onClose).toHaveBeenCalled();
     expect(saveSpy).not.toHaveBeenCalled();

@@ -431,10 +431,9 @@ describe.each(SERVER)("connection-string paste (%s)", (engine) => {
     expect(document.body.innerHTML).not.toContain("Zq1-cs-secret");
   });
 
-  it("with no server type chosen, a paste parses at once, sets the type, fills the fields and clears the box", async () => {
+  it("a paste parses at once, sets the type, fills the fields and clears the box", async () => {
     m.rpc.mockResolvedValue(result());
-    render(<ProfileEditor onClose={() => {}} />);
-    expect(combo().textContent).toContain("Choose a server type…");
+    render(<ProfileEditor preset={engine} onClose={() => {}} />);
     await openBox();
     paste(box(), cs);
     await waitFor(() => expect(parseCalls()).toHaveLength(1));
@@ -521,7 +520,7 @@ describe.each(SERVER)("connection-string paste (%s)", (engine) => {
 
   it("Test reads text left in the box, and sends the parsed secret and profile", async () => {
     m.rpc.mockImplementation(async (method: unknown) => (method === "profile.test" ? { ok: true, serverVersion: "v9", elapsedMs: 1, notes: [] } : result()));
-    render(<ProfileEditor onClose={() => {}} />);
+    render(<ProfileEditor preset={engine} onClose={() => {}} />);
     await openBox();
     fireEvent.change(box(), { target: { value: cs } });
     await userEvent.click(testBtn());
@@ -530,9 +529,9 @@ describe.each(SERVER)("connection-string paste (%s)", (engine) => {
     expect(combo().textContent).toContain(LABEL[engine]);
   });
 
-  it("Save with no server type chosen reads the box, takes its type, and saves", async () => {
+  it("Save reads the box, takes its type, and saves", async () => {
     m.rpc.mockResolvedValue(result());
-    render(<ProfileEditor onClose={() => {}} />);
+    render(<ProfileEditor preset={engine} onClose={() => {}} />);
     await pickEnv();
     await openBox();
     fireEvent.change(box(), { target: { value: cs } });

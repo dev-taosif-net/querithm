@@ -5,7 +5,7 @@
 // One column, read in the same order by the eye, Tab and a screen reader: server type → where → environment →
 // sign-in → name → folded extras. A new profile preselects neither the server type nor the environment; the folded rows
 // show their state in one line and open by themselves on a warning (transportSummary is their only source).
-import { useEffect, useId, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { SecretInput } from "../app/SecretInput";
 import { escapeForDisplay } from "../monitor/format";
 import type { AuthKind, Engine, EngineInfo, EnvironmentKind, LocationKind, Profile, SshAuthKind, SshSettings, TlsMode } from "../ipc/contract";
@@ -247,7 +247,7 @@ function testKey(p: Profile, secret: string, sshSecret: string): string {
 /** What Test and Save act on: the fields, or the fields after merging the connection string. */
 type Draft = { p: Profile; secret: string; touched: boolean };
 /** Problems found on Save that live outside profileFieldErrors (UI-only choices). */
-type Focusable = FieldKey | "engine" | "environment" | "ack" | "sshHost" | "sshUser";
+type Focusable = FieldKey | "environment" | "ack" | "sshHost" | "sshUser";
 
 export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileId?: string; preset?: Engine; copyOf?: string; onClose: () => void }) {
   const existing = useProfiles((s) => s.profiles.find((p) => p.id === profileId));
@@ -261,6 +261,11 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
   const [p, setP] = useState<Profile>(start.p);
   // A new profile names neither its server type nor its environment until the user picks them (a preset names the type).
   const [engineChosen, setEngineChosen] = useState(start.known || !!preset);
+  const [animated, setAnimated] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
   const [envChosen, setEnvChosen] = useState(start.known);
   const [envFromGroup, setEnvFromGroup] = useState<string | null>(null);
   const [nameTouched, setNameTouched] = useState(start.known);
@@ -404,16 +409,14 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
   };
 
   /** Every problem Save would stop at, in reading order. */
-  const problems = (d: Profile, chosen = engineChosen): { key: Focusable; text: string }[] => {
+  const problems = (d: Profile): { key: Focusable; text: string }[] => {
     const list: { key: Focusable; text: string }[] = [];
-    const engineChosen = chosen;
-    if (!engineChosen) list.push({ key: "engine", text: "Choose a server type." });
     const errs = profileFieldErrors(d);
-    for (const f of ["host", "port", "file"] as FieldKey[]) if (engineChosen && errs[f]) list.push({ key: f, text: errs[f]! });
+    for (const f of ["host", "port", "file"] as FieldKey[]) if (errs[f]) list.push({ key: f, text: errs[f]! });
     list.push(...sshProblems(d));
     if (!envChosen) list.push({ key: "environment", text: "Choose the environment: Local, Dev, Test, Staging or Prod." });
     // A missing file is the reason there is no name yet: it is said once, at the file.
-    if (engineChosen && errs.name && !errs.file) list.push({ key: "name", text: errs.name });
+    if (errs.name && !errs.file) list.push({ key: "name", text: errs.name });
     // A pending connection string may have changed the transport since this render. An earlier acknowledgement
     // belongs only to the transport the checkbox displayed, never to newly parsed settings.
     const sameTransport = d.engine === p.engine && d.environment === p.environment && d.tlsMode === p.tlsMode && d.trustCert === p.trustCert;
@@ -431,7 +434,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
   /** Shows these fields' messages and focuses the first one that has a message (opening its row if folded). */
   const reveal = (fieldsToShow: FieldKey[], bad: Focusable[]) => {
     setShown((cur) => new Set([...cur, ...fieldsToShow]));
-    const order: Focusable[] = ["engine", "host", "port", "file", "sshHost", "sshUser", "environment", "name", "ack"];
+    const order: Focusable[] = ["host", "port", "file", "sshHost", "sshUser", "environment", "name", "ack"];
     const first = order.find((f) => bad.includes(f));
     if (!first) return;
     if (first === "ack") setOpen((o) => ({ ...o, enc: true }));
@@ -452,6 +455,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
       setSecret(d.secret);
       setSecretTouched(d.touched);
       if (r.secret != null) setChangeSecret(true);
+      setAnimated(true);
       setEngineChosen(true);
       setUndo(null);
       setParsed({ engine: r.profile.engine, unknown: r.unknown, notApplied: r.notApplied, notes: r.notes ?? [] });
@@ -484,10 +488,6 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
 
   const runTest = async () => {
     if (busy) return;
-    if (!engineChosen && !connStr.trim()) {
-      setTest({ ok: false, text: "Choose a server type first.", key: connKey });
-      return reveal([], ["engine"]);
-    }
     setBusy(true);
     setTest(null);
     try {
@@ -538,12 +538,10 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
     if (busy) return;
     setBusy(true);
     try {
-      // A string still in the paste box names the server type once it is read.
-      const fromString = !!connStr.trim();
       const d = await draft();
       if (!d) return;
       const { p } = d;
-      const list = problems(p, engineChosen || fromString);
+      const list = problems(p);
       if (list.length) {
         setShowSummary(true);
         return reveal(FIELD_ORDER, list.map((x) => x.key));
@@ -615,6 +613,9 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
   };
   const chooseEngine = (e: Engine) => {
     setPortOffer(null);
+    if (!engineChosen || e !== p.engine) {
+      setAnimated(true);
+    }
     if (!engineChosen) {
       // The first choice starts from that engine's own defaults: nothing was typed into fields that were not shown yet
       // (the placeholder engine's user or database must not carry over); the environment, group and name stay.
@@ -710,12 +711,12 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
 
   const secretSaved = !!existing && savedSecret !== false && !kindChanged && !endpointChanged && !changeSecret && !secretTouched;
   const pasteBox = pasteOpen && (
-    <div className="space-y-1">
+    <div className="q-profile-reveal space-y-1">
       {pastedIntoHost && <p className="text-[11px] text-muted">That looks like a connection string, so it went here instead of into Host.</p>}
       <div className="flex items-center gap-2">
         <SecretInput
           className={`${INPUT} q-mono flex-1`} type="password" aria-label="Connection string" autoFocus autoComplete="off" spellCheck={false} data-no-enter-save
-          value={connStr} placeholder={engineChosen ? fields.connectionStringExample : "Server=…;Database=…  or  postgres://…"}
+          value={connStr} placeholder={fields.connectionStringExample}
           onValue={setConnStr}
           onPaste={(e) => {
             const text = e.clipboardData.getData("text");
@@ -756,6 +757,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
         return true;
       }}
       onEnter={() => {
+        if (!engineChosen) return;
         const a = document.activeElement as HTMLElement | null;
         if (a?.closest("[data-no-enter-save]") || (a instanceof HTMLInputElement && a.list) || confirmDiscard) return;
         void save();
@@ -769,177 +771,177 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
             <button ref={keepRef} className="q-btn q-btn-primary" onClick={() => setConfirmDiscard(false)}>Keep editing</button>
             <button className="q-btn text-err" onClick={onClose}>Discard</button>
           </>
-        ) : (
+        ) : engineChosen ? (
           <>
-            {existing && <button className="q-btn text-err mr-auto" onClick={() => void remove()}>Delete</button>}
-            <button className={`q-btn q-btn-run ${existing ? "" : "mr-auto"}`} onClick={() => void runTest()} disabled={busy}>Test connection</button>
-            <button className="q-btn" onClick={tryClose}>Cancel</button>
-            <button className="q-btn q-btn-primary" onClick={() => void save()} disabled={busy}>Save</button>
+            {existing && <button className={`${animated ? "q-profile-reveal q-profile-reveal-3 " : ""}q-btn text-err mr-auto`} onClick={() => void remove()}>Delete</button>}
+            <button className={`${animated ? "q-profile-reveal q-profile-reveal-3 " : ""}q-btn q-btn-run ${existing ? "" : "mr-auto"}`} onClick={() => void runTest()} disabled={busy}>Test connection</button>
+            <button className={`${animated ? "q-profile-reveal q-profile-reveal-3 " : ""}q-btn`} onClick={tryClose}>Cancel</button>
+            <button className={`${animated ? "q-profile-reveal q-profile-reveal-3 " : ""}q-btn q-btn-primary`} onClick={() => void save()} disabled={busy}>Save</button>
           </>
-        )
+        ) : undefined
       }
     >
-      {envChosen && p.environment === "prod" && <div aria-hidden className="h-[3px] shrink-0" style={{ background: "var(--q-env-prod)" }} />}
+      {envChosen && p.environment === "prod" && <div aria-hidden className="q-profile-reveal h-[3px] shrink-0" style={{ background: "var(--q-env-prod)" }} />}
       <div className="flex-1 min-h-0 overflow-auto px-5 py-3.5 space-y-2.5">
-        {summary.length > 0 && (
-          <div role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 rounded-md border border-err/40 bg-err/10 text-err text-[11.5px]">
-            <span className="font-semibold">{summary.length === 1 ? "1 thing needs" : `${summary.length} things need`} attention:</span>
-            {summary.map((x) => (
-              <button key={x.key} type="button" className="underline hover:no-underline text-left" onClick={() => reveal([], [x.key])}>{x.text}</button>
-            ))}
-          </div>
-        )}
-        {undo && (
-          <Note onDismiss={() => setUndo(null)} action={<button type="button" className="text-accent hover:underline" onClick={() => { setP(undo.before); setUndo(null); }}>Undo</button>}>
-            {undo.text}
-          </Note>
-        )}
-        {parsed && (
-          <Note>
-            <div className="text-fg">Read as {ENGINE_TRAITS[knownEngine(parsed.engine)].label}. Settings the string names replaced the fields; the rest kept their values.</div>
-            {parsed.unknown.length > 0 && <div className="text-warn">Not recognised: {parsed.unknown.map(escapeForDisplay).join(", ")}</div>}
-            {parsed.notApplied.length > 0 && <div>Not applied (Querithm sets or does not offer these): {parsed.notApplied.map(escapeForDisplay).join(", ")}</div>}
-            {/* M3: a TLS setting the string names that is weaker than the engine's default */}
-            {parsed.notes.map((n) => <div key={n} className="text-warn">{escapeForDisplay(n)}</div>)}
-          </Note>
-        )}
-
-        <Line label="Server type">
-          <div className="space-y-1.5 min-w-0">
-            <EngineSelect
-              ref={refs.engine} value={engineChosen ? p.engine : null} options={offered} autoFocus={!engineChosen} invalid={summary.some((x) => x.key === "engine")}
-              describedBy={summary.some((x) => x.key === "engine") ? errId("engine") : undefined} onChange={chooseEngine}
-            />
-            {summary.some((x) => x.key === "engine") && <span id={errId("engine")} className="block text-[10.5px] text-err">Choose a server type.</span>}
-            {!engineChosen && recent.length > 0 && (
-              <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
-                Recent:
-                {recent.map((e) => (
-                  <button key={e} type="button" className="inline-flex items-center gap-1.5 h-6 px-2 rounded-full border border-line bg-panel-2 text-fg hover:bg-hover" onClick={() => chooseEngine(e)}>
-                    <EngineMark engine={e} logo={LOGOS[e]} size={13} />
-                    {ENGINE_TRAITS[e].shortLabel}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </Line>
-
-        {!engineChosen ? (
-          <div className="pl-[108px] space-y-2">
-            <p className="text-[11.5px] text-muted">Choose a server type first: its connection fields appear here. A pasted connection string fills it in for you.</p>
-            {pasteBox || pasteLink}
-          </div>
-        ) : local ? (
-          <>
-            <Line label="Location">
-              <div role="radiogroup" aria-label="Location" className="flex items-center gap-4 h-8">
-                {locationsOf(engineInfo, p.engine).filter((l) => l !== "server").map((l) => (
-                  <label key={l} className="inline-flex items-center gap-1.5 text-fg cursor-pointer">
-                    <input type="radio" name={`${fid}-loc`} checked={locationOf(p) === l} onChange={() => { setAccess(null); set({ location: l, file: l === "file" ? p.file : null }); }} />
-                    {LOCATION_LABEL[l]}
-                  </label>
-                ))}
-              </div>
-            </Line>
-            {locationOf(p) === "file" ? (
-              // A div, not Row's <label>: a label would name the buttons after the whole row and click the first one on any press.
-              <div className="grid grid-cols-[96px_1fr] items-center gap-x-3">
-                <span className="text-[11.5px] text-muted">File</span>
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className={`flex-1 min-w-0 truncate q-mono text-[11.5px] ${p.file ? "text-fg" : "text-muted"}`} data-testid="picked-file">
-                    {p.file ? (p.file.displayName ?? "Picked file") : "No file picked"}
-                  </span>
-                  {access && <Badge tone={access === "readWrite" ? "warn" : "ok"}>{access === "readWrite" ? "Writes allowed" : "Read-only"}</Badge>}
-                  <button type="button" ref={refs.file} className="q-btn shrink-0" onClick={() => void pickFile()} aria-describedby={fieldError("file") ? errId("file") : undefined}>{p.file ? "Re-pick file…" : "Pick file…"}</button>
-                  {p.file && <button type="button" className="q-btn shrink-0" onClick={() => void allowWrites()}>Allow writes…</button>}
-                </div>
-                {errorLine("file", "col-start-2")}
-                <span className="col-start-2 mt-1 text-[10.5px] text-muted">Querithm reads only the file you pick here, read-only until you allow writes.</span>
-              </div>
-            ) : (
-              <p className="pl-[108px] text-[11px] text-muted leading-snug">Each tab gets its own empty database, and it is gone when the tab closes. Nothing is written to disk.</p>
-            )}
-          </>
-        ) : (
-          <>
-            <div className="grid grid-cols-[96px_1fr_auto_84px] items-center gap-x-3">
-              <label htmlFor={`${fid}-host`} className="text-[11.5px] text-muted">Host</label>
-              <input
-                id={`${fid}-host`} ref={refs.host} className={`${INPUT} q-mono`} value={p.host ?? ""} onChange={(e) => { set({ host: e.target.value }); setNote(null); }} placeholder="localhost"
-                title="Empty: localhost" autoComplete="off" spellCheck={false} onPaste={onHostPaste} onBlur={onHostBlur}
-                {...invalidProps("host", fields.instanceNames ? `${fid}-host-hint` : undefined)}
-              />
-              <label htmlFor={`${fid}-port`} className="text-[11.5px] text-muted">Port</label>
-              <input
-                id={`${fid}-port`} ref={refs.port} className={`${INPUT} q-mono`} type="number" min={1} max={65535} step={1} inputMode="numeric"
-                placeholder={defaultPort == null ? "" : String(defaultPort)} value={p.port == null || Number.isNaN(p.port) ? "" : p.port}
-                // A number the field cannot read ("1e" while typing) is kept as invalid, never silently the default.
-                onChange={(e) => set({ port: e.target.value ? Number(e.target.value) : e.target.validity?.badInput ? NaN : null })}
-                onWheel={(e) => (e.target as HTMLInputElement).blur()}
-                onBlur={onPortBlur}
-                {...invalidProps("port")}
-              />
-              {hostList.length > 1 && (
-                <span className="col-start-2 col-span-3 mt-1 text-[10.5px] text-warn" aria-live="polite">
-                  This profile names {hostList.length} servers; the driver tries them in order and may connect to the last one, {escapeForDisplay(hostList[hostList.length - 1])}.
-                </span>
-              )}
-              {fields.instanceNames && <span id={`${fid}-host-hint`} className="col-start-2 col-span-3 mt-1 text-[10.5px] text-muted">Server name, host\instance, or tcp:host</span>}
-              {note && <span className="col-start-2 col-span-3 mt-1 text-[10.5px] text-muted" aria-live="polite">{note}</span>}
-              {errorLine("host", "col-start-2 col-span-3")}
-              {errorLine("port", "col-start-2 col-span-3")}
+        <SmoothExpand className="space-y-2.5">
+          {summary.length > 0 && (
+            <div role="alert" className="q-profile-reveal flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 rounded-md border border-err/40 bg-err/10 text-err text-[11.5px]">
+              <span className="font-semibold">{summary.length === 1 ? "1 thing needs" : `${summary.length} things need`} attention:</span>
+              {summary.map((x) => (
+                <button key={x.key} type="button" className="underline hover:no-underline text-left" onClick={() => reveal([], [x.key])}>{x.text}</button>
+              ))}
             </div>
-            {portOffer && (
-              <Offer>
-                <span>{p.port} is the usual {ENGINE_TRAITS[portOffer].shortLabel} port.</span>
-                <button type="button" className="q-btn h-6 px-2" onClick={() => { const port = p.port; chooseEngine(portOffer); set({ port }); }}>Switch to {ENGINE_TRAITS[portOffer].shortLabel}</button>
-                <button type="button" className="text-accent hover:underline" onClick={() => setPortOffer(null)}>Keep {traits.shortLabel}</button>
-              </Offer>
-            )}
-            <Line label="Database" htmlFor={`${fid}-db`}>
-              <div className="flex items-center gap-3 min-w-0">
-                <input id={`${fid}-db`} className={`${INPUT} q-mono flex-1`} value={p.databaseDefault ?? ""} onChange={(e) => set({ databaseDefault: e.target.value || null })} placeholder={traits.defaultDatabase ?? "(login default)"} />
-                {pasteLink}
-              </div>
-            </Line>
-            {pasteBox && <div className="pl-[108px]">{pasteBox}</div>}
-          </>
-        )}
+          )}
+          {undo && (
+            <Note onDismiss={() => setUndo(null)} action={<button type="button" className="text-accent hover:underline" onClick={() => { setP(undo.before); setUndo(null); }}>Undo</button>}>
+              {undo.text}
+            </Note>
+          )}
+          {parsed && (
+            <Note>
+              <div className="text-fg">Read as {ENGINE_TRAITS[knownEngine(parsed.engine)].label}. Settings the string names replaced the fields; the rest kept their values.</div>
+              {parsed.unknown.length > 0 && <div className="text-warn">Not recognised: {parsed.unknown.map(escapeForDisplay).join(", ")}</div>}
+              {parsed.notApplied.length > 0 && <div>Not applied (Querithm sets or does not offer these): {parsed.notApplied.map(escapeForDisplay).join(", ")}</div>}
+              {/* M3: a TLS setting the string names that is weaker than the engine's default */}
+              {parsed.notes.map((n) => <div key={n} className="text-warn">{escapeForDisplay(n)}</div>)}
+            </Note>
+          )}
 
-        <div className="border-t border-line" />
-
-        <EnvironmentPicker
-          fid={fid} value={envChosen ? p.environment : null} onChange={pickEnv} firstRef={refs.environment} tint={chipText}
-          invalid={summary.some((x) => x.key === "environment")} errorId={errId("environment")}
-          after={
-            <>
-              {envFromGroup && <span className="block text-[10.5px] text-muted" aria-live="polite">Set from group “{envFromGroup}”. Change it if that’s wrong.</span>}
-              {envChosen && p.environment === "prod" && (
-                <div className="border-l-[3px] pl-2.5 py-1 text-[11px] text-fg rounded-r" style={{ borderColor: "var(--q-env-prod)", background: "color-mix(in srgb, var(--q-env-prod) 9%, transparent)" }}>
-                  {env.hint}
+          <Line label="Server type">
+            <div className="space-y-1.5 min-w-0">
+              <EngineSelect ref={refs.engine} value={engineChosen ? p.engine : null} options={offered} autoFocus={!engineChosen} onChange={chooseEngine} />
+              {!engineChosen && recent.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
+                  Recent:
+                  {recent.map((e) => (
+                    <button key={e} type="button" className="inline-flex items-center gap-1.5 h-6 px-2 rounded-full border border-line bg-panel-2 text-fg hover:bg-hover" onClick={() => chooseEngine(e)}>
+                      <EngineMark engine={e} logo={LOGOS[e]} size={13} />
+                      {ENGINE_TRAITS[e].shortLabel}
+                    </button>
+                  ))}
                 </div>
               )}
-              {prodWord && prodDismissed !== prodKey && (
+            </div>
+          </Line>
+        </SmoothExpand>
+
+        <SmoothExpand className="space-y-2.5">
+          {!engineChosen ? (
+            <div className="pl-[108px]">
+              <p className="text-[11.5px] text-muted">Choose a server type first: its connection fields appear here.</p>
+            </div>
+          ) : local ? (
+            <div key={p.engine} className={`${animated ? "q-profile-reveal " : ""}space-y-2.5`}>
+              <Line label="Location">
+                <div role="radiogroup" aria-label="Location" className="flex items-center gap-4 h-8">
+                  {locationsOf(engineInfo, p.engine).filter((l) => l !== "server").map((l) => (
+                    <label key={l} className="inline-flex items-center gap-1.5 text-fg cursor-pointer">
+                      <input type="radio" name={`${fid}-loc`} checked={locationOf(p) === l} onChange={() => { setAccess(null); set({ location: l, file: l === "file" ? p.file : null }); }} />
+                      {LOCATION_LABEL[l]}
+                    </label>
+                  ))}
+                </div>
+              </Line>
+              {locationOf(p) === "file" ? (
+                // A div, not Row's <label>: a label would name the buttons after the whole row and click the first one on any press.
+                <div key="file" className="q-profile-reveal grid grid-cols-[96px_1fr] items-center gap-x-3">
+                  <span className="text-[11.5px] text-muted">File</span>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className={`flex-1 min-w-0 truncate q-mono text-[11.5px] ${p.file ? "text-fg" : "text-muted"}`} data-testid="picked-file">
+                      {p.file ? (p.file.displayName ?? "Picked file") : "No file picked"}
+                    </span>
+                    {access && <Badge tone={access === "readWrite" ? "warn" : "ok"}>{access === "readWrite" ? "Writes allowed" : "Read-only"}</Badge>}
+                    <button type="button" ref={refs.file} className="q-btn shrink-0" onClick={() => void pickFile()} aria-describedby={fieldError("file") ? errId("file") : undefined}>{p.file ? "Re-pick file…" : "Pick file…"}</button>
+                    {p.file && <button type="button" className="q-btn shrink-0" onClick={() => void allowWrites()}>Allow writes…</button>}
+                  </div>
+                  {errorLine("file", "col-start-2")}
+                  <span className="col-start-2 mt-1 text-[10.5px] text-muted">Querithm reads only the file you pick here, read-only until you allow writes.</span>
+                </div>
+              ) : (
+                <p key="mem" className="q-profile-reveal pl-[108px] text-[11px] text-muted leading-snug">Each tab gets its own empty database, and it is gone when the tab closes. Nothing is written to disk.</p>
+              )}
+            </div>
+          ) : (
+            <div key={p.engine} className={`${animated ? "q-profile-reveal " : ""}space-y-2.5`}>
+              <div className="grid grid-cols-[96px_1fr_auto_84px] items-center gap-x-3">
+                <label htmlFor={`${fid}-host`} className="text-[11.5px] text-muted">Host</label>
+                <input
+                  id={`${fid}-host`} ref={refs.host} className={`${INPUT} q-mono`} value={p.host ?? ""} onChange={(e) => { set({ host: e.target.value }); setNote(null); }} placeholder="localhost"
+                  title="Empty: localhost" autoComplete="off" spellCheck={false} onPaste={onHostPaste} onBlur={onHostBlur}
+                  {...invalidProps("host", fields.instanceNames ? `${fid}-host-hint` : undefined)}
+                />
+                <label htmlFor={`${fid}-port`} className="text-[11.5px] text-muted">Port</label>
+                <input
+                  id={`${fid}-port`} ref={refs.port} className={`${INPUT} q-mono`} type="number" min={1} max={65535} step={1} inputMode="numeric"
+                  placeholder={defaultPort == null ? "" : String(defaultPort)} value={p.port == null || Number.isNaN(p.port) ? "" : p.port}
+                  // A number the field cannot read ("1e" while typing) is kept as invalid, never silently the default.
+                  onChange={(e) => set({ port: e.target.value ? Number(e.target.value) : e.target.validity?.badInput ? NaN : null })}
+                  onWheel={(e) => (e.target as HTMLInputElement).blur()}
+                  onBlur={onPortBlur}
+                  {...invalidProps("port")}
+                />
+                {hostList.length > 1 && (
+                  <span className="col-start-2 col-span-3 mt-1 text-[10.5px] text-warn" aria-live="polite">
+                    This profile names {hostList.length} servers; the driver tries them in order and may connect to the last one, {escapeForDisplay(hostList[hostList.length - 1])}.
+                  </span>
+                )}
+                {fields.instanceNames && <span id={`${fid}-host-hint`} className="col-start-2 col-span-3 mt-1 text-[10.5px] text-muted">Server name, host\instance, or tcp:host</span>}
+                {note && <span className="col-start-2 col-span-3 mt-1 text-[10.5px] text-muted" aria-live="polite">{note}</span>}
+                {errorLine("host", "col-start-2 col-span-3")}
+                {errorLine("port", "col-start-2 col-span-3")}
+              </div>
+              {portOffer && (
                 <Offer>
-                  <span>The address contains “{prodWord}”. Is this Production?</span>
-                  <button type="button" className="q-btn h-6 px-2" onClick={() => pickEnv("prod")}>Mark as Production</button>
-                  <button type="button" className="text-accent hover:underline" onClick={() => setProdDismissed(prodKey)}>It isn’t</button>
+                  <span>{p.port} is the usual {ENGINE_TRAITS[portOffer].shortLabel} port.</span>
+                  <button type="button" className="q-btn h-6 px-2" onClick={() => { const port = p.port; chooseEngine(portOffer); set({ port }); }}>Switch to {ENGINE_TRAITS[portOffer].shortLabel}</button>
+                  <button type="button" className="text-accent hover:underline" onClick={() => setPortOffer(null)}>Keep {traits.shortLabel}</button>
                 </Offer>
               )}
-              {lowerProd && (
-                <Offer warn>
-                  <span className="text-fg">Lower this profile from Production to {envLabel[lowerProd]}? Its tabs lose the Production guards.</span>
-                  <button type="button" className="q-btn h-6 px-2" onClick={() => { set({ environment: lowerProd }); setEnvChosen(true); setEnvFromGroup(null); setLowerProd(null); }}>Lower it</button>
-                  <button type="button" className="text-accent hover:underline" onClick={() => setLowerProd(null)}>Keep Production</button>
-                </Offer>
-              )}
-            </>
-          }
-        />
+              <Line label="Database" htmlFor={`${fid}-db`}>
+                <input id={`${fid}-db`} className={`${INPUT} q-mono`} value={p.databaseDefault ?? ""} onChange={(e) => set({ databaseDefault: e.target.value || null })} placeholder={traits.defaultDatabase ?? "(login default)"} />
+              </Line>
+              <div className="pl-[108px]">{pasteBox || pasteLink}</div>
+            </div>
+          )}
+        </SmoothExpand>
+
+        {engineChosen && (
+          <SmoothExpand animateMount={mounted} className={`${animated ? "q-profile-reveal q-profile-reveal-1 " : ""}space-y-2.5`}>
+            <div className="border-t border-line" />
+
+            <EnvironmentPicker
+              fid={fid} value={envChosen ? p.environment : null} onChange={pickEnv} firstRef={refs.environment} tint={chipText}
+              invalid={summary.some((x) => x.key === "environment")} errorId={errId("environment")}
+              after={
+                <>
+                  {envFromGroup && <span className="q-profile-reveal block text-[10.5px] text-muted" aria-live="polite">Set from group “{envFromGroup}”. Change it if that’s wrong.</span>}
+                  {envChosen && p.environment === "prod" && (
+                    <div className="q-profile-reveal border-l-[3px] pl-2.5 py-1 text-[11px] text-fg rounded-r" style={{ borderColor: "var(--q-env-prod)", background: "color-mix(in srgb, var(--q-env-prod) 9%, transparent)" }}>
+                      {env.hint}
+                    </div>
+                  )}
+                  {prodWord && prodDismissed !== prodKey && (
+                    <Offer>
+                      <span>The address contains “{prodWord}”. Is this Production?</span>
+                      <button type="button" className="q-btn h-6 px-2" onClick={() => pickEnv("prod")}>Mark as Production</button>
+                      <button type="button" className="text-accent hover:underline" onClick={() => setProdDismissed(prodKey)}>It isn’t</button>
+                    </Offer>
+                  )}
+                  {lowerProd && (
+                    <Offer warn>
+                      <span className="text-fg">Lower this profile from Production to {envLabel[lowerProd]}? Its tabs lose the Production guards.</span>
+                      <button type="button" className="q-btn h-6 px-2" onClick={() => { set({ environment: lowerProd }); setEnvChosen(true); setEnvFromGroup(null); setLowerProd(null); }}>Lower it</button>
+                      <button type="button" className="text-accent hover:underline" onClick={() => setLowerProd(null)}>Keep Production</button>
+                    </Offer>
+                  )}
+                </>
+              }
+            />
+          </SmoothExpand>
+        )}
 
         {engineChosen && !local && (
-          <>
+          <SmoothExpand animateMount={mounted} className={`${animated ? "q-profile-reveal q-profile-reveal-2 " : ""}space-y-2.5`}>
             <div className="border-t border-line" />
             <div className="grid grid-cols-[96px_minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2.5">
               <label htmlFor={`${fid}-auth`} className="text-[11.5px] text-muted">Sign in</label>
@@ -1030,31 +1032,33 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
             {existing && needsSecretFor(existing.auth) && !needsSecret && savedSecret !== false && (
               <p className="pl-[108px] text-[10.5px] text-warn">The saved {secretKind(existing.auth) === "token" ? "token" : "password"} is removed when you save, because this sign-in needs none.</p>
             )}
-          </>
+          </SmoothExpand>
         )}
 
         {engineChosen && (
           <>
-            <div className="border-t border-line" />
-            <div className="grid grid-cols-[96px_minmax(0,1fr)_auto_minmax(0,200px)] items-center gap-x-3">
-              <label htmlFor={`${fid}-name`} className="text-[11.5px] text-muted">Name</label>
-              <input
-                id={`${fid}-name`} ref={refs.name} className={`${INPUT} ${nameTouched ? "" : "italic text-muted"}`} aria-required value={name} placeholder={suggestedName(p)}
-                onChange={(e) => { set({ name: e.target.value }); setNameTouched(true); }}
-                aria-description={nameTouched ? undefined : "Suggested from the connection; type to change it."}
-                {...invalidProps("name")}
-              />
-              <label htmlFor={`${fid}-group`} className="text-[11.5px] text-muted">Group</label>
-              <input id={`${fid}-group`} className={INPUT} list={`${fid}-groups`} value={p.groupName ?? ""} placeholder="None" onChange={(e) => pickGroup(e.target.value)} />
-              <datalist id={`${fid}-groups`}>
-                {groups.map((g) => (
-                  <option key={g.name} value={g.name} />
-                ))}
-              </datalist>
-              {errorLine("name", "col-start-2 col-span-3")}
-            </div>
+            <SmoothExpand animateMount={mounted} className={`${animated ? "q-profile-reveal q-profile-reveal-3 " : ""}space-y-2.5`}>
+              <div className="border-t border-line" />
+              <div className="grid grid-cols-[96px_minmax(0,1fr)_auto_minmax(0,200px)] items-center gap-x-3">
+                <label htmlFor={`${fid}-name`} className="text-[11.5px] text-muted">Name</label>
+                <input
+                  id={`${fid}-name`} ref={refs.name} className={`${INPUT} ${nameTouched ? "" : "italic text-muted"}`} aria-required value={name} placeholder={suggestedName(p)}
+                  onChange={(e) => { set({ name: e.target.value }); setNameTouched(true); }}
+                  aria-description={nameTouched ? undefined : "Suggested from the connection; type to change it."}
+                  {...invalidProps("name")}
+                />
+                <label htmlFor={`${fid}-group`} className="text-[11.5px] text-muted">Group</label>
+                <input id={`${fid}-group`} className={INPUT} list={`${fid}-groups`} value={p.groupName ?? ""} placeholder="None" onChange={(e) => pickGroup(e.target.value)} />
+                <datalist id={`${fid}-groups`}>
+                  {groups.map((g) => (
+                    <option key={g.name} value={g.name} />
+                  ))}
+                </datalist>
+                {errorLine("name", "col-start-2 col-span-3")}
+              </div>
+            </SmoothExpand>
 
-            <div className="rounded-md border border-line bg-panel overflow-hidden">
+            <div className={`${animated ? "q-profile-reveal q-profile-reveal-3 " : ""}rounded-md border border-line bg-panel overflow-hidden`}>
               {!local && (
                 <Disclosure id={`${fid}-enc`} title="Encryption" summary={transport.text} tone={ackNeeded ? "warn" : transport.tone} open={open.enc} onToggle={() => setOpen((o) => ({ ...o, enc: !o.enc }))}>
                   <Row label="Mode">
@@ -1065,7 +1069,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
                     </select>
                   </Row>
                   {fields.trustServerCertificate ? (
-                    <Row label="Certificate" hint={p.trustCert ? <span className="text-warn">The server certificate is not validated: anyone on the network path could pose as this server. Use only for development servers.</span> : undefined}>
+                    <Row label="Certificate" hint={p.trustCert ? <span className="q-profile-reveal text-warn">The server certificate is not validated: anyone on the network path could pose as this server. Use only for development servers.</span> : undefined}>
                       <Check checked={p.trustCert} onChange={(v) => set({ trustCert: v })}>Trust server certificate</Check>
                     </Row>
                   ) : (p.tlsMode === "verifyCa" || p.tlsMode === "verifyFull" || (knownEngine(p.engine) === "mySql" && p.tlsMode === "default") || !!p.caPath) && (
@@ -1073,9 +1077,9 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
                       <input className={`${INPUT} q-mono`} value={p.caPath ?? ""} onChange={(e) => set({ caPath: e.target.value || null })} placeholder="/etc/ssl/certs/root.crt" />
                     </Row>
                   )}
-                  {transport.risk === "plain" && <p className="pl-[108px] text-[10.5px] text-warn">The password and every result cross the network as plain text.</p>}
+                  {transport.risk === "plain" && <p className="q-profile-reveal pl-[108px] text-[10.5px] text-warn">The password and every result cross the network as plain text.</p>}
                   {ackNeeded && (
-                    <div className="pl-[108px]">
+                    <div className="q-profile-reveal pl-[108px]">
                       <label className="inline-flex items-center gap-2 text-[11.5px] font-semibold cursor-pointer" style={{ color: "var(--q-env-prod)" }}>
                         <input ref={refs.ack} type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
                         I accept that this Production connection {transport.risk === "plain" ? "is not encrypted" : "does not check the server certificate"}
@@ -1135,22 +1139,24 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
       </div>
 
       {/* Pinned under the form so a test result is visible without scrolling. */}
-      <div role="status" aria-live="polite" className="shrink-0 border-t border-line bg-panel px-5 py-2">
-        {test ? (
-          <div className={`flex items-start gap-2.5 px-2.5 py-1.5 rounded-md border text-[11.5px] ${testStale ? "border-line text-muted" : test.ok ? "border-ok/40 bg-ok/10 text-ok" : "border-err/40 bg-err/10 text-err"}`}>
-            <span className="mt-px shrink-0"><Icon d={test.ok ? ICON.circleCheck : ICON.circleAlert} size={15} /></span>
-            <div className="flex-1 min-w-0 max-h-[60px] overflow-auto select-text leading-snug">
-              {test.text}
-              {testStale && <span className="block text-[10.5px]">Settings changed since this test. Test again.</span>}
+      {engineChosen && (
+        <SmoothExpand animateMount={mounted} role="status" aria-live="polite" className={`${animated ? "q-profile-reveal q-profile-reveal-2 " : ""}shrink-0 border-t border-line bg-panel px-5 py-2`}>
+          {test ? (
+            <div className={`q-profile-reveal flex items-start gap-2.5 px-2.5 py-1.5 rounded-md border text-[11.5px] ${testStale ? "border-line text-muted" : test.ok ? "border-ok/40 bg-ok/10 text-ok" : "border-err/40 bg-err/10 text-err"}`}>
+              <span className="mt-px shrink-0"><Icon d={test.ok ? ICON.circleCheck : ICON.circleAlert} size={15} /></span>
+              <div className="flex-1 min-w-0 max-h-[60px] overflow-auto select-text leading-snug">
+                {test.text}
+                {testStale && <span className="block text-[10.5px]">Settings changed since this test. Test again.</span>}
+              </div>
+              <button type="button" className="shrink-0 w-5 h-5 flex items-center justify-center rounded opacity-70 hover:opacity-100 hover:bg-black/10" aria-label="Dismiss" title="Dismiss" onClick={() => setTest(null)}>
+                <Icon d={ICON.x} size={13} />
+              </button>
             </div>
-            <button type="button" className="shrink-0 w-5 h-5 flex items-center justify-center rounded opacity-70 hover:opacity-100 hover:bg-black/10" aria-label="Dismiss" title="Dismiss" onClick={() => setTest(null)}>
-              <Icon d={ICON.x} size={13} />
-            </button>
-          </div>
-        ) : (
-          <span className="text-[11px] text-muted">Not tested yet. You can save without testing.</span>
-        )}
-      </div>
+          ) : (
+            <span className="text-[11px] text-muted">Not tested yet. You can save without testing.</span>
+          )}
+        </SmoothExpand>
+      )}
     </Modal>
   );
 }
@@ -1185,7 +1191,7 @@ function SshSection({ id, open, onToggle, ssh, onChange, secret, onSecret, saved
         <Check checked={on} onChange={(v) => onChange(v ? { host: "", port: 22, username: "", auth: "privateKey", keyPath: null } : null)}>Connect through an SSH bastion</Check>
       </Row>
       {on && (
-        <>
+        <div className="q-profile-reveal space-y-2.5">
           <Row label="Bastion" hint="With a tunnel, Host above is the address as the bastion sees it (e.g. db.internal or localhost).">
             <div className="flex gap-2">
               <input ref={hostRef} className={INPUT} value={ssh!.host} placeholder="bastion.example.com" onChange={(e) => set({ host: e.target.value })} aria-required />
@@ -1201,12 +1207,14 @@ function SshSection({ id, open, onToggle, ssh, onChange, secret, onSecret, saved
             </select>
           </Row>
           {ssh!.auth === "privateKey" && (
-            <Row label="Key file" hint="OpenSSH, PEM or PuTTY format. The path is saved; the key is read when connecting.">
-              <div className="flex gap-2">
-                <input className={INPUT} value={ssh!.keyPath ?? ""} placeholder="/home/me/.ssh/id_ed25519" onChange={(e) => set({ keyPath: e.target.value || null })} />
-                {isTauri && <button type="button" className="q-btn" onClick={() => void browse()}>Browse…</button>}
-              </div>
-            </Row>
+            <div className="q-profile-reveal">
+              <Row label="Key file" hint="OpenSSH, PEM or PuTTY format. The path is saved; the key is read when connecting.">
+                <div className="flex gap-2">
+                  <input className={INPUT} value={ssh!.keyPath ?? ""} placeholder="/home/me/.ssh/id_ed25519" onChange={(e) => set({ keyPath: e.target.value || null })} />
+                  {isTauri && <button type="button" className="q-btn" onClick={() => void browse()}>Browse…</button>}
+                </div>
+              </Row>
+            </div>
           )}
           {ssh!.auth !== "agent" && (
             <Row
@@ -1219,7 +1227,7 @@ function SshSection({ id, open, onToggle, ssh, onChange, secret, onSecret, saved
               </div>
             </Row>
           )}
-        </>
+        </div>
       )}
     </Disclosure>
   );
@@ -1320,10 +1328,84 @@ function Icon({ d, size = 16 }: { d: ReactNode; size?: number }) {
   );
 }
 
+/**
+ * Smoothly animates height transitions when a section mounts after the dialog is open or when its content expands or
+ * collapses (e.g. choosing a server type, opening a disclosure, toggling SSH bastion fields, or showing hints/offers).
+ */
+function SmoothExpand({
+  children, className = "", animateMount = false, initialHeight = 0, asSection = false, role, "aria-live": ariaLive,
+}: {
+  children: ReactNode; className?: string; animateMount?: boolean; initialHeight?: number; asSection?: boolean;
+  role?: string; "aria-live"?: "polite" | "assertive" | "off";
+}) {
+  const ref = useRef<HTMLElement>(null);
+  const prevHeight = useRef<number | null>(null);
+  const animRef = useRef<Animation | null>(null);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const canAnimate =
+      typeof el.animate === "function" &&
+      !window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+
+    let fromH = prevHeight.current;
+    if (animRef.current) {
+      fromH = el.getBoundingClientRect().height;
+      animRef.current.cancel();
+      animRef.current = null;
+    }
+
+    const toH = el.getBoundingClientRect().height;
+    prevHeight.current = toH;
+
+    if (!canAnimate) return;
+
+    if (fromH === null) {
+      if (!animateMount || Math.abs(toH - initialHeight) <= 2) return;
+      fromH = initialHeight;
+    } else if (Math.abs(toH - fromH) <= 2) {
+      return;
+    }
+
+    el.style.overflow = "hidden";
+    const anim = el.animate(
+      [
+        { height: `${fromH}px`, ...(fromH === 0 ? { opacity: 0 } : {}) },
+        { height: `${toH}px`, ...(fromH === 0 ? { opacity: 1 } : {}) },
+      ],
+      { duration: 200, easing: "cubic-bezier(0.16, 1, 0.3, 1)" },
+    );
+    animRef.current = anim;
+    const clear = () => {
+      if (animRef.current === anim) {
+        el.style.overflow = "";
+        animRef.current = null;
+        prevHeight.current = el.getBoundingClientRect().height;
+      }
+    };
+    anim.onfinish = clear;
+    anim.oncancel = clear;
+  });
+
+  if (asSection) {
+    return (
+      <section ref={ref as RefObject<HTMLElement>} role={role} aria-live={ariaLive} className={className}>
+        {children}
+      </section>
+    );
+  }
+  return (
+    <div ref={ref as RefObject<HTMLDivElement>} role={role} aria-live={ariaLive} className={className}>
+      {children}
+    </div>
+  );
+}
+
 /** A folded group of rarely changed settings: one line of state while folded, its warning colour included. */
 function Disclosure({ id, title, summary, tone = "muted", open, onToggle, children }: { id: string; title: string; summary: string; tone?: "ok" | "warn" | "muted"; open: boolean; onToggle: () => void; children: ReactNode }) {
   return (
-    <section className="border-b border-line last:border-b-0">
+    <SmoothExpand asSection className="border-b border-line last:border-b-0">
       <button
         type="button" aria-expanded={open} aria-controls={`${id}-panel`} onClick={onToggle}
         className="w-full grid grid-cols-[14px_96px_minmax(0,1fr)] items-center gap-2 h-8 px-3 text-left hover:bg-hover"
@@ -1332,14 +1414,14 @@ function Disclosure({ id, title, summary, tone = "muted", open, onToggle, childr
         <span className="text-[12px] font-semibold text-fg">{title}</span>
         <span className={`text-[11.5px] truncate ${tone === "warn" ? "text-warn" : tone === "ok" ? "text-ok" : "text-muted"}`}>{tone === "warn" ? "⚠ " : ""}{summary}</span>
       </button>
-      {open && <div id={`${id}-panel`} className="px-3 pb-3 pt-1 space-y-2.5">{children}</div>}
-    </section>
+      {open && <div id={`${id}-panel`} className="q-profile-reveal px-3 pb-3 pt-1 space-y-2.5">{children}</div>}
+    </SmoothExpand>
   );
 }
 
 function Note({ children, action, onDismiss }: { children: ReactNode; action?: ReactNode; onDismiss?: () => void }) {
   return (
-    <div className="flex items-start gap-2.5 px-2.5 py-2 rounded-md border border-line bg-panel text-[11.5px] text-muted leading-snug" aria-live="polite">
+    <div className="q-profile-reveal flex items-start gap-2.5 px-2.5 py-2 rounded-md border border-line bg-panel text-[11.5px] text-muted leading-snug" aria-live="polite">
       <span className="mt-px shrink-0 text-accent"><Icon d={ICON.info} size={15} /></span>
       <div className="flex-1 min-w-0 space-y-0.5 select-text">{children}</div>
       {action}
@@ -1354,7 +1436,7 @@ function Note({ children, action, onDismiss }: { children: ReactNode; action?: R
 
 function Offer({ children, warn = false }: { children: ReactNode; warn?: boolean }) {
   return (
-    <div className={`flex flex-wrap items-center gap-x-2.5 gap-y-1 px-2.5 py-1.5 rounded-md border border-dashed text-[11.5px] text-muted ${warn ? "border-warn" : "border-line-strong"}`} aria-live="polite">
+    <div className={`q-profile-reveal flex flex-wrap items-center gap-x-2.5 gap-y-1 px-2.5 py-1.5 rounded-md border border-dashed text-[11.5px] text-muted ${warn ? "border-warn" : "border-line-strong"}`} aria-live="polite">
       {children}
     </div>
   );
@@ -1404,8 +1486,8 @@ function engineMatches(options: Engine[], query: string): Engine[] {
  * Server-type picker: a button showing the chosen type (or "Choose a server type…"), opening a searchable list grouped
  * into server and file engines, so it stays usable as engines are added. Escape is left to it while open (see Modal).
  */
-const EngineSelect = ({ ref, value, options, invalid, describedBy, onChange, autoFocus }: {
-  ref: RefObject<HTMLButtonElement | null>; value: Engine | null; autoFocus?: boolean; options: Engine[]; invalid: boolean; describedBy?: string; onChange: (e: Engine) => void;
+const EngineSelect = ({ ref, value, options, onChange, autoFocus }: {
+  ref: RefObject<HTMLButtonElement | null>; value: Engine | null; autoFocus?: boolean; options: Engine[]; onChange: (e: Engine) => void;
 }) => {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -1490,12 +1572,10 @@ const EngineSelect = ({ ref, value, options, invalid, describedBy, onChange, aut
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={`${id}-list`}
-        aria-invalid={invalid || undefined}
-        aria-describedby={describedBy}
         autoFocus={autoFocus}
         onClick={() => (open ? close(false) : show())}
         onKeyDown={onButtonKey}
-        className={`${INPUT} flex items-center gap-2 text-left ${open ? "border-accent" : invalid ? "border-err" : ""}`}
+        className={`${INPUT} flex items-center gap-2 text-left ${open ? "border-accent" : ""}`}
       >
         {current && value ? (
           <>
@@ -1509,7 +1589,7 @@ const EngineSelect = ({ ref, value, options, invalid, describedBy, onChange, aut
         <span className="text-muted"><Icon d={ICON.chevronDown} size={14} /></span>
       </button>
       {open && (
-        <div ref={pop} className="fixed z-50 rounded-md border border-line bg-panel shadow-xl p-1.5 flex flex-col gap-1" style={pos}>
+        <div ref={pop} className="q-popover-in fixed z-50 rounded-md border border-line bg-panel shadow-xl p-1.5 flex flex-col gap-1" style={pos}>
           <div className="relative">
             <span className="absolute left-2 top-1/2 -translate-y-1/2 text-muted"><Icon d={ICON.search} size={13} /></span>
             <input
