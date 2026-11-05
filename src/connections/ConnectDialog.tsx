@@ -113,7 +113,7 @@ export function ConnectDialog({ onClose }: { onClose: () => void }) {
           </div>
         )}
         {sections.map((s) => (
-          <div key={s.key} className="space-y-1">
+          <div key={`${env}:${s.key}`} className="q-settings-page-in space-y-1">
             <div className="text-[10px] font-bold text-muted uppercase px-1 flex items-center gap-1">
               {s.key === "pinned" && <PinIcon filled />}
               {s.title}
@@ -155,7 +155,7 @@ function ProfileRow({
   return (
     <div
       data-profile={p.id}
-      className={`group h-9 pl-1 pr-1.5 rounded-md border flex items-center justify-between gap-2 hover:bg-raised ${active ? "ring-1 ring-accent/60" : ""}`}
+      className={`group h-9 pl-1 pr-1.5 rounded-md border flex items-center justify-between gap-2 transition-colors duration-150 hover:bg-raised ${active ? "ring-1 ring-accent/60" : ""}`}
       style={{ borderColor: connected ? `color-mix(in srgb, ${color} 45%, transparent)` : "var(--q-line)", background: connected ? "var(--q-raised)" : undefined }}
       onClick={onSelect}
       onDoubleClick={() => !connected && onConnect()}
@@ -198,7 +198,7 @@ function EnvChip({ label, count, color, on, disabled, onClick }: { label: string
       aria-checked={on}
       disabled={disabled}
       onClick={onClick}
-      className={`h-[22px] px-2 rounded-full border text-[10.5px] font-medium inline-flex items-center gap-1.5 disabled:opacity-40 ${on ? "bg-accent/15 border-accent text-fg q-hl" : "border-line text-muted hover:bg-hover"}`}
+      className={`h-[22px] px-2 rounded-full border text-[10.5px] font-medium inline-flex items-center gap-1.5 transition-colors duration-150 disabled:opacity-40 ${on ? "bg-accent/15 border-accent text-fg q-hl" : "border-line text-muted hover:bg-hover"}`}
     >
       {color && <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />}
       {label}

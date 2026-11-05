@@ -1138,6 +1138,28 @@ select {
   }
 }
 
+@keyframes q-side-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes q-settings-page-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 @keyframes q-profile-reveal {
   from {
     opacity: 0;
@@ -1234,6 +1256,15 @@ select {
 .q-tree-row-reveal {
   animation: q-tree-row-reveal 140ms cubic-bezier(0.16, 1, 0.3, 1);
 }
+.q-side-panel-in {
+  animation: q-side-panel-in 170ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.q-settings-page-in {
+  animation: q-settings-page-in 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.q-results-open {
+  animation: q-results-rise 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
 .q-tree-caret {
   transition: transform 140ms cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -1287,6 +1318,9 @@ select {
   .q-panel-view-in,
   .q-panel-tab-indicator,
   .q-tree-row-reveal,
+  .q-side-panel-in,
+  .q-settings-page-in,
+  .q-results-open,
   .q-profile-reveal,
   .q-tab,
   .q-tab::before,

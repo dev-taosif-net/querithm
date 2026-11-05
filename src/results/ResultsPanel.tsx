@@ -257,7 +257,7 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
       {staging && <EnvRule profileId={tab.profileId} />}
       <RunNotice tab={tab} view={view} data={data} />
       <div key={executionId ?? "empty"} className="q-panel-view-in flex-1 min-h-0 flex">
-        <div className={`flex-1 min-h-0 min-w-0 relative ${chartOn ? "flex flex-col" : "flex"}`}>
+        <div key={chartOn ? "chart" : "grid"} className={`q-panel-view-in flex-1 min-h-0 min-w-0 relative ${chartOn ? "flex flex-col" : "flex"}`}>
           {!rs ? (
             item?.kind === "error" ? <ErrorCard tab={tab} item={item} /> : <RunSummary tab={tab} view={view} />
           ) : chartOn ? (
@@ -314,7 +314,7 @@ function compareCaption(tab: TabState, rs: ArrowResultSet): string {
 function Pane({ caption, active, onClose, children }: { caption?: string; active?: boolean; onClose?: () => void; children: ReactNode }) {
   if (!caption) return <>{children}</>;
   return (
-    <div className={`flex-1 min-w-0 flex flex-col ${onClose ? "border-l-2 border-line" : ""}`} data-q-compare-pane={onClose ? "other" : "shown"}>
+    <div className={`flex-1 min-w-0 flex flex-col ${onClose ? "q-side-panel-in border-l-2 border-line" : ""}`} data-q-compare-pane={onClose ? "other" : "shown"}>
       <div className={`h-[20px] px-2 flex items-center gap-2 text-[11px] text-muted bg-panel border-b border-line shrink-0 ${active ? "shadow-[inset_0_2px_0_var(--q-accent)]" : ""}`}>
         <span className="truncate">{caption}</span>
         {onClose && (
@@ -736,7 +736,7 @@ function FilterColumns({ rs, filter, compact }: { rs: ArrowResultSet; filter: st
         <Icon name="chevron" size={10} strokeWidth={2} />
       </button>
       {open && createPortal(
-        <div ref={pop} className="fixed z-50 bg-raised border border-line rounded shadow-xl w-60 flex flex-col" style={pos} role="listbox" aria-multiselectable>
+        <div ref={pop} className="q-popover-in fixed z-50 bg-raised border border-line rounded shadow-xl w-60 flex flex-col" style={pos} role="listbox" aria-multiselectable>
           {rs.columns.length > 8 && <input autoFocus className="q-input h-[22px] m-1.5" placeholder="Find column…" value={q} onChange={(e) => setQ(e.target.value)} />}
           <label className="flex items-center gap-2 px-3 py-1 hover:bg-hover cursor-pointer border-b border-line">
             <input type="checkbox" checked={!chosen} onChange={() => set(null)} />

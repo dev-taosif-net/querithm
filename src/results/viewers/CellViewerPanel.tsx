@@ -228,7 +228,7 @@ export function CellViewerPanel({ tabId, executionId, rs, row, col, onClose }: C
   const kind: ViewerKind | null = c ? viewerKind(c, loaded.state === "text" ? loaded.text : null) : null;
   return (
     <aside
-      className="w-[400px] max-w-[50%] min-w-[260px] shrink-0 border-l border-line bg-panel flex flex-col min-h-0"
+      className="q-side-panel-in w-[400px] max-w-[50%] min-w-[260px] shrink-0 border-l border-line bg-panel flex flex-col min-h-0"
       aria-label="Cell value"
       data-q-cell-viewer
       onKeyDown={(e) => {

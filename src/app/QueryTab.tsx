@@ -121,7 +121,7 @@ export function QueryTabPanel(props: IDockviewPanelProps<Params>) {
           )}
           <div
             data-focus-region="results"
-            className={`bg-panel flex flex-col min-h-0 min-w-0 ${max ? "flex-1" : "shrink-0"} ${right ? "border-l border-line" : "border-t border-line"}`}
+            className={`q-results-open bg-panel flex flex-col min-h-0 min-w-0 ${max ? "flex-1" : "shrink-0"} ${right ? "border-l border-line" : "border-t border-line"}`}
             style={max ? undefined : right ? { width: size, minWidth: 420 } : { height: size }}
           >
             <BottomPanel tab={tab} />

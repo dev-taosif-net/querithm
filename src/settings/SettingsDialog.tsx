@@ -219,13 +219,21 @@ export function SettingsDialog({ close, page: initialPage, focus }: { close: () 
         className="flex-1 min-w-0 overflow-y-auto px-6 py-5 bg-panel outline-none"
       >
         {results ? (
-          <SearchResults results={results} query={query.trim()} open={open} announce={announce} />
+          <div key="search" className="q-settings-page-in">
+            <SearchResults results={results} query={query.trim()} open={open} announce={announce} />
+          </div>
         ) : page === "keyboard" ? (
-          <KeyboardPage query={keysQuery} setQuery={setKeysQuery} announce={announce} />
+          <div key="keyboard" className="q-settings-page-in">
+            <KeyboardPage query={keysQuery} setQuery={setKeysQuery} announce={announce} />
+          </div>
         ) : page === "about" ? (
-          <AboutPage announce={announce} />
+          <div key="about" className="q-settings-page-in">
+            <AboutPage announce={announce} />
+          </div>
         ) : (
-          <SettingsPage page={page} announce={announce} />
+          <div key={page} className="q-settings-page-in">
+            <SettingsPage page={page} announce={announce} />
+          </div>
         )}
       </div>
       <div role="status" className="sr-only">
