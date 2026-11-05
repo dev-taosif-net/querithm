@@ -1072,6 +1072,57 @@ select {
   }
 }
 
+@keyframes q-tab-enter {
+  0% {
+    opacity: 0;
+    transform: translateX(-14px) translateY(-6px) scale(0.92);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes q-tab-spotlight {
+  0% {
+    opacity: 1;
+    background-position: -120% 0;
+    box-shadow: inset 0 0 0 1.5px var(--q-accent), inset 0 22px 24px -12px color-mix(in srgb, var(--q-accent) 34%, transparent);
+  }
+  55% {
+    opacity: 1;
+    background-position: 160% 0;
+    box-shadow: inset 0 0 0 1px var(--q-accent), inset 0 18px 20px -12px color-mix(in srgb, var(--q-accent) 18%, transparent);
+  }
+  100% {
+    opacity: 0;
+    background-position: 200% 0;
+    box-shadow: none;
+  }
+}
+
+@keyframes q-editor-unfold {
+  0% {
+    opacity: 0;
+    transform: translateY(-14px) scale(0.988);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes q-results-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .q-modal-backdrop {
   animation: q-modal-backdrop-in 150ms ease-out;
 }
@@ -1093,12 +1144,42 @@ select {
 .q-profile-reveal-3 {
   animation-delay: 75ms;
 }
+.q-tab {
+  animation: q-tab-enter 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.q-tab::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background-image: linear-gradient(
+    105deg,
+    transparent 20%,
+    color-mix(in srgb, var(--q-accent) 22%, transparent) 50%,
+    transparent 80%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  opacity: 0;
+  animation: q-tab-spotlight 520ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.q-query-page [data-q-editor-column] {
+  animation: q-editor-unfold 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.q-query-page [data-focus-region="results"] {
+  animation: q-results-rise 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
 
 @media (prefers-reduced-motion: reduce) {
   .q-modal-backdrop,
   .q-modal-dialog,
   .q-popover-in,
-  .q-profile-reveal {
+  .q-profile-reveal,
+  .q-tab,
+  .q-tab::before,
+  .q-query-page [data-q-editor-column],
+  .q-query-page [data-focus-region="results"] {
     animation: none;
   }
 }

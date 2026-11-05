@@ -89,7 +89,7 @@ export function QueryTabPanel(props: IDockviewPanelProps<Params>) {
   const size = `${tab.bottomSize * 100}%`;
 
   return (
-    <div ref={root} className={`h-full flex ${right ? "flex-row" : "flex-col"} bg-bg overflow-hidden`} data-q-dock={right ? "right" : "bottom"}>
+    <div ref={root} className={`q-query-page h-full flex ${right ? "flex-row" : "flex-col"} bg-bg overflow-hidden`} data-q-dock={right ? "right" : "bottom"}>
       <div
         className={`relative flex flex-col min-h-0 min-w-0 overflow-hidden ${max ? "shrink-0" : "flex-1"}`}
         style={max ? (right ? { width: 32 } : { height: 28 }) : undefined}
