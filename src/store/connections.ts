@@ -124,9 +124,16 @@ export const useConnections = create<ConnStore>((set, get) => {
     if (quiet && needsSecret(profile) && !(await shell.secretExists(profileId).catch(() => false))) return needsInput("The password is not saved.");
     let error: string | undefined;
     let sshSecret: string | undefined;
+    // A password the server refused is not kept: the prompt saves what was typed before the server answers, so when the
+    // user gives up (Cancel, or the attempts run out) after a refusal, the refused one is removed; otherwise every later
+    // launch would send it again and count against the server's lockout.
+    const dropRefused = async () => {
+      if (error) await Promise.resolve().then(() => shell.secretDelete(profileId)).catch(() => {});
+    };
     for (let attempt = 0; attempt < 4; attempt++) {
       const secret = await obtainSecret(profile, error);
       if (secret === null) {
+        await dropRefused();
         if (!get().servers[profileId]?.sessionId) set((s) => ({ order: s.order.filter((x) => x !== profileId), servers: omit(s.servers, profileId) }));
         return false;
       }
@@ -182,6 +189,7 @@ export const useConnections = create<ConnStore>((set, get) => {
         return false;
       }
     }
+    await dropRefused();
     if (!get().disconnected[profileId] && get().servers[profileId]) put(profileId, { status: "error", error });
     return false;
   };

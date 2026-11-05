@@ -16,7 +16,8 @@ public sealed partial class SqlServerProvider : IDbProvider
     /// <summary>Raised for Entra device-code prompts so the UI can show the code (the driver would print to stdout).</summary>
     public static event Action<AuthPromptEvent>? AuthPrompt;
 
-    static readonly ConcurrentDictionary<string, bool> StrictUnsupported = new();
+    // Saved profile id → when Strict failed and Mandatory then worked on its server (see OpenAsync).
+    static readonly ConcurrentDictionary<string, DateTime> StrictUnsupported = new();
 
     static SqlServerProvider()
     {
@@ -109,6 +110,31 @@ public sealed partial class SqlServerProvider : IDbProvider
         "Connect Timeout", "Command Timeout", "Application Name",
     };
 
+    // SqlClient-only keywords (the other drivers do not know them, or Npgsql only as an ignored compatibility key).
+    static readonly HashSet<string> OwnSpellings = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Data Source", "Initial Catalog", "Integrated Security", "Trusted_Connection", "Encrypt", "TrustServerCertificate", "Trust Server Certificate",
+        "MultiSubnetFailover", "Multi Subnet Failover", "ApplicationIntent", "Application Intent", "Authentication", "HostNameInCertificate",
+    };
+    static readonly HashSet<string> Conventional = new(StringComparer.OrdinalIgnoreCase) { "Server", "Data Source", "Initial Catalog", "Database", "User ID", "Uid", "Pwd", "Password" };
+
+    public ConnectionStringAffinity ConnectionStringAffinity(IReadOnlyDictionary<string, string> keywords)
+    {
+        var distinctive = ConnectionStringKeywords.CountKeys(keywords, OwnSpellings);
+        // "host,port", "tcp:host", "host\instance": the server's address in SQL Server's own form (no driver of the others
+        // reads a port or a protocol there).
+        foreach (var key in new[] { "Server", "Data Source", "Address", "Addr", "Network Address" })
+        {
+            if (!keywords.TryGetValue(key, out var server)) continue;
+            var comma = server.LastIndexOf(',');
+            if ((comma > 0 && int.TryParse(server[(comma + 1)..].Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out _))
+                || server.StartsWith("tcp:", StringComparison.OrdinalIgnoreCase) || server.StartsWith("np:", StringComparison.OrdinalIgnoreCase)
+                || server.StartsWith("lpc:", StringComparison.OrdinalIgnoreCase) || server.Contains('\\'))
+                distinctive++;
+        }
+        return new(distinctive, ConnectionStringKeywords.CountKeys(keywords, Conventional));
+    }
+
     public ParseConnectionStringResult ParseConnectionString(string connectionString, Profile basis)
     {
         var k = ConnectionStringKeywords.Apply(connectionString, () => new SqlConnectionStringBuilder());
@@ -164,7 +190,14 @@ public sealed partial class SqlServerProvider : IDbProvider
             p = p with { TrustCert = b.TrustServerCertificate };
             if (b.TrustServerCertificate) notes.Add(WeakTls.CertNotChecked("TrustServerCertificate=True"));
         }
-        if (k.Has("Host Name In Certificate")) SetOption(options, "hostNameInCertificate", NullIfEmpty(b.HostNameInCertificate));
+        if (k.Has("Host Name In Certificate"))
+        {
+            var hn = NullIfEmpty(b.HostNameInCertificate);
+            SetOption(options, "hostNameInCertificate", hn);
+            // PT1-1: the editor has no field for it, so the override is named where the user sees it.
+            if (hn != null)
+                notes.Add($"HostNameInCertificate={hn}: the server's certificate is checked for the name {hn} instead of the server name {p.Host ?? "(none)"}; remove it unless that is the name on the server's certificate.");
+        }
         if (k.Has("Application Intent")) options["applicationIntent"] = b.ApplicationIntent == ApplicationIntent.ReadOnly ? "readOnly" : "readWrite";
         if (k.Has("Multi Subnet Failover")) options["multiSubnetFailover"] = b.MultiSubnetFailover ? "true" : "false";
         if (k.Has("Application Name")) SetOption(options, "appName", NullIfEmpty(b.ApplicationName));
@@ -254,26 +287,94 @@ public sealed partial class SqlServerProvider : IDbProvider
         return b;
     }
 
+    /// <summary>
+    /// Opens within the profile's connect timeout in total (plus <see cref="OpenMargin"/>): with Default TLS it tries
+    /// Strict (TDS 8) first and, when that fails on a server it did reach, Mandatory in the time left. SqlClient's own
+    /// timeout does not bound everything (on Windows a host without a port is also tried over named pipes, measured at
+    /// 30 s against an unroutable address with Connect Timeout=3), so a timer cancels the open and the error names the
+    /// endpoint instead of "A task was canceled.".
+    /// </summary>
     public async Task<DbConnection> OpenAsync(Profile profile, string? secret, string? database, FileGrant? file, CancellationToken ct)
     {
-        var tryStrict = profile.TlsMode == TlsMode.Default && !profile.TrustCert && !StrictUnsupported.ContainsKey(profile.Id);
+        var budgetS = Math.Max(0, profile.TimeoutS ?? 15); // 0: no limit of our own (SqlClient's meaning); ct still ends it
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        if (budgetS > 0) limit.CancelAfter(TimeSpan.FromSeconds(budgetS) + OpenMargin);
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        var tryStrict = profile.TlsMode == TlsMode.Default && !profile.TrustCert && !StrictKnownUnsupported(profile.Id);
         try
         {
-            return await OpenOnceAsync(profile, secret, database, tryStrict, ct).ConfigureAwait(false);
+            try
+            {
+                return await OpenOnceAsync(profile, secret, database, tryStrict, budgetS, limit.Token).ConfigureAwait(false);
+            }
+            catch (SqlException ex) when (tryStrict && !limit.IsCancellationRequested && !IsLoginFailure(ex) && !IsNotReachable(ex))
+            {
+                // The server answered but Strict failed (a server before 2022, or a certificate Strict rejects): try Mandatory
+                // in the time left, and remember only when that works, so a passing outage never costs a profile Strict.
+                var left = budgetS == 0 ? 0 : budgetS - (int)started.Elapsed.TotalSeconds;
+                if (budgetS > 0 && left < 1) throw;
+                var conn = await OpenOnceAsync(profile, secret, database, false, left, limit.Token).ConfigureAwait(false);
+                MarkStrictUnsupported(profile.Id, DateTime.UtcNow);
+                return conn;
+            }
         }
-        catch (SqlException ex) when (tryStrict && !ct.IsCancellationRequested && !IsLoginFailure(ex))
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && limit.IsCancellationRequested)
         {
-            // Server or certificate does not support TDS 8 strict encryption: fall back to Mandatory and remember.
-            StrictUnsupported[profile.Id] = true;
-            return await OpenOnceAsync(profile, secret, database, false, ct).ConfigureAwait(false);
+            throw new TimeoutException(NotReachedMessage(profile, budgetS));
         }
+        catch (SqlException ex) when (IsNotReachable(ex) || IsTimeout(ex))
+        {
+            ex.Data[EndpointKey] = NotReachedMessage(profile, budgetS);
+            throw;
+        }
+    }
+
+    internal static readonly TimeSpan OpenMargin = TimeSpan.FromSeconds(2);
+
+    /// <summary>How long a "Strict unsupported" finding holds before Strict is tried again (an upgraded server).</summary>
+    internal static readonly TimeSpan StrictProbeTtl = TimeSpan.FromHours(1);
+
+    const string EndpointKey = "Querithm.NotReached";
+
+    internal static bool StrictKnownUnsupported(string? profileId, DateTime? now = null)
+    {
+        if (string.IsNullOrEmpty(profileId) || !StrictUnsupported.TryGetValue(profileId, out var at)) return false;
+        if ((now ?? DateTime.UtcNow) - at < StrictProbeTtl) return true;
+        StrictUnsupported.TryRemove(profileId, out _);
+        return false;
+    }
+
+    /// <summary>Never for an unsaved profile: they all share the id "", and one Test must not set the rule for every new one.</summary>
+    internal static void MarkStrictUnsupported(string? profileId, DateTime now)
+    {
+        if (!string.IsNullOrEmpty(profileId)) StrictUnsupported[profileId] = now;
+    }
+
+    /// <summary>A changed or deleted profile (new host, new TLS settings) is probed afresh.</summary>
+    public void ForgetConnections(string profileId) => StrictUnsupported.TryRemove(profileId, out _);
+
+    string NotReachedMessage(Profile profile, int budgetS)
+    {
+        var (host, port, _) = TunnelTarget(profile);
+        var endpoint = host.Contains('\\') ? host : $"{host}:{port}";
+        var within = budgetS > 0 ? $" within {budgetS} s" : "";
+        return $"Could not reach SQL Server at {endpoint}{within}. Check the server name and port, that the server accepts TCP connections, and any firewall in between.";
     }
 
     static bool IsLoginFailure(SqlException ex) => ex.Number is 18456 or 4060 or 18452 or 18488;
 
-    async Task<DbConnection> OpenOnceAsync(Profile profile, string? secret, string? database, bool strict, CancellationToken ct)
+    /// <summary>
+    /// Nothing answered: name or instance not found (53, 40, 26, 11001, 11004), refused (10061), network or host unreachable
+    /// (10051, 10065, 1231). Strict cannot be the cause, so it is not retried as Mandatory.
+    /// </summary>
+    static bool IsNotReachable(SqlException ex) => ex.Number is 53 or 40 or 26 or 2 or 11001 or 11004 or 10061 or 10051 or 10065 or 1231;
+
+    /// <summary>Connect or pre-login timeouts (258, -2, 10060).</summary>
+    static bool IsTimeout(SqlException ex) => ex.Number is 258 or -2 or 10060;
+
+    async Task<DbConnection> OpenOnceAsync(Profile profile, string? secret, string? database, bool strict, int connectTimeoutS, CancellationToken ct)
     {
-        var conn = new SqlConnection(Build(profile, secret, database, strict).ConnectionString)
+        var conn = new SqlConnection(Build(profile with { TimeoutS = connectTimeoutS }, secret, database, strict).ConnectionString)
         {
             // Errors up to severity 16 arrive as messages, so later statements' results are still read (SSMS behaviour).
             FireInfoMessageEventOnUserErrors = true,
@@ -335,6 +436,9 @@ public sealed partial class SqlServerProvider : IDbProvider
 
     public IReadOnlyList<ProviderMessage> TranslateException(Exception ex, string? commandText = null)
     {
+        // An open that reached nothing (OpenAsync): say which endpoint, not SqlClient's generic network paragraph.
+        if (ex is SqlException { Data: var data } notReached && data[EndpointKey] is string reason)
+            return [new ProviderMessage(Severity.Error, reason, null, null, notReached.Number, notReached.State, notReached.Class)];
         if (ex is SqlException sql)
             return sql.Errors.Cast<SqlError>()
                 .Select(e => new ProviderMessage(Severity.Error, e.Message, e.LineNumber > 0 ? e.LineNumber : null,

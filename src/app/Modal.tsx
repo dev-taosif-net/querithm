@@ -70,7 +70,8 @@ export function Modal({
         e.preventDefault();
         e.stopPropagation();
         if (!onEscape?.()) onClose();
-      } else if (e.key === "Enter" && onEnter && !(target instanceof HTMLTextAreaElement) && !target.closest?.(".monaco-editor")) {
+      } else if (e.key === "Enter" && onEnter && !e.isComposing && !(target instanceof HTMLTextAreaElement) && !target.closest?.(".monaco-editor")) {
+        // An IME confirming a composition sends Enter too (isComposing): that Enter is the input method's, never the dialog's.
         const inside = target instanceof Node && !!box.current?.contains(target);
         // Left to the focused control (not prevented): a button's own activation runs, Cancel cancels.
         if (inside && target.closest(ACTIVATES)) return;

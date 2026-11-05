@@ -8,6 +8,51 @@ public readonly record struct PgToken(PgTokenKind Kind, int Offset, int Length, 
     public bool Is(string word) => Kind == PgTokenKind.Word && string.Equals(Text, word, StringComparison.OrdinalIgnoreCase);
 }
 
+/// <summary>
+/// The character classes the engines' own lexers use (PT7-1), shared by the PostgreSQL, DuckDB, MySQL and SQLite tokenizers.
+/// Whitespace is ASCII only: no engine reads U+00A0, U+3000 or any other Unicode space as a separator (DuckDB maps some to
+/// ASCII spaces before it parses, see DuckDbTokenizer). Every character from U+0080 up is an identifier character, as the
+/// engines read it: PostgreSQL's scanner (and DuckDB's) takes bytes 0x80–0xFF as ident_start / ident_cont, SQLite's
+/// tokenizer does the same, and MySQL's utf8mb4 lexer reads every multibyte character as part of an identifier. Reading
+/// such a character as whitespace or an operator lets "a&lt;U+00A0&gt;WHERE" look like an alias and a WHERE to the classifier
+/// while the engine sees one alias and no WHERE.
+/// </summary>
+public static class SqlChars
+{
+    /// <summary>ASCII whitespace: space, \t, \n, \v, \f, \r (never <see cref="char.IsWhiteSpace(char)"/>).</summary>
+    public static bool IsSpace(char c) => c is ' ' or '\t' or '\n' or '\v' or '\f' or '\r';
+
+    public static bool IsDigit(char c) => c is >= '0' and <= '9';
+
+    public static bool IsAsciiLetter(char c) => c is >= 'a' and <= 'z' or >= 'A' and <= 'Z';
+
+    /// <summary>An identifier's first character: an ASCII letter, '_' or any character from U+0080 up.</summary>
+    public static bool IsIdentStart(char c) => IsAsciiLetter(c) || c == '_' || c >= '\u0080';
+
+    /// <summary>An identifier's later characters: <see cref="IsIdentStart"/>, an ASCII digit or '$'.</summary>
+    public static bool IsIdentPart(char c) => IsIdentStart(c) || IsDigit(c) || c == '$';
+
+    /// <summary>
+    /// A character that continues a numeric literal's token: ASCII letters and digits, '_', '.' and any character from
+    /// U+0080 up (glued on, as the engines glue them; the engine judges the literal).
+    /// </summary>
+    public static bool IsNumberPart(char c) => IsAsciiLetter(c) || IsDigit(c) || c is '_' or '.' || c >= '\u0080';
+
+    /// <summary>
+    /// PT7-4: the refusal for SQL text holding a NUL (U+0000), for engines that read the text as a C string and stop at the
+    /// NUL (SQLite, DuckDB): what follows it would never run, and what the classifier checked is not what runs. Null when
+    /// there is none.
+    /// </summary>
+    public static string? NulRefusal(string text, string engine)
+    {
+        var at = text.IndexOf('\0');
+        if (at < 0) return null;
+        var line = 1;
+        for (var i = 0; i < at; i++) if (text[i] == '\n') line++;
+        return $"The SQL text holds a NUL character (U+0000) on line {line}. {engine} stops reading the text there, so what follows it would not run. Remove the character and run the script again.";
+    }
+}
+
 /// <summary>Tolerant PostgreSQL tokenizer: never throws; unterminated constructs run to end of text.</summary>
 public static class PgTokenizer
 {
@@ -23,9 +68,9 @@ public static class PgTokenizer
             var startLine = line;
             var c = s[i];
             PgTokenKind kind;
-            if (char.IsWhiteSpace(c))
+            if (SqlChars.IsSpace(c))
             {
-                while (i < s.Length && char.IsWhiteSpace(s[i])) { if (s[i] == '\n') line++; i++; }
+                while (i < s.Length && SqlChars.IsSpace(s[i])) { if (s[i] == '\n') line++; i++; }
                 kind = PgTokenKind.Whitespace;
             }
             else if (c == '-' && At(s, i + 1) == '-')
@@ -79,20 +124,20 @@ public static class PgTokenizer
                 i = stop;
                 kind = PgTokenKind.DollarString;
             }
-            else if (c == '$' && i + 1 < s.Length && char.IsDigit(s[i + 1]))
+            else if (c == '$' && i + 1 < s.Length && SqlChars.IsDigit(s[i + 1]))
             {
                 i++;
-                while (i < s.Length && char.IsDigit(s[i])) i++;
+                while (i < s.Length && SqlChars.IsDigit(s[i])) i++;
                 kind = PgTokenKind.Param;
             }
-            else if (char.IsLetter(c) || c == '_')
+            else if (SqlChars.IsIdentStart(c))
             {
-                while (i < s.Length && (char.IsLetterOrDigit(s[i]) || s[i] is '_' or '$')) i++;
+                while (i < s.Length && SqlChars.IsIdentPart(s[i])) i++;
                 kind = PgTokenKind.Word;
             }
-            else if (char.IsDigit(c) || (c == '.' && i + 1 < s.Length && char.IsDigit(s[i + 1])))
+            else if (SqlChars.IsDigit(c) || (c == '.' && i + 1 < s.Length && SqlChars.IsDigit(s[i + 1])))
             {
-                while (i < s.Length && (char.IsLetterOrDigit(s[i]) || s[i] == '.')) i++;
+                while (i < s.Length && SqlChars.IsNumberPart(s[i])) i++;
                 kind = PgTokenKind.Number;
             }
             else if (c is '(' or ')' or ',' or ';' or '[' or ']')
@@ -101,10 +146,10 @@ public static class PgTokenizer
                 kind = PgTokenKind.Punct;
             }
             else if (c == ':' && At(s, i + 1) == ':') { i += 2; kind = PgTokenKind.Operator; }
-            else if (c == ':' && i + 1 < s.Length && (char.IsLetter(s[i + 1]) || s[i + 1] == '_'))
+            else if (c == ':' && i + 1 < s.Length && SqlChars.IsIdentStart(s[i + 1]))
             {
                 i++;
-                while (i < s.Length && (char.IsLetterOrDigit(s[i]) || s[i] == '_')) i++;
+                while (i < s.Length && SqlChars.IsIdentPart(s[i]) && s[i] != '$') i++;
                 kind = PgTokenKind.Param;
             }
             else
@@ -128,8 +173,9 @@ public static class PgTokenizer
     static string? DollarTag(string s, int i)
     {
         var j = i + 1;
-        while (j < s.Length && (char.IsLetterOrDigit(s[j]) || s[j] == '_')) j++;
-        if (j < s.Length && s[j] == '$' && (j == i + 1 || !char.IsDigit(s[i + 1]))) return s.Substring(i, j - i + 1);
+        // scan.l: dolq_start [A-Za-z\200-\377_], dolq_cont [A-Za-z\200-\377_0-9].
+        while (j < s.Length && SqlChars.IsIdentPart(s[j]) && s[j] != '$') j++;
+        if (j < s.Length && s[j] == '$' && (j == i + 1 || !SqlChars.IsDigit(s[i + 1]))) return s.Substring(i, j - i + 1);
         return null;
     }
 

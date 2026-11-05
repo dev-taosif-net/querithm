@@ -3,6 +3,7 @@
 // database · server. The database is drawn in its environment's colour and the environment is not written there
 // (owner revision 2): the colour, the Prod band, the tooltip, the top bar and the spoken name say it.
 import { useEffect, useLayoutEffect, useRef, type MutableRefObject, type RefObject } from "react";
+import { escapeForDisplay } from "../monitor/format";
 import type { EnvironmentKind, Profile } from "../ipc/contract";
 import type { ToolKind } from "../store/toolTabs";
 import { envColor, envLabel, useProfiles } from "../store/profiles";
@@ -102,7 +103,7 @@ export function tooltipText(f: TabFacts, now = Date.now()): string {
   const lines = [`${isDebugTitle(f.title) ? tabTitleText(f.title) : f.title}${f.dirty ? " · modified" : ""}`];
   if (f.filePath) lines.push(f.filePath);
   const where = (t: TabTarget) =>
-    t.profile ? `${envLabel[t.profile.environment]?.toUpperCase() ?? ""} ${t.profile.name}${t.database ? ` › ${t.database}` : ""}`.trim() : t.file ?? "";
+    t.profile ? `${envLabel[t.profile.environment]?.toUpperCase() ?? ""} ${escapeForDisplay(t.profile.name ?? "")}${t.database ? ` › ${escapeForDisplay(t.database)}` : ""}`.trim() : t.file ?? "";
   if (f.profile) {
     lines.push(where(f) + (f.target ? ` → ${where(f.target)}` : "") + (f.disconnected ? " (disconnected)" : ""));
     // The address the profile points at: its name can say "dev" while it points at production.
@@ -112,7 +113,7 @@ export function tooltipText(f: TabFacts, now = Date.now()): string {
     } else {
       const from = serverAddress(f.profile);
       const to = f.target.profile ? serverAddress(f.target.profile) : undefined;
-      if (from || to) lines.push(`Server ${from ?? "(none)"} → ${to ?? "(none)"}`);
+      if (from || to) lines.push(`Server ${from ? escapeForDisplay(from) : "(none)"} → ${to ? escapeForDisplay(to) : "(none)"}`);
     }
   } else if (f.kind === "query") lines.push("No connection");
   if (f.txOpen) lines.push([`Transaction open${f.txStartedAt ? ` ${txAgeLong(now - f.txStartedAt)}` : ""}`, f.spid ? `SPID ${f.spid}` : ""].filter(Boolean).join(" · "));

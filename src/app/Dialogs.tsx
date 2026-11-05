@@ -6,6 +6,8 @@ import { useTabs } from "../store/tabs";
 import { engineBadge, envLabel, sshAccount, useProfiles } from "../store/profiles";
 import { useSnapshots } from "../store/snapshots";
 import { Field, Modal } from "./Modal";
+import { SecretInput } from "./SecretInput";
+import { escapeForDisplay } from "../monitor/format";
 import { ServerChip } from "./EnvTag";
 import { txAgeLong } from "./txAge";
 import { tabTitleText } from "./tabTitle";
@@ -167,7 +169,7 @@ function PasswordDialog({ d }: { d: Extract<Dialog, { kind: "password" }> }) {
   return (
     <Modal
       title={d.ssh ? `SSH tunnel — ${profile?.name ?? ""}` : `Sign in — ${profile?.name ?? ""}`}
-      subtitle={d.ssh ? `${profile?.ssh?.username ?? ""}@${profile?.ssh?.host ?? ""}` : `${profile?.username ?? ""}@${profile?.host ?? ""}`}
+      subtitle={escapeForDisplay(d.ssh ? `${profile?.ssh?.username ?? ""}@${profile?.ssh?.host ?? ""}` : `${profile?.username ?? ""}@${profile?.host ?? ""}`)}
       onClose={() => d.resolve(null)}
       onEnter={() => void submit()}
       width={420}
@@ -180,7 +182,7 @@ function PasswordDialog({ d }: { d: Extract<Dialog, { kind: "password" }> }) {
     >
       {d.error && <div className="mb-3 p-2 rounded bg-err/10 border border-err/40 text-err text-[11px]">{d.error}</div>}
       <Field label={d.ssh ? (profile?.ssh?.auth === "privateKey" ? "Key passphrase" : "SSH password") : profile?.auth === "entraToken" ? "Access token" : "Password"}>
-        <input className="q-input w-full" type="password" autoFocus value={value} onChange={(e) => setValue(e.target.value)} />
+        <SecretInput className="q-input w-full" type="password" autoFocus value={value} onValue={setValue} />
       </Field>
       {d.ssh ? <label className="flex items-center gap-2 mt-3 text-fg">
         <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} /> Save in the OS keyring
@@ -200,7 +202,7 @@ function HostKeyDialog({ d }: { d: Extract<Dialog, { kind: "hostKey" }> }) {
     <Modal
       danger={changed}
       title={changed ? "⚠ SSH HOST KEY CHANGED" : "Trust this SSH server?"}
-      subtitle={`${k.host}:${k.port}`}
+      subtitle={`${escapeForDisplay(k.host)}:${k.port}`}
       onClose={() => d.resolve(false)}
       width={560}
       footer={
@@ -257,8 +259,8 @@ function GuardDialog({ d }: { d: Extract<Dialog, { kind: "guard" }> }) {
           )}
         </p>
         <div className="p-3 bg-bg border border-err/40 rounded-lg space-y-1.5 q-mono text-[11px]">
-          <div><span className="text-muted">Connection:</span> <b className="text-err">{b.profileName}</b> <span className="text-muted">({b.server})</span></div>
-          <div><span className="text-muted">Database:</span> <b className="text-fg">{b.database ?? "(default)"}</b></div>
+          <div><span className="text-muted">Connection:</span> <b className="text-err">{escapeForDisplay(b.profileName ?? "")}</b> <span className="text-muted">({escapeForDisplay(b.server ?? "")})</span></div>
+          <div><span className="text-muted">Database:</span> <b className="text-fg">{b.database != null ? escapeForDisplay(b.database) : "(default)"}</b></div>
           {b.findings.map((f, i) => (
             <div key={i} className="pt-1 border-t border-line/60">
               <div><span className="text-muted">Rule:</span> <b className="text-warn">{f.description}</b> <span className="text-muted">(line {f.line})</span></div>

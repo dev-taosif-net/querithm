@@ -117,13 +117,15 @@ public sealed class SshTests : IDisposable
         Assert.Contains(reason, new PostgresProvider().TunnelTarget(Pg(host)).Refusal);
 
     [Fact]
-    public void Postgres_verify_full_degrades_to_verify_ca_with_a_reason()
+    public void Postgres_verify_full_keeps_checking_the_real_host_name_through_the_tunnel()
     {
+        // PT5-4: the TLS target host stays db.internal (ProviderTlsHardeningTests has the handshake).
         var pg = new PostgresProvider();
         Assert.Equal(("db.internal", 5432, (string?)null), pg.TunnelTarget(Pg("db.internal")));
         var (routed, note) = pg.RouteThrough(Pg("db.internal", TlsMode.VerifyFull), "127.0.0.1", 40002);
-        Assert.Equal((TlsMode.VerifyCa, "127.0.0.1", 40002), (routed.TlsMode, routed.Host, routed.Port));
-        Assert.Contains("Verify CA", note);
+        Assert.Equal((TlsMode.VerifyFull, "127.0.0.1", 40002), (routed.TlsMode, routed.Host, routed.Port));
+        Assert.Null(note);
+        Assert.Equal("db.internal", PostgresProvider.TunnelTlsHost(routed));
         Assert.Null(pg.RouteThrough(Pg("db.internal", TlsMode.Require), "127.0.0.1", 1).Note);
     }
 

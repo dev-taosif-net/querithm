@@ -909,18 +909,21 @@ try {
     await page.keyboard.press("Enter");
     await page.waitForSelector('[role="dialog"] button[role="combobox"][aria-label="Server type"]', { timeout: 10_000 }).catch(() => errors.push(`${e.key}: the profile editor did not open`));
     await sleep(800); // system.engines answers: the picker then offers the exposed engines
-    await page.evaluate(() => {
-      const name = [...document.querySelectorAll('[role="dialog"] label')].find((l) => l.textContent?.startsWith("Connection name"))?.querySelector("input");
-      name?.focus();
-      name?.select();
-    });
-    await page.keyboard.type(`Smoke ${e.label}`);
+    // A new profile names no server type and no environment: both are chosen here, then the name (shown once a type is).
     await page.click('[role="dialog"] button[role="combobox"][aria-label="Server type"]');
     const offered = await page.waitForFunction((label) => [...document.querySelectorAll('[role="option"]')].some((o) => o.textContent?.trim() === label), { timeout: 5_000 }, e.label).then(() => true, () => false);
     if (!offered) errors.push(`${e.key}: the engine picker does not offer ${e.label} in a default build: ${await page.evaluate(() => [...document.querySelectorAll('[role="option"]')].map((o) => o.textContent?.trim()).join(", "))}`);
     await page.evaluate((label) => [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent?.trim() === label)?.click(), e.label);
     await page.waitForFunction(() => [...document.querySelectorAll('[role="dialog"] button')].some((b) => b.textContent === "Pick file…"), { timeout: 5_000 })
       .catch(() => errors.push(`${e.key}: the file section did not appear`));
+    await page.evaluate(() => {
+      const label = [...document.querySelectorAll('[role="dialog"] label')].find((l) => l.textContent?.trim() === "Name");
+      const name = label?.htmlFor ? document.getElementById(label.htmlFor) : null;
+      name?.focus();
+      name?.select?.();
+    });
+    await page.keyboard.type(`Smoke ${e.label}`);
+    await page.evaluate(() => document.querySelector('[role="dialog"] input[type="radio"][aria-label="Local"]')?.click());
     const [dbChooser] = await Promise.all([
       page.waitForFileChooser({ timeout: 10_000 }),
       clickButton("Pick file…"),

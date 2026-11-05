@@ -1,4 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { escapeForDisplay } from "../monitor/format";
 import { useActiveTab } from "../store/tabs";
 import { envColor, envLabel, useProfiles } from "../store/profiles";
 import { EngineLogo } from "../connections/EngineLogo";
@@ -51,8 +52,9 @@ export function StatusBar() {
     <div className="h-[24px] bg-panel border-t border-line px-3 flex items-center justify-between text-[11px] shrink-0 gap-3" style={profile ? { borderTop: `4px solid ${color}` } : undefined}>
       <div className="flex items-center gap-3 min-w-0">
         {profile ? (
-          <span className="font-semibold flex items-center gap-1 text-fg whitespace-nowrap" title={addressLine}>
-            <EngineLogo engine={profile.engine} size={12} /> {envLabel[profile.environment].toUpperCase()} - {profile.name}
+          // The name truncates (the environment word before it never does), so a long name cannot push the indicators off.
+          <span className="font-semibold flex items-center gap-1 text-fg whitespace-nowrap min-w-0 max-w-[45%] truncate" title={addressLine}>
+            <EngineLogo engine={profile.engine} size={12} /> {envLabel[profile.environment].toUpperCase()} - {escapeForDisplay(profile.name ?? "")}
             {tab?.spid ? ` (SPID ${tab.spid})` : ""}
           </span>
         ) : (
@@ -60,7 +62,7 @@ export function StatusBar() {
         )}
         {tab?.profileId && (
           <span className="text-fg whitespace-nowrap">
-            DB: {tab.database ?? "(default)"}{disconnected ? " (disconnected)" : ""}
+            DB: {tab.database != null ? escapeForDisplay(tab.database) : "(default)"}{disconnected ? " (disconnected)" : ""}
           </span>
         )}
         {address && (

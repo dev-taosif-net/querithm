@@ -1,5 +1,9 @@
 using System.Data.Common;
 using System.Globalization;
+using System.Net;
+using System.Net.Security;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using MySqlConnector;
 using Querithm.Contract;
 using Querithm.Contract.Providers;
@@ -60,7 +64,21 @@ public sealed class MySqlProvider : IDbProvider
 
     public static bool IsMariaDb(DbConnection c) => c.ServerVersion.Contains("MariaDB", StringComparison.OrdinalIgnoreCase);
 
-    public ProductInfo Product(DbConnection connection) => new() { Name = IsMariaDb(connection) ? "MariaDB" : "MySQL", Version = connection.ServerVersion };
+    public ProductInfo Product(DbConnection connection) => new() { Name = IsMariaDb(connection) ? "MariaDB" : "MySQL", Version = CleanVersion(connection.ServerVersion, IsMariaDb(connection)) };
+
+    /// <summary>
+    /// PT9-1: the handshake's version text is whatever the server (or a MITM before TLS) sends, and it is shown in the
+    /// status bar and the Test result: only its leading version token is kept ("8.0.36", "10.11.6-MariaDB-1"). MariaDB
+    /// sends "5.5.5-" first for old clients; that prefix is dropped.
+    /// </summary>
+    internal static string CleanVersion(string? raw, bool mariaDb)
+    {
+        var text = raw ?? "";
+        if (mariaDb && text.StartsWith("5.5.5-", StringComparison.Ordinal)) text = text[6..];
+        var n = 0;
+        while (n < text.Length && n < 64 && (char.IsAsciiLetterOrDigit(text[n]) || text[n] is '.' or '-' or '+' or '_' or '~')) n++;
+        return n == 0 ? "unknown" : text[..n];
+    }
     public ConnectionLifetime LifetimeFor(Profile profile) => ConnectionLifetime.Pooled;
 
     public (string Host, int Port, string? Refusal) TunnelTarget(Profile p)
@@ -70,13 +88,72 @@ public sealed class MySqlProvider : IDbProvider
         return (host, p.Port ?? 3306, null);
     }
 
+    /// <summary>
+    /// The driver dials the forward on 127.0.0.1; VerifyFull still checks the certificate against the real server name
+    /// (PT5-4) through <see cref="VerifyFullFor"/>, set on the connection in <see cref="OpenAsync"/>.
+    /// </summary>
     public (Profile Profile, string? Note) RouteThrough(Profile p, string host, int port)
     {
         var routed = p with { Host = host, Port = port };
-        // VerifyFull checks the certificate against the host connected to, which through the tunnel is 127.0.0.1.
-        if (MapSsl(p.TlsMode) == MySqlSslMode.VerifyFull)
-            return (routed with { TlsMode = TlsMode.VerifyCa }, "Through the SSH tunnel the server certificate is checked against its CA only (the host name would be 127.0.0.1).");
-        return (routed, null);
+        if (MapSsl(p.TlsMode) != MySqlSslMode.VerifyFull) return (routed, null);
+        var options = new Dictionary<string, string>(p.Options ?? []) { [TunnelTlsHostOption] = (p.Host ?? "localhost").Trim() };
+        return (routed with { Options = options }, null);
+    }
+
+    /// <summary>
+    /// Set by <see cref="RouteThrough"/> only: the real server name. Read only for a loopback host, so a stored option
+    /// cannot retarget a direct connection.
+    /// </summary>
+    internal const string TunnelTlsHostOption = "tunnelTlsHost";
+
+    internal static string? TunnelTlsHost(Profile p) =>
+        MapSsl(p.TlsMode) == MySqlSslMode.VerifyFull && p.Options?.GetValueOrDefault(TunnelTlsHostOption) is { Length: > 0 } h
+            && IPAddress.TryParse(p.Host, out var ip) && IPAddress.IsLoopback(ip) ? h : null;
+
+    /// <summary>
+    /// VerifyFull for a server dialled under another name: the chain must lead to a trusted root (the profile's CA file
+    /// when one is set, else the system's) for a server-auth certificate, and the certificate must be issued for
+    /// <paramref name="host"/>. MySqlConnector calls a connection's callback only in Required mode (it then trusts the
+    /// callback alone), so <see cref="OpenAsync"/> pairs the two.
+    /// </summary>
+    internal static RemoteCertificateValidationCallback VerifyFullFor(string host, string? caPath)
+    {
+        X509Certificate2Collection? roots = null;
+        if (!string.IsNullOrEmpty(caPath))
+        {
+            roots = [];
+            try
+            {
+                roots.ImportFromPemFile(caPath);
+                if (roots.Count == 0) roots.Add(X509CertificateLoader.LoadCertificateFromFile(caPath)); // DER
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or CryptographicException)
+            {
+                throw new InvalidOperationException($"The CA file {Path.GetFileName(caPath)} could not be read as a certificate: {ex.Message}", ex);
+            }
+        }
+        return (_, certificate, chain, errors) =>
+        {
+            if (certificate == null || (errors & SslPolicyErrors.RemoteCertificateNotAvailable) != 0) return false;
+            using var leaf = new X509Certificate2(certificate);
+            if (roots == null)
+            {
+                // SslStream built the chain against the system store; only the name (127.0.0.1) is expected to mismatch.
+                if ((errors & SslPolicyErrors.RemoteCertificateChainErrors) != 0) return false;
+            }
+            else
+            {
+                using var custom = new X509Chain();
+                custom.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+                custom.ChainPolicy.CustomTrustStore.AddRange(roots);
+                custom.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+                custom.ChainPolicy.ApplicationPolicy.Add(new Oid("1.3.6.1.5.5.7.3.1")); // server authentication
+                if (chain != null)
+                    foreach (var e in chain.ChainElements) custom.ChainPolicy.ExtraStore.Add(e.Certificate);
+                if (!custom.Build(leaf)) return false;
+            }
+            return leaf.MatchesHostname(host);
+        };
     }
 
     static MySqlSslMode MapSsl(TlsMode m) => m switch
@@ -107,8 +184,9 @@ public sealed class MySqlProvider : IDbProvider
             AllowUserVariables = true,
             AllowLoadLocalInfile = false,
             AllowPublicKeyRetrieval = false,
-            ConnectionTimeout = (uint)(p.TimeoutS ?? 15),
-            DefaultCommandTimeout = (uint)(p.CommandTimeoutS ?? 0),
+            // PT1-3: a negative value would wrap to 4294967295 s; it means the default instead (0 stays "no limit").
+            ConnectionTimeout = (uint)(p.TimeoutS is { } t && t >= 0 ? t : 15),
+            DefaultCommandTimeout = (uint)Math.Max(0, p.CommandTimeoutS ?? 0),
             ApplicationName = "Querithm",
             AllowZeroDateTime = true,
         };
@@ -117,25 +195,38 @@ public sealed class MySqlProvider : IDbProvider
         return b.ConnectionString;
     }
 
+    // Keywords ParseConnectionString maps onto profile fields (MySqlConnector's canonical spellings); anything else the
+    // driver knows is reported as not applied.
+    static readonly HashSet<string> Mapped = new(StringComparer.OrdinalIgnoreCase) { "Server", "Port", "User ID", "Password", "Database", "SSL Mode", "SSL CA" };
+
+    // MySqlConnector's documented spelling where Npgsql's differs (SslMode vs SSL Mode), and its default port.
+    static readonly HashSet<string> OwnSpellings = new(StringComparer.OrdinalIgnoreCase) { "SslMode", "SslCa" };
+    static readonly HashSet<string> Conventional = new(StringComparer.OrdinalIgnoreCase) { "Server", "Uid", "User ID", "User", "Pwd", "Password", "Database", "Port", "SslMode" };
+
+    public ConnectionStringAffinity ConnectionStringAffinity(IReadOnlyDictionary<string, string> keywords) => new(
+        ConnectionStringKeywords.CountKeys(keywords, OwnSpellings) + (ConnectionStringKeywords.HasPort(keywords, 3306) ? 1 : 0),
+        ConnectionStringKeywords.CountKeys(keywords, Conventional));
+
+    // MySqlConnector's ContainsKey is true only for a keyword already set; reading an unknown one throws ("Option 'x' not
+    // supported."), a known one gives its default.
+    static bool Knows(string keyword)
+    {
+        try { _ = new MySqlConnectionStringBuilder()[keyword]; return true; }
+        catch (ArgumentException) { return false; }
+    }
+
     public ParseConnectionStringResult ParseConnectionString(string connectionString, Profile basis)
     {
-        MySqlConnectionStringBuilder b;
-        try { b = new MySqlConnectionStringBuilder(connectionString); }
-        catch (Exception ex) when (ex is ArgumentException or FormatException or InvalidOperationException) { throw new ArgumentException(ex.Message); }
-        var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "server", "host", "data source", "port", "user id", "uid", "user", "username", "password", "pwd", "database", "initial catalog", "sslmode", "ssl mode", "sslca", "ssl-ca" };
-        var notApplied = new List<string>();
-        var unknown = new List<string>();
-        foreach (var key in ParseKeys(connectionString))
-        {
-            if (known.Contains(key)) continue;
-            if (b.ContainsKey(key)) notApplied.Add(key); else unknown.Add(key);
-        }
+        // ADO.NET quoting rules (shared with the other drivers): a quoted or braced value holding ";" or "=" stays whole, so
+        // no part of a password can turn up as an unknown keyword.
+        var k = ConnectionStringKeywords.Apply(connectionString, () => new MySqlConnectionStringBuilder(), Knows);
+        var b = k.Builder;
+        var notApplied = k.Named.Where(n => !Mapped.Contains(n)).ToList();
         // M3: the builder reads an absent SslMode as Preferred, so only a string that names it (any spelling the driver
-        // accepts: ContainsKey is true only for a key the string set) changes the mode; otherwise the editor's (VerifyFull
-        // by default) stays.
+        // accepts) changes the mode; otherwise the editor's (VerifyFull by default) stays.
         var tls = basis.TlsMode;
         var notes = new List<string>();
-        if (b.ContainsKey("SSL Mode"))
+        if (k.Has("SSL Mode"))
         {
             tls = b.SslMode switch { MySqlSslMode.Required => TlsMode.Require, MySqlSslMode.VerifyCA => TlsMode.VerifyCa, MySqlSslMode.None => TlsMode.Disable, MySqlSslMode.Preferred => TlsMode.Prefer, _ => TlsMode.Default };
             var setting = $"SslMode={b.SslMode}";
@@ -144,21 +235,38 @@ public sealed class MySqlProvider : IDbProvider
             else if (b.SslMode == MySqlSslMode.Required) notes.Add(WeakTls.CertNotChecked(setting));
             else if (b.SslMode == MySqlSslMode.VerifyCA) notes.Add(WeakTls.HostNotChecked(setting));
         }
+        if (k.Has("Server") && FailoverNote(b.Server) is { } failover) notes.Add(failover);
+        if (k.Has("SSL CA") && !string.IsNullOrEmpty(b.SslCa))
+            notes.Add($"SslCa={b.SslCa}: the server's certificate is checked against the CA file {b.SslCa} instead of the system's trusted CAs; remove it unless you know that file is your server's CA.");
+        int? PortOf() => b.Port == 3306 ? null : (int)b.Port;
+        // A field the string does not name keeps the editor's value (as PostgreSQL and SQL Server do); a new server
+        // without a port takes the default one.
+        var (host, port) = k.Has("Server") ? (b.Server, k.Has("Port") ? PortOf() : null)
+            : k.Has("Port") ? (basis.Host, PortOf())
+            : (basis.Host, basis.Port);
         var p = basis with
         {
-            Engine = Engine.MySql, Host = b.Server, Port = b.Port == 3306 ? null : (int)b.Port, Username = string.IsNullOrEmpty(b.UserID) ? basis.Username : b.UserID,
-            DatabaseDefault = string.IsNullOrEmpty(b.Database) ? basis.DatabaseDefault : b.Database, Auth = AuthKind.Password,
+            Engine = Engine.MySql, Host = host, Port = port, Username = k.Has("User ID") && !string.IsNullOrEmpty(b.UserID) ? b.UserID : basis.Username,
+            DatabaseDefault = k.Has("Database") && !string.IsNullOrEmpty(b.Database) ? b.Database : basis.DatabaseDefault, Auth = AuthKind.Password,
             TlsMode = tls,
-            CaPath = string.IsNullOrEmpty(b.SslCa) ? basis.CaPath : b.SslCa,
+            CaPath = k.Has("SSL CA") && !string.IsNullOrEmpty(b.SslCa) ? b.SslCa : basis.CaPath,
         };
         return new ParseConnectionStringResult
         {
-            Profile = p, Secret = string.IsNullOrEmpty(b.Password) ? null : b.Password, Unknown = unknown.ToArray(), NotApplied = notApplied.ToArray(), Notes = [.. notes],
+            Profile = p, Secret = k.Has("Password") && !string.IsNullOrEmpty(b.Password) ? b.Password : null, Unknown = [.. k.Unknown], NotApplied = [.. notApplied], Notes = [.. notes],
         };
     }
 
-    static IEnumerable<string> ParseKeys(string s) =>
-        s.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(part => part.Split('=', 2)[0].Trim()).Where(k => k.Length > 0);
+    /// <summary>
+    /// PT9-3: MySqlConnector tries each host of a comma-separated list, so decoys can hide the server actually used; the
+    /// note names every host.
+    /// </summary>
+    internal static string? FailoverNote(string? hostList)
+    {
+        if (hostList == null || !hostList.Contains(',')) return null;
+        var hosts = hostList.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        return $"This connection string names {hosts.Length} servers, tried until one answers: {string.Join(", ", hosts)}. Check that each one is a server you mean to use.";
+    }
 
     /// <summary>
     /// The protocol names each column's database, table and column as stored (org_table / org_name), so origins are exact.
@@ -186,7 +294,19 @@ public sealed class MySqlProvider : IDbProvider
 
     public async Task<DbConnection> OpenAsync(Profile profile, string? secret, string? database, FileGrant? file, CancellationToken ct)
     {
-        var c = new MySqlConnection(BuildConnectionString(profile, secret, database));
+        var connectionString = BuildConnectionString(profile, secret, database);
+        RemoteCertificateValidationCallback? verify = null;
+        if (TunnelTlsHost(profile) is { } realHost)
+        {
+            // Through an SSH forward: VerifyFull against the real name (PT5-4). The callback does the whole check
+            // (VerifyFullFor); MySqlConnector consults it only in Required mode.
+            verify = VerifyFullFor(realHost, profile.CaPath);
+            var b = new MySqlConnectionStringBuilder(connectionString) { SslMode = MySqlSslMode.Required };
+            b.Remove("SslCa");
+            connectionString = b.ConnectionString;
+        }
+        var c = new MySqlConnection(connectionString);
+        if (verify != null) c.RemoteCertificateValidationCallback = verify;
         try
         {
             await c.OpenAsync(ct).ConfigureAwait(false);
@@ -205,7 +325,7 @@ public sealed class MySqlProvider : IDbProvider
 
     public Task ChangeDatabaseAsync(DbConnection connection, string database, CancellationToken ct) => ((MySqlConnection)connection).ChangeDatabaseAsync(database, ct);
     public string? CurrentDatabase(DbConnection connection) => string.IsNullOrEmpty(connection.Database) ? null : connection.Database;
-    public string ServerVersion(DbConnection connection) => $"{Product(connection).Name} {connection.ServerVersion}";
+    public string ServerVersion(DbConnection connection) => $"{Product(connection).Name} {Product(connection).Version}";
     public Task<int?> GetSpidAsync(DbConnection connection, CancellationToken ct) => Task.FromResult<int?>(((MySqlConnection)connection).ServerThread);
 
     /// <summary>

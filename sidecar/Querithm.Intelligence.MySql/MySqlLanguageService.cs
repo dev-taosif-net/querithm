@@ -101,10 +101,10 @@ public sealed class MySqlLanguageService(MySqlLexMode? mode = null) : IDialectSe
                 case "ALTER":
                     destructive.Add(Finding("alter", stmtText, code[0], "ALTER changes the definition (and commits)."));
                     break;
-                case "DELETE" when !HasTopLevel(code, verb, "WHERE"):
+                case "DELETE" when !HasTopLevel(code, verb, "WHERE", needsOperand: true):
                     destructive.Add(Finding("deleteWithoutWhere", stmtText, code[0], "DELETE without WHERE removes every row."));
                     break;
-                case "UPDATE" when !HasTopLevel(code, verb, "WHERE"):
+                case "UPDATE" when !HasTopLevel(code, verb, "WHERE", needsOperand: true):
                     destructive.Add(Finding("updateWithoutWhere", stmtText, code[0], "UPDATE without WHERE changes every row."));
                     break;
                 case "USE" when code.Count > 1:
@@ -194,18 +194,23 @@ public sealed class MySqlLanguageService(MySqlLexMode? mode = null) : IDialectSe
         return "WITH";
     }
 
-    /// <summary>The keyword appears at parenthesis depth 0 after the verb.</summary>
-    public static bool HasTopLevel(IReadOnlyList<MySqlToken> code, string verb, string keyword)
+    /// <summary>
+    /// The keyword appears at parenthesis depth 0 after the verb. With <paramref name="needsOperand"/> (WHERE), only a keyword
+    /// some code follows counts (PT7-1 safety net): a WHERE that ends the statement is not a condition, whatever the
+    /// tokenizer made of the text before it.
+    /// </summary>
+    public static bool HasTopLevel(IReadOnlyList<MySqlToken> code, string verb, string keyword, bool needsOperand = false)
     {
         var depth = 0;
         var seenVerb = false;
-        foreach (var t in code)
+        for (var i = 0; i < code.Count; i++)
         {
+            var t = code[i];
             if (t.IsP("(")) { depth++; continue; }
             if (t.IsP(")")) { depth--; continue; }
             if (depth != 0) continue;
             if (!seenVerb) { seenVerb = t.Is(verb); continue; }
-            if (t.Is(keyword)) return true;
+            if (t.Is(keyword) && (!needsOperand || (i + 1 < code.Count && !code[i + 1].IsTrivia && !code[i + 1].IsP(";")))) return true;
         }
         return false;
     }

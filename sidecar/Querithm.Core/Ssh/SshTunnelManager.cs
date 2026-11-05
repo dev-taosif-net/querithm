@@ -123,7 +123,7 @@ public sealed class SshTunnelManager(KnownHosts known, ILogger log) : IAsyncDisp
         var s = p.Ssh ?? throw QuerithmException.Invalid("The profile has no SSH settings.");
         var port = s.Port is > 0 ? s.Port.Value : 22;
         LogScrubber.RegisterSecret(sshSecret);
-        var info = new ConnectionInfo(s.Host, port, s.Username, Authentication(s, sshSecret)) { Timeout = TimeSpan.FromSeconds(Math.Max(1, p.TimeoutS ?? 15)) };
+        var info = Harden(new ConnectionInfo(s.Host, port, s.Username, Authentication(s, sshSecret)) { Timeout = TimeSpan.FromSeconds(Math.Max(1, p.TimeoutS ?? 15)) });
         var client = new SshClient(info) { KeepAliveInterval = TimeSpan.FromSeconds(30) };
         SshHostKey? untrusted = null;
         client.HostKeyReceived += (_, e) =>
@@ -187,6 +187,26 @@ public sealed class SshTunnelManager(KnownHosts known, ILogger log) : IAsyncDisp
         return tunnel;
     }
 
+    /// <summary>
+    /// PT5-5: what SSH.NET offers by default minus SHA-1 key exchange, ssh-rsa / ssh-dss host keys (SHA-1 signatures; an
+    /// RSA key is still accepted through rsa-sha2-256 / -512), CBC and RC4 ciphers, SHA-1 / MD5 MACs and compression (a
+    /// MITM picks the weakest both sides offer). What is left (curve25519 / ECDH / DH group14-sha256+ key exchange,
+    /// Ed25519 / ECDSA / RSA-SHA2 host keys, AES-CTR / AES-GCM / ChaCha20-Poly1305, HMAC-SHA2) is what OpenSSH 8.8+ offers.
+    /// </summary>
+    internal static ConnectionInfo Harden(ConnectionInfo info)
+    {
+        static void Drop<T>(IOrderedDictionary<string, T> algorithms, Func<string, bool> weak)
+        {
+            foreach (var name in algorithms.Keys.Where(weak).ToList()) algorithms.Remove(name);
+        }
+        Drop(info.KeyExchangeAlgorithms, a => a.EndsWith("-sha1", StringComparison.Ordinal) || a.Contains("sha1@", StringComparison.Ordinal) || a.StartsWith("diffie-hellman-group1-", StringComparison.Ordinal));
+        Drop(info.HostKeyAlgorithms, a => a.StartsWith("ssh-rsa", StringComparison.Ordinal) || a.StartsWith("ssh-dss", StringComparison.Ordinal));
+        Drop(info.Encryptions, a => a.EndsWith("-cbc", StringComparison.Ordinal) || a.Contains("-cbc@", StringComparison.Ordinal) || a.StartsWith("arcfour", StringComparison.Ordinal) || a.StartsWith("3des", StringComparison.Ordinal));
+        Drop(info.HmacAlgorithms, a => a.StartsWith("hmac-sha1", StringComparison.Ordinal) || a.StartsWith("hmac-md5", StringComparison.Ordinal) || a.StartsWith("hmac-ripemd", StringComparison.Ordinal));
+        Drop(info.CompressionAlgorithms, a => a != "none");
+        return info;
+    }
+
     static AuthenticationMethod[] Authentication(SshSettings s, string? secret)
     {
         switch (s.Auth)
@@ -222,6 +242,14 @@ public sealed class SshTunnelManager(KnownHosts known, ILogger log) : IAsyncDisp
         catch (SshPassPhraseNullOrEmptyException)
         {
             throw new QuerithmException("sshNeedsSecret", $"The SSH key {Path.GetFileName(path)} is protected by a passphrase. Enter it to connect.");
+        }
+        // An encrypted PKCS#8 or legacy PEM ("ssh-keygen -m PEM") key decrypted with no or the wrong passphrase: the cipher
+        // reports bad padding ("pad block corrupted", "Padding is invalid…"), which says nothing to the user.
+        catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException or Org.BouncyCastle.Crypto.CryptoException)
+        {
+            if (string.IsNullOrEmpty(passphrase))
+                throw new QuerithmException("sshNeedsSecret", $"The SSH key {Path.GetFileName(path)} is protected by a passphrase. Enter it to connect.");
+            throw new QuerithmException("sshKey", $"The SSH key {Path.GetFileName(path)} could not be used: the passphrase is wrong, or the key is damaged or in a format that is not supported.");
         }
         catch (Exception ex) when (ex is SshException or InvalidOperationException or ArgumentException or FormatException or NotSupportedException or IOException)
         {

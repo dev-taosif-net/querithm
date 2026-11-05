@@ -80,6 +80,7 @@ public sealed class SqliteSecurityTests : IAsyncDisposable
     [InlineData("PRAGMA journal_mode = OFF")]
     [InlineData("PRAGMA temp_store_directory = '/tmp'")]
     [InlineData("PRAGMA main.schema_version = 1")]
+    [InlineData("PRAGMA temp_store = FILE")]
     public async Task Security_and_file_pragmas_cannot_be_changed(string sql)
     {
         await using var c = await OpenAsync(_h.NewDatabase(), FileAccessMode.ReadWrite);

@@ -104,11 +104,15 @@ public sealed class SessionManager : IAsyncDisposable
             case LocationKind.File when !_fileGrants.ContainsKey(profile.Id): return false;
         }
         if (ProfileRules.NeedsSecret(profile)) return HasCredentials(profile.Id);
-        return !ProfileRules.Interactive(profile.Auth) || _signedIn.ContainsKey(profile.Id);
+        // PT10-1: a sign-in counts only for the settings it was made with (host, user, tenant…): an edit asks again.
+        return !ProfileRules.Interactive(profile.Auth) || (_signedIn.TryGetValue(profile.Id, out var by) && SameConnectionSettings(by, profile));
     }
 
-    /// <summary>Profiles whose browser or device-code sign-in succeeded in this sidecar (the driver caches the token).</summary>
-    readonly ConcurrentDictionary<string, byte> _signedIn = new();
+    /// <summary>
+    /// Profiles whose browser or device-code sign-in succeeded in this sidecar (the driver caches the token), with the
+    /// profile it succeeded for.
+    /// </summary>
+    readonly ConcurrentDictionary<string, Profile> _signedIn = new();
 
     /// <summary>File grants the shell injected at session.open / profile.test (Phase D0c); in memory only, never stored.</summary>
     readonly ConcurrentDictionary<string, FileGrant> _fileGrants = new();
@@ -253,7 +257,7 @@ public sealed class SessionManager : IAsyncDisposable
             return opened;
         }
         var conn = await OpenTransportAsync(profile, provider, secret, sshSecret, database, ct, tunnel).ConfigureAwait(false);
-        if (ProfileRules.Interactive(profile.Auth) && !string.IsNullOrEmpty(profile.Id)) _signedIn.TryAdd(profile.Id, 0);
+        if (ProfileRules.Interactive(profile.Auth) && !string.IsNullOrEmpty(profile.Id)) _signedIn[profile.Id] = profile;
         return conn;
     }
 
@@ -402,20 +406,65 @@ public sealed class SessionManager : IAsyncDisposable
 
     public IEnumerable<Session> All => _sessions.Values;
 
-    public Pool PoolFor(Profile profile, IDbProvider provider, string? database)
+    /// <summary>The refusal for a tab (or a helper working for it) whose profile's connection settings were edited since it opened.</summary>
+    public const string ProfileChangedMessage = "The connection settings of this profile changed: reconnect the tab.";
+
+    static QuerithmException ProfileChanged() => new("profileChanged", ProfileChangedMessage);
+
+    /// <summary>
+    /// The settings a connection is built from — where it goes, as whom and how (engine, location, file, host, port, sign-in,
+    /// user, TLS, SSH, options). Not the name, colour, environment, retention, timeouts or default database: those never send
+    /// a connection somewhere else.
+    /// </summary>
+    public static bool SameConnectionSettings(Profile a, Profile b) =>
+        a.Id == b.Id && a.Engine == b.Engine && (a.Location ?? LocationKind.Server) == (b.Location ?? LocationKind.Server) && a.File == b.File
+        && a.Host == b.Host && a.Port == b.Port && a.Auth == b.Auth && a.Username == b.Username
+        && a.TlsMode == b.TlsMode && a.TrustCert == b.TrustCert && a.CaPath == b.CaPath && a.Ssh == b.Ssh
+        && (a.Options ?? []).OrderBy(kv => kv.Key, StringComparer.Ordinal).SequenceEqual((b.Options ?? []).OrderBy(kv => kv.Key, StringComparer.Ordinal));
+
+    /// <summary>
+    /// PT10-1: the profile a pool is built from is the STORED one, never a caller's copy. A copy whose connection settings
+    /// differ from the stored profile (a tab opened before a host edit) is refused: its connections would go to the old
+    /// server with the current secret, or serve a new tab from the old server. A profile that is not stored (tests, a
+    /// deleted profile whose tabs are closing) is used as given.
+    /// </summary>
+    Profile Current(Profile snapshot)
     {
-        // Phase D0e: exact names — PostgreSQL's "Sales" and "sales" are two databases and never share a pool.
-        var key = provider.DatabaseScopedConnections ? $"{profile.Id}|{database}" : profile.Id;
-        return _pools.GetOrAdd(key, k =>
-        {
-            var pool = new Pool(k, profile, provider, provider.DatabaseScopedConnections ? database : null,
-                (db, ct) => OpenConnectionAsync(profile, provider, SecretFor(profile.Id), SshSecretFor(profile.Id), db, ct), MaxPerProfile, _log, TransportAlive,
-                ReidentifyAsync);
-            pool.Opened += Registry.Attach;
-            return pool;
-        });
+        if (string.IsNullOrEmpty(snapshot.Id) || Stored(snapshot.Id) is not { } stored) return snapshot;
+        return SameConnectionSettings(snapshot, stored) ? stored : throw ProfileChanged();
     }
 
+    /// <summary>
+    /// The pool for the profile's current settings. Keyed by the profile's credential epoch (bumped by every
+    /// <see cref="ForgetPools"/>: an edit, a new secret, a changed grant), so a pool built before an edit is never found
+    /// again under the current key; one created by a borrow that raced the edit is removed here instead of being shared.
+    /// Nothing here waits or does I/O.
+    /// </summary>
+    public Pool PoolFor(Profile profile, IDbProvider provider, string? database)
+    {
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var epoch = CredentialEpoch(profile.Id);
+            var current = Current(profile);
+            // Phase D0e: exact names — PostgreSQL's "Sales" and "sales" are two databases and never share a pool.
+            var key = provider.DatabaseScopedConnections ? $"{profile.Id}#{epoch}|{database}" : $"{profile.Id}#{epoch}";
+            var pool = _pools.GetOrAdd(key, k =>
+            {
+                var created = new Pool(k, current, provider, provider.DatabaseScopedConnections ? database : null,
+                    (db, ct) => OpenConnectionAsync(current, provider, SecretFor(current.Id), SshSecretFor(current.Id), db, ct), MaxPerProfile, _log, TransportAlive,
+                    ReidentifyAsync);
+                created.Opened += Registry.Attach;
+                return created;
+            });
+            if (CredentialEpoch(profile.Id) == epoch && SameConnectionSettings(pool.Profile, Current(profile))) return pool;
+            // An edit or a new secret landed meanwhile: this pool belongs to the old settings (busy connections finish and
+            // are dropped on return).
+            if (_pools.TryRemove(new KeyValuePair<string, Pool>(key, pool))) _ = pool.CloseAllAsync();
+        }
+        throw ProfileChanged();
+    }
+
+    /// <summary>The pool for a pooled session; refused once its profile's connection settings changed (PT10-1).</summary>
     public Pool PoolFor(Session s) => PoolFor(s.Profile, s.Provider, s.Database);
 
     /// <summary>
@@ -516,6 +565,10 @@ public sealed class SessionManager : IAsyncDisposable
             }
             return (owned, false);
         }
+        // PT10-1: a tab opened before its profile's connection settings were edited gets no new connection: neither to the
+        // old server (with the current secret) nor silently to the new one (its transaction and state belong to the old).
+        // Its pinned connection (an open transaction) stays usable above, so the user can still commit or roll back.
+        if (Stored(s.Profile.Id) is { } stored && !SameConnectionSettings(s.Profile, stored)) throw ProfileChanged();
         if (!HasCredentials(s.Profile.Id) && NeedsSecret(s.Profile))
             throw new QuerithmException("needsSecret", "The connection's credentials are not loaded. Reconnect the profile.");
         var conn = await PoolFor(s).BorrowAsync(s.Database, onQueued, ct).ConfigureAwait(false);

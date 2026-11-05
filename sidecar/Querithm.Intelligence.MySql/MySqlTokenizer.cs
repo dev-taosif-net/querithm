@@ -1,3 +1,5 @@
+using Querithm.Intelligence.PgSql;
+
 namespace Querithm.Intelligence.MySql;
 
 public enum MySqlTokenKind { Word, QuotedIdent, String, Number, Operator, Punct, Comment, Hint, Whitespace, Param, Variable }
@@ -45,9 +47,11 @@ public static class MySqlTokenizer
             var startLine = line;
             var c = s[i];
             MySqlTokenKind kind;
-            if (char.IsWhiteSpace(c))
+            // PT7-1: the server's character classes (SqlChars) — ASCII whitespace only, every multibyte character an
+            // identifier character (utf8mb4), so "a<U+00A0>WHERE" is one name here as it is to the server.
+            if (SqlChars.IsSpace(c))
             {
-                while (i < s.Length && char.IsWhiteSpace(s[i])) { if (s[i] == '\n') line++; i++; }
+                while (i < s.Length && SqlChars.IsSpace(s[i])) { if (s[i] == '\n') line++; i++; }
                 kind = MySqlTokenKind.Whitespace;
             }
             else if (inExecutable > 0 && c == '*' && At(s, i + 1) == '/')
@@ -56,7 +60,7 @@ public static class MySqlTokenizer
                 inExecutable--;
                 kind = MySqlTokenKind.Comment; // the executable comment's closing marker
             }
-            else if (c == '#' || (c == '-' && At(s, i + 1) == '-' && (i + 2 >= s.Length || char.IsWhiteSpace(s[i + 2]) || char.IsControl(s[i + 2]))))
+            else if (c == '#' || (c == '-' && At(s, i + 1) == '-' && (i + 2 >= s.Length || DashCommentEnd(s[i + 2]))))
             {
                 while (i < s.Length && s[i] != '\n') i++;
                 kind = MySqlTokenKind.Comment;
@@ -65,7 +69,7 @@ public static class MySqlTokenizer
             {
                 // Executable comment: the marker (and version number) is trivia; what follows is code.
                 i += At(s, i + 2) == '!' ? 3 : 4;
-                while (i < s.Length && char.IsDigit(s[i])) i++;
+                while (i < s.Length && SqlChars.IsDigit(s[i])) i++;
                 inExecutable++;
                 kind = MySqlTokenKind.Comment;
             }
@@ -90,14 +94,14 @@ public static class MySqlTokenizer
             else if (c == '@' && At(s, i + 1) == '@')
             {
                 i += 2;
-                while (i < s.Length && (char.IsLetterOrDigit(s[i]) || s[i] is '_' or '.' or '$')) i++;
+                while (i < s.Length && (SqlChars.IsIdentPart(s[i]) || s[i] == '.')) i++;
                 kind = MySqlTokenKind.Variable;
             }
             else if (c == '@')
             {
                 i++;
                 if (i < s.Length && s[i] is '`' or '\'' or '"') i = Quoted(s, i, s[i], false, ref line);
-                else while (i < s.Length && (char.IsLetterOrDigit(s[i]) || s[i] is '_' or '.' or '$')) i++;
+                else while (i < s.Length && (SqlChars.IsIdentPart(s[i]) || s[i] == '.')) i++;
                 kind = MySqlTokenKind.Variable;
             }
             else if (c == '?')
@@ -105,14 +109,14 @@ public static class MySqlTokenizer
                 i++;
                 kind = MySqlTokenKind.Param;
             }
-            else if (char.IsLetter(c) || c is '_' or '$')
+            else if (SqlChars.IsIdentStart(c) || c == '$')
             {
-                while (i < s.Length && (char.IsLetterOrDigit(s[i]) || s[i] is '_' or '$')) i++;
+                while (i < s.Length && SqlChars.IsIdentPart(s[i])) i++;
                 kind = MySqlTokenKind.Word;
             }
-            else if (char.IsDigit(c) || (c == '.' && i + 1 < s.Length && char.IsDigit(s[i + 1])))
+            else if (SqlChars.IsDigit(c) || (c == '.' && i + 1 < s.Length && SqlChars.IsDigit(s[i + 1])))
             {
-                while (i < s.Length && (char.IsLetterOrDigit(s[i]) || s[i] == '.' || ((s[i] is '+' or '-') && s[i - 1] is 'e' or 'E'))) i++;
+                while (i < s.Length && (SqlChars.IsNumberPart(s[i]) || s[i] == '$' || ((s[i] is '+' or '-') && s[i - 1] is 'e' or 'E'))) i++;
                 kind = MySqlTokenKind.Number;
             }
             else if (c is '(' or ')' or ',' or ';')
@@ -126,7 +130,7 @@ public static class MySqlTokenizer
                 {
                     if (s[i] == '/' && At(s, i + 1) == '*') break;
                     if (inExecutable > 0 && s[i] == '*' && At(s, i + 1) == '/') break;
-                    if (s[i] == '-' && At(s, i + 1) == '-' && (i + 2 >= s.Length || char.IsWhiteSpace(s[i + 2]))) break;
+                    if (s[i] == '-' && At(s, i + 1) == '-' && (i + 2 >= s.Length || DashCommentEnd(s[i + 2]))) break;
                     i++;
                 }
                 if (i == start) i++;
@@ -150,6 +154,12 @@ public static class MySqlTokenizer
     }
 
     static char At(string s, int i) => i < s.Length ? s[i] : '\0';
+
+    /// <summary>
+    /// What makes "--" a comment: the server's my_isspace or my_iscntrl on the next byte — ASCII whitespace and ASCII
+    /// control characters (a multibyte character's lead byte is neither).
+    /// </summary>
+    static bool DashCommentEnd(char c) => c < ' ' || c == '\u007F' || SqlChars.IsSpace(c);
 
     public static string Unquote(MySqlToken t) => t.Kind != MySqlTokenKind.QuotedIdent || t.Text.Length < 2 ? t.Text : t.Text[0] switch
     {
@@ -238,7 +248,7 @@ public static class MySqlSplitter
         for (var i = offset - 1; i >= 0; i--)
         {
             if (text[i] == '\n') return true;
-            if (!char.IsWhiteSpace(text[i])) return false;
+            if (!SqlChars.IsSpace(text[i])) return false;
         }
         return true;
     }

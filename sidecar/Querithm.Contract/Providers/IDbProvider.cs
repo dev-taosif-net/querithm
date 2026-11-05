@@ -105,6 +105,13 @@ public interface IDbProvider
     ParseConnectionStringResult ParseConnectionString(string connectionString, Profile basis);
 
     /// <summary>
+    /// How typical a pasted connection string is of this engine, used only to rank drivers that read it equally well
+    /// (Npgsql and MySqlConnector both accept Server / User ID / Port / Database). <paramref name="keywords"/> is the string
+    /// split with ADO.NET quoting rules (case-insensitive keys, as typed); nothing here throws. None by default.
+    /// </summary>
+    ConnectionStringAffinity ConnectionStringAffinity(IReadOnlyDictionary<string, string> keywords) => default;
+
+    /// <summary>
     /// The table column behind each column of the current result set (null where computed or unknown), used to
     /// mark keys in the grid. Exact or nothing: a guess would label the wrong column. <paramref name="resultInBatch"/>
     /// counts the batch's data result sets from 0.

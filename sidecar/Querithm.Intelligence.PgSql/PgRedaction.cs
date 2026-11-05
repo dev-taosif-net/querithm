@@ -5,14 +5,19 @@ namespace Querithm.Intelligence.PgSql;
 /// <summary>
 /// L4 on PostgreSQL tokens: <c>[ENCRYPTED] PASSWORD '…'</c> (CREATE / ALTER ROLE and USER), <c>password '…'</c> in
 /// user-mapping and server options, a subscription's <c>CONNECTION '…'</c> (its conninfo carries the password), and the
-/// pgcrypto functions' password arguments. DuckDB reuses the token mapping with its own rules.
+/// pgcrypto functions' password arguments, and a dblink conninfo that holds a credential. DuckDB reuses the token mapping with its own rules.
 /// </summary>
 public static class PgRedaction
 {
     static readonly SecretRules Rules = new()
     {
         SecretNames = new HashSet<string> { "CONNECTION" },
-        Triggers = ["CONNECTION"],
+        Triggers = ["CONNECTION", "DBLINK"],
+        // dblink's conninfo (or a connection name: the first argument may be either).
+        ConnectionArguments = new Dictionary<string, int[]>
+        {
+            ["DBLINK_CONNECT"] = [0, 1], ["DBLINK_CONNECT_U"] = [0, 1], ["DBLINK"] = [0], ["DBLINK_EXEC"] = [0],
+        },
         SecretArguments = new Dictionary<string, int[]>
         {
             ["CRYPT"] = [0], ["PGP_SYM_ENCRYPT"] = [1], ["PGP_SYM_DECRYPT"] = [1], ["PGP_SYM_ENCRYPT_BYTEA"] = [1], ["PGP_SYM_DECRYPT_BYTEA"] = [1],

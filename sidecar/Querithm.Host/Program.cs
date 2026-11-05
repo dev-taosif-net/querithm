@@ -219,6 +219,8 @@ using var rpc = new QuerithmJsonRpc(handler);
 // L10: bench.* only for the bench / smoke harnesses, which launch the engine with QUERITHM_BENCH=1 (§14).
 rpc.AddMethods(new RpcServer(services, () => exit.TrySetResult()), bench: Environment.GetEnvironmentVariable("QUERITHM_BENCH") == "1");
 notifier.Attach(rpc);
+// PT8-5: a malformed message no longer closes the control plane (GuardedJsonFormatter); when it does close, the log says why.
+rpc.Disconnected += (_, e) => log.LogInformation("Control plane closed: {Reason}", e.Reason);
 rpc.StartListening();
 
 await Task.WhenAny(rpc.Completion, exit.Task);

@@ -4,6 +4,7 @@
 import type { Profile } from "../ipc/contract";
 import { engineTraits } from "../engines";
 import { isLocal } from "./auth";
+import { escapeForDisplay } from "../monitor/format";
 
 type AddressFacts = Pick<Profile, "engine" | "location" | "host" | "port">;
 
@@ -26,5 +27,6 @@ export function serverAddressLine(p: (AddressFacts & Pick<Profile, "ssh">) | und
   const addr = serverAddress(p);
   if (!addr) return undefined;
   const ssh = p?.ssh?.host?.trim();
-  return `Server ${addr}${ssh ? ` via SSH ${ssh}` : ""}`;
+  // Shown in tooltips: invisible and bidi characters are escaped, so a host cannot reorder or forge a line (S4).
+  return `Server ${escapeForDisplay(addr)}${ssh ? ` via SSH ${escapeForDisplay(ssh)}` : ""}`;
 }

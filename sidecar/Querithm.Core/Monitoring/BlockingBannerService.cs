@@ -79,7 +79,11 @@ public sealed class BlockingBannerService : IAsyncDisposable
                     _notifier.Notify("session.blocking", new SessionBlockingEvent { SessionId = s.Id, Source = "check",
                         Unavailable = "This connection's server did not return its own session identity, so Querithm cannot tell whether it blocks other sessions." });
             if (ids.Count == 0) continue;
-            var pool = _sessions.PoolFor(idle[0].Session);
+            Pool pool;
+            // A tab still open from before its profile's connection settings changed is refused a pool (PT10-1): only that
+            // profile is skipped this cycle, never the other profiles' banners.
+            try { pool = _sessions.PoolFor(idle[0].Session); }
+            catch (QuerithmException q) when (q.Code == "profileChanged") { continue; }
             PhysicalConnection conn;
             // Read before the open: a failure counts against the credentials it was made with, not a newer secret.
             var epochAtOpen = _sessions.CredentialEpoch(group.Key);

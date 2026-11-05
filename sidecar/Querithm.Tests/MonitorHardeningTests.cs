@@ -22,6 +22,7 @@ public class MonitorHardeningTests
         public FakeDbProvider Provider { get; } = new();
         public FakeActivity Activity { get; } = new();
         public Profile Profile { get; }
+        public ProfileStore Profiles { get; }
         public SessionManager Sessions { get; }
         public CapturingNotifier Notifier { get; } = new();
         public FakeMonitorClock Clock { get; } = new();
@@ -32,7 +33,7 @@ public class MonitorHardeningTests
         public Rig(Contract.Providers.ISchemaSource? schema = null)
         {
             Provider.Activity = Activity;
-            var profiles = new ProfileStore(LocalStore.InMemory());
+            var profiles = Profiles = new ProfileStore(LocalStore.InMemory());
             Profile = profiles.Save(new Profile { Id = "", Name = "fake", Engine = Engine.Mssql, Host = "h", Auth = AuthKind.Sql, Username = "u" });
             Sessions = new SessionManager(profiles, new ProviderRegistry([Provider]), Notifier, Querithm.Tests.Log.Null);
             Sessions.RememberSecret(Profile.Id, "x");
@@ -260,6 +261,21 @@ public class MonitorHardeningTests
         await banner.RunCycleAsync(CancellationToken.None);
         Assert.Equal(2, banner.Checks);
         Assert.Equal(pool.Total, pool.IdleCount + 1);
+    });
+
+    [Fact]
+    public Task PT10_1_a_tab_from_before_a_host_edit_skips_its_banner_check_and_the_cycle_goes_on() => Sim(async () =>
+    {
+        // The pool of a tab whose profile's connection settings changed is refused (PT10-1). The banner borrowed it outside
+        // its try, so the refusal ended the whole cycle (every profile's banner) every 10 s until the transaction ended.
+        await using var rig = new Rig();
+        var banner = new BlockingBannerService(rig.Sessions, rig.Notifier, Querithm.Tests.Log.Null, _ => false, timer: false);
+        var s = rig.Sessions.Get(rig.Sessions.Open(new SessionOpenParams { ProfileId = rig.Profile.Id, Secret = "x" }).SessionId);
+        await rig.Sessions.TxAsync(s.Id, "begin", CancellationToken.None);
+        rig.Profiles.Save(rig.Profile with { Host = "h2" });
+        rig.Sessions.ForgetPools(rig.Profile.Id);
+        await banner.RunCycleAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10)); // no throw
+        Assert.DoesNotContain(rig.Provider.Opened, c => c.Log.Any(l => l.StartsWith("FAKE blockedBy", StringComparison.Ordinal)));
     });
 
     // ------------------------------------------------------------------ kill

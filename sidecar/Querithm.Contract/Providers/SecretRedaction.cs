@@ -24,7 +24,38 @@ public readonly record struct Redaction(string Text, IReadOnlyList<string> Secre
     {
         if (string.IsNullOrEmpty(message)) return message;
         foreach (var s in Secrets) message = message.Replace(s, "***", StringComparison.Ordinal);
+        foreach (var s in Secrets) if (s.Length > TruncatedPrefix) message = MaskTruncated(message, s);
         return message;
+    }
+
+    /// <summary>The shortest cut-off start of a secret <see cref="Mask"/> still masks (PT6-9).</summary>
+    public const int TruncatedPrefix = 8;
+
+    /// <summary>
+    /// PT6-9: an engine error may quote a window of the statement that cuts the secret short (MySQL 1064's
+    /// <c>near '%.80s'</c>): a start of <paramref name="secret"/>, at least <see cref="TruncatedPrefix"/> characters long,
+    /// that runs to a quote or to the end of the message, is masked too.
+    /// </summary>
+    static string MaskTruncated(string message, string secret)
+    {
+        var head = secret[..TruncatedPrefix];
+        var at = message.IndexOf(head, StringComparison.Ordinal);
+        if (at < 0) return message;
+        var sb = new StringBuilder();
+        var from = 0;
+        while (at >= 0)
+        {
+            var n = TruncatedPrefix;
+            while (n < secret.Length && at + n < message.Length && message[at + n] == secret[n]) n++;
+            var end = at + n;
+            if (end == message.Length || message[end] is '\'' or '"' or '`')
+            {
+                sb.Append(message, from, at - from).Append("***");
+                from = end;
+            }
+            at = message.IndexOf(head, Math.Max(end, at + 1), StringComparison.Ordinal);
+        }
+        return sb.Append(message, from, message.Length - from).ToString();
     }
 }
 
@@ -35,6 +66,11 @@ public sealed class SecretRules
     public IReadOnlySet<string> SecretNames { get; init; } = new HashSet<string>();
     /// <summary>Functions whose argument at each 0-based position is a secret when it is a string literal; upper case.</summary>
     public IReadOnlyDictionary<string, int[]> SecretArguments { get; init; } = new Dictionary<string, int[]>();
+    /// <summary>
+    /// Functions whose argument at each 0-based position is a connection string (OPENROWSET, dblink …): masked whole when it
+    /// is a string literal that holds a credential (<see cref="SecretRedaction.HoldsCredential"/>); upper case.
+    /// </summary>
+    public IReadOnlyDictionary<string, int[]> ConnectionArguments { get; init; } = new Dictionary<string, int[]>();
     /// <summary>T-SQL system procedures called without parentheses: secret positional arguments and named parameters; upper case.</summary>
     public IReadOnlyDictionary<string, (int[] Positions, string[] Parameters)> SecretProcedures { get; init; } = new Dictionary<string, (int[], string[])>();
     /// <summary>MySQL / MariaDB: <c>IDENTIFIED [WITH plugin] BY | AS 'x'</c>, <c>IDENTIFIED VIA plugin USING 'x'</c>, <c>REPLACE 'old'</c>, and <c>SET PASSWORD FOR u = 'x'</c>.</summary>
@@ -97,17 +133,21 @@ public static class SecretRedaction
         for (var i = 0; i < tokens.Count; i++)
         {
             var t = tokens[i];
-            if (t.Named && NamesSecret(t.Name, rules) && ValueAfterName(tokens, i) is var v and >= 0) secret.Add(v);
+            if (t.Named && NamesSecret(t.Name, rules) && ValueAfterName(tokens, i) is var v and >= 0) AddRun(tokens, v, secret);
             if (t.Kind == RedactTokenKind.Word && i + 1 < tokens.Count && tokens[i + 1].IsP("(")
                 && rules.SecretArguments.TryGetValue(t.Name.ToUpperInvariant(), out var positions))
-                foreach (var a in Arguments(tokens, i + 2, ")")) if (positions.Contains(a.Position) && a.Single is { } s) secret.Add(s);
+                foreach (var a in Arguments(tokens, i + 2, ")")) if (positions.Contains(a.Position) && a.Single is { } s) AddRun(tokens, s, secret);
+            if (t.Kind == RedactTokenKind.Word && i + 1 < tokens.Count && tokens[i + 1].IsP("(")
+                && rules.ConnectionArguments.TryGetValue(t.Name.ToUpperInvariant(), out var connections))
+                foreach (var a in Arguments(tokens, i + 2, ")"))
+                    if (connections.Contains(a.Position) && a.Single is { } s && Run(tokens, s).Any(k => HoldsCredential(tokens[k].Text))) AddRun(tokens, s, secret);
             if (t.Kind is RedactTokenKind.Word or RedactTokenKind.QuotedName && rules.SecretProcedures.TryGetValue(t.Name.ToUpperInvariant(), out var proc)
                 && !(i + 1 < tokens.Count && (tokens[i + 1].IsP("(") || tokens[i + 1].IsP("."))))
                 foreach (var a in Arguments(tokens, i + 1, null))
                     if ((a.Parameter == null ? proc.Positions.Contains(a.Position) : proc.Parameters.Contains(a.Parameter.TrimStart('@').ToUpperInvariant())) && a.Single is { } s)
-                        secret.Add(s);
+                        AddRun(tokens, s, secret);
             if (rules.IdentifiedBy) Identified(tokens, i, secret);
-            if (rules.Extra?.Invoke(tokens, i) is int x and >= 0) secret.Add(x);
+            if (rules.Extra?.Invoke(tokens, i) is int x and >= 0) AddRun(tokens, x, secret);
         }
         if (secret.Count == 0) return new Redaction(text, []);
         var sb = new StringBuilder(text);
@@ -121,6 +161,40 @@ public static class SecretRedaction
             sb.Remove(t.Offset, t.Length).Insert(t.Offset, t.Offset > 0 && OperatorChars.Contains(text[t.Offset - 1]) ? " " + Mask : Mask);
         }
         return new Redaction(sb.ToString(), values.Where(v => v.Length >= 3).Distinct().OrderByDescending(v => v.Length).ToArray());
+    }
+
+    /// <summary>
+    /// A connection-string literal that carries a credential: a password / pwd keyword, or a URI's <c>user:password@</c>.
+    /// A check on one token's own text, after the lexer said it is a string.
+    /// </summary>
+    public static bool HoldsCredential(string literal) =>
+        literal.Contains("PASSWORD", StringComparison.OrdinalIgnoreCase) || literal.Contains("PWD", StringComparison.OrdinalIgnoreCase)
+        || (literal.Contains("://", StringComparison.Ordinal) && literal.Contains('@'));
+
+    /// <summary>
+    /// PT6-11: a literal and the ones right after it, which the engine joins into one value (MySQL <c>'a' 'b'</c>,
+    /// PostgreSQL <c>'a'</c> newline <c>'b'</c>): all of them are the secret.
+    /// </summary>
+    static IEnumerable<int> Run(IReadOnlyList<RedactToken> tokens, int first)
+    {
+        for (var k = first; k < tokens.Count && tokens[k].Kind == RedactTokenKind.String; k++) yield return k;
+    }
+
+    static void AddRun(IReadOnlyList<RedactToken> tokens, int first, SortedSet<int> secret)
+    {
+        foreach (var k in Run(tokens, first)) secret.Add(k);
+    }
+
+    /// <summary>
+    /// The literal at <paramref name="j"/>, after a MySQL / MariaDB character-set introducer (<c>_utf8mb4'x'</c>, PT6-11):
+    /// its index, or −1.
+    /// </summary>
+    static int LiteralAt(IReadOnlyList<RedactToken> tokens, int j)
+    {
+        if (j + 1 < tokens.Count && tokens[j].Kind == RedactTokenKind.Word && tokens[j].Name is { Length: > 1 } w && w[0] == '_'
+            && tokens[j + 1].Kind == RedactTokenKind.String)
+            j++;
+        return j < tokens.Count && tokens[j].Kind == RedactTokenKind.String ? j : -1;
     }
 
     /// <summary>The string after a secret's name: <c>name 'x'</c>, <c>name = 'x'</c>, <c>name := 'x'</c>, or (a declared variable) <c>@v type(n) = 'x'</c>.</summary>
@@ -139,7 +213,7 @@ public static class SecretRedaction
                 if (tokens[k].Kind != RedactTokenKind.Word) break;
             }
         }
-        return j < tokens.Count && tokens[j].Kind == RedactTokenKind.String ? j : -1;
+        return LiteralAt(tokens, j);
     }
 
     /// <summary>MySQL / MariaDB account syntax: the string after BY / AS / USING / REPLACE within the IDENTIFIED clause, and SET PASSWORD [FOR u] = 'x'.</summary>
@@ -152,8 +226,8 @@ public static class SecretRedaction
             {
                 if (tokens[k].IsP(",") || tokens[k].IsP(";")) break;
                 if ((tokens[k].Is("BY") || tokens[k].Is("AS") || tokens[k].Is("USING") || tokens[k].Is("REPLACE"))
-                    && k + 1 < tokens.Count && tokens[k + 1].Kind == RedactTokenKind.String)
-                    secret.Add(k + 1);
+                    && LiteralAt(tokens, k + 1) is var v and >= 0)
+                    AddRun(tokens, v, secret);
             }
         }
         else if (t.Is("PASSWORD") && i > 0 && tokens[i - 1].Is("SET"))
@@ -161,7 +235,7 @@ public static class SecretRedaction
             for (var k = i + 1; k < tokens.Count && k <= i + 8; k++)
             {
                 if (tokens[k].IsP(";")) break;
-                if (tokens[k].IsP("=") && k + 1 < tokens.Count && tokens[k + 1].Kind == RedactTokenKind.String) { secret.Add(k + 1); break; }
+                if (tokens[k].IsP("=") && LiteralAt(tokens, k + 1) is var v and >= 0) { AddRun(tokens, v, secret); break; }
             }
         }
     }
@@ -171,7 +245,7 @@ public static class SecretRedaction
     /// <summary>
     /// The arguments from <paramref name="start"/>: comma-separated at depth 0, up to <paramref name="close"/> (a call) or,
     /// for a procedure called without parentheses, up to ";" or a word where no argument can continue. An argument that is
-    /// one string literal (possibly after <c>@name =</c>) carries that token's index.
+    /// string literal (possibly after <c>@name =</c>), or adjacent literals the engine joins, carries the first one's index.
     /// </summary>
     static IEnumerable<Argument> Arguments(IReadOnlyList<RedactToken> tokens, int start, string? close)
     {
@@ -188,7 +262,9 @@ public static class SecretRedaction
                 string? parameter = null;
                 var from = begin;
                 if (k - begin >= 2 && tokens[begin].Kind == RedactTokenKind.Variable && tokens[begin + 1].IsP("=")) { parameter = tokens[begin].Name; from = begin + 2; }
-                yield return new Argument(position++, parameter, k - from == 1 && tokens[from].Kind == RedactTokenKind.String ? from : null);
+                var literals = k > from;
+                for (var m = from; m < k && literals; m++) literals = tokens[m].Kind == RedactTokenKind.String;
+                yield return new Argument(position++, parameter, literals ? from : null);
                 if (end) yield break;
                 begin = k + 1;
                 continue;

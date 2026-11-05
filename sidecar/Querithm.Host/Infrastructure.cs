@@ -179,7 +179,7 @@ public sealed class QuerithmJsonRpc(IJsonRpcMessageHandler handler) : JsonRpc(ha
     public const int DatabaseError = -32002;
 
     /// <summary>The control plane's formatter: <see cref="Json.CreateRpc"/>, member names bound exactly (M1).</summary>
-    public static SystemTextJsonFormatter Formatter() => new() { JsonSerializerOptions = Json.CreateRpc() };
+    public static SystemTextJsonFormatter Formatter() => new GuardedJsonFormatter { JsonSerializerOptions = Json.CreateRpc() };
 
     /// <summary>Methods only the bench and smoke harnesses call (§14): registered only when the harness asks for them.</summary>
     public const string BenchPrefix = "bench.";
@@ -198,6 +198,8 @@ public sealed class QuerithmJsonRpc(IJsonRpcMessageHandler handler) : JsonRpc(ha
             if (!bench && name.StartsWith(BenchPrefix, StringComparison.Ordinal)) continue;
             AddLocalRpcMethod(map.TargetMethods[i], server, new JsonRpcMethodAttribute(name) { UseSingleObjectParameterDeserialization = true });
         }
+        // PT8-5: what GuardedJsonFormatter turns a malformed message into; it answers the caller's id with the error.
+        AddLocalRpcMethod(GuardedJsonFormatter.MalformedMethod, new Func<int, string, Task>((code, message) => throw new MalformedRequestException(code, message)));
     }
 
     protected override JsonRpcError.ErrorDetail CreateErrorDetails(JsonRpcRequest request, Exception exception)
@@ -207,6 +209,12 @@ public sealed class QuerithmJsonRpc(IJsonRpcMessageHandler handler) : JsonRpc(ha
         if (ex is System.Reflection.TargetInvocationException { InnerException: { } ti }) ex = ti;
         var detail = ex switch
         {
+            MalformedRequestException m => new JsonRpcError.ErrorDetail
+            {
+                Code = (JsonRpcErrorCode)m.Code,
+                Message = m.Message,
+                Data = new Dictionary<string, object?> { ["code"] = m.Code == GuardedJsonFormatter.ParseError ? "parseError" : "invalidRequest" },
+            },
             QuerithmException q => new JsonRpcError.ErrorDetail
             {
                 Code = (JsonRpcErrorCode)AppError,
@@ -239,4 +247,122 @@ public sealed class QuerithmJsonRpc(IJsonRpcMessageHandler handler) : JsonRpc(ha
     /// <summary>Never an empty error: some runtime failures (e.g. an interop TypeLoadException) carry no message at all.</summary>
     public static string Describe(Exception ex, string? message) =>
         string.IsNullOrWhiteSpace(message) ? $"{ex.GetType().Name}: the driver reported no details." : message;
+}
+
+/// <summary>A JSON-RPC message the control plane could not take, answered with <see cref="Code"/> (-32700 or -32600).</summary>
+public sealed class MalformedRequestException(int code, string message)
+    : Exception(message)
+{
+    public int Code { get; } = code == GuardedJsonFormatter.ParseError ? code : GuardedJsonFormatter.InvalidRequest;
+}
+
+/// <summary>
+/// PT8-5: the control plane's formatter. StreamJsonRpc closes the connection on any message it cannot deserialize (params
+/// nested past System.Text.Json's 64 levels, while the shell's serde_json allows 128; params that are a string, number or
+/// boolean), and the sidecar exits when it closes, ending every session and open transaction. Each message is first
+/// scanned without a depth limit for its shape: one that is too large, nests more than <see cref="MaxDepth"/> levels, has
+/// params that are not an object or array, or that the stock formatter cannot read becomes a call of
+/// <see cref="MalformedMethod"/> under the caller's id, which answers it with -32700 / -32600 and keeps the connection open.
+/// </summary>
+public sealed class GuardedJsonFormatter : SystemTextJsonFormatter, IJsonRpcMessageTextFormatter
+{
+    public const int ParseError = -32700;
+    public const int InvalidRequest = -32600;
+    /// <summary>Containers one message may nest: System.Text.Json's own limit, which reads every request's params.</summary>
+    public const int MaxDepth = 64;
+    /// <summary>
+    /// The largest message parsed. The newline-delimited handler has no limit of its own, so the line is already buffered;
+    /// this bounds the parse and the DTO that would be built from it. Scripts and results never come close.
+    /// </summary>
+    public const long MaxMessageBytes = 64L * 1024 * 1024;
+    /// <summary>The internal method a malformed message is answered through ("rpc." names are reserved by JSON-RPC).</summary>
+    public const string MalformedMethod = "rpc.malformed";
+    const int MaxIdBytes = 256;
+
+    /// <summary>The cap this formatter applies (tests lower it).</summary>
+    internal long MaxBytes { get; init; } = MaxMessageBytes;
+
+    JsonRpcMessage IJsonRpcMessageFormatter.Deserialize(System.Buffers.ReadOnlySequence<byte> contentBuffer) => Guard(contentBuffer, Encoding);
+
+    JsonRpcMessage IJsonRpcMessageTextFormatter.Deserialize(System.Buffers.ReadOnlySequence<byte> contentBuffer, System.Text.Encoding encoding) => Guard(contentBuffer, encoding);
+
+    JsonRpcMessage Guard(System.Buffers.ReadOnlySequence<byte> buffer, System.Text.Encoding encoding)
+    {
+        var (problem, code, id) = Inspect(buffer);
+        if (problem == null)
+        {
+            try { return base.Deserialize(buffer, encoding); }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                (problem, code) = ($"The request could not be read ({ex.GetType().Name}).", InvalidRequest);
+            }
+        }
+        Console.Error.WriteLine($"[warn] malformed JSON-RPC message answered with {code}: {problem}");
+        return base.Deserialize(new System.Buffers.ReadOnlySequence<byte>(Substitute(id, code, problem)), System.Text.Encoding.UTF8);
+    }
+
+    /// <summary>The message's shape, read token by token (no recursion, no depth limit): the problem, if any, and the raw id.</summary>
+    (string? Problem, int Code, byte[]? Id) Inspect(System.Buffers.ReadOnlySequence<byte> buffer)
+    {
+        byte[]? id = null;
+        try
+        {
+            var reader = new System.Text.Json.Utf8JsonReader(buffer, new System.Text.Json.JsonReaderOptions { MaxDepth = int.MaxValue });
+            if (!reader.Read()) return ("The message is empty.", ParseError, null);
+            if (reader.TokenType != System.Text.Json.JsonTokenType.StartObject) return ("A request must be a JSON object.", InvalidRequest, null);
+            var depth = 1;
+            System.Text.Json.JsonTokenType? paramsKind = null;
+            string? pending = null;
+            while (reader.Read())
+            {
+                var t = reader.TokenType;
+                if (t is System.Text.Json.JsonTokenType.StartObject or System.Text.Json.JsonTokenType.StartArray) depth = Math.Max(depth, reader.CurrentDepth + 1);
+                if (pending == "id")
+                {
+                    id = t switch
+                    {
+                        System.Text.Json.JsonTokenType.Number when reader.ValueSpan.Length <= MaxIdBytes => reader.ValueSpan.ToArray(),
+                        System.Text.Json.JsonTokenType.String when !reader.HasValueSequence && reader.ValueSpan.Length <= MaxIdBytes => [(byte)'"', .. reader.ValueSpan, (byte)'"'],
+                        _ => null,
+                    };
+                }
+                else if (pending == "params") paramsKind = t;
+                pending = t == System.Text.Json.JsonTokenType.PropertyName && reader.CurrentDepth == 1
+                    ? reader.ValueTextEquals("id") ? "id" : reader.ValueTextEquals("params") ? "params" : null
+                    : null;
+            }
+            if (buffer.Length > MaxBytes) return ($"The request is larger than {Math.Max(1, MaxBytes / (1024 * 1024))} MB.", InvalidRequest, id);
+            if (depth > MaxDepth) return ($"The request nests more than {MaxDepth} levels of objects and arrays.", InvalidRequest, id);
+            if (paramsKind is not (null or System.Text.Json.JsonTokenType.StartObject or System.Text.Json.JsonTokenType.StartArray or System.Text.Json.JsonTokenType.Null))
+                return ("A request's params must be an object.", InvalidRequest, id);
+            return (null, 0, id);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return ("The message is not valid JSON.", ParseError, id);
+        }
+    }
+
+    /// <summary>{"jsonrpc":"2.0","id":&lt;the caller's&gt;,"method":"rpc.malformed","params":{"code":…,"message":…}}; no id: a notification, answered by no one.</summary>
+    static byte[] Substitute(byte[]? id, int code, string message)
+    {
+        var buffer = new System.Buffers.ArrayBufferWriter<byte>();
+        using (var w = new System.Text.Json.Utf8JsonWriter(buffer))
+        {
+            w.WriteStartObject();
+            w.WriteString("jsonrpc", "2.0");
+            if (id != null)
+            {
+                w.WritePropertyName("id");
+                w.WriteRawValue(id, skipInputValidation: false);
+            }
+            w.WriteString("method", MalformedMethod);
+            w.WriteStartObject("params");
+            w.WriteNumber("code", code);
+            w.WriteString("message", message);
+            w.WriteEndObject();
+            w.WriteEndObject();
+        }
+        return buffer.WrittenSpan.ToArray();
+    }
 }

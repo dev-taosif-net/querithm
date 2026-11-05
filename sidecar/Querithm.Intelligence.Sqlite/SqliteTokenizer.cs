@@ -1,3 +1,5 @@
+using Querithm.Intelligence.PgSql;
+
 namespace Querithm.Intelligence.Sqlite;
 
 public enum SqliteTokenKind { Word, QuotedIdent, String, Blob, Number, Operator, Punct, Comment, Whitespace, Param }
@@ -27,9 +29,11 @@ public static class SqliteTokenizer
             var startLine = line;
             var c = s[i];
             SqliteTokenKind kind;
-            if (char.IsWhiteSpace(c))
+            // PT7-1: SQLite's own character classes (SqlChars): ASCII whitespace only, and every character from U+0080 up is
+            // an identifier character (sqlite3IsIdChar), so "a<U+00A0>WHERE" is one name here as it is to SQLite.
+            if (SqlChars.IsSpace(c))
             {
-                while (i < s.Length && char.IsWhiteSpace(s[i])) { if (s[i] == '\n') line++; i++; }
+                while (i < s.Length && SqlChars.IsSpace(s[i])) { if (s[i] == '\n') line++; i++; }
                 kind = SqliteTokenKind.Whitespace;
             }
             else if (c == '-' && At(s, i + 1) == '-')
@@ -71,23 +75,23 @@ public static class SqliteTokenizer
             else if (c == '?')
             {
                 i++;
-                while (i < s.Length && char.IsDigit(s[i])) i++;
+                while (i < s.Length && SqlChars.IsDigit(s[i])) i++;
                 kind = SqliteTokenKind.Param;
             }
-            else if (c is ':' or '@' or '$' && i + 1 < s.Length && (char.IsLetterOrDigit(s[i + 1]) || s[i + 1] == '_'))
+            else if (c is ':' or '@' or '$' && i + 1 < s.Length && SqlChars.IsIdentPart(s[i + 1]) && s[i + 1] != '$')
             {
                 i++;
-                while (i < s.Length && (char.IsLetterOrDigit(s[i]) || s[i] is '_' or '$')) i++;
+                while (i < s.Length && SqlChars.IsIdentPart(s[i])) i++;
                 kind = SqliteTokenKind.Param;
             }
-            else if (char.IsLetter(c) || c == '_')
+            else if (SqlChars.IsIdentStart(c))
             {
-                while (i < s.Length && (char.IsLetterOrDigit(s[i]) || s[i] is '_' or '$')) i++;
+                while (i < s.Length && SqlChars.IsIdentPart(s[i])) i++;
                 kind = SqliteTokenKind.Word;
             }
-            else if (char.IsDigit(c) || (c == '.' && i + 1 < s.Length && char.IsDigit(s[i + 1])))
+            else if (SqlChars.IsDigit(c) || (c == '.' && i + 1 < s.Length && SqlChars.IsDigit(s[i + 1])))
             {
-                while (i < s.Length && (char.IsLetterOrDigit(s[i]) || s[i] == '.' || ((s[i] is '+' or '-') && s[i - 1] is 'e' or 'E'))) i++;
+                while (i < s.Length && (SqlChars.IsNumberPart(s[i]) || ((s[i] is '+' or '-') && s[i - 1] is 'e' or 'E'))) i++;
                 kind = SqliteTokenKind.Number;
             }
             else if (c is '(' or ')' or ',' or ';')

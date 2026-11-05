@@ -46,17 +46,23 @@ export const useProfiles = create<ProfilesState>((set, get) => ({
   async save(p, secret, sshSecret) {
     // A group's default environment applies to new profiles that did not pick one explicitly.
     const saved = await rpc("profile.save", p);
-    if (secret != null) {
-      // §13 rule 1: the secret goes to the shell under the profile’s retention policy, never through profile.save.
-      if (secret === "") await shell.secretDelete(saved.id);
-      else await shell.secretSet(saved.id, secret);
-    }
-    // The SSH tunnel's password or key passphrase: its own keyring entry, "<profileId>:ssh".
-    if (sshSecret != null || !saved.ssh) {
-      if (!sshSecret) await shell.secretDelete(sshAccount(saved.id)).catch(() => {});
-      else await shell.secretSet(sshAccount(saved.id), sshSecret);
-    }
+    // The profile exists from here on, whatever the keyring does next: the list shows it, and a keyring failure carries
+    // it (savedProfile) so the editor saves the same profile again instead of creating a second one.
     set({ profiles: [...get().profiles.filter((x) => x.id !== saved.id), saved].sort((a, b) => a.name.localeCompare(b.name)) });
+    try {
+      if (secret != null) {
+        // §13 rule 1: the secret goes to the shell under the profile’s retention policy, never through profile.save.
+        if (secret === "") await shell.secretDelete(saved.id);
+        else await shell.secretSet(saved.id, secret);
+      }
+      // The SSH tunnel's password or key passphrase: its own keyring entry, "<profileId>:ssh".
+      if (sshSecret != null || !saved.ssh) {
+        if (!sshSecret) await shell.secretDelete(sshAccount(saved.id)).catch(() => {});
+        else await shell.secretSet(sshAccount(saved.id), sshSecret);
+      }
+    } catch (e) {
+      throw Object.assign(e instanceof Error ? e : new Error(String(e)), { savedProfile: saved });
+    }
     return saved;
   },
   async remove(id) {

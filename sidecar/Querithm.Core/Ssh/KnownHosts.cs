@@ -29,14 +29,27 @@ public sealed class KnownHosts(string path)
 
     static bool Same(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// The key type an algorithm name signs with: one RSA key is offered as ssh-rsa, rsa-sha2-256 or rsa-sha2-512 (the
+    /// signature hash is negotiated, the key and its fingerprint are the same), so a line written under any of them
+    /// matches the others. Lines keep the name they were written with.
+    /// </summary>
+    internal static string KeyType(string algorithm) => algorithm switch
+    {
+        "ssh-rsa" or "rsa-sha2-256" or "rsa-sha2-512" => "ssh-rsa",
+        "ssh-rsa-cert-v01@openssh.com" or "rsa-sha2-256-cert-v01@openssh.com" or "rsa-sha2-512-cert-v01@openssh.com" => "ssh-rsa-cert-v01@openssh.com",
+        _ => algorithm,
+    };
+
     /// <summary>Trusted when this exact key is known; Changed when another key is known for the host (any algorithm the same).</summary>
     public (HostKeyVerdict Verdict, string? Previous) Check(string host, int port, string algorithm, string fingerprint)
     {
         lock (_gate)
         {
+            var type = KeyType(algorithm);
             var known = Load().Where(e => Same(e.Host, host) && e.Port == port).ToList();
-            if (known.Any(e => e.Algorithm == algorithm && e.Fingerprint == fingerprint)) return (HostKeyVerdict.Trusted, null);
-            var sameAlgorithm = known.FirstOrDefault(e => e.Algorithm == algorithm);
+            if (known.Any(e => KeyType(e.Algorithm) == type && e.Fingerprint == fingerprint)) return (HostKeyVerdict.Trusted, null);
+            var sameAlgorithm = known.FirstOrDefault(e => KeyType(e.Algorithm) == type);
             // A server may offer another key type later (negotiation changes); a different key of a known type is a change.
             return sameAlgorithm != null ? (HostKeyVerdict.Changed, sameAlgorithm.Fingerprint) : known.Count > 0 ? (HostKeyVerdict.Changed, known[0].Fingerprint) : (HostKeyVerdict.Unknown, null);
         }

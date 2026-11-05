@@ -46,8 +46,21 @@ public sealed class DuckDbLanguageService : IDialectService
     {
         SecretNames = Set("KEY_ID", "SESSION_TOKEN", "TOKEN", "ACCESS_TOKEN", "BEARER_TOKEN", "SAS_TOKEN", "CONNECTION_STRING", "ACCOUNT_KEY")
             .Select(s => s.ToUpperInvariant()).ToHashSet(),
-        Triggers = ["KEY", "TOKEN", "CONNECTION_STRING"],
+        Triggers = ["KEY", "TOKEN", "CONNECTION_STRING", "ATTACH"],
+        Extra = AttachConnectionString,
     };
+
+    /// <summary>
+    /// <c>ATTACH [DATABASE] [IF NOT EXISTS] 'conninfo' …</c> of a postgres / mysql database: the first literal, when it holds
+    /// a credential (<see cref="SecretRedaction.HoldsCredential"/>) — a plain file path is kept.
+    /// </summary>
+    static int AttachConnectionString(IReadOnlyList<RedactToken> t, int i)
+    {
+        if (!t[i].Is("ATTACH")) return -1;
+        var j = i + 1;
+        while (j < t.Count && (t[j].Is("DATABASE") || t[j].Is("IF") || t[j].Is("NOT") || t[j].Is("EXISTS"))) j++;
+        return j < t.Count && t[j].Kind == RedactTokenKind.String && SecretRedaction.HoldsCredential(t[j].Text) ? j : -1;
+    }
 
     /// <summary>M12: the PostgreSQL-family caches this engine's completion fills (documents, statement splits, USE / SET scans).</summary>
     public void Forget(string docId) => DocumentCaches.Forget(docId);
@@ -62,7 +75,9 @@ public sealed class DuckDbLanguageService : IDialectService
         var tokens = DuckDbTokenizer.Tokenize(text);
         var findings = new List<DestructiveFinding>();
         var batches = new List<BatchInfo>();
-        string? refusal = null;
+        // PT7-4: DuckDB reads the SQL text as a C string, so it stops at a NUL and runs only what comes before it
+        // ("DELETE FROM t\0 WHERE 0" deletes every row) — refused, whatever the user confirms.
+        string? refusal = SqlChars.NulRefusal(text, "DuckDB");
         bool ddl = false, begins = false, ends = false;
         var prepared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var st in DuckDbTokenizer.Split(tokens))
@@ -71,13 +86,30 @@ public sealed class DuckDbLanguageService : IDialectService
             if (code.Count == 0 || (code.Count == 1 && code[0].Text == ";")) continue;
             var first = code[0];
             var last = code[^1];
+            var length = last.Offset + last.Length - first.Offset;
             batches.Add(new BatchInfo
             {
-                Index = batches.Count, StartLine = first.Line, EndLine = last.Line, StartOffset = first.Offset, Length = last.Offset + last.Length - first.Offset,
+                Index = batches.Count, StartLine = first.Line, EndLine = last.Line, StartOffset = first.Offset, Length = length,
             });
             var excerpt = Excerpt(text, first, last);
             refusal ??= Refused(code);
             Statement(code, excerpt, "", findings, prepared, ref ddl, ref begins, ref ends);
+            // PT7-1: DuckDB maps Unicode spaces to ASCII spaces in each command text it is given (DuckDbTokenizer), and each
+            // batch runs as a command of its own, so the batch alone can read differently from the whole text (an open quote
+            // before it, in DuckDB's view, stops the mapping). Classify the batch as DuckDB reads it too; a finding from
+            // either reading counts.
+            var batchText = text.Substring(first.Offset, length);
+            var seen = findings.Select(f => (f.Rule, f.Line)).ToHashSet();
+            var alone = new List<DestructiveFinding>();
+            foreach (var inner in DuckDbTokenizer.Split(DuckDbTokenizer.Tokenize(batchText)))
+            {
+                var innerCode = inner.Where(t => !t.IsTrivia)
+                    .Select(t => t with { Offset = t.Offset + first.Offset, Line = t.Line + first.Line - 1 }).ToList();
+                if (innerCode.Count == 0 || (innerCode.Count == 1 && innerCode[0].Text == ";")) continue;
+                refusal ??= Refused(innerCode);
+                Statement(innerCode, excerpt, "", alone, prepared, ref ddl, ref begins, ref ends);
+            }
+            findings.AddRange(alone.Where(f => seen.Add((f.Rule, f.Line))));
         }
         return new Classification
         {
@@ -118,8 +150,8 @@ public sealed class DuckDbLanguageService : IDialectService
         {
             if (ThenDelete(code, verbAt)) Add("mergeDelete", "MERGE … THEN DELETE removes every row its WHEN clause matches.");
         }
-        else if (verb.Is("DELETE") && !HasTopLevel(code, verbAt, "WHERE")) Add("deleteWithoutWhere", "DELETE without a WHERE clause removes every row.");
-        else if (verb.Is("UPDATE") && !HasTopLevel(code, verbAt, "WHERE")) Add("updateWithoutWhere", "UPDATE without a WHERE clause changes every row.");
+        else if (verb.Is("DELETE") && !HasTopLevel(code, verbAt, "WHERE", needsOperand: true)) Add("deleteWithoutWhere", "DELETE without a WHERE clause removes every row.");
+        else if (verb.Is("UPDATE") && !HasTopLevel(code, verbAt, "WHERE", needsOperand: true)) Add("updateWithoutWhere", "UPDATE without a WHERE clause changes every row.");
         else if (first.Is("DROP")) { ddl = true; Add("drop", $"DROP {Word(code, 1)} permanently removes the object."); }
         else if (first.Is("TRUNCATE")) Add("truncate", "TRUNCATE removes every row.");
         else if (first.Is("ALTER")) { ddl = true; Add("alter", $"ALTER {Word(code, 1)} changes an existing object."); }
@@ -174,14 +206,18 @@ public sealed class DuckDbLanguageService : IDialectService
         return false;
     }
 
-    static bool HasTopLevel(List<PgToken> code, int from, string keyword)
+    /// <summary>
+    /// The keyword at depth 0 after <paramref name="from"/>. With <paramref name="needsOperand"/> (WHERE), only a keyword some
+    /// code follows counts (PT7-1 safety net): a WHERE that ends the statement is no condition.
+    /// </summary>
+    static bool HasTopLevel(List<PgToken> code, int from, string keyword, bool needsOperand = false)
     {
         var depth = 0;
         for (var i = from + 1; i < code.Count; i++)
         {
             if (code[i].Text == "(") depth++;
             else if (code[i].Text == ")") depth--;
-            else if (depth == 0 && code[i].Is(keyword)) return true;
+            else if (depth == 0 && code[i].Is(keyword) && (!needsOperand || (i + 1 < code.Count && code[i + 1].Text != ";"))) return true;
         }
         return false;
     }
