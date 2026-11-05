@@ -219,11 +219,11 @@ public sealed class ActivityMonitor : IAsyncDisposable
     public const int CommandBackstopS = 15;
 
     /// <summary>The monitor's connection profile: its own application name, no transparent driver reconnects, a command-timeout backstop.</summary>
-    Profile MonitorProfile() =>
-        Profile with
+    Profile MonitorProfile(Profile profile) =>
+        profile with
         {
             CommandTimeoutS = CommandBackstopS,
-            Options = new Dictionary<string, string>(Profile.Options ?? []) { ["appName"] = "Querithm Monitor", ["connectRetryCount"] = "0" },
+            Options = new Dictionary<string, string>(profile.Options ?? []) { ["appName"] = "Querithm Monitor", ["connectRetryCount"] = "0" },
         };
 
     string? MonitorDatabase => Profile.DatabaseDefault ?? Provider.Traits.DefaultDatabase;
@@ -234,7 +234,7 @@ public sealed class ActivityMonitor : IAsyncDisposable
         {
             if (_connection != MonitorConnectionState.Reconnecting) _connection = MonitorConnectionState.Connecting;
         }
-        var conn = await _sessions.OpenDedicatedAsync(MonitorProfile(), Provider, MonitorDatabase, ct, ConnectionRegistry.Kinds.Monitor).ConfigureAwait(false);
+        var conn = await _sessions.OpenDedicatedAsync(Profile, Provider, MonitorDatabase, ct, ConnectionRegistry.Kinds.Monitor, MonitorProfile).ConfigureAwait(false);
         Activity.PrepareMonitorConnection(conn);
         try
         {
@@ -1121,7 +1121,7 @@ public sealed class ActivityMonitor : IAsyncDisposable
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
                 cts.CancelAfter(TimeSpan.FromMilliseconds(ControlConnectTimeoutMs));
                 lock (_state) _controlOpen = true;
-                control = await _sessions.OpenDedicatedAsync(MonitorProfile(), Provider, MonitorDatabase, cts.Token, ConnectionRegistry.Kinds.Control).ConfigureAwait(false);
+                control = await _sessions.OpenDedicatedAsync(Profile, Provider, MonitorDatabase, cts.Token, ConnectionRegistry.Kinds.Control, MonitorProfile).ConfigureAwait(false);
                 Activity.PrepareMonitorConnection(control);
             }
             catch (Exception ex)

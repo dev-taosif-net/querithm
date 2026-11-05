@@ -46,7 +46,8 @@ describe("profiles store", () => {
   beforeEach(() => {
     rpc.mockReset();
     shell.secretSet.mockClear();
-    shell.secretDelete.mockClear();
+    shell.secretDelete.mockReset();
+    shell.secretDelete.mockResolvedValue(undefined);
     useProfiles.setState({ profiles: [], groups: [], loaded: false });
   });
 
@@ -82,12 +83,12 @@ describe("profiles store", () => {
     expect(shell.secretDelete).not.toHaveBeenCalled();
   });
 
-  it("save keeps profiles sorted and replaces by id; ssh delete failure is ignored", async () => {
+  it("save keeps profiles sorted and replaces by id while reporting SSH deletion failures", async () => {
     rpc.mockImplementation(async (_m: string, p: unknown) => p);
     shell.secretDelete.mockRejectedValue(new Error("none"));
-    await s().save(prof({ id: "b", name: "B" }));
-    await s().save(prof({ id: "a", name: "A" }));
-    await s().save(prof({ id: "b", name: "C" }));
+    await expect(s().save(prof({ id: "b", name: "B" }))).rejects.toMatchObject({ savedProfile: expect.objectContaining({ id: "b" }) });
+    await expect(s().save(prof({ id: "a", name: "A" }))).rejects.toMatchObject({ savedProfile: expect.objectContaining({ id: "a" }) });
+    await expect(s().save(prof({ id: "b", name: "C" }))).rejects.toMatchObject({ savedProfile: expect.objectContaining({ id: "b" }) });
     expect(s().profiles.map((p) => p.name)).toEqual(["A", "C"]);
   });
 

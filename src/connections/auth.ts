@@ -35,3 +35,16 @@ export function isLocal(p: Pick<Profile, "location">): boolean {
 export function duplicateProfile(p: Profile): Profile {
   return { ...p, id: "", name: `${p.name} (copy)`, file: null, unsupported: null, createdAt: 0, updatedAt: 0 };
 }
+
+/** Everything a saved secret is bound to: where it is sent, as whom, and how the connection is protected. */
+export function endpointKey(p: Profile): string {
+  const rawHost = (p.host ?? "").trim();
+  // PostgreSQL also accepts filesystem and abstract Unix sockets. Their names are case sensitive.
+  const socket = p.engine === "pg" && rawHost.split(",").some((h) => /^[\/@]/.test(h.trimStart()));
+  const host = (socket ? rawHost : rawHost.toLowerCase()) || null;
+  return JSON.stringify([
+    p.engine, isLocal(p) ? null : host, p.port ?? null, p.username ?? null, p.auth, p.tlsMode, !!p.trustCert, p.caPath ?? null,
+    p.options?.hostNameInCertificate ?? null,
+    p.ssh ? [p.ssh.host.trim().toLowerCase(), p.ssh.port ?? 22, p.ssh.username, p.ssh.auth, p.ssh.keyPath ?? null] : null,
+  ]);
+}

@@ -18,7 +18,7 @@ import { ask, toast } from "../store/ui";
 import { isTauri } from "../ipc/transport";
 import { confirmDeleteProfile } from "./deleteProfile";
 import { PasswordRetention } from "./PasswordRetention";
-import { duplicateProfile, isLocal, locationOf, needsSecretFor } from "./auth";
+import { duplicateProfile, endpointKey, isLocal, locationOf, needsSecretFor } from "./auth";
 import { pickDatabaseFile, requestWriteAccess } from "./fileGrants";
 import { loadEngineInfo, offeredEngines } from "./engineInfo";
 import { EngineLogo } from "./EngineLogo";
@@ -226,15 +226,7 @@ export function splitHostPort(host: string, engine: Engine): { host: string; por
   return m ? { host: m[1], port: Number(m[2]) } : null;
 }
 
-/** Everything a saved secret is bound to: where it is sent, as whom, and how the connection is protected. */
-export function endpointKey(p: Profile): string {
-  const host = (p.host ?? "").trim().toLowerCase() || null;
-  return JSON.stringify([
-    p.engine, isLocal(p) ? null : host, p.port ?? null, p.username ?? null, p.auth, p.tlsMode, !!p.trustCert, p.caPath ?? null,
-    p.options?.hostNameInCertificate ?? null,
-    p.ssh ? [p.ssh.host.trim().toLowerCase(), p.ssh.port ?? 22, p.ssh.username, p.ssh.auth, p.ssh.keyPath ?? null] : null,
-  ]);
-}
+export { endpointKey } from "./auth";
 
 /** A server's version as the success line shows it: its first words only, so a server cannot write its own claims there. */
 export function shownVersion(v: string | null | undefined): string {
@@ -383,9 +375,10 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
   const transport = transportSummary(p);
   // On Production a weak transport needs an explicit tick where it is chosen; a profile that was already saved so is
   // not asked again until its environment or transport changes.
-  const ackNeeded = envChosen && p.environment === "prod" && !!transport.risk
-    && (!existing || existing.environment !== "prod" || existing.tlsMode !== p.tlsMode || existing.trustCert !== p.trustCert);
-  useEffect(() => setAck(false), [p.environment, p.tlsMode, p.trustCert]);
+  const needsTransportAck = (draft: Profile) => envChosen && draft.environment === "prod" && !!transportSummary(draft).risk
+    && (!existing || existing.environment !== "prod" || existing.engine !== draft.engine || existing.tlsMode !== draft.tlsMode || existing.trustCert !== draft.trustCert);
+  const ackNeeded = needsTransportAck(p);
+  useEffect(() => setAck(false), [p.engine, p.environment, p.tlsMode, p.trustCert]);
   const [open, setOpen] = useState(() => ({
     enc: !local && (transport.tone === "warn" || p.tlsMode !== "default" || p.trustCert || !!p.caPath),
     ssh: !!p.ssh,
@@ -421,7 +414,10 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
     if (!envChosen) list.push({ key: "environment", text: "Choose the environment: Local, Dev, Test, Staging or Prod." });
     // A missing file is the reason there is no name yet: it is said once, at the file.
     if (engineChosen && errs.name && !errs.file) list.push({ key: "name", text: errs.name });
-    if (ackNeeded && !ack) list.push({ key: "ack", text: `Confirm that this Production connection is ${transport.risk === "plain" ? "not encrypted" : "not checking the certificate"}.` });
+    // A pending connection string may have changed the transport since this render. An earlier acknowledgement
+    // belongs only to the transport the checkbox displayed, never to newly parsed settings.
+    const sameTransport = d.engine === p.engine && d.environment === p.environment && d.tlsMode === p.tlsMode && d.trustCert === p.trustCert;
+    if (needsTransportAck(d) && !(ack && sameTransport)) list.push({ key: "ack", text: `Confirm that this Production connection is ${transportSummary(d).risk === "plain" ? "not encrypted" : "not checking the certificate"}.` });
     return list;
   };
   const summary = showSummary ? problems(withName(p)) : [];
@@ -508,6 +504,9 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
         reveal([], tunnel.map((x) => x.key));
         return setTest({ ok: false, text: tunnel[0].text, key: connKey });
       }
+      const endpointChanged = !!existing && endpointKey(existing) !== endpointKey(d.p);
+      const kindChanged = !!existing && needsSecretFor(existing.auth) && needsSecretFor(d.p.auth) && secretKind(existing.auth) !== secretKind(d.p.auth);
+      const sshKindChanged = !!existing?.ssh && !!d.p.ssh && existing.ssh.auth !== d.p.ssh.auth;
       // A saved secret is used unless one was typed, or the saved one is of another kind.
       const typed = (d.touched && !!d.secret) || !existing || kindChanged || endpointChanged;
       const sshTyped = (sshSecretTouched && !!sshSecret) || !existing || sshKindChanged || endpointChanged;
@@ -553,6 +552,9 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
       if (p.environment === "prod" && transportSummary(p).risk === "plain") toast("warn", "Production profile without encryption.");
       const needs = needsSecretFor(p.auth);
       const sshNeeds = !!p.ssh && p.ssh.auth !== "agent";
+      const endpointChanged = !!existing && endpointKey(existing) !== endpointKey(p);
+      const kindChanged = !!existing && needsSecretFor(existing.auth) && needs && secretKind(existing.auth) !== secretKind(p.auth);
+      const sshKindChanged = !!existing?.ssh && !!p.ssh && existing.ssh.auth !== p.ssh.auth;
       // Typed text replaces the secret; an emptied box keeps it ("Leave it empty to keep the saved one") unless Forget
       // was chosen or the saved one is of another kind (a password is not a token).
       const secretArg = needs ? (d.touched && d.secret ? d.secret : forget || kindChanged || endpointChanged ? "" : null) : existing ? "" : null;

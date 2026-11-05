@@ -289,11 +289,25 @@ public sealed class SessionManager : IAsyncDisposable
 
     /// <summary>A connection outside the pools (debugger target/control, monitor) with the remembered secrets.</summary>
     public Task<System.Data.Common.DbConnection> OpenDedicatedAsync(Profile profile, IDbProvider provider, string? database, CancellationToken ct,
-        string kind = Monitoring.ConnectionRegistry.Kinds.Dedicated) =>
+        string kind = Monitoring.ConnectionRegistry.Kinds.Dedicated, Func<Profile, Profile>? configure = null) =>
         // Phase D0d: a helper never opens a fresh in-memory database in place of the tab's.
         ProfileRules.LocationOf(profile) == LocationKind.Memory
             ? throw new QuerithmException("memoryDedicated", "An in-memory database is reachable only through the tab that owns it.")
-            : OpenConnectionAsync(profile, provider, SecretFor(profile.Id), SshSecretFor(profile.Id), database, ct, kind: kind);
+            : OpenRememberedAsync(profile, provider, database, ct, kind, configure);
+
+    Task<System.Data.Common.DbConnection> OpenRememberedAsync(Profile profile, IDbProvider provider, string? database, CancellationToken ct,
+        string kind = Monitoring.ConnectionRegistry.Kinds.Pool, Func<Profile, Profile>? configure = null)
+    {
+        // Capture credentials first, then validate their epoch and endpoint. An edit after this check can only leave
+        // us with the old endpoint's old credentials; a queued pool factory can never read a new endpoint's secret.
+        var epoch = CredentialEpoch(profile.Id);
+        var secret = SecretFor(profile.Id);
+        var sshSecret = SshSecretFor(profile.Id);
+        profile = Current(profile);
+        if (epoch != CredentialEpoch(profile.Id)) throw ProfileChanged();
+        if (configure != null) profile = configure(profile);
+        return OpenConnectionAsync(profile, provider, secret, sshSecret, database, ct, kind: kind);
+    }
 
     /// <summary>Reads the identity again when the driver reconnected underneath a reused pool connection (O17).</summary>
     /// <summary>
@@ -326,12 +340,18 @@ public sealed class SessionManager : IAsyncDisposable
 
     public void ForgetProfile(string profileId)
     {
+        ForgetCredentials(profileId);
+        _fileGrants.TryRemove(profileId, out _);
+        ProfileForgotten?.Invoke(profileId);
+    }
+
+    /// <summary>Discard credentials bound to a previous endpoint without disturbing pinned transactions or file grants.</summary>
+    public void ForgetCredentials(string profileId)
+    {
         _secrets.TryRemove(profileId, out _);
         _sshSecrets.TryRemove(profileId, out _);
         _signedIn.TryRemove(profileId, out _);
-        _fileGrants.TryRemove(profileId, out _);
         ForgetPools(profileId);
-        ProfileForgotten?.Invoke(profileId);
     }
 
     /// <summary>Closes idle pooled connections for a profile; busy ones finish and are dropped on return.</summary>
@@ -451,7 +471,7 @@ public sealed class SessionManager : IAsyncDisposable
             var pool = _pools.GetOrAdd(key, k =>
             {
                 var created = new Pool(k, current, provider, provider.DatabaseScopedConnections ? database : null,
-                    (db, ct) => OpenConnectionAsync(current, provider, SecretFor(current.Id), SshSecretFor(current.Id), db, ct), MaxPerProfile, _log, TransportAlive,
+                    (db, ct) => OpenRememberedAsync(current, provider, db, ct), MaxPerProfile, _log, TransportAlive,
                     ReidentifyAsync);
                 created.Opened += Registry.Attach;
                 return created;
@@ -474,7 +494,7 @@ public sealed class SessionManager : IAsyncDisposable
     Pool PoolForSession(Session s) => _pools.GetOrAdd($"{s.Profile.Id}|session:{s.Id}", k =>
     {
         var pool = new Pool(k, s.Profile, s.Provider, s.Database,
-            (db, ct) => OpenConnectionAsync(s.Profile, s.Provider, SecretFor(s.Profile.Id), SshSecretFor(s.Profile.Id), db, ct), 1, _log, TransportAlive, ReidentifyAsync);
+            (db, ct) => OpenRememberedAsync(s.Profile, s.Provider, db, ct), 1, _log, TransportAlive, ReidentifyAsync);
         pool.Opened += Registry.Attach;
         return pool;
     });

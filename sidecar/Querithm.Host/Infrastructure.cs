@@ -319,10 +319,14 @@ public sealed class GuardedJsonFormatter : SystemTextJsonFormatter, IJsonRpcMess
                 if (t is System.Text.Json.JsonTokenType.StartObject or System.Text.Json.JsonTokenType.StartArray) depth = Math.Max(depth, reader.CurrentDepth + 1);
                 if (pending == "id")
                 {
+                    var valueLength = reader.HasValueSequence ? reader.ValueSequence.Length : reader.ValueSpan.Length;
+                    var value = valueLength <= MaxIdBytes
+                        ? reader.HasValueSequence ? System.Buffers.BuffersExtensions.ToArray(reader.ValueSequence) : reader.ValueSpan.ToArray()
+                        : null;
                     id = t switch
                     {
-                        System.Text.Json.JsonTokenType.Number when reader.ValueSpan.Length <= MaxIdBytes => reader.ValueSpan.ToArray(),
-                        System.Text.Json.JsonTokenType.String when !reader.HasValueSequence && reader.ValueSpan.Length <= MaxIdBytes => [(byte)'"', .. reader.ValueSpan, (byte)'"'],
+                        System.Text.Json.JsonTokenType.Number when value != null => value,
+                        System.Text.Json.JsonTokenType.String when value != null => [(byte)'"', .. value, (byte)'"'],
                         _ => null,
                     };
                 }

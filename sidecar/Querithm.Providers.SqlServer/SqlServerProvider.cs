@@ -367,7 +367,14 @@ public sealed partial class SqlServerProvider : IDbProvider
     /// Nothing answered: name or instance not found (53, 40, 26, 11001, 11004), refused (10061), network or host unreachable
     /// (10051, 10065, 1231). Strict cannot be the cause, so it is not retried as Mandatory.
     /// </summary>
-    static bool IsNotReachable(SqlException ex) => ex.Number is 53 or 40 or 26 or 2 or 11001 or 11004 or 10061 or 10051 or 10065 or 1231;
+    static bool IsNotReachable(SqlException ex) => ex.Number is 53 or 40 or 26 or 2 or 11001 or 11004 or 10061 or 10051 or 10065 or 1231
+        // Managed SNI on Unix can report Number=0 and even SocketError.Success after a failed TCP connect.
+        // Inspect the socket cause as well; a generic Number=0 alone can also be a TLS error and must stay distinct.
+        || (ex.Number == 0 && ex.InnerException is System.Net.Sockets.SocketException socket && socket.SocketErrorCode is
+            System.Net.Sockets.SocketError.Success or System.Net.Sockets.SocketError.ConnectionRefused
+            or System.Net.Sockets.SocketError.HostNotFound or System.Net.Sockets.SocketError.NoData
+            or System.Net.Sockets.SocketError.NetworkUnreachable or System.Net.Sockets.SocketError.HostUnreachable
+            or System.Net.Sockets.SocketError.TimedOut);
 
     /// <summary>Connect or pre-login timeouts (258, -2, 10060).</summary>
     static bool IsTimeout(SqlException ex) => ex.Number is 258 or -2 or 10060;

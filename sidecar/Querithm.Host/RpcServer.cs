@@ -271,6 +271,10 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
         // A refusal about one field (host, port, file, SSH host or port) names it, so the editor shows it there (L25).
         if (Core.Sessions.ProfileRules.Check(profile with { Unsupported = null }, s.Sessions.Providers.TryGet(profile.Engine)) is { } invalid)
             throw new QuerithmException("invalidProfile", invalid.Message, invalid.Field is { } field ? new Dictionary<string, string> { ["field"] = field } : null);
+        // Retire credentials before publishing the new endpoint to background work. Pinned transactions keep their
+        // already authenticated connection, and a failed save may ask for credentials again but never misroute them.
+        var credentialsChanged = before != null && !Core.Sessions.SessionManager.SameConnectionSettings(before, profile);
+        if (credentialsChanged) s.Sessions.ForgetCredentials(before!.Id);
         var saved = s.Profiles.Save(profile);
         // A running monitor keeps the profile it started with (host, options) while kills read the environment fresh: when
         // the connection would now be built differently it stops first (not for a rename or a password-retention change).
@@ -279,7 +283,7 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
         // A first-run confirm on Prod was given for the old target or environment: the edited profile asks again (L1).
         if (before != null && (ConnectionChanged(before, saved) || before.Environment != saved.Environment)) s.Sessions.ForgetProdConfirms(saved.Id);
         // Connection settings may have changed: drop pooled connections built from the old settings.
-        s.Sessions.ForgetPools(saved.Id);
+        if (!credentialsChanged) s.Sessions.ForgetPools(saved.Id);
         s.Objects.InvalidateCapabilities();
         return saved;
     }
@@ -378,7 +382,10 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
     static string EndpointKey(Profile p)
     {
         var local = Core.Sessions.ProfileRules.LocationOf(p) != LocationKind.Server;
-        var host = local || string.IsNullOrWhiteSpace(p.Host) ? null : p.Host.Trim().ToLowerInvariant();
+        var host = local || string.IsNullOrWhiteSpace(p.Host) ? null : p.Host.Trim();
+        // DNS names ignore case; PostgreSQL filesystem and abstract socket names do not.
+        var socket = p.Engine == Engine.Pg && host != null && host.Split(',').Any(h => h.TrimStart().StartsWith('/') || h.TrimStart().StartsWith('@'));
+        if (!socket) host = host?.ToLowerInvariant();
         var ssh = p.Ssh is { } t ? new object?[] { t.Host?.Trim().ToLowerInvariant(), t.Port ?? 22, t.Username, t.Auth, t.KeyPath } : null;
         return System.Text.Json.JsonSerializer.Serialize(new object?[]
         {
