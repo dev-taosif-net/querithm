@@ -139,6 +139,19 @@ describe("Workspace", () => {
     expect(dock.api.removePanel).toHaveBeenCalledTimes(1);
   });
 
+  it("closing the active tab selects its right neighbour, then left; inactive closes keep focus", () => {
+    const { dock } = mount();
+    for (const id of ["a", "b", "c"]) { addTab(id); h.hooks.onTabAdded(id, false, true); }
+    dock.api.activePanel = dock.panels.get("b");
+    h.hooks.onTabRemoved("b");
+    expect(dock.api.activePanel.id).toBe("c");
+    h.hooks.onTabRemoved("a");
+    expect(dock.api.activePanel.id).toBe("c");
+    addTab("d"); h.hooks.onTabAdded("d", true, true);
+    h.hooks.onTabRemoved("d");
+    expect(dock.api.activePanel.id).toBe("c");
+  });
+
   it("activate and strip/all order hooks read from Dockview", () => {
     const { dock } = mount();
     addTab("a");

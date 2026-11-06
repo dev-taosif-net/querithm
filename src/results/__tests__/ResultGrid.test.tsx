@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { Bool, Int32, Utf8 } from "apache-arrow";
 import { forwardRef, useImperativeHandle } from "react";
 
@@ -13,7 +13,7 @@ vi.mock("@glideapps/glide-data-grid", async (orig) => {
     DataEditor: forwardRef(function FakeEditor(props: unknown, ref) {
       latest.props = props;
       useImperativeHandle(ref, () => ({ scrollTo }) as never);
-      return <canvas data-testid="glide" />;
+      return <div className="dvn-scroller" data-testid="scroll"><canvas data-testid="glide" /></div>;
     }),
   };
 });
@@ -87,6 +87,31 @@ describe("tint / gridTheme", () => {
 });
 
 describe("read-only grid", () => {
+  it("restores width, selection and scroll after leaving a result view, but clears selection after sorting", () => {
+    const rs = build();
+    const first = render(<ResultGrid rs={rs} executionId="remember" />);
+    const selected = { columns: CompactSelection.fromSingleSelection(1), rows: CompactSelection.empty() };
+    act(() => {
+      P().onColumnResize({}, 320, 1);
+      P().onGridSelectionChange(selected);
+    });
+    const scroll = first.getByTestId("scroll");
+    scroll.scrollLeft = 70;
+    scroll.scrollTop = 90;
+    fireEvent.scroll(scroll);
+    first.unmount();
+    const second = render(<ResultGrid rs={rs} executionId="remember" />);
+    expect(P().columns[1].width).toBe(320);
+    expect(P().gridSelection).toEqual(selected);
+    expect(P().scrollOffsetX).toBe(70);
+    expect(P().scrollOffsetY).toBe(90);
+    second.unmount();
+    rs.setSort(0, "desc");
+    render(<ResultGrid rs={rs} executionId="remember" />);
+    expect(P().gridSelection.columns.length).toBe(0);
+    expect(P().columns[1].width).toBe(320);
+  });
+
   it("gives the row-number gutter the header background, read-only and editable alike", () => {
     document.documentElement.style.setProperty("--q-panel", "#abcdef");
     const rs = build();

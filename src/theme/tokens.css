@@ -803,11 +803,7 @@ select {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* Close slot (D12, owner revision 3): 24 × 20 at the end of line 1, so line 2 runs the tab's full width. The modified
-   dot at rest, × on hover, keyboard focus and on the active clean tab; the pin on pinned tabs. Line 1 ends in 26 px of
-   room for it, which counts in the tab's width (+38 px) but gives way first when a tab is cut: the name then runs to
-   the tab's end and a hover's × is drawn over it. A tab that always shows something there (active, modified, pinned,
-   renaming) keeps the room, so its name is never covered. */
+/* Reserve the close slot in every tab so activation never changes the title's available width. */
 .q-tab-top {
   position: relative;
   display: flex;
@@ -818,8 +814,8 @@ select {
 .q-tab-top::after {
   content: "";
   width: 26px;
-  flex-shrink: 1000000;
-  min-width: 4px;
+  flex-shrink: 0;
+  min-width: 26px;
 }
 .dv-tab.dv-active-tab .q-tab .q-tab-top::after,
 .q-tab:is([data-dirty], [data-pinned], [data-editing]) .q-tab-top::after {
@@ -1105,17 +1101,6 @@ select {
   }
 }
 
-@keyframes q-panel-view-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
 @keyframes q-panel-tab-indicator {
   from {
     transform: scaleX(0.35);
@@ -1166,39 +1151,6 @@ select {
     transform: translateY(-6px);
   }
   to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-@keyframes q-tab-enter {
-  0% {
-    opacity: 0;
-    transform: translateX(-4px);
-  }
-  100% {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-@keyframes q-editor-unfold {
-  0% {
-    opacity: 0;
-    transform: none;
-  }
-  100% {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-@keyframes q-results-rise {
-  0% {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  100% {
     opacity: 1;
     transform: none;
   }
@@ -1260,9 +1212,6 @@ select {
 .q-banner-in {
   animation: q-banner-in 160ms cubic-bezier(0.16, 1, 0.3, 1);
 }
-.q-panel-view-in {
-  animation: q-panel-view-in 150ms cubic-bezier(0.16, 1, 0.3, 1);
-}
 .q-panel-tab-indicator {
   animation: q-panel-tab-indicator 160ms cubic-bezier(0.16, 1, 0.3, 1);
   transform-origin: center;
@@ -1275,9 +1224,6 @@ select {
 }
 .q-settings-page-in {
   animation: q-settings-page-in 160ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-.q-results-open {
-  animation: q-results-rise 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .q-tree-caret {
   transition: transform 140ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -1294,15 +1240,6 @@ select {
 .q-profile-reveal-3 {
   animation-delay: 75ms;
 }
-.q-tab {
-  animation: q-tab-enter 150ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-.q-query-page [data-q-editor-column] {
-  animation: q-editor-unfold 140ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-.q-query-page [data-focus-region="results"] {
-  animation: q-results-rise 160ms cubic-bezier(0.22, 1, 0.36, 1);
-}
 
 @media (prefers-reduced-motion: reduce) {
   .q-modal-backdrop,
@@ -1312,16 +1249,11 @@ select {
   .q-palette-in,
   .q-toast-in,
   .q-banner-in,
-  .q-panel-view-in,
   .q-panel-tab-indicator,
   .q-tree-row-reveal,
   .q-side-panel-in,
   .q-settings-page-in,
-  .q-results-open,
-  .q-profile-reveal,
-  .q-tab,
-  .q-query-page [data-q-editor-column],
-  .q-query-page [data-focus-region="results"] {
+  .q-profile-reveal {
     animation: none;
   }
   .q-tree-caret {

@@ -22,7 +22,7 @@ export function ToolTabPanel(props: IDockviewPanelProps<Params>) {
   const tool = useToolTabs((s) => s.tools[props.params.toolId]);
   if (!tool) return null;
   return (
-    <div className="q-query-page h-full bg-bg overflow-hidden flex flex-col">
+    <div className="h-full bg-bg overflow-hidden flex flex-col">
       <Suspense fallback={<div className="flex-1 flex items-center justify-center text-muted text-xs">Loading…</div>}>
         {tool.kind === "erd" && <ErdTab tool={tool} />}
         {tool.kind === "schemaCompare" && <SchemaCompareTab tool={tool} />}

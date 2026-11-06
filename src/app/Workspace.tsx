@@ -142,7 +142,17 @@ export function Workspace() {
   const onReady = (e: DockviewReadyEvent) => {
     api.current = e.api;
     let ready = false;
-    let justOpenedId: string | undefined;
+    const tabAnimations = new WeakMap<HTMLElement, Animation>();
+    const settleTab = (el: HTMLElement) => {
+      tabAnimations.get(el)?.cancel();
+      tabAnimations.delete(el);
+    };
+    const animateTab = (el: HTMLElement, frames: Keyframe[], duration: number) => {
+      settleTab(el);
+      const animation = el.animate(frames, { duration, easing: "cubic-bezier(0.16, 1, 0.3, 1)" });
+      tabAnimations.set(el, animation);
+      animation.onfinish = () => tabAnimations.delete(el);
+    };
     const canAnimate = () =>
       typeof Element !== "undefined" &&
       typeof Element.prototype.animate === "function" &&
@@ -153,42 +163,28 @@ export function Workspace() {
       for (const x of group.panels) {
         if (x.view?.tab) {
           const el = tabElement(x as any);
+          // Rapid opens start from the settled layout, without stacking animations.
+          settleTab(el);
           map.set(el, el.getBoundingClientRect().left);
         }
       }
       return map;
     };
-    const animateOpenedPanel = (id: string, activate: boolean, before: Map<HTMLElement, number>) => {
+    const animateOpenedPanel = (id: string, before: Map<HTMLElement, number>) => {
       if (!ready || !canAnimate()) return;
       const p = e.api.getPanel(id);
       if (!p) return;
       for (const [el, oldLeft] of before) {
         const dx = oldLeft - el.getBoundingClientRect().left;
         if (Math.abs(dx) > 2) {
-          el.animate([{ transform: `translateX(${dx}px)` }, { transform: "none" }], {
-            duration: 220,
-            easing: "cubic-bezier(0.16, 1, 0.3, 1)",
-          });
+          animateTab(el, [{ transform: `translateX(${dx}px)` }, { transform: "none" }], 180);
         }
       }
       if (p.view?.tab) {
-        tabElement(p).animate(
-          [
-            { opacity: 0, transform: "translateY(-8px) scale(0.95)" },
-            { opacity: 1, transform: "none" },
-          ],
-          { duration: 220, easing: "cubic-bezier(0.16, 1, 0.3, 1)" },
-        );
-      }
-      if (activate && p.view?.content?.element) {
-        justOpenedId = id;
-        (p.view.content.element as HTMLElement).animate(
-          [
-            { opacity: 0, transform: "translateY(-10px) scale(0.992)" },
-            { opacity: 1, transform: "none" },
-          ],
-          { duration: 220, easing: "cubic-bezier(0.16, 1, 0.3, 1)" },
-        );
+        animateTab(tabElement(p), [
+          { opacity: 0, transform: "translateY(-4px)" },
+          { opacity: 1, transform: "none" },
+        ], 150);
       }
     };
     const add = (id: string, activate: boolean, atEnd = false) => {
@@ -205,7 +201,7 @@ export function Workspace() {
       });
       if (t.pinned) applyPinnedOrder(id);
       else if (!atEnd) openFirst(id);
-      if (!atEnd) animateOpenedPanel(id, activate, before);
+      if (!atEnd) animateOpenedPanel(id, before);
     };
     /** New tabs open on the left, right after the pinned ones, where they are easy to find (D16: tool tabs too). */
     const openFirst = (id: string) => {
@@ -221,11 +217,47 @@ export function Workspace() {
       const before = snapshotTabPositions(group);
       e.api.addPanel({ id, component: "tool", tabComponent: "tool", params: { toolId: id }, title, position: group ? { referenceGroup: group } : undefined });
       openFirst(id);
-      animateOpenedPanel(id, true, before);
+      animateOpenedPanel(id, before);
     };
     workspaceHooks.onTabRemoved = (id) => {
       const p = e.api.getPanel(id);
-      if (p) e.api.removePanel(p);
+      if (!p) return;
+      const wasActive = e.api.activePanel?.id === id;
+      const before = snapshotTabPositions(p.group);
+      const removedTab = p.view?.tab ? tabElement(p) : undefined;
+      if (removedTab) {
+        settleTab(removedTab);
+        before.delete(removedTab);
+      }
+      // Prefer the neighbour to the right, then the left, instead of Dockview's MRU fallback.
+      if (wasActive) {
+        const index = p.group.panels.indexOf(p);
+        const neighbour = p.group.panels[index + 1] ?? p.group.panels[index - 1];
+        neighbour?.api.setActive();
+      }
+      e.api.removePanel(p);
+      if (!ready || !canAnimate()) return;
+
+      // Follow Dockview's chosen successor; closing never delays activation or moves the editor.
+      const successor = wasActive ? e.api.activePanel : undefined;
+      const selectedTab = successor?.view?.tab ? tabElement(successor) : undefined;
+      if (selectedTab && !before.has(selectedTab)) {
+        settleTab(selectedTab);
+        before.set(selectedTab, selectedTab.getBoundingClientRect().left);
+      }
+      for (const [el, oldLeft] of before) {
+        const dx = oldLeft - el.getBoundingClientRect().left;
+        const highlight = el === selectedTab;
+        if (Math.abs(dx) <= 2 && !highlight) continue;
+        animateTab(el, [
+          {
+            transform: `translateX(${dx}px)`,
+            boxShadow: highlight ? "inset 0 -2px 0 var(--q-accent)" : "none",
+          },
+          { offset: 0.8, boxShadow: "none" },
+          { transform: "none", boxShadow: "none" },
+        ], 150);
+      }
     };
     workspaceHooks.activate = (id) => e.api.getPanel(id)?.api.setActive();
     // Strip order holds query and tool tabs alike (D17): positions are Dockview's, so moves land where they should.
@@ -279,7 +311,6 @@ export function Workspace() {
       if (active && e.api.activePanel?.id !== active) e.api.getPanel(active)?.api.setActive();
     };
     // A tool tab (diagram, compare) is not a query tab: query commands then have no active tab.
-    let lastActiveIndex = -1;
     e.api.onDidActivePanelChange((p) => {
       const tool = !!p && !!useToolTabs.getState().tools[p.id];
       const before = useTabs.getState().activeId;
@@ -288,19 +319,6 @@ export function Workspace() {
       // Ctrl+Tab lists tool tabs too (D17): they join the recent-tabs list without becoming the active query tab.
       if (tool) useTabs.getState().touch(p!.id);
       if (tool && before) announceTxLeftBehind(before);
-      const nextIndex = p?.group ? p.group.panels.indexOf(p) : -1;
-      if (ready && p && p.id !== justOpenedId && p.view?.content?.element && canAnimate()) {
-        const dir = lastActiveIndex >= 0 && nextIndex >= 0 && nextIndex !== lastActiveIndex ? (nextIndex > lastActiveIndex ? 14 : -14) : 0;
-        (p.view.content.element as HTMLElement).animate(
-          [
-            { opacity: 0.35, transform: dir ? `translateX(${dir}px)` : "translateY(-6px)" },
-            { opacity: 1, transform: "none" },
-          ],
-          { duration: 180, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
-        );
-      }
-      lastActiveIndex = nextIndex;
-      justOpenedId = undefined;
       sync();
     });
     // A drag can drop a tab in front of pinned ones: put the pinned tabs back at the front.

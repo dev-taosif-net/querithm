@@ -69,6 +69,7 @@ export function useStripLayout(group: DockviewGroupPanel | undefined, panels: ID
     }
     const frameBox = strip.parentElement;
     let frame = 0;
+    let revealPending = false;
     const tabEl = (p: IDockviewPanel) => (p.view.tab.element.closest(".dv-tab") ?? p.view.tab.element) as HTMLElement;
     const measure = (reveal: boolean) => {
       frame = 0;
@@ -109,24 +110,28 @@ export function useStripLayout(group: DockviewGroupPanel | undefined, panels: ID
       const next = hiddenIds(strip, tabs, covered);
       setHidden((cur) => (cur.length === next.length && cur.every((x, i) => x === next[i]) ? cur : next));
     };
-    const schedule = () => {
-      if (!frame) frame = requestAnimationFrame(() => measure(false));
+    const schedule = (reveal = false) => {
+      revealPending ||= reveal;
+      if (!frame) frame = requestAnimationFrame(() => {
+        const shouldReveal = revealPending;
+        revealPending = false;
+        measure(shouldReveal);
+      });
     };
-    const onResize = () => {
-      if (!frame) frame = requestAnimationFrame(() => measure(true));
-    };
+    const onScroll = () => schedule();
+    const onResize = () => schedule(true);
     measure(true);
     const resize = new ResizeObserver(onResize);
     resize.observe(strip);
     // Adding, closing, renaming or moving a tab can change what fits without resizing the strip itself.
-    const mutations = new MutationObserver(schedule);
+    const mutations = new MutationObserver(() => schedule(true));
     mutations.observe(strip, { childList: true, subtree: true, characterData: true });
-    strip.addEventListener("scroll", schedule, { passive: true });
+    strip.addEventListener("scroll", onScroll, { passive: true });
     return () => {
       if (frame) cancelAnimationFrame(frame);
       resize.disconnect();
       mutations.disconnect();
-      strip.removeEventListener("scroll", schedule);
+      strip.removeEventListener("scroll", onScroll);
     };
   }, [group, panels, isPinned, activeId]);
   return hidden;

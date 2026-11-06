@@ -46,7 +46,7 @@ export function BottomPanel({ tab }: { tab: TabState }) {
     <PanelWidthContext.Provider value={width}>
       <div ref={root} className="flex-1 flex flex-col min-h-0 min-w-0" data-q-bottom-panel data-width={width}>
         <PanelHeader tab={tab} width={width} />
-        <div key={tab.bottomTab} className="q-panel-view-in flex-1 flex flex-col min-h-0 bg-bg">
+        <div key={tab.bottomTab} className="flex-1 flex flex-col min-h-0 bg-bg">
           {/* M17: a view that fails shows so in its place; the header (and so the other views) keeps working. A run view
               that failed tries again on another run (W7); the tab's own views (Runtime, Usages) keep their boundary. */}
           <ErrorBoundary

@@ -158,6 +158,17 @@ describe("useHiddenTabs", () => {
     expect(into).toHaveBeenCalledTimes(2);
   });
 
+  it("a queued scroll cannot suppress a resize's active-tab reveal", () => {
+    const g = group([["a", 100, 300], ["b", 300, 520]]);
+    const into = vi.fn();
+    g.byId.b.scrollIntoView = into;
+    renderHook(() => useStripLayout(g.group, g.panels, none, "b"));
+    g.strip.dispatchEvent(new Event("scroll"));
+    act(() => resize!());
+    flushFrames();
+    expect(into).toHaveBeenCalledTimes(2);
+  });
+
   it("re-measures when tabs are added to the strip", async () => {
     const g = group([["a", 100, 300]]);
     renderHook(() => useStripLayout(g.group, g.panels, none));

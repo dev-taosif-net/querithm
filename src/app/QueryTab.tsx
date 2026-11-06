@@ -32,6 +32,21 @@ export function QueryTabPanel(props: IDockviewPanelProps<Params>) {
   const dock = useSettings((s) => s.panelDock);
   const slot = useRef<HTMLDivElement>(null);
   const root = useRef<HTMLDivElement>(null);
+  const results = useRef<HTMLDivElement>(null);
+  const wasBottomOpen = useRef(!!tab?.bottomOpen);
+
+  // Animate an explicit panel opening, not DOM reattachment when Dockview removes a sibling tab.
+  useEffect(() => {
+    const opened = !!tab?.bottomOpen && !wasBottomOpen.current;
+    wasBottomOpen.current = !!tab?.bottomOpen;
+    if (!opened || !props.api.isVisible || !results.current?.animate ||
+        window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) return;
+    const animation = results.current.animate([
+      { opacity: 0, transform: "translateY(4px)" },
+      { opacity: 1, transform: "none" },
+    ], { duration: 150, easing: "cubic-bezier(0.22, 1, 0.36, 1)" });
+    return () => animation.cancel();
+  }, [tab?.bottomOpen, props.api]);
   const [visible, setVisible] = useState(props.api.isVisible);
   const [groupId, setGroupId] = useState(props.api.group.id);
 
@@ -89,7 +104,7 @@ export function QueryTabPanel(props: IDockviewPanelProps<Params>) {
   const size = `${tab.bottomSize * 100}%`;
 
   return (
-    <div ref={root} className={`q-query-page h-full flex ${right ? "flex-row" : "flex-col"} bg-bg overflow-hidden`} data-q-dock={right ? "right" : "bottom"}>
+    <div ref={root} className={`h-full flex ${right ? "flex-row" : "flex-col"} bg-bg overflow-hidden`} data-q-dock={right ? "right" : "bottom"}>
       <div
         className={`relative flex flex-col min-h-0 min-w-0 overflow-hidden ${max ? "shrink-0" : "flex-1"}`}
         style={max ? (right ? { width: 32 } : { height: 28 }) : undefined}
@@ -120,8 +135,9 @@ export function QueryTabPanel(props: IDockviewPanelProps<Params>) {
             />
           )}
           <div
+            ref={results}
             data-focus-region="results"
-            className={`q-results-open bg-panel flex flex-col min-h-0 min-w-0 ${max ? "flex-1" : "shrink-0"} ${right ? "border-l border-line" : "border-t border-line"}`}
+            className={`bg-panel flex flex-col min-h-0 min-w-0 ${max ? "flex-1" : "shrink-0"} ${right ? "border-l border-line" : "border-t border-line"}`}
             style={max ? undefined : right ? { width: size, minWidth: 420 } : { height: size }}
           >
             <BottomPanel tab={tab} />
@@ -184,7 +200,7 @@ function ContextBar({ tab }: { tab: TabState }) {
   const showUse = useDb && tab.database && useDb.toLowerCase() !== tab.database.toLowerCase();
   if (!b && !tab.readOnly && !showUse) return null;
   return (
-    <div className={`q-banner-in h-[30px] border-b border-line px-3.5 flex items-center justify-between text-xs shrink-0 ${prod ? "bg-err/10 q-hl" : "bg-panel-2"}`}>
+    <div className={`h-[30px] border-b border-line px-3.5 flex items-center justify-between text-xs shrink-0 ${prod ? "bg-err/10 q-hl" : "bg-panel-2"}`}>
       <div className="flex items-center gap-2 min-w-0">
         {b && (
           <>
