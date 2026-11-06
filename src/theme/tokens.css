@@ -1260,3 +1260,21 @@ select {
     transition: none;
   }
 }
+
+/* Restrict interaction motion to small controls, never the editor or virtual result rows. */
+.q-btn, .q-tb {
+  transition: background-color 100ms ease-out, border-color 100ms ease-out, transform 80ms ease-out;
+}
+.q-btn:active:not(:disabled):not([aria-disabled="true"]),
+.q-tb:active:not(:disabled):not([aria-disabled="true"]) { transform: translateY(1px); }
+[data-q-exiting] .q-modal-backdrop { animation: q-modal-backdrop-out 120ms ease-in forwards; }
+[data-q-exiting] .q-modal-dialog { animation: q-modal-dialog-out 120ms ease-in forwards; }
+@keyframes q-modal-backdrop-out { to { opacity: 0; } }
+@keyframes q-modal-dialog-out { to { opacity: 0; transform: translateY(4px) scale(0.99); } }
+.q-skeleton { animation: q-skeleton-pulse 1.4s ease-in-out infinite; }
+@keyframes q-skeleton-pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) {
+  .q-btn, .q-tb { transition: none; }
+  .q-btn:active, .q-tb:active { transform: none; }
+  .q-skeleton, [data-q-exiting] .q-modal-backdrop, [data-q-exiting] .q-modal-dialog { animation: none; }
+}

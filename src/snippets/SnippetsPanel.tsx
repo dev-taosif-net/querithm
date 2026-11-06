@@ -1,3 +1,4 @@
+import { BusyButtonContent } from "../app/LoadingStatus";
 // Snippet library UI (Phase A3): the list with search and the editor modal. The body is edited in the shared Monaco
 // editor (borrowed with a temporary model), never a second instance (§12).
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -119,6 +120,7 @@ export function SnippetEditor({ snippet, close }: { snippet: Snippet; close: () 
   const [tags, setTags] = useState(snippet.tags.join(", "));
   const [error, setError] = useState<{ field?: string; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
+  const savePending = useRef(false);
   const host = useRef<HTMLDivElement>(null);
   const body = useRef<ReturnType<typeof borrowEditor> | null>(null);
   useEffect(() => {
@@ -131,11 +133,15 @@ export function SnippetEditor({ snippet, close }: { snippet: Snippet; close: () 
     };
   }, [snippet]);
   const save = async () => {
+    if (savePending.current) return;
+    savePending.current = true;
     setSaving(true);
+    setError(null);
     const r = await useSnippets.getState().save({
       ...snippet, title, prefix: prefix.trim(), dialect: dialect || null, body: body.current?.getValue() ?? snippet.body,
       tags: tags.split(",").map((t) => t.trim()).filter(Boolean),
     });
+    savePending.current = false;
     setSaving(false);
     if (r.ok) {
       toast("success", `Snippet "${r.snippet.prefix}" saved.`);
@@ -152,7 +158,7 @@ export function SnippetEditor({ snippet, close }: { snippet: Snippet; close: () 
       footer={
         <>
           <button className="q-btn" onClick={close}>Cancel</button>
-          <button className="q-btn q-btn-primary" disabled={saving} onClick={() => void save()}>Save</button>
+          <button className="q-btn q-btn-primary" disabled={saving} aria-busy={saving || undefined} onClick={() => void save()}><BusyButtonContent busy={saving} label="Save" busyLabel="Saving…" /></button>
         </>
       }
     >

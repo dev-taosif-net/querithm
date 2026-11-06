@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Dependency, HistoryEntry, HistoryRetention, SnapObject } from "../ipc/contract";
 import { rpc, shell } from "../ipc/client";
 import { useUi, type Dialog, toast } from "../store/ui";
@@ -6,6 +6,9 @@ import { useTabs } from "../store/tabs";
 import { engineBadge, envLabel, sshAccount, useProfiles } from "../store/profiles";
 import { useSnapshots } from "../store/snapshots";
 import { Field, Modal } from "./Modal";
+import { LoadingSkeleton } from "./LoadingStatus";
+import { lazyDialog } from "./LazyDialog";
+import { PresenceList } from "./Presence";
 import { SecretInput } from "./SecretInput";
 import { escapeForDisplay } from "../monitor/format";
 import { ServerChip } from "./EnvTag";
@@ -21,20 +24,16 @@ import { UpdateDialog } from "./UpdateDialog";
 import { assertNever, dialectOf, DIALECTS, engineTraits } from "../engines";
 
 // The wizard (and its grid preview) loads when first opened.
-const ImportWizardDialog = lazy(() => import("../import/ImportWizardDialog").then((m) => ({ default: m.ImportWizardDialog })));
-const RenameDialog = lazy(() => import("../refactor/RenameDialog").then((m) => ({ default: m.RenameDialog })));
-const SnippetsPanel = lazy(() => import("../snippets/SnippetsPanel").then((m) => ({ default: m.SnippetsPanel })));
-const SnippetEditor = lazy(() => import("../snippets/SnippetsPanel").then((m) => ({ default: m.SnippetEditor })));
-const SettingsDialog = lazy(() => import("../settings/SettingsDialog").then((m) => ({ default: m.SettingsDialog })));
+const ImportWizardDialog = lazyDialog(async () => { const m = await import("../import/ImportWizardDialog"); return { default: m.ImportWizardDialog }; });
+const RenameDialog = lazyDialog(async () => { const m = await import("../refactor/RenameDialog"); return { default: m.RenameDialog }; });
+const SnippetsPanel = lazyDialog(async () => { const m = await import("../snippets/SnippetsPanel"); return { default: m.SnippetsPanel }; });
+const SnippetEditor = lazyDialog(async () => { const m = await import("../snippets/SnippetsPanel"); return { default: m.SnippetEditor }; });
+const SettingsDialog = lazyDialog(async () => { const m = await import("../settings/SettingsDialog"); return { default: m.SettingsDialog }; });
 
 export function Dialogs() {
   const dialogs = useUi((s) => s.dialogs);
   return (
-    <>
-      {dialogs.map((d, i) => (
-        <DialogView key={i} d={d} />
-      ))}
-    </>
+    <PresenceList items={dialogs}>{(d) => <DialogView d={d} />}</PresenceList>
   );
 }
 
@@ -84,9 +83,7 @@ function DialogView({ d }: { d: Dialog }) {
       return <CellViewer d={d} close={close} />;
     case "settings":
       return (
-        <Suspense fallback={null}>
-          <SettingsDialog close={close} page={d.page} focus={d.focus} />
-        </Suspense>
+        <SettingsDialog loadingTitle="Settings" onLoadClose={close} close={close} page={d.page} focus={d.focus} />
       );
     case "update":
       return <UpdateDialog close={close} />;
@@ -117,27 +114,19 @@ function DialogView({ d }: { d: Dialog }) {
       return <GridPendingDialog d={d} />;
     case "import":
       return (
-        <Suspense fallback={null}>
-          <ImportWizardDialog d={d} />
-        </Suspense>
+        <ImportWizardDialog loadingTitle="Import data" onLoadClose={close} d={d} />
       );
     case "rename":
       return (
-        <Suspense fallback={null}>
-          <RenameDialog d={d} />
-        </Suspense>
+        <RenameDialog loadingTitle="Rename" onLoadClose={close} d={d} />
       );
     case "snippets":
       return (
-        <Suspense fallback={null}>
-          <SnippetsPanel close={close} />
-        </Suspense>
+        <SnippetsPanel loadingTitle="Snippets" onLoadClose={close} close={close} />
       );
     case "snippetEdit":
       return (
-        <Suspense fallback={null}>
-          <SnippetEditor snippet={d.snippet} close={close} />
-        </Suspense>
+        <SnippetEditor loadingTitle="Edit snippet" onLoadClose={close} snippet={d.snippet} close={close} />
       );
   }
 }
@@ -718,17 +707,22 @@ function HistoryDialog({ close }: { close: () => void }) {
 function DependenciesDialog({ d, close }: { d: Extract<Dialog, { kind: "dependencies" }>; close: () => void }) {
   const [deps, setDeps] = useState<Dependency[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
+    let active = true;
+    setError(null);
     void (async () => {
       try {
         const { useConnections } = await import("../store/connections");
         const sessionId = await useConnections.getState().sessionFor(d.profileId);
-        setDeps(await rpc("meta.dependencies", { sessionId, object: { schema: d.schema, name: d.name, objectId: d.objectId, kind: d.kind2 as SnapObject["kind"], database: d.database, profileId: d.profileId } }));
+        const result = await rpc("meta.dependencies", { sessionId, object: { schema: d.schema, name: d.name, objectId: d.objectId, kind: d.kind2 as SnapObject["kind"], database: d.database, profileId: d.profileId } });
+        if (active) setDeps(result);
       } catch (e) {
-        setError((e as Error).message);
+        if (active) setError(e instanceof Error ? e.message : String(e));
       }
     })();
-  }, [d]);
+    return () => { active = false; };
+  }, [d, attempt]);
   const groups = useMemo(() => ({ uses: deps?.filter((x) => x.direction === "uses") ?? [], usedBy: deps?.filter((x) => x.direction === "usedBy") ?? [] }), [deps]);
   const open = (x: Dependency) => {
     if (x.object.kind === "table") return;
@@ -737,8 +731,8 @@ function DependenciesDialog({ d, close }: { d: Extract<Dialog, { kind: "dependen
   };
   return (
     <Modal title={`Dependencies — ${d.schema}.${d.name}`} onClose={close} width={720} footer={<button className="q-btn" onClick={close}>Close</button>}>
-      {error && <div className="text-err">{error}</div>}
-      {!deps && !error && <div className="text-muted">Loading…</div>}
+      {error && <div role="alert" className="text-err flex items-center gap-2">{error}<button className="q-btn" onClick={() => setAttempt((n) => n + 1)}>Retry</button></div>}
+      {!deps && !error && <LoadingSkeleton label="Loading dependencies…" />}
       {deps && (
         <div className="grid grid-cols-2 gap-4">
           {(["uses", "usedBy"] as const).map((k) => (

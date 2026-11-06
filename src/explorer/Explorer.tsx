@@ -393,7 +393,7 @@ export function Explorer() {
     }
     if (e.key === "F5") {
       e.preventDefault();
-      if (r.t === "server" && r.status === "connected") void useConnections.getState().refreshDatabases(r.profileId);
+      if (r.t === "server" && r.status === "connected") void useConnections.getState().refreshDatabases(r.profileId).catch((e) => toast("error", `Could not refresh databases: ${e instanceof Error ? e.message : String(e)}. Press F5 to retry.`));
       else if ("db" in r && r.db && "profileId" in r && r.profileId) void useSnapshots.getState().refresh(r.profileId, r.db, false);
       return;
     }
@@ -976,7 +976,7 @@ const Row = memo(function Row({ row: r, index: i, selected, focused, fresh, view
     "aria-posinset": r.pos,
     "aria-expanded": r.expandable || (r.t === "server" && r.status === "off") ? r.expanded : undefined,
     "aria-selected": selected,
-    "aria-busy": (r.t === "server" && r.status === "connecting") || (r.t === "note" && r.busy) || (r.t === "db" && (r.state === "loading" || r.state === "refreshing")) || undefined,
+    "aria-busy": (r.t === "server" && (r.status === "connecting" || r.refreshing)) || (r.t === "note" && r.busy) || (r.t === "db" && (r.state === "loading" || r.state === "refreshing")) || undefined,
     "aria-label": label,
     style,
     onClick: (e: MouseEvent) => handlers.click(i, e),
@@ -1026,9 +1026,9 @@ function RowBody({ r, view, handlers }: { r: TreeRow; view: RowView; handlers: H
             </span>
           )}
           {p && <EnvTag env={p.environment} color={view.envText.get(p.id) ?? `var(--q-env-${p.environment})`} />}
-          {r.status === "connecting" && (
+          {(r.status === "connecting" || r.refreshing) && (
             <span className="shrink-0 flex items-center gap-1 text-accent text-[11px]">
-              {!view.compact && "Connecting"}
+              {!view.compact && (r.refreshing ? "Refreshing…" : "Connecting…")}
               <Icon name="spinner" size={13} className="animate-spin motion-reduce:animate-none" />
             </span>
           )}
@@ -1051,7 +1051,7 @@ function RowBody({ r, view, handlers }: { r: TreeRow; view: RowView; handlers: H
           {r.state === "offline" && <span className="shrink-0 text-[10.5px] text-muted">{(r.dbState ?? "offline").toUpperCase()}</span>}
           {(r.state === "loading" || r.state === "refreshing") && (
             <span className="shrink-0 flex items-center gap-1 text-[11px] text-muted">
-              {r.state === "loading" && !view.compact && "Loading"}
+              {!view.compact && (r.state === "loading" ? "Loading…" : "Refreshing…")}
               <Icon name="spinner" size={12} className="animate-spin motion-reduce:animate-none" />
             </span>
           )}

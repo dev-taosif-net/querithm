@@ -172,7 +172,7 @@ export function serverMenu(row: RowOf<"server">): MenuEntry[] {
       ]
     : [];
   const tools: MenuEntry[] = [
-    item("Refresh databases", () => void useConnections.getState().refreshDatabases(id), { hint: "F5", unavailable: off ?? (row.memory ? MEMORY_NOTE : undefined) }),
+    item("Refresh databases", () => void useConnections.getState().refreshDatabases(id).catch((e) => toast("error", `Could not refresh databases: ${e instanceof Error ? e.message : String(e)}. Choose Refresh databases to retry.`)), { hint: "F5", unavailable: off ?? (row.memory ? MEMORY_NOTE : undefined) }),
     item("Activity monitor", () => openActivityMonitor(id), { unavailable: off ?? (traits.monitor ? undefined : `${traits.shortLabel} has no activity monitor`) }),
   ];
   const sessions = Object.values(useTabs.getState().tabs).filter((t) => t.profileId === id && t.sessionId).length;

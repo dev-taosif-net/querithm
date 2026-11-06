@@ -151,6 +151,22 @@ describe("snippet editor", () => {
     expect(h.borrowed.release).toHaveBeenCalledTimes(1);
   });
 
+  it("shows saving feedback, prevents a duplicate save, and permits retry after failure", async () => {
+    let reject!: (error: Error) => void;
+    h.rpc.mockImplementation(() => new Promise((_, fail) => { reject = fail; }));
+    render(<SnippetEditor snippet={blankSnippet({ title: "x", prefix: "x", body: "SELECT 1;" })} close={() => {}} />);
+    const save = screen.getByRole("button", { name: "Save" });
+    fireEvent.click(save);
+    expect(save.getAttribute("aria-busy")).toBe("true");
+    expect(save.textContent).toContain("Saving…");
+    fireEvent.click(save);
+    expect(h.rpc).toHaveBeenCalledTimes(1);
+    reject(new Error("Could not save"));
+    await screen.findByRole("alert");
+    expect((save as HTMLButtonElement).disabled).toBe(false);
+    expect(save.textContent).toBe("Save");
+  });
+
   it("shows a duplicate prefix inline next to the prefix and keeps the dialog open", async () => {
     h.rpc.mockRejectedValue(new FakeRpcError("The prefix 'audit' is already used by \"Audit columns\".", -32001, "snippetPrefixTaken", { field: "prefix" }));
     const close = vi.fn();

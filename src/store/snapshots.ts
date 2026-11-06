@@ -212,7 +212,21 @@ export const useSnapshots = create<SnapStore>((set, get) => {
       }
     },
     async refresh(profileId, database, full = false, sessionId) {
-      await rpc("meta.refresh", { profileId, database, full, ...sessionParam(sessionId) });
+      if (isDisconnected(profileId)) return;
+      const k = snapKey(profileId, database, sessionId);
+      const prev = get().entries[k];
+      if (prev?.status === "refreshing" || prev?.status === "loading") return;
+      const pending: SnapEntry = { ...prev, key: k, profileId, database, sessionId,
+        status: "refreshing", error: null, version: (prev?.version ?? 0) + 1 };
+      put(pending);
+      try {
+        await rpc("meta.refresh", { profileId, database, full, ...sessionParam(sessionId) });
+      } catch (e) {
+        // Handle fire-and-forget refresh actions too, keeping their cached schema and Retry available.
+        const now = get().entries[k];
+        if (!now || now.status !== "refreshing" || isDisconnected(profileId)) return;
+        put({ ...now, status: "error", error: e instanceof Error ? e.message : String(e), failedAt: Date.now(), version: now.version + 1 });
+      }
     },
     get(profileId, database, sessionId) {
       if (!profileId || !database) return undefined;

@@ -25,6 +25,7 @@ export interface ServerConn {
   /** The database the explorer session is in: the profile default, else the login's default as the server reports it. */
   database?: string;
   databases: DatabaseInfo[];
+  refreshing?: boolean;
   caps?: Capabilities;
   /** An in-memory profile: shown connected without a session of its own (one would be a new, empty database). */
   memory?: boolean;
@@ -216,10 +217,21 @@ export const useConnections = create<ConnStore>((set, get) => {
       set((st) => ({ servers: omit(st.servers, profileId), order: st.order.filter((x) => x !== profileId), disconnected: { ...st.disconnected, [profileId]: true } }));
     },
     async refreshDatabases(profileId) {
-      if (get().servers[profileId]?.memory) return;
-      const sid = await get().sessionFor(profileId);
-      const databases = await rpc("meta.databases", { sessionId: sid });
-      patchLive(profileId, sid, { databases });
+      const server = get().servers[profileId];
+      if (server?.memory || server?.refreshing) return;
+      // Keep the current list visible and guard repeated F5 / menu activation.
+      if (server) put(profileId, { refreshing: true });
+      let sid: string | undefined;
+      try {
+        sid = await get().sessionFor(profileId);
+        const databases = await rpc("meta.databases", { sessionId: sid });
+        patchLive(profileId, sid, { databases });
+      } finally {
+        if (sid) patchLive(profileId, sid, { refreshing: false });
+        else if (get().servers[profileId] === server || get().servers[profileId]?.sessionId === server?.sessionId) {
+          if (get().servers[profileId] && !get().disconnected[profileId]) put(profileId, { refreshing: false });
+        }
+      }
     },
     async sessionFor(profileId) {
       const s = get().servers[profileId];

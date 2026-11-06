@@ -52,7 +52,7 @@ interface Base {
 export type TreeRow = Base &
   (
     | { t: "env"; env: EnvironmentKind; count: number }
-    | { t: "server"; profileId: string; status: ServerStatus; error?: string; pinned: boolean; memory?: boolean }
+    | { t: "server"; profileId: string; status: ServerStatus; error?: string; pinned: boolean; memory?: boolean; refreshing?: boolean }
     | { t: "note"; text: string; tone: "muted" | "err"; busy?: boolean }
     | { t: "action"; action: "reconnect" | "editProfile" | "repick" | "retryMeta" | "retryDetails"; label: string; profileId: string; db?: string; objKey?: string; obj?: SnapObject }
     | { t: "db"; profileId: string; db: string; active: boolean; state: DbState; refreshedAt?: number | null; error?: string | null; dbState?: string | null }
@@ -215,7 +215,7 @@ export function buildTree(i: TreeInput): TreeResult {
     const status = statusOf(conn);
     const sKey = serverKey(p.id);
     const open = i.expanded.has(sKey);
-    const sIdx = add({ t: "server", key: sKey, level: base + 1, parent: i.groupByEnv ? envParent : -1, expandable: true, expanded: open && status !== "off", profileId: p.id, status, error: conn?.error, pinned: i.pinned.includes(p.id), ...(conn?.memory ? { memory: true } : {}) });
+    const sIdx = add({ t: "server", key: sKey, level: base + 1, parent: i.groupByEnv ? envParent : -1, expandable: true, expanded: open && status !== "off", profileId: p.id, status, error: conn?.error, ...(conn?.refreshing ? { refreshing: true } : {}), pinned: i.pinned.includes(p.id), ...(conn?.memory ? { memory: true } : {}) });
     if (!open || status === "off") continue;
     if (status === "error") {
       add({ t: "note", key: `${sKey}:why`, level: base + 2, parent: sIdx, expandable: false, expanded: false, text: firstSentence(conn?.error) ?? "Connection failed.", tone: "err" });

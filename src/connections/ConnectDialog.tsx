@@ -1,3 +1,4 @@
+import { BusySpinner } from "../app/LoadingStatus";
 // [+ Connect] profile picker (mockup screen 4, modal A): compact rows, search, environment filter, pins, edit/delete.
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Profile } from "../ipc/contract";
@@ -33,7 +34,10 @@ export function ConnectDialog({ onClose }: { onClose: () => void }) {
     if (active) listRef.current?.querySelector(`[data-profile="${CSS.escape(active.id)}"]`)?.scrollIntoView({ block: "nearest" });
   }, [active]);
 
+  const pending = useRef(false);
   const connect = async (p: Profile) => {
+    if (pending.current || useConnections.getState().servers[p.id]?.status === "connecting") return;
+    pending.current = true;
     onClose();
     const ok = await useConnections.getState().connect(p.id);
     if (!ok) return;
@@ -158,7 +162,7 @@ function ProfileRow({
       className={`group h-9 pl-1 pr-1.5 rounded-md border flex items-center justify-between gap-2 transition-colors duration-150 hover:bg-raised ${active ? "ring-1 ring-accent/60" : ""}`}
       style={{ borderColor: connected ? `color-mix(in srgb, ${color} 45%, transparent)` : "var(--q-line)", background: connected ? "var(--q-raised)" : undefined }}
       onClick={onSelect}
-      onDoubleClick={() => !connected && onConnect()}
+      onDoubleClick={() => !connected && status !== "connecting" && onConnect()}
     >
       <div className="flex items-center gap-1.5 min-w-0">
         <IconButton title={pinned ? "Unpin" : "Pin to top"} onClick={onPin} className={pinned ? "text-accent" : "text-muted opacity-0 group-hover:opacity-100 focus:opacity-100"}>
@@ -181,7 +185,7 @@ function ProfileRow({
           {connected ? (
             <span className="text-[10px] px-2 py-0.5 bg-ok/15 text-ok rounded font-medium">Connected</span>
           ) : status === "connecting" ? (
-            <span className="text-[10px] text-muted">Connecting…</span>
+            <span role="status" className="inline-flex items-center gap-1 text-[10px] text-muted"><BusySpinner />Connecting…</span>
           ) : (
             <button className="q-btn q-btn-primary h-[24px]" onClick={onConnect}>Connect</button>
           )}

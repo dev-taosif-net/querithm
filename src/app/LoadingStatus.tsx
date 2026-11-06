@@ -48,3 +48,16 @@ export function ProgressBar({ label, value, active, failed = false }: { label: s
     </div>
   );
 }
+
+/** A stable first-load placeholder; decorative blocks are hidden from assistive technology. */
+export function LoadingSkeleton({ label }: { label: string }) {
+  return <div className="space-y-4 py-4" aria-busy="true">
+    <LoadingStatus label={label} />
+    <div aria-hidden="true" className="q-skeleton space-y-3">
+      <div className="h-4 w-2/3 rounded bg-panel-2" />
+      <div className="h-8 rounded bg-panel-2" />
+      <div className="h-8 rounded bg-panel-2" />
+      <div className="h-4 w-1/2 rounded bg-panel-2" />
+    </div>
+  </div>;
+}

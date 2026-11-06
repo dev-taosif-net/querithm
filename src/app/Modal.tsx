@@ -1,4 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useExiting } from "./Presence";
 import { isTopModal, pushModal } from "./modalStack";
 
 const FOCUSABLE =
@@ -37,6 +38,7 @@ export function Modal({
   onEscape?: () => boolean;
   bodyClassName?: string;
 }) {
+  const exiting = useExiting();
   const token = useRef({}).current;
   const box = useRef<HTMLDivElement>(null);
   const id = useId();
@@ -48,9 +50,15 @@ export function Modal({
   useLayoutEffect(() => {
     handlers.current = { onClose, onEnter, onEscape, alert };
   });
-  useEffect(() => pushModal(token), [token]);
+  useEffect(() => exiting ? undefined : pushModal(token), [token, exiting]);
   useLayoutEffect(() => {
     const el = box.current;
+    // React restores selection after mutation cleanup; move focus again in the layout phase on exit.
+    if (exiting) {
+      const active = document.activeElement;
+      if (opener?.isConnected && (!active || active === document.body || el?.contains(active))) opener.focus({ preventScroll: true });
+      return;
+    }
     if (el && !el.contains(document.activeElement)) {
       const cancel = handlers.current.alert ? el.querySelector<HTMLElement>("[data-modal-cancel]:not([disabled])") : null;
       (cancel ?? el).focus({ preventScroll: true });
@@ -59,9 +67,10 @@ export function Modal({
       const a = document.activeElement;
       if (opener?.isConnected && (!a || a === document.body || el?.contains(a))) opener.focus({ preventScroll: true });
     };
-  }, [opener]);
+  }, [opener, exiting]);
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
+      if (box.current?.closest("[data-q-exiting]")) return;
       if (!isTopModal(token)) return;
       const { onClose, onEnter, onEscape, alert } = handlers.current;
       const target = e.target as HTMLElement;
