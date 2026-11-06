@@ -1334,7 +1334,7 @@ PROD…" button always shows the SQL first (`applyChanges`; the sidecar's ProdWr
 locked while changes are staged. The
 **footer** describes the shown result set (rows, "212 of 1,234" when filtered, streaming, row limit, incomplete; the
 Arrow batch count is its tooltip) and the selection statistics next to the data: Count · NULL · Distinct · Sum · Avg ·
-Min · Max, "≈" when sampled; run timing lives in the status bar only. **Messages** is the run's log in arrival order with a
+Min · Max, "≈" when sampled; run timing lives in the status bar, with elapsed seconds also shown in the Results waiting state until rows arrive. **Messages** is the run's log in arrival order with a
 "Result set N began" marker where each set started, All | Errors, Copy all (split: errors only), Clear; STATISTICS IO /
 TIME and Diagnostics collapse to one summary line each (other engines say why and point to Explain › Actual); logs over
 400 entries render a window that moves in blocks of 50. **Plan** has Graph | Table: the table is a treegrid of
@@ -1819,6 +1819,7 @@ without a UI stall.
 | Item | Original | Here | Reason |
 |---|---|---|---|
 | Name | SqlForge / `sqlforge` | Querithm / `querithm` | Product name chosen by the owner |
+| Loading feedback (2026-11-06) | Run timing only in the status bar | Results waiting state also shows elapsed seconds; shared spinners appear after 180 ms, busy buttons reserve their width, and imports show indeterminate progress when no total is known | Owner requested loading feedback across startup, execution, import, ERD and cell values, and quieter tab entry; reduced motion keeps status text and disables spinning, travel and width transitions |
 | Sidecar spawn | tauri-plugin-shell | `std::process` from Rust (no shell plugin, no `shell:*` capability) | Needs the raw child handle for the Job Object and main-thread spawn for PDEATHSIG; smaller capability surface (§15 rule 10) |
 | Package pins | SqlClient 5.2+, ScriptDom 161+, SMO 170+ | 6.1.x, 180.x, 181.x | Current releases satisfying the original minimums |
 | Data-plane payload | Arrow stream | each `0x01`/`0x02` payload is a self-contained Arrow IPC stream | Frames decode independently; schema bytes are negligible |

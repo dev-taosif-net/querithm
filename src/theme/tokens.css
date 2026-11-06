@@ -1174,7 +1174,7 @@ select {
 @keyframes q-tab-enter {
   0% {
     opacity: 0;
-    transform: translateX(-14px) translateY(-6px) scale(0.92);
+    transform: translateX(-4px);
   }
   100% {
     opacity: 1;
@@ -1182,28 +1182,10 @@ select {
   }
 }
 
-@keyframes q-tab-spotlight {
-  0% {
-    opacity: 1;
-    background-position: -120% 0;
-    box-shadow: inset 0 0 0 1.5px var(--q-accent), inset 0 22px 24px -12px color-mix(in srgb, var(--q-accent) 34%, transparent);
-  }
-  55% {
-    opacity: 1;
-    background-position: 160% 0;
-    box-shadow: inset 0 0 0 1px var(--q-accent), inset 0 18px 20px -12px color-mix(in srgb, var(--q-accent) 18%, transparent);
-  }
-  100% {
-    opacity: 0;
-    background-position: 200% 0;
-    box-shadow: none;
-  }
-}
-
 @keyframes q-editor-unfold {
   0% {
     opacity: 0;
-    transform: translateY(-14px) scale(0.988);
+    transform: none;
   }
   100% {
     opacity: 1;
@@ -1214,12 +1196,44 @@ select {
 @keyframes q-results-rise {
   0% {
     opacity: 0;
-    transform: translateY(18px);
+    transform: translateY(4px);
   }
   100% {
     opacity: 1;
     transform: none;
   }
+}
+
+.q-busy-spinner {
+  display: inline-flex;
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  visibility: hidden;
+  animation: q-busy-reveal 0s 180ms forwards;
+}
+.q-busy-button-label { display: inline-grid; }
+.q-busy-button-label > span,
+.q-busy-button-label::before,
+.q-busy-button-label::after { grid-area: 1 / 1; }
+.q-busy-button-label::before { content: attr(data-label); visibility: hidden; }
+.q-busy-button-label::after { content: attr(data-busy-label); visibility: hidden; }
+@keyframes q-busy-reveal {
+  to { visibility: visible; }
+}
+.q-progress-fill {
+  transition: width 180ms ease-out;
+}
+.q-progress-indeterminate {
+  animation: q-progress-travel 1.3s ease-in-out infinite;
+}
+@keyframes q-progress-travel {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(286%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .q-progress-fill { transition: none; }
+  .q-progress-indeterminate { animation: none; }
 }
 
 .q-modal-backdrop {
@@ -1281,30 +1295,13 @@ select {
   animation-delay: 75ms;
 }
 .q-tab {
-  animation: q-tab-enter 240ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-.q-tab::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  pointer-events: none;
-  background-image: linear-gradient(
-    105deg,
-    transparent 20%,
-    color-mix(in srgb, var(--q-accent) 22%, transparent) 50%,
-    transparent 80%
-  );
-  background-size: 200% 100%;
-  background-repeat: no-repeat;
-  opacity: 0;
-  animation: q-tab-spotlight 520ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: q-tab-enter 150ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .q-query-page [data-q-editor-column] {
-  animation: q-editor-unfold 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: q-editor-unfold 140ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .q-query-page [data-focus-region="results"] {
-  animation: q-results-rise 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: q-results-rise 160ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1323,7 +1320,6 @@ select {
   .q-results-open,
   .q-profile-reveal,
   .q-tab,
-  .q-tab::before,
   .q-query-page [data-q-editor-column],
   .q-query-page [data-focus-region="results"] {
     animation: none;

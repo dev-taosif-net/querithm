@@ -1,5 +1,6 @@
 // The Results view of the bottom panel (§12 bottom panel): the statement ledger and the tools on one 28 px row, the
 // notice line, the grid (or chart, error card, run summary, comparison) and a 22 px footer about the shown result set.
+import { BusyButtonContent, LoadingStatus } from "../app/LoadingStatus";
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { TabState } from "../store/tabs";
@@ -267,7 +268,7 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
           ) : (
             <>
               <Pane caption={comparing ? `${latest ? "This run" : "Shown run"} · result set ${rs.index + 1}` : undefined} active>
-                <Suspense fallback={null}>
+                <Suspense fallback={<div className="flex-1 flex items-center justify-center"><LoadingStatus label="Loading the grid…" /></div>}>
                   <ResultGrid
                     key={`${executionId}:${rs.index}`} engine={engine} rs={rs} executionId={executionId!} handleRef={handle} staging={staging}
                     onStaged={staging ? () => scheduleTokens(executionId!, staging) : undefined}
@@ -276,6 +277,7 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
                     onViewCell={onViewCell}
                     tone={comparing ? (r, c) => (differs(rs, compareRs!, r, c) ? "changed" : null) : undefined}
                   />
+                  {!rs.complete && rs.rowCount === 0 && <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none"><LoadingStatus label="Waiting for rows…" startedAt={view.startedAt} /></div>}
                 </Suspense>
               </Pane>
               {comparing && (
@@ -361,7 +363,7 @@ function ErrorCard({ tab, item }: { tab: TabState; item: Extract<LedgerItem, { k
 
 /** A run without result sets: what it did, in place of an empty grid (the view never switches by itself). */
 function RunSummary({ tab, view }: { tab: TabState; view: ExecutionView }) {
-  if (!isFinal(view)) return <Empty text={view.state === "queued" ? "Queued — waiting for a free connection…" : "Executing…"} />;
+  if (!isFinal(view)) return <div className="flex-1 flex items-center justify-center p-4"><LoadingStatus label={view.state === "queued" ? "Queued — waiting for a free connection…" : "Executing…"} startedAt={view.startedAt} /></div>;
   const info = view.messages.filter((m) => m.severity !== "error").slice(-6);
   const head =
     view.state === "cancelled" ? "Cancelled before any result set arrived."
@@ -489,8 +491,8 @@ export function readOnlyWhy(rs: Pick<ArrowResultSet, "interrupted">, latest: boo
 }
 
 /** A text button of the edit row: always in its place; unavailable ones stay focusable and say why (aria-disabled). */
-function EditAction({ label, icon, title, disabled, onClick, className = "", minWidth, compact, ...data }: {
-  label: string; icon?: IconName; title: string; disabled?: string | false; onClick: () => void; className?: string; minWidth?: number; compact?: boolean;
+function EditAction({ label, icon, title, disabled, onClick, className = "", minWidth, compact, busy, busyLabel, ...data }: {
+  label: string; icon?: IconName; title: string; disabled?: string | false; onClick: () => void; className?: string; minWidth?: number; compact?: boolean; busy?: boolean; busyLabel?: string;
   [k: `data-${string}`]: string | undefined;
 }) {
   return (
@@ -499,13 +501,14 @@ function EditAction({ label, icon, title, disabled, onClick, className = "", min
       className={`q-btn h-[22px] px-2 shrink-0 justify-center ${className}`}
       style={minWidth ? { minWidth } : undefined}
       aria-disabled={disabled ? true : undefined}
+      aria-busy={busy || undefined}
       aria-label={compact && icon ? label : undefined}
       title={disabled || title}
       onClick={() => !disabled && onClick()}
       {...data}
     >
       {icon && <Icon name={icon} size={12} strokeWidth={2} />}
-      {!(compact && icon) && label}
+      {busyLabel ? <BusyButtonContent busy={!!busy} label={label} busyLabel={busyLabel} /> : !(compact && icon) && label}
     </button>
   );
 }
@@ -636,7 +639,9 @@ function EditTools({ tabId, executionId, rs, staging, handle, filterBox, onDone 
       />
       <span aria-hidden className="w-px h-4 bg-line shrink-0" />
       <EditAction
-        label={busy && staging.busy ? "Applying…" : reviewFirst ? `Review & apply to ${word}…` : "Apply"}
+        label={reviewFirst ? `Review & apply to ${word}…` : "Apply"}
+        busy={staging.busy}
+        busyLabel="Applying…"
         className={reviewFirst && env === "prod" ? "q-btn-danger" : "q-btn-primary"}
         // The longest label sets the width, so "Applying…" never moves Cancel.
         minWidth={reviewFirst ? undefined : 74}

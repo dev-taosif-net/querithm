@@ -6,6 +6,7 @@
 // sign-in → name → folded extras. A new profile preselects neither the server type nor the environment; the folded rows
 // show their state in one line and open by themselves on a warning (transportSummary is their only source).
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { BusyButtonContent } from "../app/LoadingStatus";
 import { SecretInput } from "../app/SecretInput";
 import { escapeForDisplay } from "../monitor/format";
 import type { AuthKind, Engine, EngineInfo, EnvironmentKind, LocationKind, Profile, SshAuthKind, SshSettings, TlsMode } from "../ipc/contract";
@@ -310,7 +311,8 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
   const [sshSecretTouched, setSshSecretTouched] = useState(false);
   const [sshForget, setSshForget] = useState(false);
   const [test, setTest] = useState<{ ok: boolean; text: string; key: string } | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busyAction, setBusyAction] = useState<"parse" | "test" | "save" | null>(null);
+  const busy = busyAction != null;
   const [showSecret, setShowSecret] = useState(false);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pastedIntoHost, setPastedIntoHost] = useState(false);
@@ -477,18 +479,18 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
   };
 
   const fillFromString = async (text = connStr) => {
-    setBusy(true);
+    setBusyAction("parse");
     setTest(null);
     try {
       await parse(text);
     } finally {
-      setBusy(false);
+      setBusyAction(null);
     }
   };
 
   const runTest = async () => {
     if (busy) return;
-    setBusy(true);
+    setBusyAction("test");
     setTest(null);
     try {
       const d = await draft();
@@ -530,13 +532,13 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
     } catch (e) {
       setTest({ ok: false, text: (e as Error).message || "Failed", key: connKey });
     } finally {
-      setBusy(false);
+      setBusyAction(null);
     }
   };
 
   const save = async () => {
     if (busy) return;
-    setBusy(true);
+    setBusyAction("save");
     try {
       const d = await draft();
       if (!d) return;
@@ -571,7 +573,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
         reveal([], [field as FieldKey]);
       } else toast("error", message);
     } finally {
-      setBusy(false);
+      setBusyAction(null);
     }
   };
 
@@ -774,9 +776,9 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
         ) : engineChosen ? (
           <>
             {existing && <button className={`${animated ? "q-profile-reveal q-profile-reveal-3 " : ""}q-btn text-err mr-auto`} onClick={() => void remove()}>Delete</button>}
-            <button className={`${animated ? "q-profile-reveal q-profile-reveal-3 " : ""}q-btn q-btn-run ${existing ? "" : "mr-auto"}`} onClick={() => void runTest()} disabled={busy}>Test connection</button>
+            <button className={`${animated ? "q-profile-reveal q-profile-reveal-3 " : ""}q-btn q-btn-run ${existing ? "" : "mr-auto"}`} onClick={() => void runTest()} disabled={busy} aria-busy={busyAction === "test" || undefined}><BusyButtonContent busy={busyAction === "test"} label="Test connection" busyLabel="Testing…" /></button>
             <button className={`${animated ? "q-profile-reveal q-profile-reveal-3 " : ""}q-btn`} onClick={tryClose}>Cancel</button>
-            <button className={`${animated ? "q-profile-reveal q-profile-reveal-3 " : ""}q-btn q-btn-primary`} onClick={() => void save()} disabled={busy}>Save</button>
+            <button className={`${animated ? "q-profile-reveal q-profile-reveal-3 " : ""}q-btn q-btn-primary`} onClick={() => void save()} disabled={busy} aria-busy={busyAction === "save" || undefined}><BusyButtonContent busy={busyAction === "save"} label="Save" busyLabel="Saving…" /></button>
           </>
         ) : undefined
       }
