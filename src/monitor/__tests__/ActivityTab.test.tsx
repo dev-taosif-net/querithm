@@ -53,6 +53,10 @@ const push = (s: MonitorSnapshot) => act(() => handlers.get("monitor.snapshot")?
 const ready = async () => {
   await screen.findByTestId("activity-tab");
   await vi.waitFor(() => expect(handlers.has("monitor.snapshot")).toBe(true));
+  // The render that set the model ran outside act, so its passive effects (useTopics' useSyncExternalStore subscription)
+  // wait in React's scheduler queue. A push before they run notifies nobody and the view re-reads the model only later,
+  // after the test's synchronous checks (the rare U9 flake on busy runners). One macrotask lets the queued task run.
+  await act(() => new Promise((r) => setTimeout(r, 20)));
 };
 
 beforeEach(() => {

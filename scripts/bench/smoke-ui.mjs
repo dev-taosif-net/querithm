@@ -122,7 +122,15 @@ try {
     await sleep(200);
   };
   const NARROW = new Set(["00-welcome", "02-connected", "02b-explorer-search", "02c-explorer-200", "02d-explorer-600", "03-results", "01a-update-dialog", "03d-import-file", "03g-schema-compare", "08-prod-first", "10-postgres", "11-ssh-hostkey", "13-monitor-sessions", "18-monitor-banner"]);
+  // Enter animations (dialogs, side panels, revealed rows) fade text in: audited mid-fade, its contrast reads low. Wait for
+  // the finite ones to end (spinners loop forever and are skipped), at most 2 s.
+  const settle = () =>
+    page.evaluate(() => {
+      const finite = document.getAnimations().filter((a) => a.playState === "running" && Number.isFinite(a.effect?.getComputedTiming().endTime ?? Infinity));
+      return Promise.race([Promise.all(finite.map((a) => a.finished.catch(() => {}))), new Promise((r) => setTimeout(r, 2_000))]);
+    });
   const shot = async (name) => {
+    await settle();
     await page.screenshot({ path: path.join(out, `${name}.png`) });
     await auditLayout(name);
     if (NARROW.has(name)) {

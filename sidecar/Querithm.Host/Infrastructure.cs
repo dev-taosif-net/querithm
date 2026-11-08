@@ -279,6 +279,10 @@ public sealed class GuardedJsonFormatter : SystemTextJsonFormatter, IJsonRpcMess
     public const string MalformedMethod = "rpc.malformed";
     const int MaxIdBytes = 256;
 
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2026",
+        Justification = "The stock formatter's reflection serializer: StreamJsonRpc and the contract DTOs are rooted whole (Querithm.Host.csproj), as for QuerithmJsonRpc.Formatter.")]
+    public GuardedJsonFormatter() { }
+
     /// <summary>The cap this formatter applies (tests lower it).</summary>
     internal long MaxBytes { get; init; } = MaxMessageBytes;
 

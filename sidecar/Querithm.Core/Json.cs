@@ -51,6 +51,8 @@ public sealed class StrictEnumConverter(JsonNamingPolicy policy) : JsonConverter
 {
     public override bool CanConvert(Type typeToConvert) => typeToConvert.IsEnum;
 
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2071",
+        Justification = "CanConvert admits only enums, and an enum always has its parameterless constructor (the struct constraint).")]
     public override JsonConverter CreateConverter(Type typeToConvert, JsonSerializerOptions options) =>
         (JsonConverter)Activator.CreateInstance(typeof(Strict<>).MakeGenericType(typeToConvert), policy)!;
 

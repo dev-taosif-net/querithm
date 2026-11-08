@@ -66,13 +66,14 @@ static class TSqlRedaction
                 _ => RedactTokenKind.Other,
             };
             if (kind is not { } k) continue;
+            var tx = t.Text ?? "";
             var name = k switch
             {
-                RedactTokenKind.QuotedName when t.Text.Length >= 2 => t.Text[0] == '[' ? t.Text[1..^1].Replace("]]", "]") : t.Text[1..^1].Replace("\"\"", "\""),
-                RedactTokenKind.Word or RedactTokenKind.Variable => t.Text,
+                RedactTokenKind.QuotedName when tx.Length >= 2 => tx[0] == '[' ? tx[1..^1].Replace("]]", "]") : tx[1..^1].Replace("\"\"", "\""),
+                RedactTokenKind.Word or RedactTokenKind.Variable => tx,
                 _ => "",
             };
-            list.Add(new RedactToken(k, t.Offset, t.Text.Length, t.Text, name));
+            list.Add(new RedactToken(k, t.Offset, tx.Length, tx, name));
         }
         if (end < text.Length && UnclosedLiteral(text, end, text.Length) is { } tail) list.Add(new RedactToken(RedactTokenKind.String, end, tail.Length, tail, ""));
         return SecretRedaction.Apply(text, list, Rules);

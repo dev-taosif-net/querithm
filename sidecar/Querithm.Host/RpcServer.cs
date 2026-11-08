@@ -229,6 +229,8 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
     /// connection dialog then never shows again: that profile is listed as unsupported with only its id and name (it can be
     /// deleted), and the sidecar log says so.
     /// </summary>
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2026",
+        Justification = "Reflection JSON over the contract DTOs, which the Host roots whole (TrimmerRootAssembly Querithm.Contract), as StreamJsonRpc does.")]
     static Profile Listable(Profile p)
     {
         try
@@ -379,6 +381,8 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
         return EndpointKey(stored) == EndpointKey(edited) ? null : EndpointChangedMessage;
     }
 
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2026",
+        Justification = "Reflection JSON over the contract DTOs, which the Host roots whole (TrimmerRootAssembly Querithm.Contract), as StreamJsonRpc does.")]
     static string EndpointKey(Profile p)
     {
         var local = Core.Sessions.ProfileRules.LocationOf(p) != LocationKind.Server;
