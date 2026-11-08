@@ -244,8 +244,10 @@ public sealed class SshTunnelManager(KnownHosts known, ILogger log) : IAsyncDisp
             throw new QuerithmException("sshNeedsSecret", $"The SSH key {Path.GetFileName(path)} is protected by a passphrase. Enter it to connect.");
         }
         // An encrypted PKCS#8 or legacy PEM ("ssh-keygen -m PEM") key decrypted with no or the wrong passphrase: the cipher
-        // reports bad padding ("pad block corrupted", "Padding is invalid…"), which says nothing to the user.
-        catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException or Org.BouncyCastle.Crypto.CryptoException)
+        // reports bad padding ("pad block corrupted", "Padding is invalid…"), which says nothing to the user. About one wrong
+        // passphrase in 256 decrypts to bytes whose padding happens to look valid: the garbage then fails the key's ASN.1
+        // parse (AsnContentException, seen on CI) instead.
+        catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException or Org.BouncyCastle.Crypto.CryptoException or System.Formats.Asn1.AsnContentException)
         {
             if (string.IsNullOrEmpty(passphrase))
                 throw new QuerithmException("sshNeedsSecret", $"The SSH key {Path.GetFileName(path)} is protected by a passphrase. Enter it to connect.");
