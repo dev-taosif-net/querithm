@@ -806,8 +806,8 @@ export function ResultGrid({
       onGridSelectionChange={setSelection}
       // Clicking a row number selects the whole row; Ctrl/Shift+click adds rows or a range.
       rowMarkers={{ kind: "clickable-number", width: Math.max(44, String(totalRows).length * 8 + 16), theme: markerTheme }}
-      smoothScrollX={false}
-      smoothScrollY={false}
+      smoothScrollX
+      smoothScrollY
       overscrollX={0}
       rowHeight={Math.round(24 * GRID_SCALE)}
       headerHeight={Math.round(28 * GRID_SCALE)}
