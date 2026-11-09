@@ -144,11 +144,18 @@ public class MonitorMatrixTests
             Assert.True(sw.ElapsedMilliseconds < 500, $"kill took {sw.ElapsedMilliseconds} ms while a job ran");
             File.AppendAllText(Path.Combine(Path.GetTempPath(), "querithm-c2.txt"), $"{DateTime.UtcNow:O} {EngineKind} kill via control while a job ran: {sw.ElapsedMilliseconds} ms{Environment.NewLine}");
             // The blocked tabs, the queued one included, proceed once the blocker is gone.
+            var started = DateTime.UtcNow;
+            var outcomes = new List<string>();
             foreach (var e in runs)
             {
                 var d = await Host.Notifier.WaitDone(e, 30_000);
-                Assert.True(d.State == ExecState.Done, $"{d.State} {d.Error?.Number}: {d.Error?.Message}");
+                outcomes.Add($"{d.State} after {d.ElapsedMs:0} ms{(d.Error is { } er ? $" ({er.Message})" : "")}");
             }
+            // CI-only failure (SqlClient "too many simultaneous non-pooled connection attempts"): say how each run ended and
+            // what the thread pool looked like.
+            Assert.True(outcomes.All(o => o.StartsWith(nameof(ExecState.Done), StringComparison.Ordinal)),
+                $"runs: {string.Join("; ", outcomes)}; waited {(DateTime.UtcNow - started).TotalMilliseconds:0} ms; threads {ThreadPool.ThreadCount}, " +
+                $"pending {ThreadPool.PendingWorkItemCount}, cpus {Environment.ProcessorCount}");
             await busy;
         }
 
