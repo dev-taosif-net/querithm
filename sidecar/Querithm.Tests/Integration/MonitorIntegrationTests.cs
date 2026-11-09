@@ -570,12 +570,3 @@ public class MonitorIntegrationTests
         }
     }
 }
-
-/// <summary>
-/// The SQL Server monitor tests run alone. C2/C3 opens about twelve connections at once (nine tabs, the holder, the
-/// monitor, the control connection), and SqlClient lets only 2 x CPU non-pooled opens run at once per process; beside
-/// the rest of the suite a 4-core CI runner failed opens with "too many simultaneous non-pooled connection attempts"
-/// (dev CI, 2026-11-08/09: C2/C3 and O2).
-/// </summary>
-[CollectionDefinition("monitor-mssql", DisableParallelization = true)]
-public class MonitorMssqlCollection;

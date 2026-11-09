@@ -12,7 +12,6 @@ namespace Querithm.Tests;
 /// out of errors and logs. A real login is not tried here (no server); the failure-path tests dial a closed local port.
 /// TLS keywords are covered elsewhere and are not asserted here.
 /// </summary>
-[Collection("sqlclient-dial")]
 public class SignInMatrixSqlServerTests
 {
     const string Secret = "s3cret-fake-pw";
@@ -242,6 +241,11 @@ public class SignInMatrixSqlServerTests
     [Fact]
     public async Task Unroutable_host_without_a_port_is_bounded_by_the_timeout_and_named()
     {
+        // Windows only (named pipes). Elsewhere a host without a port is plain TCP, covered by the closed-port case above,
+        // and a dial to an unroutable address kept one of SqlClient's few non-pooled open slots for the OS connect timeout
+        // (about 2 min on Linux) after this test ended: later SQL Server opens in the run failed with "too many
+        // simultaneous non-pooled connection attempts" (CI, MonitorMatrixTests C2/C3).
+        if (!OperatingSystem.IsWindows()) return;
         await using var host = new TestHost();
         var profile = P(AuthKind.Sql) with { Host = "192.0.2.1", Port = null, TimeoutS = 3 }; // RFC 5737 TEST-NET-1: never routed
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -285,9 +289,17 @@ public class SignInMatrixSqlServerTests
     [Fact]
     public async Task A_cancel_by_the_caller_stays_a_cancel()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
-        var profile = P(AuthKind.Sql) with { Host = "192.0.2.1", Port = 1433, TimeoutS = 3 };
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Provider.OpenAsync(profile, Secret, null, null, cts.Token));
+        // A local server that accepts and never answers: stopping it ends SqlClient's dial at once, so the open does not
+        // keep one of SqlClient's non-pooled open slots after the test (an unroutable address did, for minutes).
+        var silent = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        silent.Start();
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+            var profile = P(AuthKind.Sql) with { Host = "127.0.0.1", Port = ((System.Net.IPEndPoint)silent.LocalEndpoint).Port, TimeoutS = 10 };
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Provider.OpenAsync(profile, Secret, null, null, cts.Token));
+        }
+        finally { silent.Stop(); }
     }
 
     static string RepoRoot()
@@ -297,12 +309,3 @@ public class SignInMatrixSqlServerTests
         return d?.FullName ?? throw new InvalidOperationException("repo root not found");
     }
 }
-
-/// <summary>
-/// Tests that dial an unreachable SQL Server run alone. SqlClient lets only 2 x CPU non-pooled opens run at once in the
-/// process and keeps a dial to a TEST-NET address in its slot until the connect timeout, even after the caller cancels;
-/// beside the monitor integration tests (8 tab opens at once) a 4-core CI runner then failed an unrelated open with
-/// "too many simultaneous non-pooled connection attempts".
-/// </summary>
-[CollectionDefinition("sqlclient-dial", DisableParallelization = true)]
-public class SqlClientDialCollection;
