@@ -542,6 +542,8 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
     /// transaction or a running query (the tab-close Commit / Roll back / Cancel prompt handles those first, §6 rule 5).
     /// Each session's execution lock is taken before anything closes, so no query starts in between.
     /// </summary>
+    static readonly TimeSpan BusyGrace = TimeSpan.FromMilliseconds(500);
+
     async Task<int> CloseProfileSessionsAsync(string profileId, Func<QuerithmException> busy)
     {
         var affected = s.Sessions.All.Where(x => x.Profile.Id == profileId && !x.Closed).ToList();
@@ -550,7 +552,8 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
         {
             foreach (var x in affected)
             {
-                if (!x.ExecLock.Wait(0)) throw busy();
+                // A run that just reported done may still be releasing the lock: wait briefly (bounded), never for a running query.
+                if (!await x.ExecLock.WaitAsync(BusyGrace)) throw busy();
                 locked.Add(x);
                 if (x.ActiveExecutionId != null || x.TxState != TxState.None) throw busy();
             }
