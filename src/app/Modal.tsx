@@ -2,6 +2,17 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } f
 import { useExiting } from "./Presence";
 import { isTopModal, pushModal } from "./modalStack";
 
+// Each dialog box -> the element that had focus when it opened. A dialog that opened while another one had focus (a
+// lazy dialog's loading shell handing over to the loaded dialog) inherits that one's opener once it is gone.
+const openers = new WeakMap<Element, HTMLElement | null>();
+function liveOpener(el: HTMLElement | null): HTMLElement | null {
+  for (let i = 0; el && !el.isConnected && i < 8; i++) {
+    const box = el.closest("[data-q-modal-box]");
+    el = box ? openers.get(box) ?? null : null;
+  }
+  return el?.isConnected ? el : null;
+}
+
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
 
@@ -54,9 +65,11 @@ export function Modal({
   useLayoutEffect(() => {
     const el = box.current;
     // React restores selection after mutation cleanup; move focus again in the layout phase on exit.
+    if (el) openers.set(el, opener);
     if (exiting) {
       const active = document.activeElement;
-      if (opener?.isConnected && (!active || active === document.body || el?.contains(active))) opener.focus({ preventScroll: true });
+      const back = liveOpener(opener);
+      if (back && (!active || active === document.body || el?.contains(active))) back.focus({ preventScroll: true });
       return;
     }
     if (el && !el.contains(document.activeElement)) {
@@ -65,7 +78,8 @@ export function Modal({
     }
     return () => {
       const a = document.activeElement;
-      if (opener?.isConnected && (!a || a === document.body || el?.contains(a))) opener.focus({ preventScroll: true });
+      const back = liveOpener(opener);
+      if (back && (!a || a === document.body || el?.contains(a))) back.focus({ preventScroll: true });
     };
   }, [opener, exiting]);
   useEffect(() => {
@@ -108,6 +122,7 @@ export function Modal({
     <div className="q-modal-backdrop fixed inset-0 z-40 bg-black/50 flex items-center justify-center p-6" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
         ref={box}
+        data-q-modal-box=""
         role={alert ? "alertdialog" : "dialog"}
         aria-modal="true"
         aria-labelledby={`${id}-title`}

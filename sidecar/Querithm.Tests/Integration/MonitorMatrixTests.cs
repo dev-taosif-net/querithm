@@ -144,7 +144,11 @@ public class MonitorMatrixTests
             Assert.True(sw.ElapsedMilliseconds < 500, $"kill took {sw.ElapsedMilliseconds} ms while a job ran");
             File.AppendAllText(Path.Combine(Path.GetTempPath(), "querithm-c2.txt"), $"{DateTime.UtcNow:O} {EngineKind} kill via control while a job ran: {sw.ElapsedMilliseconds} ms{Environment.NewLine}");
             // The blocked tabs, the queued one included, proceed once the blocker is gone.
-            foreach (var e in runs) Assert.Equal(ExecState.Done, (await Host.Notifier.WaitDone(e, 30_000)).State);
+            foreach (var e in runs)
+            {
+                var d = await Host.Notifier.WaitDone(e, 30_000);
+                Assert.True(d.State == ExecState.Done, $"{d.State} {d.Error?.Code}: {d.Error?.Message}");
+            }
             await busy;
         }
 
@@ -152,7 +156,8 @@ public class MonitorMatrixTests
         public async Task O2_a_tab_whose_connection_was_killed_is_known_by_its_new_identity_and_the_old_one_maps_to_nothing()
         {
             var m = await StartAsync(MonitorPane.Sessions);
-            Assert.Equal(ExecState.Done, (await Host.RunAsync(SessionId, "SELECT 1")).Done.State);
+            var first = (await Host.RunAsync(SessionId, "SELECT 1")).Done;
+            Assert.True(first.State == ExecState.Done, $"{first.State} {first.Error?.Code}: {first.Error?.Message}");
             var spid1 = (await Host.Rpc.SessionStateGet(new SessionRef { SessionId = SessionId })).Spid!.Value;
             var old = (await WaitSnapshot(m.MonitorId, x => x.Sessions?.Any(r => r.Key.Id == spid1 && r.QuerithmKind == ConnectionRegistry.Kinds.Pool) == true))
                 .Sessions!.Single(r => r.Key.Id == spid1).Key;
