@@ -6,6 +6,9 @@ using Querithm.Core.Store;
 namespace Querithm.Tests;
 
 /// <summary>Schema migrations of store.db files written by older builds (§8): one transaction, data kept.</summary>
+// Both classes set the static LocalStore.AfterMigrationStep hook: one collection, so they never run at the same time
+// (a parallel finally cleared the other test's hook; Windows CI, 2026-11-09).
+[Collection("local-store-hooks")]
 public class StoreMigrationTests : IDisposable
 {
     readonly string _dir = Directory.CreateTempSubdirectory("qstore-").FullName;
@@ -216,6 +219,9 @@ public class StoreMigrationTests : IDisposable
 /// M22: a damaged store.db is set aside and replaced instead of failing every start; a store about to be upgraded is
 /// copied first; two app instances opening one old file migrate it once.
 /// </summary>
+// Both classes set the static LocalStore.AfterMigrationStep hook: one collection, so they never run at the same time
+// (a parallel finally cleared the other test's hook; Windows CI, 2026-11-09).
+[Collection("local-store-hooks")]
 public class StoreRecoveryTests : IDisposable
 {
     readonly string _dir = Directory.CreateTempSubdirectory("qstore-rec-").FullName;
