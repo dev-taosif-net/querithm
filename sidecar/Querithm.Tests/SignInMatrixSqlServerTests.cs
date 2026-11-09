@@ -302,6 +302,47 @@ public class SignInMatrixSqlServerTests
         finally { silent.Stop(); }
     }
 
+    // Regression: SqlClient's OpenAsync (pooling off) runs only 2 x CPU opens at once per process and queues the rest, so
+    // dials to a server that never answers made every other SQL Server open fail with "too many simultaneous non-pooled
+    // connection attempts" (CI: MonitorMatrixTests C2/C3). Here the slots are taken by dials to a silent server; an open to
+    // a server that drops the connection must still be tried and fail for its own reason, not queue behind them.
+    [Fact]
+    public async Task Dials_to_a_silent_server_do_not_hold_up_other_opens()
+    {
+        var silent = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        silent.Start(512);
+        var closing = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        closing.Start();
+        using var stopClosing = new CancellationTokenSource();
+        var closer = Task.Run(async () =>
+        {
+            while (!stopClosing.IsCancellationRequested)
+            {
+                try { (await closing.AcceptSocketAsync(stopClosing.Token)).Dispose(); }
+                catch (OperationCanceledException) { break; }
+            }
+        });
+        var stuck = new List<Task>();
+        try
+        {
+            var silentProfile = P(AuthKind.Sql) with { Id = "", Host = "127.0.0.1", Port = ((System.Net.IPEndPoint)silent.LocalEndpoint).Port, TimeoutS = 8 };
+            for (var i = 0; i < 2 * Environment.ProcessorCount; i++) stuck.Add(Provider.OpenAsync(silentProfile, Secret, null, null, CancellationToken.None));
+            await Task.Delay(500);
+            var other = P(AuthKind.Sql) with { Id = "", Host = "127.0.0.1", Port = ((System.Net.IPEndPoint)closing.LocalEndpoint).Port, TimeoutS = 3 };
+            var ex = await Assert.ThrowsAnyAsync<Exception>(() => Provider.OpenAsync(other, Secret, null, null, CancellationToken.None));
+            Assert.DoesNotContain("non-pooled", ex.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.IsType<SqlException>(ex);
+        }
+        finally
+        {
+            silent.Stop();
+            stopClosing.Cancel();
+            closing.Stop();
+            foreach (var t in stuck) { try { await t.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(30))); } catch (Exception) { } }
+            await closer;
+        }
+    }
+
     static string RepoRoot()
     {
         var d = new DirectoryInfo(AppContext.BaseDirectory);

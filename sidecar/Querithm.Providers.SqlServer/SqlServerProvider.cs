@@ -387,10 +387,22 @@ public sealed partial class SqlServerProvider : IDbProvider
             FireInfoMessageEventOnUserErrors = true,
         };
         if (profile.Auth == AuthKind.EntraToken) conn.AccessToken = secret;
+        // SqlClient's OpenAsync without its pooling (Core pools, §6) lets only 2 x CPU opens run at once per process and
+        // queues the rest behind them: one dial to a server that never answers held a slot for the OS connect timeout
+        // (minutes on Linux) after the caller gave up, and every other SQL Server open then failed with "too many
+        // simultaneous non-pooled connection attempts". The synchronous Open has no such queue; it runs on a thread of
+        // its own, bounded by Connect Timeout, and the caller's token (with OpenAsync's timer) ends the wait.
+        var open = Task.Factory.StartNew(conn.Open, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
         try
         {
-            await conn.OpenAsync(ct).ConfigureAwait(false);
+            await open.WaitAsync(ct).ConfigureAwait(false);
             return conn;
+        }
+        catch when (!open.IsCompleted)
+        {
+            // Given up while the dial still runs: the connection closes when it ends, whichever way.
+            _ = open.ContinueWith(_ => conn.Dispose(), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            throw;
         }
         catch
         {

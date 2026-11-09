@@ -21,6 +21,7 @@ public class ArchitectureRulesTests
     {
         ["sidecar/Querithm.Core/Monitoring/BlockingBannerService.cs"] = (1, "the banner's timer cycle: its check query has a 5 s command timeout and its pool wait a 1 s bound (§16)"),
         ["sidecar/Querithm.Core/Monitoring/MonitorScheduler.cs"] = (1, "a ContinueWith scheduling token, not a wait"),
+        ["sidecar/Querithm.Providers.SqlServer/SqlServerProvider.cs"] = (2, "OpenOnceAsync: the synchronous Open's thread and the dispose after an abandoned open are not waits; Connect Timeout bounds the Open, and the caller awaits it with its own token and OpenAsync's timer"),
         ["sidecar/Querithm.Host/Program.cs"] = (2, "startup self-check of the bundled in-process engines on a local temp file: no network, no user input"),
         ["sidecar/Querithm.Host/RpcServer.cs"] = (1, "RpcServer.OwnBound: the handlers that use it are listed with their own bound in RpcOwnBounds; every other handler that waits on a server has a deadline (InteractiveDeadline / LongDeadline)"),
     };
