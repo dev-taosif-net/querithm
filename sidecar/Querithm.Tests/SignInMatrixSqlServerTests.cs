@@ -12,6 +12,7 @@ namespace Querithm.Tests;
 /// out of errors and logs. A real login is not tried here (no server); the failure-path tests dial a closed local port.
 /// TLS keywords are covered elsewhere and are not asserted here.
 /// </summary>
+[Collection("sqlclient-dial")]
 public class SignInMatrixSqlServerTests
 {
     const string Secret = "s3cret-fake-pw";
@@ -285,7 +286,7 @@ public class SignInMatrixSqlServerTests
     public async Task A_cancel_by_the_caller_stays_a_cancel()
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
-        var profile = P(AuthKind.Sql) with { Host = "192.0.2.1", Port = 1433, TimeoutS = 10 };
+        var profile = P(AuthKind.Sql) with { Host = "192.0.2.1", Port = 1433, TimeoutS = 3 };
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Provider.OpenAsync(profile, Secret, null, null, cts.Token));
     }
 
@@ -296,3 +297,12 @@ public class SignInMatrixSqlServerTests
         return d?.FullName ?? throw new InvalidOperationException("repo root not found");
     }
 }
+
+/// <summary>
+/// Tests that dial an unreachable SQL Server run alone. SqlClient lets only 2 x CPU non-pooled opens run at once in the
+/// process and keeps a dial to a TEST-NET address in its slot until the connect timeout, even after the caller cancels;
+/// beside the monitor integration tests (8 tab opens at once) a 4-core CI runner then failed an unrelated open with
+/// "too many simultaneous non-pooled connection attempts".
+/// </summary>
+[CollectionDefinition("sqlclient-dial", DisableParallelization = true)]
+public class SqlClientDialCollection;
