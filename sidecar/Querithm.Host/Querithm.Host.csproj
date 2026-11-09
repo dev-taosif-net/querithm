@@ -21,7 +21,16 @@
     <!-- SqlClient's native SNI marshals AuthProviderInfo, whose object fields need built-in COM marshalling. Trimming turns it
          off by default, and every TLS pre-login (including Encrypt=Optional against 2022) then fails with an empty TypeLoadException. -->
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
-    <EnableCompressionInSingleFile Condition="'$(SelfContained)' == 'true'">true</EnableCompressionInSingleFile>
+    <!-- Not on Windows: a compressed self-extracting executable is what Defender's heuristics flag in an unsigned app (users
+         saw Windows Security stop Querithm). The MSI / NSIS installers compress the file anyway (§16). -->
+    <EnableCompressionInSingleFile Condition="'$(SelfContained)' == 'true' And !$(RuntimeIdentifier.StartsWith('win'))">true</EnableCompressionInSingleFile>
+    <!-- File properties Windows shows and its reputation checks read; the version is the app's (tauri.conf.json). -->
+    <Product>Querithm</Product>
+    <Company>Querithm</Company>
+    <AssemblyTitle>Querithm engine</AssemblyTitle>
+    <Description>Querithm engine: sessions, database drivers and SQL intelligence for the Querithm SQL IDE</Description>
+    <Copyright>Copyright (c) 2026 taosif</Copyright>
+    <Version>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../../src-tauri/tauri.conf.json')), '"version"\s*:\s*"(\d+\.\d+\.\d+)').Groups[1].Value)</Version>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
   <ItemGroup>

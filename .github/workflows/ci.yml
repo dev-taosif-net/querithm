@@ -75,6 +75,15 @@ jobs:
           echo "${{ matrix.rid }}: trimmed sidecar $(wc -c < "$exe" | tr -d ' ') bytes, self-test ok" | tee -a "$GITHUB_STEP_SUMMARY"
       # L23: the Host suppresses trim warnings (SMO, SqlClient and StreamJsonRpc warn and are rooted instead); this publish
       # shows them and fails when there are more than scripts/trim-warnings-baseline.json lists.
+      # Windows Security stopped the unsigned app: the engine ships uncompressed and names its product and version (§16).
+      - name: Windows engine file properties
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        run: |
+          $v = (Get-Item sidecar/Querithm.Host/bin/publish/win-x64-release/querithm-sidecar.exe).VersionInfo
+          $app = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          "$($v.ProductName) | $($v.CompanyName) | $($v.FileDescription) | $($v.ProductVersion)"
+          if ($v.ProductName -ne 'Querithm' -or $v.CompanyName -ne 'Querithm' -or -not $v.ProductVersion.StartsWith($app)) { Write-Error "engine file properties are wrong"; exit 1 }
       - name: Trim warnings stay at the baseline
         if: matrix.rid == 'linux-x64'
         run: node scripts/trim-warnings.mjs --rid linux-x64
