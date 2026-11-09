@@ -255,7 +255,9 @@ public sealed class MetadataService
         if (session is { SessionOwned: true } && session.TxState != TxState.None)
         {
             session.RefreshDeferred = true;
-            if (mainStore.GetSnapshotRow(p.ProfileId, mainDb)?.Status == SnapshotStatus.Fresh) mainStore.SetStatus(p.ProfileId, mainDb, SnapshotStatus.Stale);
+            // Refreshing too: a refresh still running would otherwise end Fresh over this transaction's pending DDL.
+            if (mainStore.GetSnapshotRow(p.ProfileId, mainDb)?.Status is SnapshotStatus.Fresh or SnapshotStatus.Refreshing)
+                mainStore.SetStatus(p.ProfileId, mainDb, SnapshotStatus.Stale);
             _notifier.Notify("meta.updated", new MetaUpdatedEvent { ProfileId = p.ProfileId, Database = p.Database, Status = SnapshotStatus.Stale, SessionId = inMemory ? session.Id : null });
             return;
         }
@@ -305,6 +307,14 @@ public sealed class MetadataService
             // A session closed while this ran keeps nothing in memory (its view was dropped with it).
             if (session is { Closed: true }) return;
             mainStore.ApplyRefresh(p.ProfileId, mainDb, p.Full, mainChanged, mainRemoved, Only(details, mainChanged), version);
+            // A tab of this file deferred its refresh while this one ran (DDL inside its transaction): the snapshot stays
+            // Stale until that refresh runs, instead of this one calling it Fresh.
+            var status = SnapshotStatus.Fresh;
+            if (!inMemory && owned && _sessions.All.Any(x => x.Profile.Id == p.ProfileId && !x.Closed && x.RefreshDeferred))
+            {
+                mainStore.SetStatus(p.ProfileId, mainDb, SnapshotStatus.Stale);
+                status = SnapshotStatus.Stale;
+            }
             if (inMemory) _cache.InvalidateSession(p.ProfileId, p.Database, session!.Id);
             else _cache.Invalidate(p.ProfileId, p.Database);
             if (localDb != null && !inMemory)
@@ -315,7 +325,7 @@ public sealed class MetadataService
             if (!inMemory) _refreshedThisLaunch[Key(p.ProfileId, p.Database)] = 0;
             _notifier.Notify("meta.updated", new MetaUpdatedEvent
             {
-                ProfileId = p.ProfileId, Database = p.Database, Status = SnapshotStatus.Fresh, Changed = mainChanged.Count + mainRemoved.Count,
+                ProfileId = p.ProfileId, Database = p.Database, Status = status, Changed = mainChanged.Count + mainRemoved.Count,
                 ChangedIds = p.Full ? null : mainChanged.Select(c => c.Id).ToArray(), RemovedIds = p.Full ? null : mainRemoved.ToArray(), Full = p.Full,
                 ElapsedMs = sw.Elapsed.TotalMilliseconds, SessionId = inMemory ? session!.Id : null,
             });
