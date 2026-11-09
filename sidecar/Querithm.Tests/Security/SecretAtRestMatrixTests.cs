@@ -55,6 +55,16 @@ public class SecretAtRestMatrixTests
         Assert.Contains("***", scrubbed);
     }
 
+    // Regression (Windows CI flake): another test registered the secret "fresh", which masked part of the key name and
+    // left the refresh_token value unmasked.
+    [Fact]
+    public void A_registered_secret_inside_a_key_name_does_not_hide_that_keys_value()
+    {
+        LogScrubber.RegisterSecret("fresh");
+        var scrubbed = LogScrubber.Scrub("{\"refresh_token\" : \"fake-s3cret-37\"}");
+        Assert.False(scrubbed.Contains("fake-s3cret-37", StringComparison.Ordinal), scrubbed);
+    }
+
     // Regressions: shapes the scrubber missed (defence in depth behind RegisterSecret).
     [Theory]
     [InlineData("passphrase=fake-s3cret-21", "fake-s3cret-21")]

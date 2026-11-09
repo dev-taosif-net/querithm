@@ -97,18 +97,18 @@ public static partial class LogScrubber
         if (string.IsNullOrEmpty(text)) return text ?? "";
         // Known secrets first (PT6-1), longest first: a pattern below could cut a registered secret (one with a space) so
         // it is no longer found whole, and a secret that contains a shorter one ("x-s3cret" and "s3cret") is masked whole.
+        // The pattern values are found in the text as given: a short registered secret masked inside a key name
+        // ("fresh" in "refresh_token") would otherwise hide that key's value from the patterns below.
+        var values = new List<string>();
+        Patterns(text, values);
+        // URL-encoded pairs (PT6-6: password%3Dx): find the values in a decoded copy, then mask them as they stand here.
+        if (text.Contains('%')) Patterns(Unescape(text), values);
         var s = text;
         foreach (var secret in KnownSecrets.Keys.OrderByDescending(x => x.Length))
             if (s.Contains(secret, StringComparison.Ordinal)) s = s.Replace(secret, "***", StringComparison.Ordinal);
-        // URL-encoded pairs (PT6-6: password%3Dx): find the values in a decoded copy, then mask them as they stand here.
-        if (s.Contains('%'))
-        {
-            var values = new List<string>();
-            Patterns(Unescape(s), values);
-            foreach (var v in values.Where(v => v.Length >= MinRegisteredLength && v != "***").Distinct().OrderByDescending(v => v.Length))
-                foreach (var form in new[] { Uri.EscapeDataString(v), v })
-                    if (s.Contains(form, StringComparison.OrdinalIgnoreCase)) s = s.Replace(form, "***", StringComparison.OrdinalIgnoreCase);
-        }
+        foreach (var v in values.Where(v => v.Length >= MinRegisteredLength && v != "***").Distinct().OrderByDescending(v => v.Length))
+            foreach (var form in new[] { Uri.EscapeDataString(v), v })
+                if (s.Contains(form, StringComparison.OrdinalIgnoreCase)) s = s.Replace(form, "***", StringComparison.OrdinalIgnoreCase);
         s = Patterns(s, null);
         foreach (var path in KnownPaths.Keys)
         {
@@ -135,8 +135,8 @@ public static partial class LogScrubber
             return m.Groups["eq"].Success ? $"{m.Groups["key"].Value}=***" : $"{m.Groups["key"].Value}: ***";
         });
         s = UriUserInfo().Replace(s, m => { masked?.Add(m.Groups[2].Value); return $"{m.Groups[1].Value}:***@"; });
-        s = AuthorizationHeader().Replace(s, m => $"{m.Groups[1].Value}: ***");
-        s = JsonSecretField().Replace(s, m => $"{m.Groups[1].Value}\"***\"");
+        s = AuthorizationHeader().Replace(s, m => { Collect(masked, m); return $"{m.Groups[1].Value}: ***"; });
+        s = JsonSecretField().Replace(s, m => { Collect(masked, m); return $"{m.Groups[1].Value}\"***\""; });
         s = JsonSecretArray().Replace(s, m => $"{m.Groups[1].Value}[\"***\"]");
         s = EscapedJsonSecretField().Replace(s, m =>
         {
@@ -144,9 +144,17 @@ public static partial class LogScrubber
             var quote = key[..(key.IndexOf('"') + 1)]; // the backslashes and quote this depth uses
             return $"{key}{quote}***{quote}";
         });
-        s = ArgvJson().Replace(s, m => $"{m.Groups[1].Value}***\"");
-        s = ArgvBare().Replace(s, m => $"{m.Groups[1].Value}***");
-        s = AccessToken().Replace(s, m => $"{m.Groups[1].Value}=***");
+        s = ArgvJson().Replace(s, m => { Collect(masked, m); return $"{m.Groups[1].Value}***\""; });
+        s = ArgvBare().Replace(s, m => { Collect(masked, m); return $"{m.Groups[1].Value}***"; });
+        s = AccessToken().Replace(s, m => { Collect(masked, m); return $"{m.Groups[1].Value}=***"; });
         return s;
+    }
+
+    /// <summary>The masked part of a match: what follows its kept prefix (group 1), without separators and quotes.</summary>
+    static void Collect(List<string>? masked, System.Text.RegularExpressions.Match m)
+    {
+        if (masked == null) return;
+        var value = m.Value[m.Groups[1].Length..].Trim().TrimStart('=', ':').Trim().Trim('"');
+        if (value.Length > 0) masked.Add(value);
     }
 }
