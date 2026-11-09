@@ -147,7 +147,7 @@ public class MonitorMatrixTests
             foreach (var e in runs)
             {
                 var d = await Host.Notifier.WaitDone(e, 30_000);
-                Assert.True(d.State == ExecState.Done, $"{d.State} {d.Error?.Code}: {d.Error?.Message}");
+                Assert.True(d.State == ExecState.Done, $"{d.State} {d.Error?.Number}: {d.Error?.Message}");
             }
             await busy;
         }
@@ -157,7 +157,7 @@ public class MonitorMatrixTests
         {
             var m = await StartAsync(MonitorPane.Sessions);
             var first = (await Host.RunAsync(SessionId, "SELECT 1")).Done;
-            Assert.True(first.State == ExecState.Done, $"{first.State} {first.Error?.Code}: {first.Error?.Message}");
+            Assert.True(first.State == ExecState.Done, $"{first.State} {first.Error?.Number}: {first.Error?.Message}");
             var spid1 = (await Host.Rpc.SessionStateGet(new SessionRef { SessionId = SessionId })).Spid!.Value;
             var old = (await WaitSnapshot(m.MonitorId, x => x.Sessions?.Any(r => r.Key.Id == spid1 && r.QuerithmKind == ConnectionRegistry.Kinds.Pool) == true))
                 .Sessions!.Single(r => r.Key.Id == spid1).Key;
