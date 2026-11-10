@@ -214,6 +214,8 @@ public class CancelRecoveryTests
         int _allow = allow;
         public readonly TaskCompletionSource Choked = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public volatile bool Disposed;
+        /// <summary>Stopwatch timestamp of the moment the parked write saw its token cancelled (0 = never).</summary>
+        public long SawCancelAt;
 
         public byte[] Bytes { get { lock (_got) return _got.ToArray(); } }
         public void Drain() => _drain.TrySetResult();
@@ -229,7 +231,8 @@ public class CancelRecoveryTests
                 buffer = buffer[n..];
                 if (buffer.IsEmpty) break;
                 Choked.TrySetResult();
-                await _drain.Task.WaitAsync(ct);
+                try { await _drain.Task.WaitAsync(ct); }
+                catch (OperationCanceledException) { Interlocked.CompareExchange(ref SawCancelAt, System.Diagnostics.Stopwatch.GetTimestamp(), 0); throw; }
                 ObjectDisposedException.ThrowIf(Disposed, this);
             }
         }
@@ -278,9 +281,17 @@ public class CancelRecoveryTests
         await choked.Choked.Task.WaitAsync(Wait);
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
+        var cancelledAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        var (threads, pending) = (ThreadPool.ThreadCount, ThreadPool.PendingWorkItemCount);
         cts.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => write.WaitAsync(Wait));
-        Assert.True(sw.Elapsed < Wait / 2, $"took {sw.Elapsed}"); // the grace, not the reader, bounds it
+        var callerAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        var seen = Volatile.Read(ref choked.SawCancelAt);
+        string Ms(long a, long b) => $"{System.Diagnostics.Stopwatch.GetElapsedTime(a, b).TotalMilliseconds:0} ms";
+        // the grace, not the reader, bounds it
+        Assert.True(sw.Elapsed < Wait / 2, $"took {sw.Elapsed}: cancel to the stream seeing it {(seen == 0 ? "never" : Ms(cancelledAt, seen))} (grace {Grace.TotalMilliseconds} ms)," +
+            $" then to the caller {(seen == 0 ? "-" : Ms(seen, callerAt))}; thread pool at cancel {threads} threads {pending} pending," +
+            $" now {ThreadPool.ThreadCount} threads {ThreadPool.PendingWorkItemCount} pending, cpus {Environment.ProcessorCount}");
         Assert.True(choked.Disposed); // the connection holding part of a frame is gone: the shell reconnects
         var torn = choked.Bytes.Length;
         Assert.Equal(23 + 1000, torn);

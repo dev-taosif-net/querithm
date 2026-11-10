@@ -430,12 +430,14 @@ public class MonitorMatrixTests
             var id = Spid(writer);
             bool Mine(ActivityRow r) => r.Key.Id == id && r.Program == "p5-writer";
             var key = (await WaitSnapshot(m.MonitorId, x => x.Sessions?.Any(Mine) == true)).Sessions!.Single(Mine).Key;
+            var started = DateTime.UtcNow;
             var done = await Host.Rpc.MonitorKill(new MonitorKillParams { MonitorId = m.MonitorId, Target = key, Mode = KillMode.TerminateSession, ConfirmedKill = true, ConfirmedLongRollback = true });
-            Assert.Equal(KillOutcome.Done, done.Outcome);
+            Assert.True(done.Outcome == KillOutcome.Done, $"kill {done.Outcome} {done.Code} {done.Message}{Timeline(m.MonitorId, started)}");
+            var killedMs = (DateTime.UtcNow - started).TotalMilliseconds;
             var preview = await Host.Rpc.MonitorKillPreview(new MonitorSessionParams { MonitorId = m.MonitorId, Key = key });
-            Assert.True(preview.RollingBack, $"rolling back {preview.RollingBack}, ended {preview.SessionEnded}");
+            Assert.True(preview.RollingBack, $"rolling back {preview.RollingBack}, ended {preview.SessionEnded}; kill took {killedMs:0} ms, preview at {(DateTime.UtcNow - started).TotalMilliseconds:0} ms{Timeline(m.MonitorId, started)}");
             var again = await Host.Rpc.MonitorKill(new MonitorKillParams { MonitorId = m.MonitorId, Target = key, Mode = KillMode.TerminateSession, ConfirmedKill = true, ConfirmedLongRollback = true });
-            Assert.Equal("rollingBack", again.Code);
+            Assert.True(again.Code == "rollingBack", $"second kill {again.Outcome} {again.Code} {again.Message} at {(DateTime.UtcNow - started).TotalMilliseconds:0} ms{Timeline(m.MonitorId, started)}");
             await WaitSnapshot(m.MonitorId, x => x.Sessions?.All(r => r.Key != key) == true, 120_000);
             await using var cleanup = await OpenForeignAsync("p5-cleanup");
             await ExecAsync(cleanup, "TRUNCATE TABLE dbo.monitor_big");

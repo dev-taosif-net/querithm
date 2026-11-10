@@ -148,7 +148,25 @@ public class MonitorIntegrationTests
             throw new Xunit.Sdk.XunitException($"No matching snapshot in {timeoutMs} ms. Last: connection {latest?.Connection} {latest?.ConnectionError}; status " +
                 string.Join(", ", latest?.Status.Select(x => $"{x.Pane}={x.State}:{x.Reason}") ?? []) + $"; sessions {latest?.Sessions?.Length}"
                 + "; metrics " + string.Join(", ", Host.Notifier.Of<MonitorSnapshot>().LastOrDefault(x => x.MonitorId == monitorId && x.Metrics != null)?.Metrics?.Values.Select(v => $"{v.Key}={v.Value}({v.Note})") ?? [])
-                + "; top " + string.Join(" | ", Host.Notifier.Of<MonitorSnapshot>().Where(x => x.MonitorId == monitorId && x.TopQueries != null).Select(x => x.TopQueries!.Length)));
+                + "; top " + string.Join(" | ", Host.Notifier.Of<MonitorSnapshot>().Where(x => x.MonitorId == monitorId && x.TopQueries != null).Select(x => x.TopQueries!.Length))
+                + Timeline(monitorId, deadline.AddMilliseconds(-timeoutMs)));
+        }
+
+        /// <summary>
+        /// What the wait saw, for a failure message: the snapshots of its window (time from the start of the wait, tick lag,
+        /// throttled, rows, Querithm's pool rows with their owners), the scheduler's state and the thread pool.
+        /// </summary>
+        protected string Timeline(string monitorId, DateTime since)
+        {
+            var from = new DateTimeOffset(since).ToUnixTimeMilliseconds();
+            var snaps = Host.Notifier.Of<MonitorSnapshot>().Where(s => s.MonitorId == monitorId && s.At >= from - 2_000).TakeLast(40);
+            var lines = snaps.Select(s => $"+{s.At - from}ms lag {s.LagMs} thr {(s.Throttled ? 1 : 0)} n {s.Sessions?.Length.ToString() ?? "-"} pool [" +
+                string.Join(" ", s.Sessions?.Where(r => r.QuerithmKind == ConnectionRegistry.Kinds.Pool).Select(r => $"{r.Key.Id}:{r.OwnSessionId?[^4..] ?? r.QuerithmNote ?? "?"}") ?? []) + "]");
+            MonitorScheduler? sch = null;
+            try { sch = Host.Services.Monitors.Get(monitorId).Scheduler; } catch (Exception) { /* stopped: the snapshots still tell */ }
+            var jobs = sch == null ? "" : string.Join(",", sch.Jobs.Select(j => $"{j.Name}x{j.Multiplier}"));
+            return $"; timeline: {string.Join(" / ", lines)}; scheduler: tick x{sch?.TickMultiplier} interval {sch?.IntervalMs} ticks {sch?.TickCount} " +
+                $"lags {string.Join(",", sch?.RecentLags.TakeLast(15) ?? [])} jobs {jobs}; threads {ThreadPool.ThreadCount} pending {ThreadPool.PendingWorkItemCount} cpus {Environment.ProcessorCount}";
         }
 
         protected Task<MonitorStartResult> StartAsync(params MonitorPane[] panes) =>
@@ -189,7 +207,7 @@ public class MonitorIntegrationTests
             Assert.True(s.Blocking.BlockedCount >= 1);
             var vrow = s.Sessions!.Single(r => r.Key.Id == v);
             Assert.True(vrow.IsUserSession);
-            Assert.NotNull(vrow.TextId);
+            Assert.True(vrow.TextId != null, $"victim row without text (seq {s.Seq}, wait {vrow.WaitType}, status {vrow.Status}, note {vrow.TextNote}){Timeline(m.MonitorId, DateTime.UtcNow.AddSeconds(-30))}");
             Assert.Equal(32, vrow.TextId!.Length);
             Assert.NotEmpty(vrow.Key.Instance);
             var self = s.Sessions!.Single(r => r.QuerithmKind == ConnectionRegistry.Kinds.Monitor);
@@ -198,11 +216,11 @@ public class MonitorIntegrationTests
             var texts = await Host.Rpc.MonitorTexts(new MonitorTextsParams { MonitorId = m.MonitorId, Ids = [vrow.TextId] });
             Assert.Contains("UPDATE", texts.Texts[vrow.TextId], StringComparison.OrdinalIgnoreCase);
             var sentIn = Host.Notifier.Of<MonitorSnapshot>().Where(x => x.MonitorId == m.MonitorId && x.Texts?.ContainsKey(vrow.TextId) == true).Count();
-            Assert.Equal(1, sentIn);
+            Assert.True(sentIn == 1, $"text sent in {sentIn} snapshots{Timeline(m.MonitorId, DateTime.UtcNow.AddSeconds(-30))}");
             // Locks pane (LK4): the holder's granted and the victim's waiting lock.
             var withLocks = await WaitSnapshot(m.MonitorId, x => x.Locks?.Any(l => l.Key.Id == v && l.Status == "waiting") == true);
             Assert.Contains(withLocks.Locks!, l => l.Key.Id == h && l.Status == "granted");
-            Assert.Equal(1, s.ConnectionCount);
+            Assert.True(s.ConnectionCount == 1, $"connections {s.ConnectionCount}{Timeline(m.MonitorId, DateTime.UtcNow.AddSeconds(-30))}");
             await Host.Rpc.MonitorStop(new MonitorRef { MonitorId = m.MonitorId });
         }
 
