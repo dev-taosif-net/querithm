@@ -1,0 +1,33 @@
+{
+  "date": "2026-11-10T09:40:13.206Z",
+  "os": "Windows_NT 10.0.26200",
+  "cpu": "13th Gen Intel(R) Core(TM) i5-1335U",
+  "cores": 12,
+  "memGb": 16,
+  "results": {
+    "11b.oracle": {
+      "metric": "Oracle: execute → first batch on a cold pool connection (TCP, login, product + identity read, SELECT 1 FROM dual, median)",
+      "unit": "ms",
+      "target": 300,
+      "value": 43.35,
+      "pass": true,
+      "samples": [
+        574.5,
+        51.3,
+        47,
+        39.8,
+        43.4,
+        45.3,
+        41.9,
+        40.1,
+        116.3,
+        59.2,
+        42.6,
+        70.6,
+        43.2,
+        41.3,
+        39.1
+      ]
+    }
+  }
+}

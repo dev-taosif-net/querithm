@@ -21,6 +21,11 @@ public sealed class Session(string id, Profile profile, IDbProvider provider, st
     public int? Spid { get; set; }
     public string? ActiveExecutionId { get; set; }
     public bool Closed { get; set; }
+    /// <summary>
+    /// Phase D4: server output (Oracle DBMS_OUTPUT) is read back after each batch. Set by the run option or a script's
+    /// <c>SET SERVEROUTPUT</c>; applied to whichever connection the next run borrows.
+    /// </summary>
+    public bool ServerOutput { get; set; }
 
     /// <summary>
     /// Phase D0d: the session opens one connection of its own on first use and keeps it (pinned) until it closes — file

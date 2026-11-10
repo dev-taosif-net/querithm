@@ -25,6 +25,11 @@ public sealed record ExecuteOptions
     public int? LineOffset { get; init; }
     /// <summary>Do not write this execution to history (internal helper queries).</summary>
     public bool NoHistory { get; init; }
+    /// <summary>
+    /// Phase D4: the tab's server-output toggle (Oracle DBMS_OUTPUT). Set, it becomes the session's setting from this run
+    /// on; null keeps the session's (off until turned on here or by <c>SET SERVEROUTPUT ON</c> in a script).
+    /// </summary>
+    public bool? ServerOutput { get; init; }
 }
 
 public sealed record QueryExecuteParams

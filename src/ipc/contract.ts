@@ -199,6 +199,7 @@ export interface Classification {
   batches: BatchInfo[];
   parseErrors: Diagnostic[];
   refusal?: string | null;
+  serverOutput?: ServerOutputToggle[] | null;
 }
 export interface ClassifyParams {
   text: string;
@@ -535,6 +536,7 @@ export interface ExecuteOptions {
   parameters?: QueryParameter[] | null;
   lineOffset?: number | null;
   noHistory: boolean;
+  serverOutput?: boolean | null;
 }
 export interface ExecutionRef {
   executionId: string;
@@ -1447,6 +1449,10 @@ export interface ServerMessage {
   class?: number | null;
   batchIndex: number;
   ts: number;
+}
+export interface ServerOutputToggle {
+  beforeBatch: number;
+  on: boolean;
 }
 export interface SessionBlockingEvent {
   sessionId: string;

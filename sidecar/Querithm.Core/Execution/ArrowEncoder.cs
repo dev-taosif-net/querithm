@@ -28,10 +28,12 @@ public sealed class ResultSetEncoder
     public ColumnOrigin?[]? Origins { get; }
     public int PendingRows { get; private set; }
 
+    /// <param name="ct">Checked between the chunks of a large value, so a cancel stops a long LOB read part-way (§7 step 4).</param>
     public ResultSetEncoder(DbDataReader reader, IDbProvider provider, TruncatedCellStore cells, int resultIndex,
-        Func<IReadOnlyList<DbColumn>, ColumnOrigin?[]?>? origins = null, SchemaSnapshot? snapshot = null)
+        Func<IReadOnlyList<DbColumn>, ColumnOrigin?[]?>? origins = null, SchemaSnapshot? snapshot = null, CancellationToken ct = default)
     {
         var dbColumns = reader.GetColumnSchema();
+        var shapes = provider.DescribeColumns(reader);
         Origins = origins?.Invoke(dbColumns);
         var keys = Origins is { } o && snapshot != null ? new KeyLookup(snapshot, o) : null;
         var fields = new List<Field>();
@@ -42,9 +44,12 @@ public sealed class ResultSetEncoder
         {
             var dbCol = dbColumns.Count > i ? dbColumns[i] : null;
             var name = Unique(usedNames, string.IsNullOrEmpty(reader.GetName(i)) ? $"(No column name)" : reader.GetName(i));
-            var typeName = SafeTypeName(reader, i);
-            var clr = reader.GetFieldType(i);
-            var enc = ColumnEncoder.Create(name, i, clr, typeName, dbCol, provider, cells, resultIndex);
+            var shape = shapes != null && i < shapes.Count ? shapes[i] : null;
+            var typeName = shape?.TypeName ?? SafeTypeName(reader, i);
+            var clr = shape?.Clr ?? reader.GetFieldType(i);
+            var enc = shape != null
+                ? ColumnEncoder.Create(i, shape, provider, cells, resultIndex, ct)
+                : ColumnEncoder.Create(name, i, clr, typeName, dbCol, provider, cells, resultIndex, ct);
             encoders.Add(enc);
             var meta = new Dictionary<string, string> { ["q:typeName"] = typeName, ["q:ordinal"] = i.ToString(CultureInfo.InvariantCulture) };
             var key = keys?.At(i);
@@ -221,8 +226,32 @@ abstract class ColumnEncoder(int ordinal)
     public abstract void Append(DbDataReader r, long rowIndex);
     public abstract void BuildInto(List<IArrowArray> arrays);
 
+    /// <summary>
+    /// Phase D4: a column the provider described. Dispatch is on the CLR type alone; precision and scale come from the
+    /// shape; large text and binary stream through the shape's openers where it has them.
+    /// </summary>
+    public static ColumnEncoder Create(int ordinal, ColumnShape shape, IDbProvider provider, TruncatedCellStore cells, int resultIndex, CancellationToken ct)
+    {
+        var clr = shape.Clr;
+        switch (shape.Hint)
+        {
+            case ColumnHint.ProviderString or ColumnHint.ProviderBytes: return new ProviderStringEncoder(ordinal, provider);
+            case ColumnHint.Dynamic: return new DynamicEncoder(ordinal, cells, resultIndex);
+        }
+        if (clr == typeof(decimal))
+            return shape.Precision is > 0 and <= 38 && shape.Scale is >= 0 && shape.Scale <= shape.Precision
+                ? new DecimalEncoder(ordinal, shape.Precision.Value, shape.Scale.Value, provider)
+                : new ProviderStringEncoder(ordinal, provider);
+        if (clr == typeof(DateTime) && shape.TimestampMicros is { } micros) return new MicrosTimestampEncoder(ordinal, micros);
+        if (clr == typeof(DateTime)) return new TimestampEncoder(ordinal, null);
+        if (clr == typeof(string))
+            return new TextEncoder(ordinal, shape.Hint == ColumnHint.LargeText, cells, resultIndex, shape.OpenText == null ? r => r.GetString(ordinal) : null, ct, shape.OpenText);
+        if (clr == typeof(byte[])) return new BinaryEncoder(ordinal, cells, resultIndex, ct, shape.OpenBinary);
+        return Create("", ordinal, clr, "", null, provider, cells, resultIndex, ct);
+    }
+
     public static ColumnEncoder Create(string name, int ordinal, Type? clr, string typeName, DbColumn? col, IDbProvider provider,
-        TruncatedCellStore cells, int resultIndex)
+        TruncatedCellStore cells, int resultIndex, CancellationToken ct = default)
     {
         var hint = col == null ? ColumnHint.Default : provider.GetColumnHint(col);
         var tn = typeName.ToLowerInvariant();
@@ -260,10 +289,10 @@ abstract class ColumnEncoder(int ordinal)
             var large = hint == ColumnHint.LargeText || tn is "xml" or "text" or "ntext" or "json" or "jsonb" || size is null or <= 0 or >= 8000;
             // Stream only genuine character types; drivers refuse GetTextReader on xml/json and friends.
             var streamable = tn is "nvarchar" or "varchar" or "nchar" or "char" or "text" or "ntext" or "character varying" or "character" or "bpchar";
-            return new TextEncoder(ordinal, large, cells, resultIndex, streamable ? null : r => r.GetString(ordinal));
+            return new TextEncoder(ordinal, large, cells, resultIndex, streamable ? null : r => r.GetString(ordinal), ct);
         }
         // A driver that reads binary values as streams (DuckDB.NET reports BLOB as Stream) goes through GetStream as well.
-        if (clr == typeof(byte[]) || (clr != null && typeof(Stream).IsAssignableFrom(clr))) return new BinaryEncoder(ordinal, cells, resultIndex);
+        if (clr == typeof(byte[]) || (clr != null && typeof(Stream).IsAssignableFrom(clr))) return new BinaryEncoder(ordinal, cells, resultIndex, ct);
         if (clr == typeof(char[]) || clr == typeof(char)) return new TextEncoder(ordinal, false, cells, resultIndex, r => Convert.ToString(r.GetValue(ordinal), CultureInfo.InvariantCulture) ?? "");
         return new TextEncoder(ordinal, true, cells, resultIndex, r => FormatValue(r.GetValue(ordinal)));
     }
@@ -375,6 +404,28 @@ sealed class TimestampEncoder(int ordinal, string? tz) : ColumnEncoder(ordinal)
     public override void BuildInto(List<IArrowArray> arrays) { arrays.Add((_b ??= new(_type)).Build()); _b = null; Bytes = 0; }
 }
 
+/// <summary>Phase D4: a naive timestamp read as microseconds since 1970 by the provider (dates DateTime cannot hold, such as BC ones).</summary>
+sealed class MicrosTimestampEncoder(int ordinal, Func<DbDataReader, int, long> read) : ColumnEncoder(ordinal)
+{
+    static readonly TimestampType Type = new(TimeUnit.Microsecond, (string?)null);
+    Int64Array.Builder _b = new();
+    public override IArrowType ArrowType => Type;
+
+    public override void Append(DbDataReader r, long rowIndex)
+    {
+        if (r.IsDBNull(Ordinal)) _b.AppendNull(); else _b.Append(read(r, Ordinal));
+        Bytes += 8;
+    }
+
+    public override void BuildInto(List<IArrowArray> arrays)
+    {
+        var a = _b.Build();
+        arrays.Add(new TimestampArray(Type, a.ValueBuffer, a.NullBitmapBuffer, a.Length, a.NullCount, a.Offset));
+        _b = new();
+        Bytes = 0;
+    }
+}
+
 sealed class DateTimeOffsetEncoder(int ordinal) : ColumnEncoder(ordinal)
 {
     readonly TimestampType _type = new(TimeUnit.Microsecond, "UTC");
@@ -445,7 +496,8 @@ sealed class TimeEncoder(int ordinal) : ColumnEncoder(ordinal)
 }
 
 /// <summary>Utf8; unbounded types are truncated at 1 MB with a sibling flag column (§5).</summary>
-sealed class TextEncoder(int ordinal, bool large, TruncatedCellStore cells, int resultIndex, Func<DbDataReader, string>? read) : ColumnEncoder(ordinal)
+sealed class TextEncoder(int ordinal, bool large, TruncatedCellStore cells, int resultIndex, Func<DbDataReader, string>? read,
+    CancellationToken ct = default, Func<DbDataReader, int, TextReader>? open = null) : ColumnEncoder(ordinal)
 {
     StringArray.Builder _b = new();
     BooleanArray.Builder _flag = new();
@@ -479,16 +531,23 @@ sealed class TextEncoder(int ordinal, bool large, TruncatedCellStore cells, int 
         }
         else
         {
-            using var tr = r.GetTextReader(Ordinal);
+            using var tr = open != null ? open(r, Ordinal) : r.GetTextReader(Ordinal);
             var sb = new StringBuilder();
             int n;
-            while (sb.Length <= ResultSetEncoder.TextLimitChars && (n = tr.Read(_buf, 0, _buf.Length)) > 0) sb.Append(_buf, 0, n);
+            while (sb.Length <= ResultSetEncoder.TextLimitChars && (n = tr.Read(_buf, 0, _buf.Length)) > 0)
+            {
+                sb.Append(_buf, 0, n);
+                ct.ThrowIfCancellationRequested();
+            }
             truncated = sb.Length > ResultSetEncoder.TextLimitChars;
             if (truncated)
             {
                 // Keep reading for query.cell while the per-execution budget allows; otherwise drain.
                 while ((n = tr.Read(_buf, 0, _buf.Length)) > 0)
+                {
+                    ct.ThrowIfCancellationRequested();
                     if (sb.Length < TruncatedCellStore.BudgetBytes / 2) sb.Append(_buf, 0, n);
+                }
                 var full = sb.ToString();
                 cells.TryAdd(resultIndex, rowIndex, Ordinal, full, full.Length * 2L);
                 value = full[..ResultSetEncoder.TextLimitChars];
@@ -509,7 +568,8 @@ sealed class TextEncoder(int ordinal, bool large, TruncatedCellStore cells, int 
 }
 
 /// <summary>Binary truncated at 64 KB with a sibling flag column (§5).</summary>
-sealed class BinaryEncoder(int ordinal, TruncatedCellStore cells, int resultIndex) : ColumnEncoder(ordinal)
+sealed class BinaryEncoder(int ordinal, TruncatedCellStore cells, int resultIndex, CancellationToken ct = default,
+    Func<DbDataReader, int, Stream>? open = null) : ColumnEncoder(ordinal)
 {
     BinaryArray.Builder _b = new();
     BooleanArray.Builder _flag = new();
@@ -519,12 +579,13 @@ sealed class BinaryEncoder(int ordinal, TruncatedCellStore cells, int resultInde
     public override void Append(DbDataReader r, long rowIndex)
     {
         if (r.IsDBNull(Ordinal)) { _b.AppendNull(); _flag.Append(false); return; }
-        using var s = r.GetStream(Ordinal);
+        using var s = open != null ? open(r, Ordinal) : r.GetStream(Ordinal);
         using var ms = new MemoryStream();
         var buf = new byte[81920];
         int n;
         while ((n = s.Read(buf, 0, buf.Length)) > 0)
         {
+            ct.ThrowIfCancellationRequested();
             if (ms.Length < TruncatedCellStore.BudgetBytes / 2) ms.Write(buf, 0, n);
             else if (ms.Length > ResultSetEncoder.BinaryLimitBytes) continue;
         }

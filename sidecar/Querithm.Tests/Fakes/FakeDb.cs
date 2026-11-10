@@ -329,6 +329,30 @@ public sealed class FakeDbProvider : IDbProvider
         return [];
     }
 
+    /// <summary>D4 S04 tests: messages after a batch, from its text (Oracle's compile errors).</summary>
+    public Func<string, IReadOnlyList<ProviderMessage>>? AfterBatchText { get; set; }
+
+    public async Task<IReadOnlyList<ProviderMessage>> AfterBatchMessagesAsync(DbConnection connection, string batchText, CancellationToken ct)
+    {
+        var first = await AfterBatchMessagesAsync(connection, ct).ConfigureAwait(false);
+        return AfterBatchText == null ? first : [.. first, .. AfterBatchText(batchText)];
+    }
+
+    /// <summary>D4 S04 tests: every server-output switch Core asked for, in order.</summary>
+    public ConcurrentQueue<bool> ServerOutputSets { get; } = new();
+
+    public Task SetServerOutputAsync(DbConnection connection, bool on, CancellationToken ct)
+    {
+        ServerOutputSets.Enqueue(on);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>D4 S04 tests: the commands Core prepared (their text), and column shapes this fake engine describes.</summary>
+    public ConcurrentQueue<string> Prepared { get; } = new();
+    public void PrepareCommand(DbCommand command) => Prepared.Enqueue(command.CommandText);
+    public Func<DbDataReader, IReadOnlyList<ColumnShape?>?>? Shapes { get; set; }
+    public IReadOnlyList<ColumnShape?>? DescribeColumns(DbDataReader reader) => Shapes?.Invoke(reader);
+
     public string? CurrentDatabase(DbConnection connection) => connection.Database;
     public string ServerVersion(DbConnection connection) => "Fake 1";
     public Task<int?> GetSpidAsync(DbConnection connection, CancellationToken ct) => Task.FromResult<int?>(((FakeDbConnection)connection).Spid);

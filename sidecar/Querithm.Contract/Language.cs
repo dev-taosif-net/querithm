@@ -159,4 +159,15 @@ public sealed record Classification
     /// filesystem-changing pragma). A hard error, never a confirmable guard: <c>confirmedDestructive</c> does not bypass it.
     /// </summary>
     public string? Refusal { get; init; }
+    /// <summary>
+    /// Phase D4: client commands that turn server output on or off (Oracle <c>SET SERVEROUTPUT ON|OFF</c>), in script
+    /// order; each applies before batch <see cref="ServerOutputToggle.BeforeBatch"/> (= the batch count: after the last).
+    /// </summary>
+    public ServerOutputToggle[]? ServerOutput { get; init; }
+}
+
+public sealed record ServerOutputToggle
+{
+    public int BeforeBatch { get; init; }
+    public bool On { get; init; }
 }

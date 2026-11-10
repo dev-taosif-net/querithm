@@ -9,6 +9,7 @@
 //   pnpm bench -- --sqlite     # SQLite per-engine metrics only (temp-dir files, no Docker)
 //   pnpm bench -- --mysql      # MySQL per-engine metrics only (the mysql84 fixture)
 //   pnpm bench -- --duckdb     # DuckDB per-engine metrics only (temp-dir files, no Docker)
+//   pnpm bench -- --oracle     # Oracle per-engine metrics only (the oracle fixture, --profile oracle)
 //   pnpm bench -- --app <bin>  # also measure the bundled app (cold start, RSS, orphan check) — Linux/macOS
 import { spawn, spawnSync, execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -23,13 +24,15 @@ import { fixturePassword } from "../fixture/fixture-secrets.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const args = process.argv.slice(2);
-const only = args.includes("--engine") ? "engine" : args.includes("--ui") ? "ui" : args.includes("--sqlite") ? "sqlite" : args.includes("--mysql") ? "mysql" : args.includes("--duckdb") ? "duckdb" : "all";
+const only = args.includes("--engine") ? "engine" : args.includes("--ui") ? "ui" : args.includes("--sqlite") ? "sqlite" : args.includes("--mysql") ? "mysql" : args.includes("--duckdb") ? "duckdb" : args.includes("--oracle") ? "oracle" : "all";
 const appBin = args.includes("--app") ? args[args.indexOf("--app") + 1] : null;
 const RUNS = 5;
 
 const MSSQL = { host: process.env.QUERITHM_IT_MSSQL_HOST || "localhost", port: 14333, user: "sa", password: fixturePassword("mssql"), db: "SalesDB" };
 const PG = { host: process.env.QUERITHM_IT_PG_HOST || "localhost", port: 54329, user: "postgres", password: fixturePassword("pg"), db: "postgres" };
 const MYSQL = { host: "127.0.0.1", port: 33084, user: "root", password: fixturePassword("mysql"), db: "q_bench" };
+// Phase D4: Oracle Free's least-privileged app user over plain TCP (the fixture's TCPS certificate is self-signed).
+const ORACLE = { host: "127.0.0.1", port: 15210, user: "querithm_app", password: fixturePassword("oracle"), service: "FREEPDB1" };
 
 // metric id → [name, unit, target, compare] ; compare: "le" (value must be ≤ target)
 const TARGETS = {
@@ -91,6 +94,8 @@ const TARGETS = {
   "20.sqlite": ["SQLite: grid edits, DML preview for 100 staged cells", "ms", 15],
   "23.sqlite": ["SQLite: import 100k × 10 CSV into a new table (median of 3)", "ms", 2000],
   // Phase D2: MySQL 8.4 (the fixture's mysql84, TLS required), hidden behind the dev setting like SQLite.
+  // Phase D4: Oracle (hidden engine), the fixture's Oracle Free.
+  "11b.oracle": ["Oracle: execute → first batch on a cold pool connection (TCP, login, product + identity read, SELECT 1 FROM dual, median)", "ms", 300],
   "11cold.mysql": ["MySQL: execute → first batch on a cold pool connection (TCP, TLS, login, identity read, SELECT 1, median)", "ms", 300],
   "8.mysql": ["MySQL: database switch on an existing connection (COM_INIT_DB, median)", "ms", 20],
   "15.mysql": ["MySQL: cancel latency (KILL QUERY on a side connection)", "ms", 500],
@@ -896,6 +901,43 @@ async function duckdbMetrics() {
 }
 
 /**
+ * Phase D4 per-engine metrics for Oracle (exposed with QUERITHM_DEV_ENGINES), on the Docker fixture's Oracle Free
+ * (`docker compose -p querithm-fixture -f scripts/bench/docker/compose.yml --profile oracle up -d --wait oracle`).
+ * #11b.oracle: each sample a new profile, so a new physical connection (TCP, login, the product and identity reads every
+ * open does), then `SELECT 1 FROM dual` to its first batch frame.
+ */
+async function oracleMetrics() {
+  console.log("oracle metrics");
+  const sc = await startSidecar({ QUERITHM_DEV_ENGINES: "oracle" });
+  const { call, until, frames } = sc;
+  const profileOf = (name) => call("profile.save", { id: "", name, engine: "oracle", host: ORACLE.host, port: ORACLE.port, auth: "password", username: ORACLE.user, environment: "dev", tlsMode: "disable", databaseDefault: ORACLE.service });
+  try {
+    const cold = [];
+    for (let i = 0; i < 15; i++) {
+      const profile = await profileOf(`Bench Oracle cold ${i}`);
+      const { sessionId } = await call("session.open", { profileId: profile.id, secret: ORACLE.password });
+      const before = new Set(frames.keys());
+      const t0 = performance.now();
+      const ex = await call("query.execute", { sessionId, sql: "SELECT 1 FROM dual", options: { noHistory: true } });
+      const done = await until((m, p) => m === "query.done" && p.executionId === ex.executionId, 60_000, "oracle cold", true);
+      if (done.error) throw new Error(`#11b.oracle: ${done.error.message}`);
+      let f;
+      for (let w = 0; w < 100 && !(f = [...frames.entries()].find(([k, v]) => !before.has(k) && v.firstAt)?.[1]); w++) await sleep(10);
+      if (!f) throw new Error("#11b.oracle: no batch frame");
+      cold.push(f.firstAt - t0);
+      await call("session.close", { sessionId, force: true });
+      await call("profile.delete", { profileId: profile.id });
+    }
+    record("11b.oracle", median(cold), { samples: cold.map((x) => Math.round(x * 10) / 10) });
+  } catch (e) {
+    console.log(`  oracle metrics failed: ${e.message}`);
+    throw e;
+  } finally {
+    sc.kill();
+  }
+}
+
+/**
  * Phase D2 per-engine metrics for MySQL 8.4 (exposed with QUERITHM_DEV_ENGINES), on the Docker fixture. The fixture's
  * certificate is self-signed, so the profiles take the explicit Required downgrade, as the integration tests do.
  */
@@ -1300,6 +1342,7 @@ if (only === "engine" || only === "all") await engineMetrics();
 if (only === "all" || only === "engine" || only === "sqlite") await sqliteMetrics();
 if (only === "all" || only === "engine" || only === "mysql") await mysqlMetrics();
 if (only === "all" || only === "engine" || only === "duckdb") await duckdbMetrics();
+if (only === "all" || only === "engine" || only === "oracle") await oracleMetrics();
 // A ui run that broke off measured nothing: it fails the run instead of reading as "0 outside target".
 let uiError = null;
 if (only === "ui" || only === "all") await uiMetrics().catch((e) => { uiError = e; console.log(`  ui metrics failed: ${e.message}`); });

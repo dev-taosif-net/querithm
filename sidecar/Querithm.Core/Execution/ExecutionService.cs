@@ -416,11 +416,25 @@ public sealed class ExecutionService : IAsyncDisposable
 
             var (before, after) = session.Provider.SessionOptionsSql(exec.Options);
             if (before != null) await ExecuteNonQueryAsync(conn.Db, before, ct).ConfigureAwait(false);
+            // Phase D4: server output follows the session (the run option sets it), whichever connection this run borrowed.
+            if (exec.Options.ServerOutput is { } so) session.ServerOutput = so;
+            var toggles = classification.ServerOutput ?? [];
+            await session.Provider.SetServerOutputAsync(conn.Db, session.ServerOutput, ct).ConfigureAwait(false);
+            async Task ToggleAsync(int beforeBatch)
+            {
+                foreach (var t in toggles)
+                    if (t.BeforeBatch == beforeBatch && t.On != session.ServerOutput)
+                    {
+                        session.ServerOutput = t.On;
+                        await session.Provider.SetServerOutputAsync(conn.Db, t.On, ct).ConfigureAwait(false);
+                    }
+            }
             var stopped = false;
             try
             {
                 for (batchIndex = 0; batchIndex < batches.Length; batchIndex++)
                 {
+                    await ToggleAsync(batchIndex).ConfigureAwait(false);
                     var batch = batches[batchIndex];
                     var text = exec.Sql.Substring(batch.StartOffset, batch.Length);
                     var reps = Math.Max(1, batch.RepeatCount);
@@ -436,11 +450,20 @@ public sealed class ExecutionService : IAsyncDisposable
                             // returns normally (MySQL's KILL QUERY makes SELECT SLEEP(n) return 1): Cancelled, not Done.
                             ct.ThrowIfCancellationRequested();
                             if (batchIndex == batches.Length - 1 && rep == reps - 1) workDone = true;
-                            foreach (var m in await session.Provider.AfterBatchMessagesAsync(conn.Db, ct).ConfigureAwait(false))
+                            foreach (var m in await session.Provider.AfterBatchMessagesAsync(conn.Db, text, ct).ConfigureAwait(false))
+                            {
+                                int? editorLine = m.Line is > 0 ? batch.StartLine + m.Line.Value - 1 + lineOffset : null;
+                                if (m.Severity == Severity.Error)
+                                {
+                                    hadError = true;
+                                    firstError ??= new ErrorInfo { Message = m.Message, Number = m.Number, Line = m.Line, EditorLine = editorLine, Procedure = m.Procedure, BatchIndex = batchIndex };
+                                }
                                 Message(exec, new ServerMessage
                                 {
-                                    ExecutionId = exec.IdText, Severity = m.Severity, Message = m.Message, Number = m.Number, BatchIndex = batchIndex, Ts = Time.NowMs(),
+                                    ExecutionId = exec.IdText, Severity = m.Severity, Message = m.Message, Line = m.Line, EditorLine = editorLine, Procedure = m.Procedure,
+                                    Number = m.Number, BatchIndex = batchIndex, Ts = Time.NowMs(),
                                 });
+                            }
                         }
                         // No data plane reader, or a frame it broke off: every later batch would fail the same way (or run
                         // after results the user never saw complete), so the run ends here.
@@ -458,6 +481,20 @@ public sealed class ExecutionService : IAsyncDisposable
                                 });
                             }
                             if (!conn.IsOpen) throw; // connection-level failure: stop
+                            // Phase D4: what the failed batch printed before it raised (Oracle DBMS_OUTPUT), shown with its error.
+                            try
+                            {
+                                foreach (var m in await session.Provider.FailedBatchMessagesAsync(conn.Db, ct).ConfigureAwait(false))
+                                    Message(exec, new ServerMessage
+                                    {
+                                        ExecutionId = exec.IdText, Severity = m.Severity == Severity.Error ? Severity.Warning : m.Severity, Message = m.Message,
+                                        Number = m.Number, BatchIndex = batchIndex, Ts = Time.NowMs(),
+                                    });
+                            }
+                            catch (Exception readEx) when (readEx is not OperationCanceledException)
+                            {
+                                _log.LogWarning("Execution {Id}: reading the failed batch's messages failed: {Message}", exec.IdText, readEx.Message);
+                            }
                             stopped = session.Provider.StopOnBatchError;
                             break; // like SSMS: an error ends this batch, the next batch still runs
                         }
@@ -473,6 +510,7 @@ public sealed class ExecutionService : IAsyncDisposable
                         break;
                     }
                 }
+                if (!stopped) await ToggleAsync(batches.Length).ConfigureAwait(false); // a trailing SET SERVEROUTPUT: for the next run
                 workDone = true; // every batch ran, or the run stopped at an error
             }
             finally
@@ -594,6 +632,7 @@ public sealed class ExecutionService : IAsyncDisposable
         cmd.CommandTimeout = session.Provider.Traits.FixedCommandTimeoutS ?? session.Profile.CommandTimeoutS ?? 0;
         if (exec.Options.Parameters is { Length: > 0 } ps)
             foreach (var prm in ps) session.Provider.AddParameter(cmd, prm);
+        session.Provider.PrepareCommand(cmd);
         exec.CurrentCommand = cmd;
         var truncatedAny = false;
         var dataResult = 0;
@@ -675,7 +714,7 @@ public sealed class ExecutionService : IAsyncDisposable
     async Task<bool> StreamResultSetAsync(Execution exec, DbDataReader reader, Contract.Providers.IDbProvider provider, int resultIndex, int batchIndex,
         int maxRows, CancellationToken ct, Func<IReadOnlyList<DbColumn>, Contract.Providers.ColumnOrigin?[]?>? origins = null, SchemaSnapshot? snapshot = null, string? editRefusal = null)
     {
-        var enc = new ResultSetEncoder(reader, provider, exec.Cells, resultIndex, origins, snapshot);
+        var enc = new ResultSetEncoder(reader, provider, exec.Cells, resultIndex, origins, snapshot, ct);
         var ri = checked((ushort)resultIndex); // below MaxResultSets (L13), never wrapped
         ResultEditInfo? edit = null;
         if (exec.Session is { } session && Editability is { } decide)

@@ -13,7 +13,7 @@ namespace Querithm.Intelligence.Oracle;
 /// <c>EXECUTE IMMEDIATE</c> of an expression and <c>DBMS_SQL</c> / <c>DBMS_UTILITY.EXEC_DDL_STATEMENT</c> cannot be
 /// checked and count as destructive (<c>dynamicSql</c>). DDL (which commits before and after) drives the metadata refresh.
 /// <c>ALTER SESSION SET CURRENT_SCHEMA</c> changes the completion schema (<see cref="CurrentSchemaAt"/>), never the
-/// database. SQL*Plus commands are not sent: <c>SET SERVEROUTPUT ON|OFF</c> is reported by <see cref="ServerOutputToggles"/>,
+/// database. SQL*Plus commands are not sent: <c>SET SERVEROUTPUT ON|OFF</c> is reported in <see cref="Classification.ServerOutput"/>,
 /// every other command and any <c>&amp;substitution</c> variable is a refusal with the reason (O5).
 /// Completion, diagnostics, signature help and formatting are later sessions (S06); they answer empty or unchanged.
 /// </summary>
@@ -21,9 +21,6 @@ public sealed class OracleLanguageService : IDialectService
 {
     /// <summary>Formatting Oracle SQL arrives with the editor work (D4 S06).</summary>
     public const string NoFormatter = "Formatting Oracle SQL is not available in this build of Querithm yet.";
-
-    /// <summary>Kept for the provider's not-yet-implemented paths (ad-hoc parameters arrive in D4 S04).</summary>
-    public const string NotReadYet = "Oracle ad-hoc parameters are not available in this build of Querithm yet.";
 
     /// <summary>Verbs whose statements are DDL (an implicit commit before and after).</summary>
     static readonly HashSet<string> DdlVerbs = new(StringComparer.OrdinalIgnoreCase)
@@ -41,6 +38,7 @@ public sealed class OracleLanguageService : IDialectService
             if (st.Kind == OracleStatementKind.ClientCommand)
             {
                 state.Refusal ??= st.Command!.Refusal;
+                if (st.Command!.ServerOutput is { } on) state.ServerOutput.Add(new ServerOutputToggle { BeforeBatch = state.Batches.Count, On = on });
                 continue;
             }
             var code = st.Code.ToList();
@@ -57,6 +55,7 @@ public sealed class OracleLanguageService : IDialectService
         {
             Destructive = state.Destructive.ToArray(), HasDdl = state.Ddl, BeginsTransaction = state.Begins, EndsTransaction = state.Ends,
             UseDatabase = null, Batches = state.Batches.ToArray(), ParseErrors = [], Refusal = state.Refusal,
+            ServerOutput = state.ServerOutput.Count > 0 ? state.ServerOutput.ToArray() : null,
         };
     }
 
@@ -65,6 +64,7 @@ public sealed class OracleLanguageService : IDialectService
         public readonly string Text = text;
         public readonly List<DestructiveFinding> Destructive = [];
         public readonly List<BatchInfo> Batches = [];
+        public readonly List<ServerOutputToggle> ServerOutput = [];
         public string? Refusal;
         public bool Ddl, Begins, Ends;
 
@@ -250,8 +250,8 @@ public sealed class OracleLanguageService : IDialectService
     }
 
     /// <summary>
-    /// The <c>SET SERVEROUTPUT</c> commands in the text, each with the number of batches before it (D4 S04 turns
-    /// DBMS_OUTPUT on or off at that point of the run).
+    /// The <c>SET SERVEROUTPUT</c> commands in the text, each with the number of batches before it (the run turns
+    /// DBMS_OUTPUT on or off at that point, D4 S04; <see cref="Classify"/> reports the same list).
     /// </summary>
     public static IReadOnlyList<(int BeforeBatch, bool On)> ServerOutputToggles(string text)
     {

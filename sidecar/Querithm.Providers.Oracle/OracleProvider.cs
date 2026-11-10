@@ -16,8 +16,9 @@ namespace Querithm.Providers.Oracle;
 /// with the certificate and server name checked by default (plain TCP is an explicit, warned downgrade, §13 rule 2), a
 /// password from the keyring, no sqlnet.ora / tnsnames.ora (O1), Oracle 19c or later. Transactions (<see
 /// cref="OracleTransactions"/>), cancel (OracleCommand.Cancel: a break on the command's own connection) and ORA- errors
-/// with their position work; metadata, plans, scripting, grid edit and import still refuse with a reason until their
-/// session (D4 S04–S12) replaces them.
+/// with their position work. Since D4 S04 every Oracle type reaches the grid typed or as exact text (<see cref="OracleTypes"/>),
+/// DBMS_OUTPUT and compile errors are read after each batch (<see cref="OracleOutput"/>) and <c>:name</c> binds by name;
+/// metadata, plans, scripting, grid edit and import still refuse with a reason until their session (D4 S05–S12).
 /// </summary>
 public sealed class OracleProvider : IDbProvider
 {
@@ -232,38 +233,69 @@ public sealed class OracleProvider : IDbProvider
         return Convert.ToInt32(await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false), CultureInfo.InvariantCulture);
     }
 
-    /// <summary>DBMS_OUTPUT is read after each batch in D4 S04; the driver raises no info messages of its own for SQL.</summary>
+    /// <summary>The driver raises no info messages of its own for SQL: DBMS_OUTPUT and compile errors are read after each batch.</summary>
     public IDisposable SubscribeMessages(DbConnection connection, Action<ProviderMessage> onMessage) => Nop.Instance;
+
+    /// <summary>DBMS_OUTPUT lines (while server output is on) and the compile errors of a PL/SQL unit the batch created (<see cref="OracleOutput"/>).</summary>
+    public Task<IReadOnlyList<ProviderMessage>> AfterBatchMessagesAsync(DbConnection connection, string batchText, CancellationToken ct) =>
+        OracleOutput.AfterBatchAsync(connection, batchText, ct);
+
+    /// <summary>The DBMS_OUTPUT lines a failed block printed before it raised.</summary>
+    public Task<IReadOnlyList<ProviderMessage>> FailedBatchMessagesAsync(DbConnection connection, CancellationToken ct) => OracleOutput.AfterFailureAsync(connection, ct);
+
+    /// <summary>DBMS_OUTPUT.ENABLE(NULL) / DISABLE, only when the connection's state changes (one round trip).</summary>
+    public Task SetServerOutputAsync(DbConnection connection, bool on, CancellationToken ct) => OracleOutput.SetAsync(connection, on, ct);
 
     public IReadOnlyList<ProviderMessage> TranslateException(Exception ex, string? commandText = null) =>
         ex is OracleException o ? OracleErrors.Translate(o, commandText) : [new ProviderMessage(Severity.Error, ex.Message)];
 
     public (string? Before, string? After) SessionOptionsSql(ExecuteOptions options) => (null, null);
 
-    public void AddParameter(DbCommand command, QueryParameter parameter) => throw new NotSupportedException(OracleLanguageService.NotReadYet);
+    /// <summary>
+    /// A <c>:name</c> / <c>:1</c> bind (the name with or without its colon; a quoted name keeps its quotes), its value as
+    /// VARCHAR2 text that the server converts where the statement needs another type (a CLOB past 32,767 characters).
+    /// The type name is not used: Oracle converts from text by the column or expression it is compared with.
+    /// </summary>
+    public void AddParameter(DbCommand command, QueryParameter parameter)
+    {
+        var name = parameter.Name.Trim();
+        if (name.StartsWith(':')) name = name[1..];
+        if (name.Length == 0 || name.Length > OracleIdentifiers.MaxBytes + 2) throw new ArgumentException($"\"{parameter.Name}\" is not an Oracle bind variable name.");
+        var value = parameter.IsNull || parameter.Value == null ? null : parameter.Value;
+        var type = value is { Length: > 32767 } ? OracleDbType.Clob : OracleDbType.Varchar2;
+        command.Parameters.Add(new OracleParameter(name, type, (object?)value ?? DBNull.Value, System.Data.ParameterDirection.Input));
+    }
 
-    /// <summary>Every column as the driver's own lossless text until D4 S04 maps Oracle types to Arrow (NUMBER(38) exceeds System.Decimal).</summary>
+    /// <summary>Fetch buffer per round trip, chosen by measurement (ARCHITECTURE §14 metric 11b): 200,000 rows × 5 columns read in 176–192 ms at 1 MB against 422–674 ms at the driver's 128 KB default, 153–166 ms at 4 MB.</summary>
+    public const long FetchSizeBytes = 1024 * 1024;
+    /// <summary>LOB bytes sent with each row (measured, 5,000 × 200-character CLOBs read whole: 44–63 ms at 4 KB, 3.5–3.8 s at 0, 169–195 ms at 32 KB; in chunks to their length, as the encoder reads them: 80–90 ms at 4 KB).</summary>
+    public const int InitialLobFetchSize = 4096;
+
+    /// <summary>
+    /// Binds by name (ODP.NET binds by position by default), the fetch sizes above, LONG / LONG RAW fetched inline (−1: the
+    /// driver otherwise needs the row's ROWID in the select list to read them), and only the parameters the statement
+    /// names — a <c>CREATE TRIGGER</c>'s <c>:NEW</c> is no bind, so the run's parameters never reach DDL.
+    /// </summary>
+    public void PrepareCommand(DbCommand command)
+    {
+        if (command is not OracleCommand c) return;
+        c.BindByName = true;
+        c.FetchSize = FetchSizeBytes;
+        c.InitialLOBFetchSize = InitialLobFetchSize;
+        c.InitialLONGFetchSize = -1;
+        if (c.Parameters.Count == 0) return;
+        var used = new HashSet<string>(OracleLanguageService.Binds(c.CommandText ?? ""), StringComparer.Ordinal);
+        for (var i = c.Parameters.Count - 1; i >= 0; i--)
+            if (!used.Contains(OracleIdentifiers.Identity(c.Parameters[i].ParameterName))) c.Parameters.RemoveAt(i);
+    }
+
+    /// <summary>Oracle types from the reader's schema table (<see cref="OracleTypes.Map"/>): DbColumn carries no Oracle type, precision or scale.</summary>
+    public IReadOnlyList<ColumnShape?>? DescribeColumns(DbDataReader reader) => OracleTypes.Describe(reader);
+
+    /// <summary>Only reached for a column <see cref="DescribeColumns"/> did not describe.</summary>
     public ColumnHint GetColumnHint(DbColumn column) => ColumnHint.ProviderString;
 
-    public string? ReadAsString(DbDataReader reader, int ordinal)
-    {
-        if (reader.IsDBNull(ordinal)) return null;
-        if (reader is OracleDataReader r)
-        {
-            var v = r.GetOracleValue(ordinal);
-            if (v is global::Oracle.ManagedDataAccess.Types.OracleBinary b) return "0x" + Convert.ToHexString(b.Value);
-            if (v is global::Oracle.ManagedDataAccess.Types.OracleDecimal d) return d.ToString();
-            if (v is global::Oracle.ManagedDataAccess.Types.OracleDate dt) return dt.Value.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
-            if (v is global::Oracle.ManagedDataAccess.Types.OracleTimeStamp ts) return ts.Value.ToString("yyyy-MM-dd HH:mm:ss.FFFFFFF", CultureInfo.InvariantCulture);
-        }
-        var value = reader.GetValue(ordinal);
-        return value switch
-        {
-            byte[] bytes => "0x" + Convert.ToHexString(bytes),
-            IFormattable f => f.ToString(null, CultureInfo.InvariantCulture),
-            _ => Convert.ToString(value, CultureInfo.InvariantCulture),
-        };
-    }
+    public string? ReadAsString(DbDataReader reader, int ordinal) => OracleTypes.ReadAsString(reader, ordinal);
 
     public bool IsPlanResultSet(DbDataReader reader) => false;
 

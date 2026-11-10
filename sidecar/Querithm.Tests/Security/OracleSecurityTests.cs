@@ -80,7 +80,6 @@ public sealed class OracleSecurityTests
                 SessionId = sid, Sql = sql, Options = new ExecuteOptions { ConfirmedProd = true, ConfirmedDestructive = true },
             }));
             Assert.Equal("refused", ex.Code);
-            Assert.NotEqual(OracleLanguageService.NotReadYet, ex.Message);
         });
     }
 

@@ -148,6 +148,42 @@ public interface IDbProvider
     Task<IReadOnlyList<ProviderMessage>> AfterBatchMessagesAsync(DbConnection connection, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<ProviderMessage>>([]);
 
+    /// <summary>
+    /// Phase D4: <see cref="AfterBatchMessagesAsync(DbConnection, CancellationToken)"/> with the batch that just ran, for
+    /// messages that depend on it (Oracle: the compile errors of the PL/SQL unit a <c>CREATE</c> made, which the driver
+    /// does not raise). Lines are relative to <paramref name="batchText"/>; an Error marks the run failed.
+    /// </summary>
+    Task<IReadOnlyList<ProviderMessage>> AfterBatchMessagesAsync(DbConnection connection, string batchText, CancellationToken ct) =>
+        AfterBatchMessagesAsync(connection, ct);
+
+    /// <summary>
+    /// Phase D4: messages to read after a batch that failed on a connection still open (Oracle: the DBMS_OUTPUT lines a
+    /// block printed before it raised, which would otherwise surface after some later statement). None by default; never
+    /// errors of their own (a failure here is logged and dropped).
+    /// </summary>
+    Task<IReadOnlyList<ProviderMessage>> FailedBatchMessagesAsync(DbConnection connection, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<ProviderMessage>>([]);
+
+    /// <summary>
+    /// Phase D4: turns the engine's server-output buffer on or off for this connection (Oracle DBMS_OUTPUT), so that
+    /// <see cref="AfterBatchMessagesAsync(DbConnection, string, CancellationToken)"/> reads it back. Called before the
+    /// first batch of every run with the session's setting, and where the script toggles it. Nothing by default.
+    /// </summary>
+    Task SetServerOutputAsync(DbConnection connection, bool on, CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>
+    /// Phase D4: driver settings for a user command, applied after its parameters were added and before it runs (Oracle:
+    /// bind by name, fetch sizes). Nothing by default.
+    /// </summary>
+    void PrepareCommand(DbCommand command) { }
+
+    /// <summary>
+    /// Phase D4: the shape of each column of the reader's current result set where the provider knows better than the
+    /// reader's CLR type and <see cref="DbColumn"/> (ODP.NET reports NUMBER(12,3) as Double and no precision); null
+    /// entries (or a null list) keep the default mapping. Read once per result set, before any row.
+    /// </summary>
+    IReadOnlyList<ColumnShape?>? DescribeColumns(DbDataReader reader) => null;
+
     /// <summary>Forwards server info/notice/print messages. Dispose to unsubscribe.</summary>
     IDisposable SubscribeMessages(DbConnection connection, Action<ProviderMessage> onMessage);
 
@@ -231,6 +267,20 @@ public enum ColumnHint
     /// could break.
     /// </summary>
     Dynamic,
+}
+
+/// <summary>
+/// Phase D4: one result column as the provider describes it (<see cref="IDbProvider.DescribeColumns"/>). The encoder
+/// dispatches on <see cref="Clr"/> alone (a DateTime is a timestamp, whatever the type name says) and shows
+/// <see cref="TypeName"/>. <see cref="OpenText"/> / <see cref="OpenBinary"/> stream a large value in chunks (checked for
+/// cancel between them) instead of the reader's whole-value default; <see cref="TimestampMicros"/> reads a timestamp as
+/// microseconds since 1970-01-01 (dates outside DateTime's range, such as Oracle's BC dates).
+/// </summary>
+public sealed record ColumnShape(Type Clr, string TypeName, ColumnHint Hint = ColumnHint.Default, int? Precision = null, int? Scale = null)
+{
+    public Func<DbDataReader, int, TextReader>? OpenText { get; init; }
+    public Func<DbDataReader, int, Stream>? OpenBinary { get; init; }
+    public Func<DbDataReader, int, long>? TimestampMicros { get; init; }
 }
 
 /// <summary>A dynamically typed value's storage class, sent per cell in the <c>&lt;col&gt;__class</c> sibling (Phase D0f).</summary>

@@ -661,6 +661,36 @@ public class CancelRecoveryTests
         await rig.Done(run);
     }
 
+    /// <summary>
+    /// D4 S04: a large value streamed in chunks (an Oracle CLOB through the provider's reader) is a long-running path of
+    /// its own — the driver's command is done, only the value's reads go on. The cancel stops it between chunks; before
+    /// the check a never-ending value read until the per-execution budget ran out, and Cancel waited for it.
+    /// </summary>
+    [Fact]
+    public async Task Cancel_stops_a_large_value_streamed_in_chunks_and_frees_the_session()
+    {
+        await using var rig = new Rig();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.Provider.Handler = (_, _) => Task.FromResult(new FakeResult([FakeResult.Table([("c", typeof(string))], ["x"])]));
+        rig.Provider.Shapes = _ =>
+        [
+            new ColumnShape(typeof(string), "CLOB", ColumnHint.LargeText)
+            {
+                OpenText = (_, _) => new OracleExecuteTests.EndlessText(() => { entered.TrySetResult(); Thread.Sleep(1); }),
+            },
+        ];
+        var s = rig.Open();
+
+        var run = rig.Run(s, "SELECT c FROM big");
+        await entered.Task.WaitAsync(Wait);
+        Assert.True(rig.Executions.Cancel(run).Cancelled);
+
+        Assert.Equal(ExecState.Cancelled, (await rig.Done(run)).State);
+        Assert.Null(s.ActiveExecutionId);
+        Assert.Equal(1, s.ExecLock.CurrentCount);
+        Assert.Equal(ConnectionState.Open, rig.Provider.Opened.Single().State); // stopped by the run's token, not by closing the connection
+    }
+
     // ------------------------------------------------------------------ queued, connecting, tool runs
 
     [Fact]
