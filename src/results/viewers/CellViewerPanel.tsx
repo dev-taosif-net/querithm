@@ -2,6 +2,7 @@
 // worker, folding, search), XML (formatted, showplan → Open as plan), binary (hex, PNG/JPEG/GIF preview) and long text
 // (wrap, copy). A truncated cell's full value comes from query.cell. Values are never inserted as HTML: text is React
 // text, and an image is an <img> with a data: URL whose type comes from the bytes' signature.
+import { LoadingStatus } from "../../app/LoadingStatus";
 import { useEffect, useMemo, useState } from "react";
 import type { Engine } from "../../ipc/contract";
 import { rpc } from "../../ipc/client";
@@ -228,7 +229,7 @@ export function CellViewerPanel({ tabId, executionId, rs, row, col, onClose }: C
   const kind: ViewerKind | null = c ? viewerKind(c, loaded.state === "text" ? loaded.text : null) : null;
   return (
     <aside
-      className="w-[400px] max-w-[50%] min-w-[260px] shrink-0 border-l border-line bg-panel flex flex-col min-h-0"
+      className="q-side-panel-in w-[400px] max-w-[50%] min-w-[260px] shrink-0 border-l border-line bg-panel flex flex-col min-h-0"
       aria-label="Cell value"
       data-q-cell-viewer
       onKeyDown={(e) => {
@@ -246,7 +247,7 @@ export function CellViewerPanel({ tabId, executionId, rs, row, col, onClose }: C
           ✕
         </button>
       </div>
-      {loaded.state === "loading" && <Note>Fetching the full value…</Note>}
+      {loaded.state === "loading" && <div className="flex-1 flex items-center justify-center p-4"><LoadingStatus label="Fetching the full value…" /></div>}
       {loaded.state === "null" && <div className="flex-1 flex items-center justify-center text-muted text-xs">NULL</div>}
       {"note" in loaded && loaded.note && <Note>{loaded.note}</Note>}
       {loaded.state === "text" && kind && <TextValue key={`${row}:${col}`} text={loaded.text} kind={kind} tabId={tabId} executionId={executionId} />}

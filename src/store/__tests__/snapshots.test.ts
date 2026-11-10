@@ -41,6 +41,45 @@ describe("snapshots store", () => {
     rpc.mockReset();
   });
 
+  it("refresh keeps cached objects and reports busy immediately, suppressing duplicate requests", async () => {
+    rpc.mockResolvedValueOnce(snapshot([obj(1, "dbo", "Orders")]));
+    await s().load("p1", "Sales");
+    const cached = s().get("p1", "Sales")!.snapshot;
+    const request = deferred<unknown>();
+    rpc.mockReset().mockReturnValue(request.promise);
+    const refresh = s().refresh("p1", "Sales");
+    expect(s().get("p1", "Sales")?.status).toBe("refreshing");
+    expect(s().get("p1", "Sales")?.snapshot).toBe(cached);
+    await s().refresh("p1", "Sales");
+    expect(rpc).toHaveBeenCalledTimes(1);
+    request.resolve({ jobId: "refresh" });
+    await refresh;
+  });
+
+  it("failed refresh keeps cached data, exits the busy state and permits retry", async () => {
+    rpc.mockResolvedValueOnce(snapshot([obj(1, "dbo", "Orders")]));
+    await s().load("p1", "Sales");
+    const cached = s().get("p1", "Sales")!.snapshot;
+    rpc.mockReset().mockRejectedValueOnce(new Error("Network unavailable"));
+    await s().refresh("p1", "Sales");
+    expect(s().get("p1", "Sales")).toMatchObject({ status: "error", error: "Network unavailable" });
+    expect(s().get("p1", "Sales")?.snapshot).toBe(cached);
+    rpc.mockResolvedValueOnce({ jobId: "retry" });
+    await s().refresh("p1", "Sales");
+    expect(s().get("p1", "Sales")?.status).toBe("refreshing");
+    expect(rpc).toHaveBeenCalledTimes(2);
+  });
+
+  it("a late refresh failure cannot resurrect a forgotten database", async () => {
+    let reject!: (reason: Error) => void;
+    rpc.mockReturnValue(new Promise((_, fail) => { reject = fail; }));
+    const refresh = s().refresh("p1", "Sales");
+    s().forget("p1");
+    reject(new Error("Disconnected"));
+    await refresh;
+    expect(s().get("p1", "Sales")).toBeUndefined();
+  });
+
   it("keys are per profile and the database's exact name (D0e identity: PostgreSQL's \"Sales\" and \"sales\" are two databases)", () => {
     expect(snapKey("P1", "SalesDB")).toBe("P1|SalesDB");
     expect(snapKey("p1", "SALESDB")).not.toBe(snapKey("p1", "salesdb"));

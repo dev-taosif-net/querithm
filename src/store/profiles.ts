@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { DatabaseInfo, Dialect, EnvironmentKind, Profile, ProfileGroup } from "../ipc/contract";
 import { rpc, RpcError, shell } from "../ipc/client";
+import { endpointKey } from "../connections/auth";
 import { dialectOf, engineTraits } from "../engines";
 
 export const envLabel: Record<EnvironmentKind, string> = { local: "Local", dev: "Dev", test: "Test", staging: "Stage", prod: "Prod" };
@@ -45,18 +46,32 @@ export const useProfiles = create<ProfilesState>((set, get) => ({
   },
   async save(p, secret, sshSecret) {
     // A group's default environment applies to new profiles that did not pick one explicitly.
+    const before = get().profiles.find((profile) => profile.id === p.id);
+    const moved = !!before && endpointKey(before) !== endpointKey(p);
+    // Remove credentials before committing a new endpoint. If the keyring is locked, the stored profile must still
+    // point at its old endpoint; a failed deletion must never leave the old secret attached to a new destination.
+    if (moved) {
+      await shell.secretDelete(p.id);
+      await shell.secretDelete(sshAccount(p.id));
+    }
     const saved = await rpc("profile.save", p);
-    if (secret != null) {
-      // §13 rule 1: the secret goes to the shell under the profile’s retention policy, never through profile.save.
-      if (secret === "") await shell.secretDelete(saved.id);
-      else await shell.secretSet(saved.id, secret);
-    }
-    // The SSH tunnel's password or key passphrase: its own keyring entry, "<profileId>:ssh".
-    if (sshSecret != null || !saved.ssh) {
-      if (!sshSecret) await shell.secretDelete(sshAccount(saved.id)).catch(() => {});
-      else await shell.secretSet(sshAccount(saved.id), sshSecret);
-    }
+    // The profile exists from here on, whatever the keyring does next: the list shows it, and a keyring failure carries
+    // it (savedProfile) so the editor saves the same profile again instead of creating a second one.
     set({ profiles: [...get().profiles.filter((x) => x.id !== saved.id), saved].sort((a, b) => a.name.localeCompare(b.name)) });
+    try {
+      if (secret != null) {
+        // §13 rule 1: the secret goes to the shell under the profile’s retention policy, never through profile.save.
+        if (secret === "") { if (!moved) await shell.secretDelete(saved.id); }
+        else await shell.secretSet(saved.id, secret);
+      }
+      // The SSH tunnel's password or key passphrase: its own keyring entry, "<profileId>:ssh".
+      if (sshSecret != null || !saved.ssh) {
+        if (!sshSecret) { if (!moved) await shell.secretDelete(sshAccount(saved.id)); }
+        else await shell.secretSet(sshAccount(saved.id), sshSecret);
+      }
+    } catch (e) {
+      throw Object.assign(e instanceof Error ? e : new Error(String(e)), { savedProfile: saved });
+    }
     return saved;
   },
   async remove(id) {

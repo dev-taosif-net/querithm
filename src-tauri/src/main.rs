@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod close;
+mod credential_guard;
 mod files;
 mod grants;
 mod injection;

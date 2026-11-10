@@ -214,20 +214,69 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
 
     // ---- profiles ----
     /// <summary>Every stored profile; one for an engine this build does not offer is listed as unsupported, never as another engine (Phase D0a).</summary>
-    public Task<Profile[]> ProfileList() => Task.FromResult(s.Profiles.List().Select(Describe).ToArray());
+    public Task<Profile[]> ProfileList() => Task.FromResult(s.Profiles.List().Select(Describe).Select(Listable).ToArray());
 
     Profile Describe(Profile p) =>
         p.Unsupported == null && s.Sessions.Providers.TryGet(p.Engine) == null ? p with { Unsupported = Core.Sessions.ProfileRules.Unavailable(p.Engine) } : p;
 
+    static readonly System.Text.Json.JsonSerializerOptions WireJson = Json.CreateRpc();
+
+    internal const string UnlistableProfile =
+        "This profile holds a setting this version of Querithm cannot show (it may have been saved by a newer version, or edited outside Querithm). Delete it and create it again.";
+
+    /// <summary>
+    /// PT8-6: one stored row the reply cannot carry (an undefined enum value, say) must not fail the whole list, which the
+    /// connection dialog then never shows again: that profile is listed as unsupported with only its id and name (it can be
+    /// deleted), and the sidecar log says so.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2026",
+        Justification = "Reflection JSON over the contract DTOs, which the Host roots whole (TrimmerRootAssembly Querithm.Contract), as StreamJsonRpc does.")]
+    static Profile Listable(Profile p)
+    {
+        try
+        {
+            System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(p, WireJson);
+            return p;
+        }
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or NotSupportedException or ArgumentException)
+        {
+            var name = Core.Sessions.ProfileRules.Text(p.Name, "name", "name", Core.Sessions.ProfileRules.MaxNameLength, required: true) == null ? p.Name : "(unreadable profile)";
+            Console.Error.WriteLine($"[warn] profile {(Core.Sessions.ProfileRules.ValidId(p.Id) ? p.Id : "(bad id)")} cannot be listed as stored ({ex.GetType().Name}); it is shown as unsupported");
+            return new Profile
+            {
+                Id = p.Id, Name = name, Engine = Enum.IsDefined(p.Engine) ? p.Engine : Engine.Mssql, Auth = Enum.IsDefined(p.Auth) ? p.Auth : AuthKind.Sql,
+                Location = p.Location is { } l && Enum.IsDefined(l) ? l : null, Unsupported = UnlistableProfile, CreatedAt = p.CreatedAt, UpdatedAt = p.UpdatedAt,
+            };
+        }
+    }
+
+    /// <summary>
+    /// A new profile has an empty id (the sidecar assigns a ULID); any other id must name a stored profile, in the shape the
+    /// sidecar assigns (PT8-4). A caller-chosen id could look like a path, outgrow the shell's keyring accounts, or alias
+    /// another profile's keyring entry ("&lt;id&gt;:ssh").
+    /// </summary>
+    Profile? Existing(string? id)
+    {
+        if (string.IsNullOrEmpty(id)) return null;
+        if (!Core.Sessions.ProfileRules.ValidId(id))
+            throw new QuerithmException("invalidProfile", "This profile id was not assigned by Querithm. Save the profile as a new one.", new Dictionary<string, string> { ["field"] = "id" });
+        return s.Profiles.Get(id) ?? throw new QuerithmException("notFound", "This connection profile no longer exists (it may have been deleted). Save it as a new one.");
+    }
+
     public async Task<Profile> ProfileSave(Profile profile)
     {
+        if (profile == null) throw QuerithmException.Invalid("profile.save needs a profile.");
         if (string.IsNullOrWhiteSpace(profile.Name)) throw new QuerithmException("invalid", "A profile needs a name.", new Dictionary<string, string> { ["field"] = "name" });
-        var before = string.IsNullOrEmpty(profile.Id) ? null : s.Profiles.Get(profile.Id);
+        var before = Existing(profile.Id);
         // A stored profile this build cannot read keeps what a newer build wrote: it is never overwritten from here.
         if (before?.Unsupported is { } unreadable) throw new QuerithmException("unsupportedProfile", unreadable);
         // A refusal about one field (host, port, file, SSH host or port) names it, so the editor shows it there (L25).
         if (Core.Sessions.ProfileRules.Check(profile with { Unsupported = null }, s.Sessions.Providers.TryGet(profile.Engine)) is { } invalid)
             throw new QuerithmException("invalidProfile", invalid.Message, invalid.Field is { } field ? new Dictionary<string, string> { ["field"] = field } : null);
+        // Retire credentials before publishing the new endpoint to background work. Pinned transactions keep their
+        // already authenticated connection, and a failed save may ask for credentials again but never misroute them.
+        var credentialsChanged = before != null && !Core.Sessions.SessionManager.SameConnectionSettings(before, profile);
+        if (credentialsChanged) s.Sessions.ForgetCredentials(before!.Id);
         var saved = s.Profiles.Save(profile);
         // A running monitor keeps the profile it started with (host, options) while kills read the environment fresh: when
         // the connection would now be built differently it stops first (not for a rename or a password-retention change).
@@ -236,7 +285,7 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
         // A first-run confirm on Prod was given for the old target or environment: the edited profile asks again (L1).
         if (before != null && (ConnectionChanged(before, saved) || before.Environment != saved.Environment)) s.Sessions.ForgetProdConfirms(saved.Id);
         // Connection settings may have changed: drop pooled connections built from the old settings.
-        s.Sessions.ForgetPools(saved.Id);
+        if (!credentialsChanged) s.Sessions.ForgetPools(saved.Id);
         s.Objects.InvalidateCapabilities();
         return saved;
     }
@@ -269,10 +318,17 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
 
     public async Task<ProfileTestResult> ProfileTest(ProfileTestParams p)
     {
+        if (p == null) throw QuerithmException.Invalid("profile.test needs a profileId or a profile.");
         var profile = p.Profile ?? (p.ProfileId != null ? s.Sessions.GetProfile(p.ProfileId) : throw QuerithmException.Invalid("profile.test needs a profileId or a profile."));
-        // An unsaved profile from the editor carries no Unsupported of its own; a stored one may (Phase D0a).
-        if (Core.Sessions.ProfileRules.Validate(profile, s.Sessions.Providers.TryGet(profile.Engine)) is { } invalid)
-            return new ProfileTestResult { Ok = false, Error = invalid };
+        // PT3-1: with a profileId the shell fills a missing secret from that profile's keyring entry, so the edited copy
+        // may be tested with it only while it still points where the stored profile does (the webview sends no profileId
+        // once the endpoint changed, and the user types the secret).
+        if (p.Profile != null && p.ProfileId != null && (p.Secret != null || p.SshSecret != null) && EndpointRefusal(p.ProfileId, p.Profile) is { } moved)
+            return new ProfileTestResult { Ok = false, Error = moved };
+        // An unsaved profile from the editor carries no Unsupported of its own; a stored one may (Phase D0a). The editor's
+        // copy also meets the input rules profile.save applies.
+        if (Core.Sessions.ProfileRules.Check(profile, s.Sessions.Providers.TryGet(profile.Engine), input: p.Profile != null) is { } invalid)
+            return new ProfileTestResult { Ok = false, Error = invalid.Message };
         var provider = s.Sessions.Providers.Get(profile.Engine);
         Core.Logging.LogScrubber.RegisterSecret(p.Secret);
         Core.Logging.LogScrubber.RegisterSecret(p.SshSecret);
@@ -281,7 +337,7 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
         Core.Ssh.SshTunnelManager.Tunnel? tunnel = null;
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds((profile.TimeoutS ?? 15) * (profile.Ssh != null ? 2 : 1) + 5));
+            using var cts = new CancellationTokenSource(TestDeadline(profile));
             if (profile.Ssh != null)
             {
                 // A tunnel of its own: an unsaved profile must not reuse (or leave behind) a shared one.
@@ -309,38 +365,129 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
         finally { tunnel?.Dispose(); }
     }
 
-    /// <summary>Only after the user compared and confirmed the fingerprint in the UI (never automatic), and only a key a bastion presented (M2).</summary>
+    internal const string EndpointChangedMessage = "The connection settings changed: type the password again to test them.";
+
+    /// <summary>
+    /// PT3-1 (defence in depth for the shell's keyring injection): null while <paramref name="edited"/> still names the
+    /// stored profile's endpoint, else the reason. The endpoint is what a saved secret is bound to, as the editor's
+    /// endpointKey (ProfileEditor.tsx) has it: engine, host (trimmed, any case; none for a file or memory database), port,
+    /// user, sign-in, TLS mode, trustCert, CA file, hostNameInCertificate, and the SSH host, port, user, sign-in and key
+    /// file. Name, group, environment, color, timeouts and the other options may differ.
+    /// </summary>
+    string? EndpointRefusal(string profileId, Profile edited)
+    {
+        var stored = Core.Sessions.ProfileRules.ValidId(profileId) ? s.Profiles.Get(profileId) : null;
+        if (stored == null) return "This connection profile no longer exists (it may have been deleted). Type the password to test the settings.";
+        return EndpointKey(stored) == EndpointKey(edited) ? null : EndpointChangedMessage;
+    }
+
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2026",
+        Justification = "Reflection JSON over the contract DTOs, which the Host roots whole (TrimmerRootAssembly Querithm.Contract), as StreamJsonRpc does.")]
+    static string EndpointKey(Profile p)
+    {
+        var local = Core.Sessions.ProfileRules.LocationOf(p) != LocationKind.Server;
+        var host = local || string.IsNullOrWhiteSpace(p.Host) ? null : p.Host.Trim();
+        // DNS names ignore case; PostgreSQL filesystem and abstract socket names do not.
+        var socket = p.Engine == Engine.Pg && host != null && host.Split(',').Any(h => h.TrimStart().StartsWith('/') || h.TrimStart().StartsWith('@'));
+        if (!socket) host = host?.ToLowerInvariant();
+        var ssh = p.Ssh is { } t ? new object?[] { t.Host?.Trim().ToLowerInvariant(), t.Port ?? 22, t.Username, t.Auth, t.KeyPath } : null;
+        return System.Text.Json.JsonSerializer.Serialize(new object?[]
+        {
+            p.Engine, host, p.Port, p.Username, p.Auth, p.TlsMode, p.TrustCert, p.CaPath, p.Options?.GetValueOrDefault("hostNameInCertificate"), ssh,
+        }, WireJson);
+    }
+
+    /// <summary>
+    /// PT8-2 / PT1-3: how long profile.test may take, computed in long seconds so no timeoutS overflows it: the profile's
+    /// connect timeout capped at <see cref="Core.Sessions.ProfileRules.MaxTestTimeoutS"/> (0, the drivers' "no limit", and
+    /// anything negative add nothing, as before), twice through an SSH tunnel, plus 5 s. Never unbounded.
+    /// </summary>
+    internal static TimeSpan TestDeadline(Profile profile)
+    {
+        long connect = profile.TimeoutS switch
+        {
+            null => 15,
+            <= 0 => 0, // as before: SqlClient reads 0 as "retry until the deadline", so 0 gets only the 5 s below
+            { } t => Math.Min(t, Core.Sessions.ProfileRules.MaxTestTimeoutS),
+        };
+        return TimeSpan.FromSeconds(connect * (profile.Ssh != null ? 2L : 1L) + 5L);
+    }
+
+    /// <summary>
+    /// Only after the user compared and confirmed the fingerprint in the UI (never automatic), and only a key a bastion
+    /// presented to this sidecar in the last <see cref="Core.Ssh.PresentedHostKeys.Lifetime"/>, each presentation used once (M2).
+    /// </summary>
     public Task SshTrustHostKey(SshHostKey p)
     {
+        if (p == null || string.IsNullOrEmpty(p.Host) || string.IsNullOrEmpty(p.Algorithm) || string.IsNullOrEmpty(p.Fingerprint))
+            throw QuerithmException.Invalid("ssh.trustHostKey needs the host, port, algorithm and fingerprint the SSH server presented.");
+        if (p.Host.Length > Core.Sessions.ProfileRules.MaxHostLength || p.Algorithm.Length > 64 || p.Fingerprint.Length > 128 || p.Port is < 1 or > 65535)
+            throw QuerithmException.Invalid("This is not a host key an SSH server presented to Querithm.");
         s.Sessions.Tunnels!.Trust(p);
         return Task.CompletedTask;
     }
 
+    /// <summary>A pasted connection string is a few hundred characters; anything past this is refused unread.</summary>
+    internal const int MaxConnectionStringChars = 8 * 1024;
+
     /// <summary>
-    /// Reads a pasted connection string with each driver's own rules and keeps the engine whose driver recognised
-    /// the most keywords, then the one that applies the most of them (the editor's engine wins remaining ties,
-    /// e.g. "Server=..;Database=.." suits both).
+    /// Reads a pasted connection string with each driver's own rules and ranks the drivers that read it, in order:
+    /// fewest keywords the driver does not know; most signals only that engine's strings carry (its own keyword spelling,
+    /// its default port, SQL Server's "host,port"); fewest keywords Querithm does not apply; the editor's engine (a new
+    /// profile sends a placeholder, so it decides only between equals); most spellings conventional for the engine;
+    /// registration order. "Server=h;Port=3306;User ID=u" is thus MySQL even though Npgsql reads every keyword of it.
+    /// The text may hold a secret: no error repeats any of it.
     /// </summary>
     public Task<ParseConnectionStringResult> ProfileParseConnectionString(ParseConnectionStringParams p)
     {
-        var basis = p.Profile;
-        ParseConnectionStringResult? best = null;
-        string? error = null;
-        foreach (var provider in s.Sessions.Providers.All.OrderBy(x => x.Engine == basis.Engine ? 0 : 1))
+        if (p?.Profile is not { } basis) throw QuerithmException.Invalid("profile.parseConnectionString needs the editor's profile.");
+        var text = p.ConnectionString;
+        if (string.IsNullOrWhiteSpace(text)) throw QuerithmException.Invalid("Paste a connection string first.");
+        if (text.Length > MaxConnectionStringChars)
+            throw QuerithmException.Invalid($"This connection string could not be read: it is longer than {MaxConnectionStringChars / 1024} KB.");
+
+        var keywords = Contract.Providers.ConnectionStringKeywords.Tokenize(text);
+        var ranked = new List<(ParseConnectionStringResult Result, Contract.Providers.ConnectionStringAffinity Affinity, int Order, bool Basis)>();
+        var order = 0;
+        foreach (var provider in s.Sessions.Providers.All)
         {
+            var isBasis = provider.Engine == basis.Engine;
             try
             {
-                var r = provider.ParseConnectionString(p.ConnectionString, provider.Engine == basis.Engine ? basis : Rebase(basis, provider));
-                if (best == null || (r.Unknown.Length, r.NotApplied.Length).CompareTo((best.Unknown.Length, best.NotApplied.Length)) < 0) best = r;
+                var r = provider.ParseConnectionString(text, isBasis ? basis : Rebase(basis, provider));
+                ranked.Add((r, provider.ConnectionStringAffinity(keywords), order, isBasis));
             }
-            catch (ArgumentException ex)
-            {
-                error ??= ex.Message;
-            }
+            catch (ArgumentException) { /* this driver cannot read it; the reason given below never quotes the text */ }
+            order++;
         }
-        if (best == null) throw QuerithmException.Invalid($"Not a valid connection string: {Core.Logging.LogScrubber.Scrub(error)}");
+        if (ranked.Count == 0)
+        {
+            // Only file engines here (§13 rule 6: their files are picked, never named by a string).
+            var fileOnly = s.Sessions.Providers.All.All(x => !x.Traits.Locations.Contains(LocationKind.Server));
+            var reason = fileOnly ? "databases on this computer are picked with the file dialog, not read from a connection string." : UnreadableReason(text, keywords);
+            throw QuerithmException.Invalid($"This connection string could not be read: {reason}");
+        }
+        var best = ranked
+            .OrderBy(x => x.Result.Unknown.Length)
+            .ThenByDescending(x => x.Affinity.Distinctive)
+            .ThenBy(x => x.Result.NotApplied.Length)
+            .ThenByDescending(x => x.Basis)
+            .ThenByDescending(x => x.Affinity.Conventional)
+            .ThenBy(x => x.Order)
+            .First().Result;
         Core.Logging.LogScrubber.RegisterSecret(best.Secret);
         return Task.FromResult(best);
+    }
+
+    static string UnreadableReason(string text, IReadOnlyDictionary<string, string> keywords)
+    {
+        var t = text.TrimStart();
+        if (t.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase) || t.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase))
+            return "it is not a valid postgres:// URI (multi-host URIs are not supported).";
+        if (t.Contains("://", StringComparison.Ordinal)) return "only postgres:// URIs are read; paste a keyword string (Key=value;…) for other engines.";
+        return keywords.Count == 0
+            ? "it is not a list of Key=value settings (a setting without \"=\", or a quote that is not closed)."
+            : "none of its keywords is a connection setting Querithm knows.";
     }
 
     /// <summary>Engine-specific fields reset as the editor does when the server type changes.</summary>
@@ -356,6 +503,9 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
 
     public Task<ProfileGroup[]> GroupSave(ProfileGroup g)
     {
+        // PT8-3: the same text rules as a profile's group name (size, control and invisible characters), a known environment and a CSS color.
+        if (Core.Sessions.ProfileRules.CheckGroup(g) is { } invalid)
+            throw new QuerithmException("invalidGroup", invalid.Message, invalid.Field is { } field ? new Dictionary<string, string> { ["field"] = field } : null);
         var list = (s.Settings.Read(GroupsKey, Json.Context.ProfileGroupArray) ?? []).Where(x => !string.Equals(x.Name, g.Name, StringComparison.OrdinalIgnoreCase)).Append(g)
             .OrderBy(x => x.Name).ToArray();
         s.Settings.Write(GroupsKey, list, Json.Context.ProfileGroupArray);
@@ -392,6 +542,8 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
     /// transaction or a running query (the tab-close Commit / Roll back / Cancel prompt handles those first, §6 rule 5).
     /// Each session's execution lock is taken before anything closes, so no query starts in between.
     /// </summary>
+    static readonly TimeSpan BusyGrace = TimeSpan.FromMilliseconds(500);
+
     async Task<int> CloseProfileSessionsAsync(string profileId, Func<QuerithmException> busy)
     {
         var affected = s.Sessions.All.Where(x => x.Profile.Id == profileId && !x.Closed).ToList();
@@ -400,7 +552,8 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
         {
             foreach (var x in affected)
             {
-                if (!x.ExecLock.Wait(0)) throw busy();
+                // A run that just reported done may still be releasing the lock: wait briefly (bounded), never for a running query.
+                if (!await x.ExecLock.WaitAsync(BusyGrace)) throw busy();
                 locked.Add(x);
                 if (x.ActiveExecutionId != null || x.TxState != TxState.None) throw busy();
             }

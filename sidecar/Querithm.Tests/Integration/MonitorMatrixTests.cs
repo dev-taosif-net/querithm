@@ -144,7 +144,18 @@ public class MonitorMatrixTests
             Assert.True(sw.ElapsedMilliseconds < 500, $"kill took {sw.ElapsedMilliseconds} ms while a job ran");
             File.AppendAllText(Path.Combine(Path.GetTempPath(), "querithm-c2.txt"), $"{DateTime.UtcNow:O} {EngineKind} kill via control while a job ran: {sw.ElapsedMilliseconds} ms{Environment.NewLine}");
             // The blocked tabs, the queued one included, proceed once the blocker is gone.
-            foreach (var e in runs) Assert.Equal(ExecState.Done, (await Host.Notifier.WaitDone(e, 30_000)).State);
+            var started = DateTime.UtcNow;
+            var outcomes = new List<string>();
+            foreach (var e in runs)
+            {
+                var d = await Host.Notifier.WaitDone(e, 30_000);
+                outcomes.Add($"{d.State} after {d.ElapsedMs:0} ms{(d.Error is { } er ? $" ({er.Message})" : "")}");
+            }
+            // CI-only failure (SqlClient "too many simultaneous non-pooled connection attempts"): say how each run ended and
+            // what the thread pool looked like.
+            Assert.True(outcomes.All(o => o.StartsWith(nameof(ExecState.Done), StringComparison.Ordinal)),
+                $"runs: {string.Join("; ", outcomes)}; waited {(DateTime.UtcNow - started).TotalMilliseconds:0} ms; threads {ThreadPool.ThreadCount}, " +
+                $"pending {ThreadPool.PendingWorkItemCount}, cpus {Environment.ProcessorCount}");
             await busy;
         }
 
@@ -152,7 +163,8 @@ public class MonitorMatrixTests
         public async Task O2_a_tab_whose_connection_was_killed_is_known_by_its_new_identity_and_the_old_one_maps_to_nothing()
         {
             var m = await StartAsync(MonitorPane.Sessions);
-            Assert.Equal(ExecState.Done, (await Host.RunAsync(SessionId, "SELECT 1")).Done.State);
+            var first = (await Host.RunAsync(SessionId, "SELECT 1")).Done;
+            Assert.True(first.State == ExecState.Done, $"{first.State} {first.Error?.Number}: {first.Error?.Message}");
             var spid1 = (await Host.Rpc.SessionStateGet(new SessionRef { SessionId = SessionId })).Spid!.Value;
             var old = (await WaitSnapshot(m.MonitorId, x => x.Sessions?.Any(r => r.Key.Id == spid1 && r.QuerithmKind == ConnectionRegistry.Kinds.Pool) == true))
                 .Sessions!.Single(r => r.Key.Id == spid1).Key;
@@ -418,12 +430,14 @@ public class MonitorMatrixTests
             var id = Spid(writer);
             bool Mine(ActivityRow r) => r.Key.Id == id && r.Program == "p5-writer";
             var key = (await WaitSnapshot(m.MonitorId, x => x.Sessions?.Any(Mine) == true)).Sessions!.Single(Mine).Key;
+            var started = DateTime.UtcNow;
             var done = await Host.Rpc.MonitorKill(new MonitorKillParams { MonitorId = m.MonitorId, Target = key, Mode = KillMode.TerminateSession, ConfirmedKill = true, ConfirmedLongRollback = true });
-            Assert.Equal(KillOutcome.Done, done.Outcome);
+            Assert.True(done.Outcome == KillOutcome.Done, $"kill {done.Outcome} {done.Code} {done.Message}{Timeline(m.MonitorId, started)}");
+            var killedMs = (DateTime.UtcNow - started).TotalMilliseconds;
             var preview = await Host.Rpc.MonitorKillPreview(new MonitorSessionParams { MonitorId = m.MonitorId, Key = key });
-            Assert.True(preview.RollingBack, $"rolling back {preview.RollingBack}, ended {preview.SessionEnded}");
+            Assert.True(preview.RollingBack, $"rolling back {preview.RollingBack}, ended {preview.SessionEnded}; kill took {killedMs:0} ms, preview at {(DateTime.UtcNow - started).TotalMilliseconds:0} ms{Timeline(m.MonitorId, started)}");
             var again = await Host.Rpc.MonitorKill(new MonitorKillParams { MonitorId = m.MonitorId, Target = key, Mode = KillMode.TerminateSession, ConfirmedKill = true, ConfirmedLongRollback = true });
-            Assert.Equal("rollingBack", again.Code);
+            Assert.True(again.Code == "rollingBack", $"second kill {again.Outcome} {again.Code} {again.Message} at {(DateTime.UtcNow - started).TotalMilliseconds:0} ms{Timeline(m.MonitorId, started)}");
             await WaitSnapshot(m.MonitorId, x => x.Sessions?.All(r => r.Key != key) == true, 120_000);
             await using var cleanup = await OpenForeignAsync("p5-cleanup");
             await ExecAsync(cleanup, "TRUNCATE TABLE dbo.monitor_big");

@@ -141,6 +141,52 @@ export function Workspace() {
 
   const onReady = (e: DockviewReadyEvent) => {
     api.current = e.api;
+    let ready = false;
+    const tabAnimations = new WeakMap<HTMLElement, Animation>();
+    const settleTab = (el: HTMLElement) => {
+      tabAnimations.get(el)?.cancel();
+      tabAnimations.delete(el);
+    };
+    const animateTab = (el: HTMLElement, frames: Keyframe[], duration: number) => {
+      settleTab(el);
+      const animation = el.animate(frames, { duration, easing: "cubic-bezier(0.16, 1, 0.3, 1)" });
+      tabAnimations.set(el, animation);
+      animation.onfinish = () => tabAnimations.delete(el);
+    };
+    const canAnimate = () =>
+      typeof Element !== "undefined" &&
+      typeof Element.prototype.animate === "function" &&
+      !window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+    const snapshotTabPositions = (group: { panels: { view?: { tab?: { element: HTMLElement } } }[] } | undefined) => {
+      const map = new Map<HTMLElement, number>();
+      if (!ready || !group || !canAnimate()) return map;
+      for (const x of group.panels) {
+        if (x.view?.tab) {
+          const el = tabElement(x as any);
+          // Rapid opens start from the settled layout, without stacking animations.
+          settleTab(el);
+          map.set(el, el.getBoundingClientRect().left);
+        }
+      }
+      return map;
+    };
+    const animateOpenedPanel = (id: string, before: Map<HTMLElement, number>) => {
+      if (!ready || !canAnimate()) return;
+      const p = e.api.getPanel(id);
+      if (!p) return;
+      for (const [el, oldLeft] of before) {
+        const dx = oldLeft - el.getBoundingClientRect().left;
+        if (Math.abs(dx) > 2) {
+          animateTab(el, [{ transform: `translateX(${dx}px)` }, { transform: "none" }], 180);
+        }
+      }
+      if (p.view?.tab) {
+        animateTab(tabElement(p), [
+          { opacity: 0, transform: "translateY(-4px)" },
+          { opacity: 1, transform: "none" },
+        ], 150);
+      }
+    };
     const add = (id: string, activate: boolean, atEnd = false) => {
       const t = useTabs.getState().tabs[id];
       if (!t || e.api.getPanel(id)) return;
@@ -148,12 +194,14 @@ export function Workspace() {
       // group at the left edge, and an inactive panel then sits alone in a split showing the watermark. Always open in
       // an existing group; the first panel of an empty workspace is shown, since a group needs a visible panel.
       const group = e.api.activeGroup ?? e.api.groups[0];
+      const before = snapshotTabPositions(group);
       e.api.addPanel({
         id, component: t.notebook ? "notebook" : "query", tabComponent: "query", params: { tabId: id }, title: t.title,
         inactive: !activate && !!group, position: group ? { referenceGroup: group } : undefined,
       });
       if (t.pinned) applyPinnedOrder(id);
       else if (!atEnd) openFirst(id);
+      if (!atEnd) animateOpenedPanel(id, before);
     };
     /** New tabs open on the left, right after the pinned ones, where they are easy to find (D16: tool tabs too). */
     const openFirst = (id: string) => {
@@ -166,12 +214,50 @@ export function Workspace() {
     workspaceHooks.onToolAdded = (id, title) => {
       if (e.api.getPanel(id)) return;
       const group = e.api.activeGroup ?? e.api.groups[0];
+      const before = snapshotTabPositions(group);
       e.api.addPanel({ id, component: "tool", tabComponent: "tool", params: { toolId: id }, title, position: group ? { referenceGroup: group } : undefined });
       openFirst(id);
+      animateOpenedPanel(id, before);
     };
     workspaceHooks.onTabRemoved = (id) => {
       const p = e.api.getPanel(id);
-      if (p) e.api.removePanel(p);
+      if (!p) return;
+      const wasActive = e.api.activePanel?.id === id;
+      const before = snapshotTabPositions(p.group);
+      const removedTab = p.view?.tab ? tabElement(p) : undefined;
+      if (removedTab) {
+        settleTab(removedTab);
+        before.delete(removedTab);
+      }
+      // Prefer the neighbour to the right, then the left, instead of Dockview's MRU fallback.
+      if (wasActive) {
+        const index = p.group.panels.indexOf(p);
+        const neighbour = p.group.panels[index + 1] ?? p.group.panels[index - 1];
+        neighbour?.api.setActive();
+      }
+      e.api.removePanel(p);
+      if (!ready || !canAnimate()) return;
+
+      // Follow Dockview's chosen successor; closing never delays activation or moves the editor.
+      const successor = wasActive ? e.api.activePanel : undefined;
+      const selectedTab = successor?.view?.tab ? tabElement(successor) : undefined;
+      if (selectedTab && !before.has(selectedTab)) {
+        settleTab(selectedTab);
+        before.set(selectedTab, selectedTab.getBoundingClientRect().left);
+      }
+      for (const [el, oldLeft] of before) {
+        const dx = oldLeft - el.getBoundingClientRect().left;
+        const highlight = el === selectedTab;
+        if (Math.abs(dx) <= 2 && !highlight) continue;
+        animateTab(el, [
+          {
+            transform: `translateX(${dx}px)`,
+            boxShadow: highlight ? "inset 0 -2px 0 var(--q-accent)" : "none",
+          },
+          { offset: 0.8, boxShadow: "none" },
+          { transform: "none", boxShadow: "none" },
+        ], 150);
+      }
     };
     workspaceHooks.activate = (id) => e.api.getPanel(id)?.api.setActive();
     // Strip order holds query and tool tabs alike (D17): positions are Dockview's, so moves land where they should.
@@ -254,6 +340,7 @@ export function Workspace() {
     const s = useTabs.getState();
     for (const id of s.order) add(id, id === s.activeId, true);
     applyPinnedOrder();
+    ready = true;
   };
 
   // Keys on a focused strip tab (D22): one listener for every strip.

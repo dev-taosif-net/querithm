@@ -22,6 +22,7 @@ public class MonitorHardeningTests
         public FakeDbProvider Provider { get; } = new();
         public FakeActivity Activity { get; } = new();
         public Profile Profile { get; }
+        public ProfileStore Profiles { get; }
         public SessionManager Sessions { get; }
         public CapturingNotifier Notifier { get; } = new();
         public FakeMonitorClock Clock { get; } = new();
@@ -32,7 +33,7 @@ public class MonitorHardeningTests
         public Rig(Contract.Providers.ISchemaSource? schema = null)
         {
             Provider.Activity = Activity;
-            var profiles = new ProfileStore(LocalStore.InMemory());
+            var profiles = Profiles = new ProfileStore(LocalStore.InMemory());
             Profile = profiles.Save(new Profile { Id = "", Name = "fake", Engine = Engine.Mssql, Host = "h", Auth = AuthKind.Sql, Username = "u" });
             Sessions = new SessionManager(profiles, new ProviderRegistry([Provider]), Notifier, Querithm.Tests.Log.Null);
             Sessions.RememberSecret(Profile.Id, "x");
@@ -77,7 +78,7 @@ public class MonitorHardeningTests
         };
         rig.Start();
         Assert.NotNull(stop);
-        await stop!.WaitAsync(TimeSpan.FromSeconds(5));
+        await stop!.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(5)));
         var ticks = rig.TickCalls;
         rig.Clock.Run(10_000);
         Assert.Equal(ticks, rig.TickCalls);
@@ -251,7 +252,7 @@ public class MonitorHardeningTests
             if (hang && cmd.CommandText.StartsWith("FAKE blockedBy", StringComparison.Ordinal)) await Task.Delay(Timeout.Infinite, ct);
             return FakeResult.None;
         };
-        await banner.RunCycleAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+        await banner.RunCycleAsync(CancellationToken.None).WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
         Assert.Contains("did not finish", banner.LastError);
         var checkConn = Assert.Single(rig.Provider.Opened, c => c.Log.Any(l => l.StartsWith("FAKE blockedBy", StringComparison.Ordinal)));
         Assert.Equal(1, checkConn.DisposeCount);
@@ -260,6 +261,21 @@ public class MonitorHardeningTests
         await banner.RunCycleAsync(CancellationToken.None);
         Assert.Equal(2, banner.Checks);
         Assert.Equal(pool.Total, pool.IdleCount + 1);
+    });
+
+    [Fact]
+    public Task PT10_1_a_tab_from_before_a_host_edit_skips_its_banner_check_and_the_cycle_goes_on() => Sim(async () =>
+    {
+        // The pool of a tab whose profile's connection settings changed is refused (PT10-1). The banner borrowed it outside
+        // its try, so the refusal ended the whole cycle (every profile's banner) every 10 s until the transaction ended.
+        await using var rig = new Rig();
+        var banner = new BlockingBannerService(rig.Sessions, rig.Notifier, Querithm.Tests.Log.Null, _ => false, timer: false);
+        var s = rig.Sessions.Get(rig.Sessions.Open(new SessionOpenParams { ProfileId = rig.Profile.Id, Secret = "x" }).SessionId);
+        await rig.Sessions.TxAsync(s.Id, "begin", CancellationToken.None);
+        rig.Profiles.Save(rig.Profile with { Host = "h2" });
+        rig.Sessions.ForgetPools(rig.Profile.Id);
+        await banner.RunCycleAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10)); // no throw
+        Assert.DoesNotContain(rig.Provider.Opened, c => c.Log.Any(l => l.StartsWith("FAKE blockedBy", StringComparison.Ordinal)));
     });
 
     // ------------------------------------------------------------------ kill
@@ -385,12 +401,12 @@ public class MonitorHardeningTests
         session.Rows.Add(Row(701));
         rig.Clock.Run(1_000);
         var kill = rig.Monitors.KillAsync(new MonitorKillParams { MonitorId = id, Target = target, Mode = KillMode.TerminateSession, ConfirmedKill = true });
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await entered.Task.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(5)));
         // A second kill waits for the per-server kill lock behind the first.
         var queued = rig.Monitors.KillAsync(new MonitorKillParams { MonitorId = id, Target = Row(701).Key, Mode = KillMode.TerminateSession, ConfirmedKill = true });
-        await rig.Monitors.StopAsync(id).WaitAsync(TimeSpan.FromSeconds(10));
-        var result = await kill.WaitAsync(TimeSpan.FromSeconds(5));
-        var second = await queued.WaitAsync(TimeSpan.FromSeconds(10));
+        await rig.Monitors.StopAsync(id).WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
+        var result = await kill.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(5)));
+        var second = await queued.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
         Assert.Equal(0, disposedWhileRunning); // the kill ended (cancelled by the stop) before its connection was closed
         Assert.Equal(1, monitorConn.DisposeCount);
         Assert.Equal("monitorStopped", result.Code);

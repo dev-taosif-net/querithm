@@ -12,7 +12,7 @@ namespace Querithm.Tests.FileEngines;
 public sealed class DuckDbOpenGateTests : IAsyncDisposable
 {
     readonly DuckDbHost _h = new();
-    static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+    static readonly TimeSpan Bound = TestTime.Of(TimeSpan.FromSeconds(30));
 
     public ValueTask DisposeAsync() => _h.DisposeAsync();
 

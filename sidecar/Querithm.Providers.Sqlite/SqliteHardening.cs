@@ -11,12 +11,13 @@ namespace Querithm.Providers.Sqlite;
 /// </summary>
 public static class SqliteHardening
 {
-    /// <summary>Pragmas the authorizer refuses to set (reading them stays allowed).</summary>
-    static readonly HashSet<string> RefusedPragmas = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "temp_store_directory", "data_store_directory", "writable_schema", "trusted_schema", "journal_mode", "schema_version",
-        "legacy_file_format", "cell_size_check", "mmap_size", "locking_mode",
-    };
+    /// <summary>
+    /// Pragmas the authorizer refuses to set (reading them stays allowed): the classifier's list, shared so the two cannot
+    /// drift. It includes temp_store (PT2-1), so a script cannot undo temp_store = MEMORY below and spill into the OS temp
+    /// directory. sqlite3_temp_directory is not set as a second layer: it is one process-wide global (every connection,
+    /// not thread-safe to change), and with temp_store locked to MEMORY SQLite keeps its temporary files in memory.
+    /// </summary>
+    static IReadOnlySet<string> RefusedPragmas => Querithm.Intelligence.Sqlite.SqlitePragmaPolicy.RefusedToSet;
 
     // Kept in a static field: the native side holds a pointer to it for the connection's life.
     static readonly strdelegate_authorizer Authorizer = Authorize;

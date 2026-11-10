@@ -128,11 +128,15 @@ public class SessionOwnedTests
         }
     }
 
+    // An upper-bound wait: scaled for slow runners (TestTime) and measured on the clock, not counted in 10 ms steps (each
+    // Task.Delay(10) sleeps longer than 10 ms). macOS Intel CI missed the unscaled 5 s twice.
     static async Task Until(Func<bool> condition, int ms = 5000)
     {
-        for (var waited = 0; !condition(); waited += 10)
+        var limit = TestTime.Of(TimeSpan.FromMilliseconds(ms));
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (!condition())
         {
-            if (waited > ms) throw new TimeoutException("condition not reached");
+            if (clock.Elapsed > limit) throw new TimeoutException("condition not reached");
             await Task.Delay(10);
         }
     }
@@ -360,7 +364,7 @@ public class SessionOwnedTests
 
     // ---------------------------------------------------------------------------------------------- closing the tab
 
-    static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan Wait = TestTime.Of(TimeSpan.FromSeconds(10));
 
     [Theory]
     [InlineData(false)]

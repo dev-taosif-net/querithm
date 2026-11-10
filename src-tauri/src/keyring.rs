@@ -51,7 +51,7 @@ fn existing(id: &str) -> Option<Slot> {
     accounts().get(id).cloned()
 }
 fn validate_id(id: &str) -> Result<(), String> {
-    if id.is_empty() || id.len() > 64 { Err("invalid profile id".into()) } else { Ok(()) }
+    if crate::credential_guard::valid_account(id) { Ok(()) } else { Err("invalid profile id".into()) }
 }
 #[cfg(not(test))]
 async fn read_disk(id: String) -> Result<Option<String>, String> {
@@ -250,6 +250,13 @@ mod tests {
     use super::*;
     fn profile(id: &str, policy: &str) -> serde_json::Value {
         serde_json::json!({ "id": id, "passwordRetention": policy, "passwordRetentionMinutes": 10080 })
+    }
+    #[tokio::test]
+    async fn webview_cannot_overwrite_the_shells_timed_credential_envelopes() {
+        for id in ["victim:timed", "victim:ssh:timed", "victim:ssh:ssh", "../victim", "victim\0x"] {
+            assert!(secret_set(id.into(), "not-a-timed-envelope".into()).await.is_err(), "accepted reserved account {id:?}");
+            assert!(secret_delete(id.into()).await.is_err(), "deleted reserved account {id:?}");
+        }
     }
     #[tokio::test]
     async fn seven_days_survives_restart_without_extending_expiry() {

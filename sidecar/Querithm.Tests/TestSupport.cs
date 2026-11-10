@@ -25,7 +25,9 @@ public sealed class CapturingNotifier : INotifier
 
     TaskCompletionSource<QueryDoneEvent> Done(string id) => _done.GetOrAdd(id, _ => new TaskCompletionSource<QueryDoneEvent>(TaskCreationOptions.RunContinuationsAsynchronously));
 
-    public Task<QueryDoneEvent> WaitDone(string executionId, int timeoutMs = 30_000) => Done(executionId).Task.WaitAsync(TimeSpan.FromMilliseconds(timeoutMs));
+    /// <summary>Waits for the run to end; the default 30 s is scaled (<see cref="TestTime"/>), a given limit is used as passed.</summary>
+    public Task<QueryDoneEvent> WaitDone(string executionId, int timeoutMs = -1) =>
+        Done(executionId).Task.WaitAsync(TimeSpan.FromMilliseconds(timeoutMs < 0 ? TestTime.Ms(30_000) : timeoutMs));
 
     /// <summary>Payloads of one type; <c>Of&lt;ServerMessage&gt;()</c> reads the messages inside each query.messages batch (M13).</summary>
     public IEnumerable<T> Of<T>() =>

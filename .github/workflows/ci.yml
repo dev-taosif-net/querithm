@@ -15,7 +15,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-latest, macos-15]
+        # macos-15-intel: the osx-x64 build's only full-suite run outside a release tag, so a slow-runner failure shows
+        # on push, not on the tag. It is several times slower: test time limits scale there (sidecar/Querithm.Tests/TestTime.cs).
+        os: [ubuntu-24.04, windows-latest, macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -33,6 +35,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm gen:contract && git diff --exit-code src/ipc/contract.ts   # contract.ts is generated, never hand-edited (§15 rule 5)
       - run: pnpm test
+        env: { QUERITHM_TEST_TIME_SCALE: "${{ matrix.os == 'macos-15-intel' && '4' || '1' }}" }
       - run: node scripts/run.mjs build-sidecar --debug
       - run: cargo check --locked --manifest-path src-tauri/Cargo.toml
       # The shell's own tests (relay, grants, injection, keyring, updater): `pnpm test` covers only Vitest and xUnit.
@@ -72,6 +75,15 @@ jobs:
           echo "${{ matrix.rid }}: trimmed sidecar $(wc -c < "$exe" | tr -d ' ') bytes, self-test ok" | tee -a "$GITHUB_STEP_SUMMARY"
       # L23: the Host suppresses trim warnings (SMO, SqlClient and StreamJsonRpc warn and are rooted instead); this publish
       # shows them and fails when there are more than scripts/trim-warnings-baseline.json lists.
+      # Windows Security stopped the unsigned app: the engine ships uncompressed and names its product and version (§16).
+      - name: Windows engine file properties
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        run: |
+          $v = (Get-Item sidecar/Querithm.Host/bin/publish/win-x64-release/querithm-sidecar.exe).VersionInfo
+          $app = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          "$($v.ProductName) | $($v.CompanyName) | $($v.FileDescription) | $($v.ProductVersion)"
+          if ($v.ProductName -ne 'Querithm' -or $v.CompanyName -ne 'Querithm' -or -not $v.ProductVersion.StartsWith($app)) { Write-Error "engine file properties are wrong"; exit 1 }
       - name: Trim warnings stay at the baseline
         if: matrix.rid == 'linux-x64'
         run: node scripts/trim-warnings.mjs --rid linux-x64

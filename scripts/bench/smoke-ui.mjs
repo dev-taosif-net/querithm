@@ -24,7 +24,9 @@ const uiPort = Number(process.env.QUERITHM_UI_PORT ?? 1420);
 const bridgePort = Number(process.env.QUERITHM_BRIDGE_PORT ?? 1421);
 // The SQL Server fixture's host, as for the integration tests (ARCHITECTURE §16).
 const mssqlHost = process.env.QUERITHM_IT_MSSQL_HOST || "localhost";
-if (!process.argv.includes("--no-build"))
+// --no-build reuses the bench's dist/; when there is none (CI skips the bench after a failed step) it builds anyway, or
+// vite preview exits at once and the run reports a busy port it never had.
+if (!process.argv.includes("--no-build") || !existsSync(path.join(root, "dist", "index.html")))
   spawnSync("pnpm", ["build:web"], { cwd: root, stdio: "inherit", env: { ...process.env, VITE_BRIDGE_URL: `ws://127.0.0.1:${bridgePort}` } });
 
 const bridge = spawn(process.execPath, [path.join(root, "scripts", "dev-bridge.mjs")], {
@@ -120,7 +122,15 @@ try {
     await sleep(200);
   };
   const NARROW = new Set(["00-welcome", "02-connected", "02b-explorer-search", "02c-explorer-200", "02d-explorer-600", "03-results", "01a-update-dialog", "03d-import-file", "03g-schema-compare", "08-prod-first", "10-postgres", "11-ssh-hostkey", "13-monitor-sessions", "18-monitor-banner"]);
+  // Enter animations (dialogs, side panels, revealed rows) fade text in: audited mid-fade, its contrast reads low. Wait for
+  // the finite ones to end (spinners loop forever and are skipped), at most 2 s.
+  const settle = () =>
+    page.evaluate(() => {
+      const finite = document.getAnimations().filter((a) => a.playState === "running" && Number.isFinite(a.effect?.getComputedTiming().endTime ?? Infinity));
+      return Promise.race([Promise.all(finite.map((a) => a.finished.catch(() => {}))), new Promise((r) => setTimeout(r, 2_000))]);
+    });
   const shot = async (name) => {
+    await settle();
     await page.screenshot({ path: path.join(out, `${name}.png`) });
     await auditLayout(name);
     if (NARROW.has(name)) {
@@ -320,12 +330,14 @@ try {
   // The chip click took the keyboard into the panel: give it back to the editor for the next query.
   await page.click(".monaco-editor .view-lines");
   // Grid editing: a single-table result is editable; stage a value, review the SQL, discard.
+  // The Read-only button carries data-q-edit-toggle too (focus returns to it), so every wait here asks for the enabled one:
+  // otherwise the previous run's Read-only button matches before the new result arrives.
   await page.keyboard.down("Control"); await page.keyboard.press("A"); await page.keyboard.up("Control");
   await page.keyboard.type("SELECT CustomerId, FullName, Email FROM dbo.Customers ORDER BY CustomerId;");
   await page.keyboard.press("F5");
-  await page.waitForFunction(() => !!document.querySelector("[data-q-edit-toggle]"), { timeout: 15_000 }).catch(() => errors.push("grid Edit button did not appear"));
+  await page.waitForFunction(() => !!document.querySelector("[data-q-edit-toggle]:not([aria-disabled])"), { timeout: 15_000 }).catch(() => errors.push("grid Edit button did not appear"));
   if (await page.evaluate(() => !!document.querySelector("[data-q-grid-edit]"))) errors.push("grid was editable before Edit was clicked");
-  await page.evaluate(() => document.querySelector("[data-q-edit-toggle]")?.click());
+  await page.evaluate(() => document.querySelector("[data-q-edit-toggle]:not([aria-disabled])")?.click());
   await page.waitForFunction(() => document.body.innerText.includes("Type or double-click to edit"), { timeout: 5_000 }).catch(() => errors.push("grid edit bar did not appear"));
   await sleep(500);
   const grid = await page.evaluate(() => {
@@ -363,7 +375,10 @@ try {
     await page.evaluate(() => document.querySelector("[data-q-edit-cancel]")?.click());
     await page.waitForFunction(() => document.body.innerText.includes("Discard 1 staged change to dbo.Customers?"), { timeout: 5_000 })
       .catch(() => errors.push("Cancel did not ask before discarding"));
-    await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent === "Keep editing")?.click());
+    // The discard question is an alert dialog (role=alertdialog): a [role=dialog] selector missed it, the dialog stayed
+    // open and swallowed the next click.
+    await page.evaluate(() => [...document.querySelectorAll('[role="alertdialog"] button')].find((b) => b.textContent === "Keep editing")?.click());
+    await page.waitForFunction(() => !document.querySelector('[role="alertdialog"]'), { timeout: 5_000 }).catch(() => errors.push("Keep editing did not close the question"));
     await sleep(200);
     if (!(await page.evaluate(() => document.body.innerText.includes("1 changed")))) errors.push("Keep editing lost the staged change");
     await editMenu("Discard all");
@@ -376,10 +391,10 @@ try {
     await shot("03c-grid-duplicate");
     await page.evaluate(() => document.querySelector("[data-q-edit-cancel]")?.click());
     await sleep(200);
-    await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent === "Discard and leave")?.click());
+    await page.evaluate(() => [...document.querySelectorAll('[role="alertdialog"] button')].find((b) => b.textContent === "Discard and leave")?.click());
     await page.waitForFunction(() => !document.querySelector("[data-q-grid-edit]"), { timeout: 5_000 }).catch(() => errors.push("Cancel → Discard and leave did not leave edit mode"));
     // Leaving edit mode is not sticky: the grid is read-only until Edit is clicked again.
-    await page.evaluate(() => document.querySelector("[data-q-edit-toggle]")?.click());
+    await page.evaluate(() => document.querySelector("[data-q-edit-toggle]:not([aria-disabled])")?.click());
     await sleep(200);
   } else errors.push("editable grid canvas not found");
   // Reviewed Gemini workflows: header selection must not crash; a query error is shown without hiding the results.
@@ -909,18 +924,21 @@ try {
     await page.keyboard.press("Enter");
     await page.waitForSelector('[role="dialog"] button[role="combobox"][aria-label="Server type"]', { timeout: 10_000 }).catch(() => errors.push(`${e.key}: the profile editor did not open`));
     await sleep(800); // system.engines answers: the picker then offers the exposed engines
-    await page.evaluate(() => {
-      const name = [...document.querySelectorAll('[role="dialog"] label')].find((l) => l.textContent?.startsWith("Connection name"))?.querySelector("input");
-      name?.focus();
-      name?.select();
-    });
-    await page.keyboard.type(`Smoke ${e.label}`);
+    // A new profile names no server type and no environment: both are chosen here, then the name (shown once a type is).
     await page.click('[role="dialog"] button[role="combobox"][aria-label="Server type"]');
     const offered = await page.waitForFunction((label) => [...document.querySelectorAll('[role="option"]')].some((o) => o.textContent?.trim() === label), { timeout: 5_000 }, e.label).then(() => true, () => false);
     if (!offered) errors.push(`${e.key}: the engine picker does not offer ${e.label} in a default build: ${await page.evaluate(() => [...document.querySelectorAll('[role="option"]')].map((o) => o.textContent?.trim()).join(", "))}`);
     await page.evaluate((label) => [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent?.trim() === label)?.click(), e.label);
     await page.waitForFunction(() => [...document.querySelectorAll('[role="dialog"] button')].some((b) => b.textContent === "Pick file…"), { timeout: 5_000 })
       .catch(() => errors.push(`${e.key}: the file section did not appear`));
+    await page.evaluate(() => {
+      const label = [...document.querySelectorAll('[role="dialog"] label')].find((l) => l.textContent?.trim() === "Name");
+      const name = label?.htmlFor ? document.getElementById(label.htmlFor) : null;
+      name?.focus();
+      name?.select?.();
+    });
+    await page.keyboard.type(`Smoke ${e.label}`);
+    await page.evaluate(() => document.querySelector('[role="dialog"] input[type="radio"][aria-label="Local"]')?.click());
     const [dbChooser] = await Promise.all([
       page.waitForFileChooser({ timeout: 10_000 }),
       clickButton("Pick file…"),
@@ -959,9 +977,9 @@ try {
         await page.keyboard.type("SELECT id, v FROM t ORDER BY id;");
         await page.keyboard.press("Escape");
         await page.keyboard.press("F5");
-        await page.waitForFunction(() => !!document.querySelector("[data-q-edit-toggle]"), { timeout: 15_000 })
+        await page.waitForFunction(() => !!document.querySelector("[data-q-edit-toggle]:not([aria-disabled])"), { timeout: 15_000 })
           .catch(() => errors.push(`${e.key}: the grid Edit button did not appear (the keyed table should be editable)`));
-        await page.evaluate(() => document.querySelector("[data-q-edit-toggle]")?.click());
+        await page.evaluate(() => document.querySelector("[data-q-edit-toggle]:not([aria-disabled])")?.click());
         await page.waitForFunction(() => document.body.innerText.includes("Type or double-click to edit"), { timeout: 5_000 }).catch(() => errors.push(`${e.key}: grid edit bar did not appear`));
         await sleep(1000);
         const sqGrid = await page.evaluate(() => {
@@ -1053,9 +1071,9 @@ try {
     await page.keyboard.press("F5");
     await page.waitForFunction(() => /\b2 rows\b/.test(document.body.innerText), { timeout: 20_000 })
       .catch(async () => errors.push(`mysql: the grid did not show 2 rows: ${await page.evaluate(() => document.querySelector("[data-q-messages]")?.textContent?.slice(0, 300) ?? document.body.innerText.slice(-300))}`));
-    await page.waitForFunction(() => !!document.querySelector("[data-q-edit-toggle]"), { timeout: 15_000 })
+    await page.waitForFunction(() => !!document.querySelector("[data-q-edit-toggle]:not([aria-disabled])"), { timeout: 15_000 })
       .catch(() => errors.push("mysql: the grid Edit button did not appear (the result should be editable)"));
-    await page.evaluate(() => document.querySelector("[data-q-edit-toggle]")?.click());
+    await page.evaluate(() => document.querySelector("[data-q-edit-toggle]:not([aria-disabled])")?.click());
     await page.waitForFunction(() => document.body.innerText.includes("Type or double-click to edit"), { timeout: 5_000 }).catch(() => errors.push("mysql: grid edit bar did not appear"));
     await sleep(500);
     const myGrid = await page.evaluate(() => {

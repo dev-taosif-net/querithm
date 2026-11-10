@@ -254,7 +254,7 @@ public sealed class MonitorService : IAsyncDisposable
                     TopQueries = p.IncludeText ? s.TopQueries : s.TopQueries?.Select(q => q with { TextId = null }).ToArray(),
                     Locks = s.Locks, NewDeadlocks = null,
                 };
-                JsonSerializer.Serialize(w, tick, Json.Options);
+                JsonSerializer.Serialize(w, tick, Json.Monitor.MonitorSnapshot);
             }
             w.WriteEndArray();
             if (p.IncludeText)

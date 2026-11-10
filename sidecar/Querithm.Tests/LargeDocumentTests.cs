@@ -110,8 +110,8 @@ public class LargeDocumentTests
         var p95 = warm.Order().ElementAt((int)Math.Ceiling(warm.Count * 0.95) - 1);
         // The 150 ms gate (metric 27) is measured by pnpm bench through lang.complete; this guards an order-of-magnitude
         // regression without failing on a slow CI runner.
-        Assert.True(p95 < 150 * 3, $"warm p95 {p95:F1} ms; edited {string.Join(", ", cold.Select(c => c.ToString("F1")))} ms");
-        Assert.True(cold.Max() < 150 * 5, $"edited max {cold.Max():F1} ms");
+        Assert.True(p95 < TestTime.Budget(150 * 3), $"warm p95 {p95:F1} ms; edited {string.Join(", ", cold.Select(c => c.ToString("F1")))} ms");
+        Assert.True(cold.Max() < TestTime.Budget(150 * 5), $"edited max {cold.Max():F1} ms");
     }
 
     [Fact]

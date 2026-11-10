@@ -178,9 +178,9 @@ export function TabList({ onClose, only }: { onClose: () => void; only?: string[
   const label = only ? "Hidden tabs" : "Go to tab";
 
   return (
-    <div className="fixed inset-0 z-40" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="q-modal-backdrop fixed inset-0 z-40" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       {/* 88 px from the top: below the tab strip, which stays in view (D18). */}
-      <div role="dialog" aria-modal="true" aria-label={label} className="absolute left-1/2 top-[88px] -translate-x-1/2 w-[640px] max-w-[92vw] bg-raised border border-line rounded-lg shadow-2xl overflow-hidden" style={{ ["--q-row-bg" as string]: "var(--q-raised)" }}>
+      <div role="dialog" aria-modal="true" aria-label={label} className="q-palette-in absolute left-1/2 top-[88px] -translate-x-1/2 w-[640px] max-w-[92vw] bg-raised border border-line rounded-lg shadow-2xl overflow-hidden" style={{ ["--q-row-bg" as string]: "var(--q-raised)" }}>
         <input
           ref={input}
           role="combobox"
@@ -328,8 +328,8 @@ export function TabSwitcher() {
   const n = switcher.ids.length;
   const hl = rowOf(switcher.ids[switcher.index], tabs, tools, byId);
   return (
-    <div className="fixed inset-0 z-50 pointer-events-none flex items-start justify-center pt-[90px]">
-      <div className="pointer-events-auto w-[440px] max-w-[92vw] bg-raised border border-line rounded-lg shadow-2xl py-1" style={{ ["--q-row-bg" as string]: "var(--q-raised)" }}>
+    <div className="q-modal-backdrop fixed inset-0 z-50 pointer-events-none flex items-start justify-center pt-[90px]">
+      <div className="q-palette-in pointer-events-auto w-[440px] max-w-[92vw] bg-raised border border-line rounded-lg shadow-2xl py-1" style={{ ["--q-row-bg" as string]: "var(--q-raised)" }}>
         <div className="px-3 pt-1 pb-1.5 text-[10px] font-bold uppercase text-muted">
           Recent tabs · {switcher.index + 1} of {n} · release Ctrl to open
         </div>

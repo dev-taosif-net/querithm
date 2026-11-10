@@ -1,6 +1,7 @@
 // A connection's environment as a word in its color (§12: never color alone; the Explorer's row tag, for screens
 // outside the Explorer), and the server chip a server-bound dialog shows: "PROD Billing › SalesDB".
 import type { EnvironmentKind } from "../ipc/contract";
+import { escapeForDisplay } from "../monitor/format";
 import { envColor, envLabel, useProfiles } from "../store/profiles";
 import { Icon } from "./icons";
 import { readableOnSurface, useThemeKey } from "./tabStyle";
@@ -25,13 +26,13 @@ export function ServerChip({ profileId, database, surface = "var(--q-panel)" }: 
   const raw = envColor(profile, groups);
   const env = envLabel[profile.environment]?.toUpperCase() ?? "";
   return (
-    <span className="inline-flex items-center gap-1.5 min-w-0 max-w-full align-bottom text-[11px]" data-testid="server-chip" title={`${env ? `${env} ` : ""}${profile.name}${database ? ` › ${database}` : ""}`}>
+    <span className="inline-flex items-center gap-1.5 min-w-0 max-w-full align-bottom text-[11px]" data-testid="server-chip" title={`${env ? `${env} ` : ""}${escapeForDisplay(profile.name ?? "")}${database ? ` › ${escapeForDisplay(database)}` : ""}`}>
       <EnvTag env={profile.environment} color={readableOnSurface(raw, surface) ?? raw} />
-      <span className="font-semibold text-fg truncate">{profile.name}</span>
+      <span className="font-semibold text-fg truncate">{escapeForDisplay(profile.name ?? "")}</span>
       {database && (
         <>
           <span aria-hidden className="text-muted">›</span>
-          <span className="text-fg truncate">{database}</span>
+          <span className="text-fg truncate">{escapeForDisplay(database)}</span>
         </>
       )}
     </span>

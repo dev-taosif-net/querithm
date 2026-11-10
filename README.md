@@ -8,7 +8,10 @@ React + Monaco + Glide Data Grid, Apache Arrow over IPC.
 The architecture and every decision live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 It runs fully offline: fonts, editor, grid and plan renderer are bundled; the only network traffic is to your
-databases (and Microsoft Entra ID when you choose that sign-in).
+databases (and Microsoft Entra ID when you choose that sign-in) and the update check, which you can turn off in Settings.
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
+[SignPath Foundation](https://signpath.org). See the [code signing policy](docs/code-signing.md).
 
 ## What it does
 

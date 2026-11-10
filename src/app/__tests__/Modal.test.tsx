@@ -93,6 +93,15 @@ describe("Modal Enter (M19)", () => {
     expect(enter).toHaveBeenCalledTimes(1);
   });
 
+  it("Enter that confirms an IME composition is the input method's, not the dialog's", () => {
+    const enter = vi.fn();
+    const { getByLabelText } = render(<Modal title="t" onClose={() => {}} onEnter={enter}><input aria-label="name" autoFocus /></Modal>);
+    fireEvent.keyDown(getByLabelText("name"), { key: "Enter", isComposing: true });
+    expect(enter).not.toHaveBeenCalled();
+    fireEvent.keyDown(getByLabelText("name"), { key: "Enter" });
+    expect(enter).toHaveBeenCalledTimes(1);
+  });
+
   it("a danger dialog is an alertdialog that opens on its cancel control, so Enter right after opening does not confirm", async () => {
     const enter = vi.fn();
     const cancel = vi.fn();

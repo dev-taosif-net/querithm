@@ -1,5 +1,6 @@
 // Import wizard: 1. pick and profile a file (whole file, preview from the data plane), 2. map it onto a new or
 // existing table (DDL and per-column verdicts from the sidecar), 3. load it with the native bulk path and a reject log.
+import { LoadingStatus, ProgressBar } from "../app/LoadingStatus";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type {
   Engine, ImportColumnVerdict, ImportFormat, ImportInspectResult, ImportMapping, ImportProgressEvent, ImportReadOptions, ImportRunOptions, ImportTargetResult,
@@ -254,9 +255,10 @@ export function ImportWizardDialog({ d }: { d: Extract<Dialog, { kind: "import" 
             <button className="q-btn q-btn-primary" onClick={() => void choose()} disabled={busy}>{file ? "Choose another file…" : "Choose file…"}</button>
             {file && <span className="text-muted">{file.name} · {bytes(file.size)}</span>}
             {busy && progress && progress.phase === "profiling" && (
-              <span className="text-muted">Profiling every row… {progress.rowsProcessed.toLocaleString()} rows{pct != null ? ` (${pct} %)` : ""}</span>
+              <LoadingStatus label={`Profiling every row… ${progress.rowsProcessed.toLocaleString()} rows${pct != null ? ` (${pct} %)` : ""}`} />
             )}
           </div>
+          {busy && (!progress || progress.phase !== "profiling") && <LoadingStatus label={ins ? "Checking target…" : "Reading file…"} />}
           {ins && file && (
             <>
               <div className="grid grid-cols-5 gap-2">
@@ -444,9 +446,7 @@ export function ImportWizardDialog({ d }: { d: Extract<Dialog, { kind: "import" 
 
       {step === "load" && (
         <div className="space-y-3">
-          <div className="h-2 rounded bg-panel-2 overflow-hidden">
-            <div className={`h-full ${result?.error ? "bg-err" : "bg-accent"}`} style={{ width: `${result ? 100 : pct ?? 0}%` }} />
-          </div>
+          <ProgressBar label="Import progress" value={result && !result.error ? 100 : pct} active={!result} failed={!!result?.error} />
           <div className="text-fg">
             {progress ? `${progress.rowsLoaded.toLocaleString()} rows loaded · ${progress.rejected.toLocaleString()} rejected · ${(progress.elapsedMs / 1000).toFixed(1)} s` : "Starting…"}
           </div>

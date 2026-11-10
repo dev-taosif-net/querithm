@@ -80,6 +80,7 @@ public sealed class SqliteSecurityTests : IAsyncDisposable
     [InlineData("PRAGMA journal_mode = OFF")]
     [InlineData("PRAGMA temp_store_directory = '/tmp'")]
     [InlineData("PRAGMA main.schema_version = 1")]
+    [InlineData("PRAGMA temp_store = FILE")]
     public async Task Security_and_file_pragmas_cannot_be_changed(string sql)
     {
         await using var c = await OpenAsync(_h.NewDatabase(), FileAccessMode.ReadWrite);
@@ -114,7 +115,7 @@ public sealed class SqliteSecurityTests : IAsyncDisposable
         }
         // The engine may keep its own -wal / -shm beside the file (the journal files the grant covers); the database is untouched.
         Assert.Equal(before, await File.ReadAllBytesAsync(path));
-        Assert.Empty(Directory.GetFiles(_h.Dir).Where(f => !f.StartsWith(path, StringComparison.Ordinal) && Path.GetFileName(f) != "sales.db" && !Directory.Exists(f)));
+        Assert.DoesNotContain(Directory.GetFiles(_h.Dir), f => !f.StartsWith(path, StringComparison.Ordinal) && Path.GetFileName(f) != "sales.db" && !Directory.Exists(f));
     }
 
     [Fact]

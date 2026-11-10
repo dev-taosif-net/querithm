@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using Querithm.Contract;
 
 namespace Querithm.Core.Monitoring;
@@ -67,7 +68,7 @@ public sealed class HistoryBuffer
         var t = new Tick
         {
             Seq = s.Seq, At = atMs, Wall = s.At, GapBefore = _gapPending,
-            Rest = Pack(s with { Sessions = null, Texts = null, NewDeadlocks = null, Capabilities = null }),
+            Rest = Pack(s with { Sessions = null, Texts = null, NewDeadlocks = null, Capabilities = null }, Json.Monitor.MonitorSnapshot),
             TextIds = rows.Select(r => r.TextId).Concat((s.TopQueries ?? []).Select(q => q.TextId)).OfType<string>().Distinct().ToArray(),
             Sessions = rows.Length,
             Blocked = s.Blocking?.BlockedCount ?? rows.Count(r => r.BlockedBy.Length > 0),
@@ -75,13 +76,13 @@ public sealed class HistoryBuffer
         _gapPending = false;
         if (keyframe)
         {
-            t.Keyframe = Pack(rows);
+            t.Keyframe = Pack(rows, Json.Monitor.ActivityRowArray);
             _sinceKeyframe = 0;
         }
         else
         {
-            t.Upserts = Pack(rows.Where(r => !_last.TryGetValue(r.Key, out var old) || !RowEquals(old, r)).ToArray());
-            t.Removed = Pack(_last.Keys.Where(k => !current.ContainsKey(k)).ToArray());
+            t.Upserts = Pack(rows.Where(r => !_last.TryGetValue(r.Key, out var old) || !RowEquals(old, r)).ToArray(), Json.Monitor.ActivityRowArray);
+            t.Removed = Pack(_last.Keys.Where(k => !current.ContainsKey(k)).ToArray(), Json.Monitor.SessionKeyArray);
             _sinceKeyframe++;
         }
         _last = current;
@@ -105,7 +106,7 @@ public sealed class HistoryBuffer
     void Drop()
     {
         var oldest = _ticks.First!.Value;
-        var oldestRows = oldest.Keyframe != null ? Unpack<ActivityRow[]>(oldest.Keyframe) : null;
+        var oldestRows = oldest.Keyframe != null ? Unpack(oldest.Keyframe, Json.Monitor.ActivityRowArray) : null;
         _ticks.RemoveFirst();
         _bytes -= oldest.Bytes;
         _texts.RemoveHistoryRefs(oldest.TextIds);
@@ -114,7 +115,7 @@ public sealed class HistoryBuffer
         {
             var rows = Apply(oldestRows ?? [], next.Value);
             _bytes -= next.Value.Bytes;
-            next.Value.Keyframe = Pack(rows.Values.ToArray());
+            next.Value.Keyframe = Pack(rows.Values.ToArray(), Json.Monitor.ActivityRowArray);
             next.Value.Upserts = null;
             next.Value.Removed = null;
             next.Value.Bytes = Size(next.Value);
@@ -125,8 +126,8 @@ public sealed class HistoryBuffer
     static Dictionary<SessionKey, ActivityRow> Apply(ActivityRow[] previous, Tick t)
     {
         var rows = previous.ToDictionary(r => r.Key);
-        if (t.Removed != null) foreach (var k in Unpack<SessionKey[]>(t.Removed)) rows.Remove(k);
-        if (t.Upserts != null) foreach (var r in Unpack<ActivityRow[]>(t.Upserts)) rows[r.Key] = r;
+        if (t.Removed != null) foreach (var k in Unpack(t.Removed, Json.Monitor.SessionKeyArray)) rows.Remove(k);
+        if (t.Upserts != null) foreach (var r in Unpack(t.Upserts, Json.Monitor.ActivityRowArray)) rows[r.Key] = r;
         return rows;
     }
 
@@ -139,11 +140,11 @@ public sealed class HistoryBuffer
         {
             if (t.Seq < start) continue;
             if (t.Seq > seq) break;
-            if (t.Keyframe != null) rows = Unpack<ActivityRow[]>(t.Keyframe).ToDictionary(r => r.Key);
+            if (t.Keyframe != null) rows = Unpack(t.Keyframe, Json.Monitor.ActivityRowArray).ToDictionary(r => r.Key);
             else if (rows != null)
             {
-                if (t.Removed != null) foreach (var k in Unpack<SessionKey[]>(t.Removed)) rows.Remove(k);
-                if (t.Upserts != null) foreach (var r in Unpack<ActivityRow[]>(t.Upserts)) rows[r.Key] = r;
+                if (t.Removed != null) foreach (var k in Unpack(t.Removed, Json.Monitor.SessionKeyArray)) rows.Remove(k);
+                if (t.Upserts != null) foreach (var r in Unpack(t.Upserts, Json.Monitor.ActivityRowArray)) rows[r.Key] = r;
             }
         }
         return rows?.Values.ToArray() ?? [];
@@ -169,7 +170,7 @@ public sealed class HistoryBuffer
         if (t == null) return null;
         var rows = Rebuild(seq);
         var (texts, _) = _texts.Get(t.TextIds);
-        return Unpack<MonitorSnapshot>(t.Rest) with { Sessions = rows, Texts = texts.Count > 0 ? texts : null };
+        return Unpack(t.Rest, Json.Monitor.MonitorSnapshot) with { Sessions = rows, Texts = texts.Count > 0 ? texts : null };
     }
 
     /// <summary>Snapshots in [from, to] (inclusive), oldest first, for export.</summary>
@@ -193,17 +194,17 @@ public sealed class HistoryBuffer
     /// <summary>The bytes a tick holds: its compressed parts, its text-id array, and fixed bookkeeping.</summary>
     static long Size(Tick t) => TickOverhead + t.Rest.Length + (t.Keyframe?.Length ?? 0) + (t.Upserts?.Length ?? 0) + (t.Removed?.Length ?? 0) + 8L * t.TextIds.Length;
 
-    internal static byte[] Pack<T>(T value)
+    internal static byte[] Pack<T>(T value, JsonTypeInfo<T> type)
     {
         using var ms = new MemoryStream();
         using (var z = new DeflateStream(ms, CompressionLevel.Fastest, leaveOpen: true))
-            JsonSerializer.Serialize(z, value, Json.Options);
+            JsonSerializer.Serialize(z, value, type);
         return ms.ToArray();
     }
 
-    internal static T Unpack<T>(byte[] data)
+    internal static T Unpack<T>(byte[] data, JsonTypeInfo<T> type)
     {
         using var z = new DeflateStream(new MemoryStream(data), CompressionMode.Decompress);
-        return JsonSerializer.Deserialize<T>(z, Json.Options)!;
+        return JsonSerializer.Deserialize(z, type)!;
     }
 }

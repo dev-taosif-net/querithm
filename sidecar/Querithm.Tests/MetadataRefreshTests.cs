@@ -132,13 +132,13 @@ public class MetadataRefreshTests
         var third = metadata.Refresh(p);
         Assert.Equal(first.JobId, second.JobId);
         slow.Gate.SetResult();
-        await metadata.WaitAsync(profile.Id, "db").WaitAsync(TimeSpan.FromSeconds(10));
+        await metadata.WaitAsync(profile.Id, "db").WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
         // One more read after the running one: the two later requests coalesce into a single re-run.
         Assert.Equal(2, slow.Reads);
         Assert.Equal(third.JobId, first.JobId);
         // Once idle, a new request starts a new job.
         var fourth = metadata.Refresh(p);
-        await metadata.WaitAsync(profile.Id, "db").WaitAsync(TimeSpan.FromSeconds(10));
+        await metadata.WaitAsync(profile.Id, "db").WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
         Assert.NotEqual(first.JobId, fourth.JobId);
         Assert.Equal(3, slow.Reads);
     }

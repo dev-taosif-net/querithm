@@ -82,7 +82,8 @@ describe("Dialogs host", () => {
     show({ kind: "connect" });
     show({ kind: "profile" });
     await userEvent.setup().click(screen.getByText("connect-dialog"));
-    expect(screen.queryByText("connect-dialog")).toBeNull();
+    expect(screen.getByText("connect-dialog").closest("[inert][data-q-exiting]")).not.toBeNull();
+    await waitFor(() => expect(screen.queryByText("connect-dialog")).toBeNull());
     expect(screen.getByText(/profile-editor/)).toBeInTheDocument();
   });
   it("routes grid dialogs and lazily loaded wizards", async () => {
@@ -158,7 +159,7 @@ describe("confirm", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     expect(upper).toHaveBeenCalledWith(false);
     expect(lower).not.toHaveBeenCalled();
-    fireEvent.mouseDown(container.firstChild as Element);
+    fireEvent.mouseDown(container.querySelector(".q-modal-backdrop")!);
     expect(lower).toHaveBeenCalledWith(false);
   });
 });
@@ -626,7 +627,7 @@ describe("settings", () => {
     render(<Dialogs />);
     show({ kind: "settings", page: "about" });
     expect(await screen.findByRole("dialog", { name: "Settings" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /About/ })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("tab", { name: /About/ })).toHaveAttribute("aria-selected", "true");
     await userEvent.setup().click(screen.getByRole("button", { name: "Done" }));
     expect(useUi.getState().dialogs).toHaveLength(0);
   });
@@ -765,7 +766,7 @@ describe("dependencies", () => {
     h.rpc.mockResolvedValue(deps);
     render(<Dialogs />);
     show(d);
-    expect(screen.getByText("Loading…")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Loading dependencies…");
     await screen.findByText("Uses (2)");
     expect(screen.getByText("Used by (1)")).toBeInTheDocument();
     expect(h.rpc).toHaveBeenCalledWith("meta.dependencies", { sessionId: "sess", object: { schema: "dbo", name: "p", objectId: 5, kind: "proc", database: "Sales", profileId: "ms1" } });

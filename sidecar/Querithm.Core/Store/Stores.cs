@@ -109,8 +109,11 @@ public sealed class ProfileStore(LocalStore store)
     /// </summary>
     static Profile Read(SqliteDataReader r)
     {
-        var opts = r.Str(14) is { } json ? JsonSerializer.Deserialize(json, StoreJsonContext.Default.StoredOptions) : null;
         string? unsupported = null;
+        StoredOptions? opts = null;
+        // A row whose options no longer parse is listed as unsupported (it can be deleted), never failing the whole list.
+        try { opts = r.Str(14) is { } json ? JsonSerializer.Deserialize(json, StoreJsonContext.Default.StoredOptions) : null; }
+        catch (JsonException) { unsupported = "This profile's stored settings cannot be read (they were changed outside Querithm). Delete it and create it again."; }
         if (!EnumText.TryParse<Engine>(r.Str(2), out var engine))
             unsupported = $"This profile is for an engine this version of Querithm does not know ('{Clip(r.Str(2))}'). It was probably saved by a newer version.";
         // Legacy rows may have no auth: they were SQL logins (the enum default) before auth kinds existed.
@@ -122,6 +125,14 @@ public sealed class ProfileStore(LocalStore store)
         {
             if (EnumText.TryParse<LocationKind>(locText, out var loc)) location = loc;
             else unsupported ??= $"This profile uses a database location this version of Querithm does not know ('{Clip(locText)}').";
+        }
+        // options_json keeps enums as numbers: an SSH sign-in no member names (PT8-6: "privateKey,agent" was stored as 3)
+        // is never read as another one, and never reaches a reply the enum converter would refuse to write.
+        var ssh = opts?.Ssh;
+        if (ssh != null && !Enum.IsDefined(ssh.Auth))
+        {
+            unsupported ??= "This profile uses an SSH sign-in this version of Querithm does not know. Delete it and create it again.";
+            ssh = ssh with { Auth = SshAuthKind.Password };
         }
         return new Profile
         {
@@ -147,7 +158,7 @@ public sealed class ProfileStore(LocalStore store)
             Options = opts?.Options,
             CaPath = opts?.CaPath,
             CommandTimeoutS = opts?.CommandTimeoutS,
-            Ssh = opts?.Ssh,
+            Ssh = ssh,
             CreatedAt = r.Long(15) ?? 0,
             UpdatedAt = r.Long(16) ?? 0,
         };

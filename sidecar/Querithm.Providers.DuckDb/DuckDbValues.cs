@@ -138,6 +138,9 @@ public static class DuckDbValues
 
     static readonly System.Reflection.MethodInfo GetFieldValue = typeof(DuckDBDataReader).GetMethod(nameof(DuckDBDataReader.GetFieldValue))!;
 
+    // GetFieldValue<T> has no DynamicallyAccessedMembers on T, so a type made at run time needs nothing the trimmer could
+    // remove; t is a CLR type the driver itself reported for the column.
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2060", Justification = "GetFieldValue<T> places no trimming requirements on T.")]
     static object? Read(DuckDBDataReader r, int ordinal, Type t)
     {
         try { return GetFieldValue.MakeGenericMethod(t).Invoke(r, [ordinal]); }

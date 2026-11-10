@@ -1,5 +1,6 @@
 // ER diagram tab: neighbourhood, schema and current-query modes over the cached snapshot (no server roundtrip),
 // column-to-column FK edges, search highlight, Shift+Click selection → generated JOIN, and SVG/PNG export.
+import { LoadingStatus } from "../app/LoadingStatus";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { Background, Controls, MiniMap, ReactFlow, type Edge, type Node } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -189,7 +190,7 @@ export const ErdTab = memo(function ErdTab({ tool }: { tool: ToolTab }) {
   if (!snap) {
     return (
       <div className="flex-1 flex items-center justify-center text-muted text-xs p-4 text-center">
-        {!scope ? MEMORY_GONE : entry?.status === "error" ? `Metadata could not be loaded: ${entry.error}` : "Loading the cached schema…"}
+        {!scope ? MEMORY_GONE : entry?.status === "error" ? `Metadata could not be loaded: ${entry.error}` : <LoadingStatus label="Loading the cached schema…" />}
       </div>
     );
   }
@@ -244,7 +245,7 @@ export const ErdTab = memo(function ErdTab({ tool }: { tool: ToolTab }) {
             {graph.edges.length === 0 && graph.nodes.length > 1 && (
               <div className="absolute z-10 top-2 left-1/2 -translate-x-1/2 px-3 py-1 rounded bg-panel border border-line text-muted text-[11px]">No foreign keys in this schema</div>
             )}
-            {!positions && <div className="absolute z-10 top-2 left-2 text-muted text-[11px]">Laying out {graph.nodes.length} tables…</div>}
+            {!positions && <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none"><LoadingStatus label={`Laying out ${graph.nodes.length} tables…`} /></div>}
             <ReactFlow
               nodes={nodes}
               edges={edges}

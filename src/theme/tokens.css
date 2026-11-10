@@ -803,11 +803,7 @@ select {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* Close slot (D12, owner revision 3): 24 × 20 at the end of line 1, so line 2 runs the tab's full width. The modified
-   dot at rest, × on hover, keyboard focus and on the active clean tab; the pin on pinned tabs. Line 1 ends in 26 px of
-   room for it, which counts in the tab's width (+38 px) but gives way first when a tab is cut: the name then runs to
-   the tab's end and a hover's × is drawn over it. A tab that always shows something there (active, modified, pinned,
-   renaming) keeps the room, so its name is never covered. */
+/* Reserve the close slot in every tab so activation never changes the title's available width. */
 .q-tab-top {
   position: relative;
   display: flex;
@@ -818,8 +814,8 @@ select {
 .q-tab-top::after {
   content: "";
   width: 26px;
-  flex-shrink: 1000000;
-  min-width: 4px;
+  flex-shrink: 0;
+  min-width: 26px;
 }
 .dv-tab.dv-active-tab .q-tab .q-tab-top::after,
 .q-tab:is([data-dirty], [data-pinned], [data-editing]) .q-tab-top::after {
@@ -1027,4 +1023,258 @@ select {
 .q-markdown .q-md-img {
   color: var(--q-muted);
   font-style: italic;
+}
+
+/* Modal, popover and profile editor reveal: smooth fade + slide when dialogs, menus or sections open. */
+@keyframes q-modal-backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes q-modal-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes q-popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes q-submenu-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes q-palette-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes q-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes q-banner-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes q-panel-tab-indicator {
+  from {
+    transform: scaleX(0.35);
+    opacity: 0.4;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+@keyframes q-tree-row-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes q-side-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes q-settings-page-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes q-profile-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.q-busy-spinner {
+  display: inline-flex;
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  visibility: hidden;
+  animation: q-busy-reveal 0s 180ms forwards;
+}
+.q-busy-button-label { display: inline-grid; }
+.q-busy-button-label > span,
+.q-busy-button-label::before,
+.q-busy-button-label::after { grid-area: 1 / 1; }
+.q-busy-button-label::before { content: attr(data-label); visibility: hidden; }
+.q-busy-button-label::after { content: attr(data-busy-label); visibility: hidden; }
+@keyframes q-busy-reveal {
+  to { visibility: visible; }
+}
+.q-progress-fill {
+  transition: width 180ms ease-out;
+}
+.q-progress-indeterminate {
+  animation: q-progress-travel 1.3s ease-in-out infinite;
+}
+@keyframes q-progress-travel {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(286%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .q-progress-fill { transition: none; }
+  .q-progress-indeterminate { animation: none; }
+}
+
+.q-modal-backdrop {
+  animation: q-modal-backdrop-in 150ms ease-out;
+}
+.q-modal-dialog {
+  animation: q-modal-dialog-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.q-popover-in {
+  animation: q-popover-in 140ms cubic-bezier(0.16, 1, 0.3, 1);
+  transform-origin: top left;
+}
+.q-submenu-in {
+  animation: q-submenu-in 130ms cubic-bezier(0.16, 1, 0.3, 1);
+  transform-origin: top left;
+}
+.q-palette-in {
+  animation: q-palette-in 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  transform-origin: top center;
+}
+.q-toast-in {
+  animation: q-toast-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.q-banner-in {
+  animation: q-banner-in 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.q-panel-tab-indicator {
+  animation: q-panel-tab-indicator 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  transform-origin: center;
+}
+.q-tree-row-reveal {
+  animation: q-tree-row-reveal 140ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.q-side-panel-in {
+  animation: q-side-panel-in 170ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.q-settings-page-in {
+  animation: q-settings-page-in 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.q-tree-caret {
+  transition: transform 140ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.q-profile-reveal {
+  animation: q-profile-reveal 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.q-profile-reveal-1 {
+  animation-delay: 25ms;
+}
+.q-profile-reveal-2 {
+  animation-delay: 50ms;
+}
+.q-profile-reveal-3 {
+  animation-delay: 75ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .q-modal-backdrop,
+  .q-modal-dialog,
+  .q-popover-in,
+  .q-submenu-in,
+  .q-palette-in,
+  .q-toast-in,
+  .q-banner-in,
+  .q-panel-tab-indicator,
+  .q-tree-row-reveal,
+  .q-side-panel-in,
+  .q-settings-page-in,
+  .q-profile-reveal {
+    animation: none;
+  }
+  .q-tree-caret {
+    transition: none;
+  }
+}
+
+/* Restrict interaction motion to small controls, never the editor or virtual result rows. */
+.q-btn, .q-tb {
+  transition: background-color 100ms ease-out, border-color 100ms ease-out, transform 80ms ease-out;
+}
+.q-btn:active:not(:disabled):not([aria-disabled="true"]),
+.q-tb:active:not(:disabled):not([aria-disabled="true"]) { transform: translateY(1px); }
+[data-q-exiting] .q-modal-backdrop { animation: q-modal-backdrop-out 120ms ease-in forwards; }
+[data-q-exiting] .q-modal-dialog { animation: q-modal-dialog-out 120ms ease-in forwards; }
+@keyframes q-modal-backdrop-out { to { opacity: 0; } }
+@keyframes q-modal-dialog-out { to { opacity: 0; transform: translateY(4px) scale(0.99); } }
+.q-skeleton { animation: q-skeleton-pulse 1.4s ease-in-out infinite; }
+@keyframes q-skeleton-pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) {
+  .q-btn, .q-tb { transition: none; }
+  .q-btn:active, .q-tb:active { transform: none; }
+  .q-skeleton, [data-q-exiting] .q-modal-backdrop, [data-q-exiting] .q-modal-dialog { animation: none; }
 }

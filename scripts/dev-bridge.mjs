@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { isAllowedOrigin, parseMessage } from "./dev-bridge-guard.mjs";
 import { createFileTokens, refuseShellKeys } from "./dev-bridge-files.mjs";
-import { wantedSecrets } from "./dev-bridge-secrets.mjs";
+import { wantedSecrets, sameEndpoint, createProfileLocks, validCredentialAccount } from "./dev-bridge-secrets.mjs";
 import { createGrants } from "./dev-bridge-grants.mjs";
 import { createRelay, framingError, kindError, POLL_WAIT_MS, ulid } from "./dev-bridge-relay.mjs";
 
@@ -155,6 +155,7 @@ setTimeout(() => connectData(), 100);
 // ---- shell commands ----
 const secrets = new Map();
 const policies = new Map();
+const lockProfile = createProfileLocks();
 function getSecret(id) {
   const entry = secrets.get(id);
   if (!entry) return undefined;
@@ -169,51 +170,66 @@ const files = createFileTokens();
 const grants = createGrants();
 const uploads = mkdtempSync(path.join(os.tmpdir(), "querithm-bridge-files-"));
 async function handle(cmd, args) {
+  if (["secret_set", "secret_delete", "secret_exists", "secret_end_connection"].includes(cmd) && !validCredentialAccount(args.profileId))
+    throw new Error("invalid profile id");
   switch (cmd) {
     case "rpc": {
       const params = args.params ?? null;
       // Mirrors the shell (M1): no shell-owned name, and no other spelling of one, before anything is injected.
       const owned = refuseShellKeys(params);
       if (owned) throw owned;
-      if ((args.method === "session.open" || args.method === "profile.test") && params && params.profileId) {
-        // Mirrors the shell (Phase D0a): only the secrets the sign-in needs are looked up; session.open from the stored profile.
-        const edited = args.method === "profile.test" && params.profile && typeof params.profile === "object" ? params.profile : null;
-        const [db, ssh] = wantedSecrets(edited ?? policies.get(params.profileId));
-        if (params.secret == null && db) params.secret = getSecret(params.profileId) ?? null;
-        if (params.sshSecret == null && ssh) params.sshSecret = getSecret(`${params.profileId}:ssh`) ?? null;
-      }
-      const refused = files.inject(args.method, params) ?? grants.inject(args.method, params);
-      if (refused) throw refused;
-      if (args.method !== "import.run") {
-        const result = await call(args.method, params);
-        grants.settle(args.method, params, result);
-        // Mirrors the shell (L2): a deleted profile's secrets go with it (the database's and the SSH tunnel's).
-        if (args.method === "profile.delete" && params?.profileId) {
-          for (const account of [params.profileId, `${params.profileId}:ssh`]) secrets.delete(account);
-          policies.delete(params.profileId);
-        }
-        const profiles = args.method === "profile.list" ? result : args.method === "profile.save" ? [result] : [];
-        for (const profile of profiles) {
-          grants.remember(profile);
-          getSecret(profile.id); // discard expired values before changing a policy
-          const previous = policies.get(profile.id);
-          if (previous && (previous.passwordRetention !== profile.passwordRetention || previous.passwordRetentionMinutes !== profile.passwordRetentionMinutes)) {
-            const entry = secrets.get(profile.id);
-            if (entry) entry.entered = Date.now();
-          }
-          policies.set(profile.id, profile);
-        }
-        return result;
-      }
-      // The picked file is spent only by an import that started (not by a Production guard block).
-      let started = false;
+      const unlock = await lockProfile(args.method, params);
       try {
-        const r = await call(args.method, params);
-        started = r?.jobId != null;
-        return r;
-      } finally {
-        files.settleRun(params?.fileToken, started);
-      }
+        if (args.method === "profile.save" && params?.id) {
+          const stored = await call("profile.list", null);
+          if (!Array.isArray(stored)) throw new Error("Could not verify the saved profile before editing it.");
+          const before = stored.find((p) => p.id === params.id);
+          if (before && !sameEndpoint(before, params)) {
+            secrets.delete(params.id);
+            secrets.delete(`${params.id}:ssh`);
+          }
+        }
+        if ((args.method === "session.open" || args.method === "profile.test") && params && params.profileId) {
+          if (!validCredentialAccount(params.profileId)) throw new Error("invalid profile id");
+          // Mirrors the shell (Phase D0a): only the secrets the sign-in needs are looked up; session.open from the stored profile.
+          const edited = args.method === "profile.test" && params.profile && typeof params.profile === "object" ? params.profile : null;
+          const [db, ssh] = wantedSecrets(edited ?? policies.get(params.profileId));
+          if (params.secret == null && db) params.secret = getSecret(params.profileId) ?? null;
+          if (params.sshSecret == null && ssh) params.sshSecret = getSecret(`${params.profileId}:ssh`) ?? null;
+        }
+        const refused = files.inject(args.method, params) ?? grants.inject(args.method, params);
+        if (refused) throw refused;
+        if (args.method !== "import.run") {
+          const result = await call(args.method, params);
+          grants.settle(args.method, params, result);
+          // Mirrors the shell (L2): a deleted profile's secrets go with it (the database's and the SSH tunnel's).
+          if (args.method === "profile.delete" && params?.profileId) {
+            for (const account of [params.profileId, `${params.profileId}:ssh`]) secrets.delete(account);
+            policies.delete(params.profileId);
+          }
+          const profiles = args.method === "profile.list" ? result : args.method === "profile.save" ? [result] : [];
+          for (const profile of profiles) {
+            grants.remember(profile);
+            getSecret(profile.id); // discard expired values before changing a policy
+            const previous = policies.get(profile.id);
+            if (previous && (previous.passwordRetention !== profile.passwordRetention || previous.passwordRetentionMinutes !== profile.passwordRetentionMinutes)) {
+              const entry = secrets.get(profile.id);
+              if (entry) entry.entered = Date.now();
+            }
+            policies.set(profile.id, profile);
+          }
+          return result;
+        }
+        // The picked file is spent only by an import that started (not by a Production guard block).
+        let started = false;
+        try {
+          const r = await call(args.method, params);
+          started = r?.jobId != null;
+          return r;
+        } finally {
+          files.settleRun(params?.fileToken, started);
+        }
+      } finally { unlock(); }
     }
     case "results_discard":
       relay.discard(String(args.executionId));

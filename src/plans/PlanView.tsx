@@ -309,7 +309,7 @@ function Inspector({ node }: { node: PlanNode }) {
   if (node.logicalReads != null) rows.push(["Logical reads", `${node.logicalReads.toLocaleString()} pages`]);
   if (node.elapsedMs != null) rows.push(["Actual elapsed", `${node.elapsedMs} ms`, "text-ok"]);
   return (
-    <div className="w-[330px] shrink-0 bg-panel border-l border-line p-3 overflow-y-auto text-[11px] select-text">
+    <div key={node.id} className="q-side-panel-in w-[330px] shrink-0 bg-panel border-l border-line p-3 overflow-y-auto text-[11px] select-text">
       <div className="border-b border-line pb-2 mb-2">
         <div className="text-[10px] text-muted font-bold uppercase">Selected operator</div>
         <div className="text-sm font-bold text-fg">{node.operator}</div>

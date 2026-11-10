@@ -1,3 +1,4 @@
+import { LoadingStatus } from "./LoadingStatus";
 import { useEffect, useLayoutEffect, useState } from "react";
 import { CONTRACT_VERSION } from "../ipc/contract";
 import { rpc } from "../ipc/client";
@@ -147,7 +148,7 @@ export function App() {
     return (
       <div className="h-full flex items-center justify-center text-muted text-xs bg-bg">
         <SettingsEffects />
-        Starting Querithm…
+        <LoadingStatus label="Starting Querithm…" />
       </div>
     );
 

@@ -376,6 +376,15 @@ pub async fn rpc(
     let mut params = params.unwrap_or(Value::Null);
     // M1: no shell-owned name from the webview, and no other spelling of one, before anything is read or injected.
     crate::injection::refuse_shell_keys(&mut params)?;
+    let _profile_guard = crate::credential_guard::lock_profile(&method, &params).await;
+    if method == "profile.save" {
+        crate::credential_guard::prepare_save(&params,
+            || sup.call("profile.list", Value::Null),
+            |id| async move {
+                crate::keyring::forget_profile(&id).await.map_err(|e|
+                    json!({ "code": -32001, "message": e, "data": { "code": "keyring" } }))
+            }).await?;
+    }
     // import.*: the token from the native dialog becomes the path; a path sent by the webview never reaches the sidecar.
     // import.run holds the token until the reply: only an import that started spends it (not a Production guard block).
     let run_token = crate::files::inject(&method, &mut params, &files)?;

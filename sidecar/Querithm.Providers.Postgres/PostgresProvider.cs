@@ -49,17 +49,21 @@ public sealed class PostgresProvider : IDbProvider
     static string KeyPrefix(string profileId) => profileId + "\u001f";
 
     /// <summary>The cached source for the profile's connection string (made on first use), with its password set to the string's.</summary>
-    internal static NpgsqlDataSource DataSourceFor(string profileId, string connectionString) => EntryFor(profileId, connectionString, lease: false).Source;
+    internal static NpgsqlDataSource DataSourceFor(string profileId, string connectionString, string? tlsHost = null) => EntryFor(profileId, connectionString, lease: false, tlsHost).Source;
 
     /// <summary>Test seam: the password the source's provider sends for the next open.</summary>
     internal static string? PasswordOf(NpgsqlDataSource source) { lock (SourcesGate) return Sources.Values.FirstOrDefault(e => e.Source == source)?.Password; }
 
-    static SourceEntry EntryFor(string profileId, string connectionString, bool lease)
+    /// <param name="tlsHost">
+    /// The host name the server's certificate is checked against when it is not the one dialled (an SSH forward on
+    /// 127.0.0.1, PT5-4): Npgsql's VerifyFull compares the certificate with the TLS target host, which this sets.
+    /// </param>
+    static SourceEntry EntryFor(string profileId, string connectionString, bool lease, string? tlsHost = null)
     {
         var identity = new NpgsqlConnectionStringBuilder(connectionString);
         var password = identity.Password;
         identity.Remove("Password");
-        var key = KeyPrefix(profileId) + identity.ConnectionString;
+        var key = KeyPrefix(profileId) + identity.ConnectionString + (tlsHost == null ? "" : "\u001fTLS=" + tlsHost);
         var retired = new List<SourceEntry>();
         SourceEntry entry;
         lock (SourcesGate)
@@ -82,6 +86,8 @@ public sealed class PostgresProvider : IDbProvider
                 // Npgsql allows one source of passwords: a Passfile named in the profile's options stays the only one.
                 if (string.IsNullOrEmpty(identity.Passfile))
                     b.UsePasswordProvider(_ => made.Password ?? "", (_, _) => ValueTask.FromResult(made.Password ?? ""));
+                // Npgsql fills the options (its own validation callback included) before this runs; only the name changes.
+                if (tlsHost != null) b.UseSslClientAuthenticationOptionsCallback(o => o.TargetHost = tlsHost);
                 made.Source = b.Build();
                 Sources[key] = entry = made;
             }
@@ -97,9 +103,9 @@ public sealed class PostgresProvider : IDbProvider
     /// A connection made from the cached source, which stays alive until the connection, once opened, closes — or, for one
     /// whose open failed, until <paramref name="release"/> runs (once either way).
     /// </summary>
-    internal static NpgsqlConnection CreateConnection(string profileId, string connectionString, out Action release)
+    internal static NpgsqlConnection CreateConnection(string profileId, string connectionString, out Action release, string? tlsHost = null)
     {
-        var entry = EntryFor(profileId, connectionString, lease: true);
+        var entry = EntryFor(profileId, connectionString, lease: true, tlsHost);
         var done = 0;
         void Release()
         {
@@ -210,11 +216,29 @@ public sealed class PostgresProvider : IDbProvider
             },
         };
         if (!string.IsNullOrEmpty(p.CaPath)) b.RootCertificate = p.CaPath;
+        // PT5-1: without a checked certificate, whoever answers may be a TLS-terminating MITM, which can ask for the password
+        // in clear text (AuthenticationCleartextPassword). Every other method is still accepted (SCRAM, MD5, Kerberos/GSS,
+        // SSPI, trust), so md5 and scram servers keep working; a verified certificate (VerifyCA / VerifyFull) allows
+        // cleartext too (LDAP / RADIUS / PAM servers, Azure Entra tokens). Channel binding stays Prefer (Npgsql's default):
+        // Require would refuse servers without SCRAM-SHA-256-PLUS.
+        if (b.SslMode is SslMode.Require or SslMode.Prefer or SslMode.Allow) b.RequireAuth = NoCleartextAuth;
         if (p.Auth is AuthKind.Password or AuthKind.Sql or AuthKind.EntraToken) b.Password = secret;
         if (p.Auth is AuthKind.Kerberos && !string.IsNullOrEmpty(p.Options?.GetValueOrDefault("kerberosServiceName")))
             b.KerberosServiceName = p.Options!["kerberosServiceName"];
         return b.ConnectionString;
     }
+
+    /// <summary>Npgsql's Require Auth list: every method but cleartext "password".</summary>
+    internal const string NoCleartextAuth = "ScramSHA256,MD5,GSS,SSPI,None";
+
+    /// <summary>
+    /// Set by <see cref="RouteThrough"/> only: the real server name its certificate is checked against when the driver
+    /// dials an SSH forward. Read only for a loopback host, so a stored option cannot retarget a direct connection.
+    /// </summary>
+    internal const string TunnelTlsHostOption = "tunnelTlsHost";
+
+    internal static string? TunnelTlsHost(Profile p) =>
+        p.Options?.GetValueOrDefault(TunnelTlsHostOption) is { Length: > 0 } h && System.Net.IPAddress.TryParse(p.Host, out var ip) && System.Net.IPAddress.IsLoopback(ip) ? h : null;
 
     /// <summary>One TCP host; several hosts (failover lists) or a Unix socket directory cannot go through one SSH forward.</summary>
     public (string Host, int Port, string? Refusal) TunnelTarget(Profile p)
@@ -226,13 +250,16 @@ public sealed class PostgresProvider : IDbProvider
         return (host, port, null);
     }
 
-    /// <summary>Npgsql checks the certificate against the host it dials (127.0.0.1 here), so Verify full becomes Verify CA.</summary>
+    /// <summary>
+    /// The driver dials the forward on 127.0.0.1; Verify full still checks the certificate against the real server name
+    /// (PT5-4), which the TLS handshake is given as its target host (<see cref="TunnelTlsHostOption"/>).
+    /// </summary>
     public (Profile Profile, string? Note) RouteThrough(Profile p, string host, int port)
     {
         var routed = p with { Host = host, Port = port };
         if (p.TlsMode != TlsMode.VerifyFull) return (routed, null);
-        return (routed with { TlsMode = TlsMode.VerifyCa },
-            "Through the SSH tunnel the certificate's host name cannot be checked (the driver connects to 127.0.0.1), so Verify full runs as Verify CA: the certificate chain is still verified.");
+        var options = new Dictionary<string, string>(p.Options ?? []) { [TunnelTlsHostOption] = (p.Host ?? "localhost").Trim() };
+        return (routed with { Options = options }, null);
     }
 
     // Keywords ParseConnectionString maps onto profile fields; anything else the driver knows is reported as not applied.
@@ -250,6 +277,15 @@ public sealed class PostgresProvider : IDbProvider
         ["application_name"] = "Application Name", ["krbsrvname"] = "Kerberos Service Name",
     };
 
+    // Npgsql's own spellings: MySqlConnector reads Host and Username too, but its documentation (and SQL Server's) says
+    // Server and User ID.
+    static readonly HashSet<string> OwnSpellings = new(StringComparer.OrdinalIgnoreCase) { "Host", "Username", "User Name" };
+    static readonly HashSet<string> Conventional = new(StringComparer.OrdinalIgnoreCase) { "Host", "Username", "Database", "Password", "Port" };
+
+    public ConnectionStringAffinity ConnectionStringAffinity(IReadOnlyDictionary<string, string> keywords) => new(
+        ConnectionStringKeywords.CountKeys(keywords, OwnSpellings) + (ConnectionStringKeywords.HasPort(keywords, 5432) ? 1 : 0),
+        ConnectionStringKeywords.CountKeys(keywords, Conventional));
+
     public ParseConnectionStringResult ParseConnectionString(string connectionString, Profile basis)
     {
         var uriUnknown = new List<string>();
@@ -263,7 +299,12 @@ public sealed class PostgresProvider : IDbProvider
         var options = new Dictionary<string, string>(basis.Options ?? []);
         string? secret = null;
 
-        if (k.Has("Host")) p = p with { Host = NullIfEmpty(b.Host), Port = k.Has("Port") ? b.Port : null };
+        var notes = new List<string>();
+        if (k.Has("Host"))
+        {
+            p = p with { Host = NullIfEmpty(b.Host), Port = k.Has("Port") ? b.Port : null };
+            if (FailoverNote(p.Host) is { } failover) notes.Add(failover);
+        }
         else if (k.Has("Port")) p = p with { Port = b.Port };
         if (k.Has("Database")) p = p with { DatabaseDefault = NullIfEmpty(b.Database) };
         if (k.Has("Username")) p = p with { Username = NullIfEmpty(b.Username) };
@@ -277,7 +318,6 @@ public sealed class PostgresProvider : IDbProvider
         if (k.Has("Kerberos Service Name")) SetOption(options, "kerberosServiceName", NullIfEmpty(b.KerberosServiceName));
 
         // A mode the string does not name keeps the editor's (Require by default, §13 rule 2; M3); a weaker one is reported.
-        var notes = new List<string>();
         if (k.Has("SSL Mode"))
         {
             p = p with
@@ -294,7 +334,11 @@ public sealed class PostgresProvider : IDbProvider
             if (b.SslMode == SslMode.Disable) notes.Add(WeakTls.NotEncrypted("SSL Mode=Disable"));
             else if (b.SslMode is SslMode.Allow or SslMode.Prefer) notes.Add(WeakTls.Downgradable($"SSL Mode={b.SslMode}"));
         }
-        if (k.Has("Root Certificate")) p = p with { CaPath = NullIfEmpty(b.RootCertificate) };
+        if (k.Has("Root Certificate"))
+        {
+            p = p with { CaPath = NullIfEmpty(b.RootCertificate) };
+            if (p.CaPath != null) notes.Add(CaFileNote("Root Certificate", p.CaPath)); // PT5-2
+        }
         if (k.Has("Timeout")) p = p with { TimeoutS = b.Timeout };
         if (k.Has("Command Timeout")) p = p with { CommandTimeoutS = b.CommandTimeout };
         if (k.Has("Application Name")) SetOption(options, "appName", NullIfEmpty(b.ApplicationName));
@@ -346,7 +390,8 @@ public sealed class PostgresProvider : IDbProvider
         {
             var eq = pair.IndexOf('=');
             var name = Uri.UnescapeDataString(eq < 0 ? pair : pair[..eq]);
-            var value = eq < 0 ? "" : Uri.UnescapeDataString(pair[(eq + 1)..].Replace('+', ' '));
+            // libpq only percent-decodes: a "+" is a plus sign, not a space (form encoding does not apply).
+            var value = eq < 0 ? "" : Uri.UnescapeDataString(pair[(eq + 1)..]);
             if (!UriParams.TryGetValue(name, out var keyword)) unknown.Add(name);
             // libpq spells modes verify-full / verify-ca; Npgsql's enum has no hyphen.
             else b[keyword] = keyword == "SSL Mode" ? value.Replace("-", "") : value;
@@ -355,6 +400,21 @@ public sealed class PostgresProvider : IDbProvider
     }
 
     static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s;
+
+    /// <summary>PT5-2: a pasted CA file replaces the system's trusted CAs for this connection.</summary>
+    internal static string CaFileNote(string keyword, string path) =>
+        $"{keyword}={path}: the server's certificate is checked against the CA file {path} instead of the system's trusted CAs; remove it unless you know that file is your server's CA.";
+
+    /// <summary>
+    /// PT9-3: a host list (Npgsql tries each in turn) can put decoys in front of the server actually used, and the editor,
+    /// the tab and the status bar show only the start of it; the note names every host.
+    /// </summary>
+    internal static string? FailoverNote(string? hostList)
+    {
+        if (hostList == null || !hostList.Contains(',')) return null;
+        var hosts = hostList.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        return $"This connection string names {hosts.Length} servers, tried in order until one answers: {string.Join(", ", hosts)}. Check that each one is a server you mean to use.";
+    }
 
     static void SetOption(Dictionary<string, string> options, string key, string? value)
     {
@@ -367,19 +427,28 @@ public sealed class PostgresProvider : IDbProvider
         var connectionString = BuildConnectionString(profile, secret, database);
         // The lease keeps the source alive from here until the connection closes, so a ForgetConnections meanwhile cannot
         // dispose it under the open.
-        var conn = CreateConnection(profile.Id, connectionString, out var release);
+        var conn = CreateConnection(profile.Id, connectionString, out var release, profile.TlsMode == TlsMode.VerifyFull ? TunnelTlsHost(profile) : null);
         try
         {
             await conn.OpenAsync(ct).ConfigureAwait(false);
             return conn;
         }
-        catch
+        catch (Exception ex)
         {
             await conn.DisposeAsync().ConfigureAwait(false);
             release();
+            if (IsRefusedCleartext(ex)) throw new NpgsqlException(CleartextRefused, ex);
             throw;
         }
     }
+
+    internal const string CleartextRefused =
+        "This server asked for the password in plain text, which Querithm sends only over a verified connection: set Encryption to Verify full (with the server's CA if it is not publicly trusted) and test again.";
+
+    /// <summary>Npgsql's refusal of a method Require Auth leaves out: under <see cref="NoCleartextAuth"/> only "password" is.</summary>
+    internal static bool IsRefusedCleartext(Exception ex) =>
+        ex is NpgsqlException and not PostgresException && ex.Message.Contains("authentication method is not allowed", StringComparison.OrdinalIgnoreCase)
+            && ex.Message.Contains("password", StringComparison.OrdinalIgnoreCase);
 
     public Task ChangeDatabaseAsync(DbConnection connection, string database, CancellationToken ct) =>
         throw new NotSupportedException("PostgreSQL connections are bound to one database; Core opens a pool per database.");

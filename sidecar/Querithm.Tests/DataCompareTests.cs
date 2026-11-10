@@ -304,7 +304,7 @@ public class DataCompareTests
             Target = new DataCompareSide { SessionId = sid, Database = "db", Schema = "dbo", Table = "t" },
             Key = ["id"],
         }, CancellationToken.None);
-        await frames.BatchParked.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await frames.BatchParked.Task.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
         Assert.Equal(2, reads); // both sides are streaming
 
         services.Executions.Close(start.ExecutionId);

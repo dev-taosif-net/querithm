@@ -213,7 +213,7 @@ function RunSections({ tab, view, data }: { tab: TabState; view: ExecutionView; 
       {io.length > 0 && (
         <details>
           <summary className={summary}><b className="text-fg font-semibold">STATISTICS IO</b> · {io.length} {io.length === 1 ? "table" : "tables"} · {reads.toLocaleString()} logical reads</summary>
-          <table className="ml-3 my-1 text-[11px] border border-line">
+          <table className="q-profile-reveal ml-3 my-1 text-[11px] border border-line">
             <thead className="bg-panel text-muted">
               <tr>
                 {["Batch", "Table", "Scans", "Logical reads", "Physical reads", "Read-ahead", "LOB logical"].map((h) => (
@@ -240,7 +240,7 @@ function RunSections({ tab, view, data }: { tab: TabState; view: ExecutionView; 
       {times.length > 0 && (
         <details>
           <summary className={summary}><b className="text-fg font-semibold">STATISTICS TIME</b> · {times.length} {times.length === 1 ? "phase" : "phases"} · CPU {cpu.toLocaleString()} ms</summary>
-          <table className="ml-3 my-1 text-[11px] border border-line">
+          <table className="q-profile-reveal ml-3 my-1 text-[11px] border border-line">
             <thead className="bg-panel text-muted">
               <tr>
                 {["Batch", "Phase", "CPU ms", "Elapsed ms"].map((h) => (
@@ -269,7 +269,7 @@ function RunSections({ tab, view, data }: { tab: TabState; view: ExecutionView; 
       {sets.length > 0 && (
         <details>
           <summary className={summary}><b className="text-fg font-semibold">Diagnostics</b> · Arrow stream · {batches} {batches === 1 ? "batch" : "batches"} · {sets.length} {sets.length === 1 ? "result set" : "result sets"}</summary>
-          <div className="px-6 py-1 text-[11px] text-muted space-y-0.5">
+          <div className="q-profile-reveal px-6 py-1 text-[11px] text-muted space-y-0.5">
             {sets.map((s) => (
               <div key={s.index}>Result set {s.index + 1}: {s.rowCount.toLocaleString()} rows · {s.columns.length} columns · {s.batches.length} {s.batches.length === 1 ? "batch" : "batches"}{s.truncated ? " · row limit" : ""}{s.interrupted ? " · stopped" : ""}</div>
             ))}

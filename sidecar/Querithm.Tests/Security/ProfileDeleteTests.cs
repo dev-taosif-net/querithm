@@ -82,4 +82,22 @@ public class ProfileDeleteTests
         await host.Rpc.ProfileDelete(new ProfileRef { ProfileId = p.Id });
         Assert.Null(host.Services.Profiles.Get(p.Id));
     }
+
+    // Regression (CI flake): the done event can reach the caller just before the run releases the session's lock; a delete
+    // in that window was refused as busy. The release is simulated: the lock is held, then let go 100 ms later.
+    [Theory]
+    [MemberData(nameof(TestEngines.All), MemberType = typeof(TestEngines))]
+    public async Task Deleting_right_after_a_run_ends_waits_for_the_run_to_let_go_of_the_session(Engine engine)
+    {
+        var (host, p) = await Rig(engine);
+        await using var _ = host;
+        var sid = await Open(host, p);
+        var session = host.Services.Sessions.Get(sid);
+        await session.ExecLock.WaitAsync();
+        var release = Task.Run(async () => { await Task.Delay(100); session.ExecLock.Release(); });
+        await host.Rpc.ProfileDelete(new ProfileRef { ProfileId = p.Id });
+        await release;
+        Assert.Null(host.Services.Profiles.Get(p.Id));
+        Assert.Throws<QuerithmException>(() => host.Services.Sessions.Get(sid));
+    }
 }

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Querithm",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "identifier": "dev.querithm.app",
   "build": {
     "frontendDist": "../dist",
@@ -30,6 +30,8 @@
     "active": true,
     "targets": "all",
     "category": "DeveloperTool",
+    "publisher": "Querithm",
+    "copyright": "Copyright (c) 2026 taosif",
     "shortDescription": "SQL IDE for SQL Server, PostgreSQL, MySQL / MariaDB, SQLite and DuckDB",
     "externalBin": ["binaries/querithm-sidecar"],
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],

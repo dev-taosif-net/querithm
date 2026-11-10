@@ -327,7 +327,7 @@ public class DataEditIntegrationTests
 
         await Ok(h, sid, engine == "mssql"
             ? "DROP TABLE IF EXISTS dbo.q_filtered; CREATE TABLE dbo.q_filtered (code varchar(10) NOT NULL, active bit NOT NULL, label nvarchar(10) NULL); CREATE UNIQUE INDEX ux_active ON dbo.q_filtered (code) WHERE active = 1; INSERT dbo.q_filtered VALUES ('a', 0, N'x'), ('a', 0, N'y'), ('a', 1, N'z');"
-            : "DROP TABLE IF EXISTS q_filtered; CREATE TABLE q_filtered (code text NOT NULL, active boolean NOT NULL, label text); CREATE UNIQUE INDEX ux_active ON q_filtered (code) WHERE active; CREATE UNIQUE INDEX ux_lower ON q_filtered (lower(code), code); INSERT INTO q_filtered VALUES ('a', false, 'x'), ('a', false, 'y'), ('a', true, 'z');");
+            : "DROP TABLE IF EXISTS q_filtered; CREATE TABLE q_filtered (code text NOT NULL, active boolean NOT NULL, label text); CREATE UNIQUE INDEX ux_active ON q_filtered (code) WHERE active; CREATE UNIQUE INDEX ux_lower ON q_filtered (lower(label), code); INSERT INTO q_filtered VALUES ('a', false, 'x'), ('a', false, 'y'), ('a', true, 'z');");
         await RefreshAsync(h, p);
         var (_, filtered) = await SelectAsync(h, sid, $"SELECT code, label FROM {T(engine, "q_filtered")}");
         Assert.False(filtered.Editable, string.Join(",", filtered.KeyColumns));

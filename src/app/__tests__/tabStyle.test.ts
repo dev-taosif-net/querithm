@@ -34,16 +34,16 @@ describe("tab surfaces (strip redesign D1–D3)", () => {
     expect(css).not.toContain("--dv-tabs-container-scrollbar-color");
   });
 
-  it("the close slot sits on line 1 and lends its room to a cut name; tabs that always show it keep the room (D12, owner revision 3)", () => {
+  it("the close slot sits on line 1 and every tab keeps its room, so activation never changes the name's width (D12, revised in c2b56db)", () => {
     const rule = (sel: string) => css.slice(css.indexOf(`${sel} {`), css.indexOf("}", css.indexOf(`${sel} {`)));
     expect(rule(".q-tab-slot")).toContain("position: absolute;");
-    // 26 px in the tab's width (+38 px in all), given up first when the tab is cut. A width, not a flex-basis: the
-    // content size a tab takes its width from ignores flex-basis (a basis alone made mid-length tabs 22 px narrower).
+    // 26 px in the tab's width (+38 px in all), kept by every tab. A width, not a flex-basis: the content size a tab
+    // takes its width from ignores flex-basis (a basis alone made mid-length tabs 22 px narrower).
     const spacer = rule(".q-tab-top::after");
     expect(spacer).toContain("width: 26px;");
-    expect(spacer).toContain("flex-shrink: 1000000;");
+    expect(spacer).toContain("min-width: 26px;");
+    expect(spacer).toContain("flex-shrink: 0;");
     expect(spacer).not.toMatch(/flex(-basis)?:/);
-    expect(css).toMatch(/\.dv-tab\.dv-active-tab \.q-tab \.q-tab-top::after,\s*\.q-tab:is\(\[data-dirty\], \[data-pinned\], \[data-editing\]\) \.q-tab-top::after \{\s*flex-shrink: 0;/);
     // Drawn over a name, the × hides it behind the tab's own surface.
     expect(rule(".q-tab-x")).toContain("background: var(--q-row-bg);");
   });

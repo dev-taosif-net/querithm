@@ -139,6 +139,23 @@ describe("sessions", () => {
     await expect(c().sessionFor("unknown")).rejects.toThrow("Not connected");
   });
 
+  it("database refresh keeps the current list, blocks duplicate refreshes, and clears busy after failure", async () => {
+    ok();
+    await c().connect("p1");
+    const cached = c().servers.p1.databases;
+    let reject!: (error: Error) => void;
+    rpc.mockImplementation(() => new Promise((_, fail) => { reject = fail; }));
+    const refresh = c().refreshDatabases("p1");
+    expect(c().servers.p1.refreshing).toBe(true);
+    expect(c().servers.p1.databases).toBe(cached);
+    await c().refreshDatabases("p1");
+    expect(rpc.mock.calls.filter((call) => call[0] === "meta.databases")).toHaveLength(2); // initial connect + refresh
+    reject(new Error("Connection lost"));
+    await expect(refresh).rejects.toThrow("Connection lost");
+    expect(c().servers.p1.refreshing).toBe(false);
+    expect(c().servers.p1.databases).toBe(cached);
+  });
+
   it("refreshDatabases updates the live server", async () => {
     ok();
     await c().connect("p1");

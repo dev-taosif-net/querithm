@@ -1,5 +1,6 @@
 using Querithm.Contract;
 using Querithm.Contract.Providers;
+using Querithm.Intelligence.PgSql;
 using Querithm.Intelligence.PgSql.Completion;
 
 namespace Querithm.Intelligence.Sqlite;
@@ -11,14 +12,27 @@ namespace Querithm.Intelligence.Sqlite;
 /// statements the file policy refuses outright (D0c): ATTACH / DETACH, VACUUM INTO, load_extension(), and pragmas that
 /// change files or the security settings.
 /// </summary>
+/// <summary>
+/// The one list of pragmas no statement may set (reading them stays allowed): the classifier's refusal
+/// (<see cref="SqliteLanguageService"/>) and the native authorizer (SqliteHardening) both read it, so the two cannot drift.
+/// </summary>
+public static class SqlitePragmaPolicy
+{
+    /// <summary>
+    /// Pragmas that write elsewhere on disk or loosen the hardening of untrusted files. PT2-1: temp_store too — the hardening
+    /// keeps temporary tables and sort spills in memory, and temp_store = FILE would spill query data into the OS temp
+    /// directory, outside &lt;appDataDir&gt;/querithm, even on a read-only grant.
+    /// </summary>
+    public static readonly IReadOnlySet<string> RefusedToSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "temp_store", "temp_store_directory", "data_store_directory", "writable_schema", "trusted_schema", "journal_mode",
+        "schema_version", "legacy_file_format", "cell_size_check", "mmap_size", "locking_mode",
+    };
+}
+
 public sealed class SqliteLanguageService : IDialectService
 {
-    /// <summary>Pragmas refused when set: they write elsewhere on disk or loosen the hardening of untrusted files.</summary>
-    static readonly HashSet<string> RefusedPragmas = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "temp_store_directory", "data_store_directory", "writable_schema", "trusted_schema", "journal_mode", "schema_version",
-        "legacy_file_format", "cell_size_check", "mmap_size", "locking_mode",
-    };
+    static IReadOnlySet<string> RefusedPragmas => SqlitePragmaPolicy.RefusedToSet;
 
     /// <summary>
     /// L4: an encryption key (SQLCipher-style builds): <c>PRAGMA [schema.]key | rekey | hexkey | hexrekey | textkey | textrekey
@@ -77,7 +91,10 @@ public sealed class SqliteLanguageService : IDialectService
         var statements = SqliteSplitter.Split(tokens);
         var destructive = new List<DestructiveFinding>();
         var batches = new List<BatchInfo>();
-        string? refusal = null;
+        // PT7-4: SQLite compiles the text as a C string, so it stops at a NUL: "DELETE FROM t\0 WHERE 0" deletes every row,
+        // and Microsoft.Data.Sqlite never gets past the NUL (it prepares the same empty tail forever, a hang no Cancel ends).
+        // Refused before it runs, whatever the user confirms.
+        string? refusal = SqlChars.NulRefusal(text, "SQLite");
         bool ddl = false, begins = false, ends = false;
         foreach (var st in statements)
         {
@@ -146,18 +163,23 @@ public sealed class SqliteLanguageService : IDialectService
         return "WITH";
     }
 
-    /// <summary>A keyword at parenthesis depth 0 after the statement's verb (a WHERE inside a subquery does not count).</summary>
+    /// <summary>
+    /// A keyword at parenthesis depth 0 after the statement's verb (a WHERE inside a subquery does not count), with some code
+    /// after it (PT7-1 safety net): a WHERE that ends the statement is no condition, whatever the tokenizer made of the text
+    /// before it.
+    /// </summary>
     static bool HasTopLevel(List<SqliteToken> code, string verb, string keyword)
     {
         var depth = 0;
         var seenVerb = false;
-        foreach (var t in code)
+        for (var i = 0; i < code.Count; i++)
         {
+            var t = code[i];
             if (t.IsP("(")) { depth++; continue; }
             if (t.IsP(")")) { depth--; continue; }
             if (depth != 0) continue;
             if (!seenVerb) { seenVerb = t.Is(verb); continue; }
-            if (t.Is(keyword)) return true;
+            if (t.Is(keyword) && i + 1 < code.Count && !code[i + 1].IsP(";")) return true;
         }
         return false;
     }
@@ -170,7 +192,9 @@ public sealed class SqliteLanguageService : IDialectService
         if (verb == "VACUUM" && code.Any(t => t.Is("INTO")))
             return "VACUUM INTO writes a new file, which no grant covers. Copy the database with your file manager instead.";
         for (var i = 0; i + 1 < code.Count; i++)
-            if (code[i].Is("load_extension") && code[i + 1].IsP("("))
+            // A quoted name calls the function too ("load_extension"(…), [load_extension](…)).
+            if (code[i].Kind is SqliteTokenKind.Word or SqliteTokenKind.QuotedIdent
+                && string.Equals(SqliteTokenizer.Unquote(code[i]), "load_extension", StringComparison.OrdinalIgnoreCase) && code[i + 1].IsP("("))
                 return "Loading SQLite extensions is not allowed: they are native code that runs inside Querithm.";
         if (verb == "PRAGMA" && code.Count >= 2)
         {

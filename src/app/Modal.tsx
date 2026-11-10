@@ -1,5 +1,17 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useExiting } from "./Presence";
 import { isTopModal, pushModal } from "./modalStack";
+
+// Each dialog box -> the element that had focus when it opened. A dialog that opened while another one had focus (a
+// lazy dialog's loading shell handing over to the loaded dialog) inherits that one's opener once it is gone.
+const openers = new WeakMap<Element, HTMLElement | null>();
+function liveOpener(el: HTMLElement | null): HTMLElement | null {
+  for (let i = 0; el && !el.isConnected && i < 8; i++) {
+    const box = el.closest("[data-q-modal-box]");
+    el = box ? openers.get(box) ?? null : null;
+  }
+  return el?.isConnected ? el : null;
+}
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
@@ -37,6 +49,7 @@ export function Modal({
   onEscape?: () => boolean;
   bodyClassName?: string;
 }) {
+  const exiting = useExiting();
   const token = useRef({}).current;
   const box = useRef<HTMLDivElement>(null);
   const id = useId();
@@ -48,20 +61,30 @@ export function Modal({
   useLayoutEffect(() => {
     handlers.current = { onClose, onEnter, onEscape, alert };
   });
-  useEffect(() => pushModal(token), [token]);
+  useEffect(() => exiting ? undefined : pushModal(token), [token, exiting]);
   useLayoutEffect(() => {
     const el = box.current;
+    // React restores selection after mutation cleanup; move focus again in the layout phase on exit.
+    if (el) openers.set(el, opener);
+    if (exiting) {
+      const active = document.activeElement;
+      const back = liveOpener(opener);
+      if (back && (!active || active === document.body || el?.contains(active))) back.focus({ preventScroll: true });
+      return;
+    }
     if (el && !el.contains(document.activeElement)) {
       const cancel = handlers.current.alert ? el.querySelector<HTMLElement>("[data-modal-cancel]:not([disabled])") : null;
       (cancel ?? el).focus({ preventScroll: true });
     }
     return () => {
       const a = document.activeElement;
-      if (opener?.isConnected && (!a || a === document.body || el?.contains(a))) opener.focus({ preventScroll: true });
+      const back = liveOpener(opener);
+      if (back && (!a || a === document.body || el?.contains(a))) back.focus({ preventScroll: true });
     };
-  }, [opener]);
+  }, [opener, exiting]);
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
+      if (box.current?.closest("[data-q-exiting]")) return;
       if (!isTopModal(token)) return;
       const { onClose, onEnter, onEscape, alert } = handlers.current;
       const target = e.target as HTMLElement;
@@ -70,7 +93,8 @@ export function Modal({
         e.preventDefault();
         e.stopPropagation();
         if (!onEscape?.()) onClose();
-      } else if (e.key === "Enter" && onEnter && !(target instanceof HTMLTextAreaElement) && !target.closest?.(".monaco-editor")) {
+      } else if (e.key === "Enter" && onEnter && !e.isComposing && !(target instanceof HTMLTextAreaElement) && !target.closest?.(".monaco-editor")) {
+        // An IME confirming a composition sends Enter too (isComposing): that Enter is the input method's, never the dialog's.
         const inside = target instanceof Node && !!box.current?.contains(target);
         // Left to the focused control (not prevented): a button's own activation runs, Cancel cancels.
         if (inside && target.closest(ACTIVATES)) return;
@@ -95,15 +119,16 @@ export function Modal({
     return () => window.removeEventListener("keydown", h, true);
   }, [token]);
   return (
-    <div className="fixed inset-0 z-40 bg-black/50 flex items-center justify-center p-6" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="q-modal-backdrop fixed inset-0 z-40 bg-black/50 flex items-center justify-center p-6" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
         ref={box}
+        data-q-modal-box=""
         role={alert ? "alertdialog" : "dialog"}
         aria-modal="true"
         aria-labelledby={`${id}-title`}
         aria-describedby={subtitle ? `${id}-subtitle` : undefined}
         tabIndex={-1}
-        className={`bg-panel rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-full outline-none ${danger ? "border-2 border-err shadow-[0_0_50px_rgba(239,68,68,0.3)]" : "border border-line"}`}
+        className={`q-modal-dialog bg-panel rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-full outline-none ${danger ? "border-2 border-err shadow-[0_0_50px_rgba(239,68,68,0.3)]" : "border border-line"}`}
         style={{ width, maxWidth: "100%" }}
       >
         <div className={`px-4 py-3 ${danger ? "bg-err-solid text-white" : "border-b border-line"}`}>
@@ -113,7 +138,7 @@ export function Modal({
           {subtitle && <div id={`${id}-subtitle`} className={`text-[11px] mt-0.5 ${danger ? "text-white" : "text-muted"}`}>{subtitle}</div>}
         </div>
         <div className={`${bodyClassName} text-xs`}>{children}</div>
-        {footer && <div className="px-4 py-3 bg-panel-2 border-t border-line flex justify-end gap-2.5">{footer}</div>}
+        {footer && <div className="q-profile-reveal px-4 py-3 bg-panel-2 border-t border-line flex justify-end gap-2.5">{footer}</div>}
       </div>
     </div>
   );

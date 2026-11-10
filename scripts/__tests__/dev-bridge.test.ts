@@ -327,9 +327,11 @@ describe("secrets (in memory only)", () => {
     await send(ws, 5, "rpc", { method: "session.open", params: { profileId: "p", database: "d", secret: null } });
     let sent = JSON.parse(h.child.stdin.written.at(-1));
     expect(sent.params).toMatchObject({ secret: "pw", sshSecret: "sshpw" });
+    await reply({ sessionId: "s1" });
     await send(ws, 6, "rpc", { method: "profile.test", params: { profileId: "p", secret: "explicit", sshSecret: "explicit2" } });
     sent = JSON.parse(h.child.stdin.written.at(-1));
     expect(sent.params).toMatchObject({ secret: "explicit", sshSecret: "explicit2" });
+    await reply({ ok: true });
     await send(ws, 7, "rpc", { method: "meta.snapshot", params: { profileId: "p" } });
     expect(JSON.parse(h.child.stdin.written.at(-1)).params.secret).toBeUndefined();
     await send(ws, 8, "secret_delete", { profileId: "p" });
@@ -578,4 +580,37 @@ describe("data plane", () => {
     expect(h.sockets).toHaveLength(2);
     warn.mockRestore();
   });
+});
+
+
+describe("hostile RPC credential isolation", () => {
+  it("raw profile.save cannot move saved credentials to another endpoint", async () => {
+    await start();
+    const ws = connect();
+    const old = { id: "victim", name: "victim", engine: "pg", auth: "password", host: "old.invalid", ssh: { host: "old-jump.invalid", username: "u", auth: "password" } };
+    const edited = { ...old, host: "attacker.invalid" };
+    await send(ws, 1, "secret_set", { profileId: "victim", secret: "private-db-zz1" });
+    await send(ws, 2, "secret_set", { profileId: "victim:ssh", secret: "private-ssh-zz1" });
+    await send(ws, 3, "rpc", { method: "profile.save", params: edited });
+    // A hardened relay reads the trusted old profile before forwarding the edit.
+    if (JSON.parse(h.child.stdin.written.at(-1)).method === "profile.list") await reply([old]);
+    await reply(edited);
+    await send(ws, 4, "rpc", { method: "session.open", params: { profileId: "victim", secret: null, sshSecret: null } });
+    const sent = JSON.parse(h.child.stdin.written.at(-1));
+    expect(sent.method).toBe("session.open");
+    expect(sent.params.secret).toBeNull();
+    expect(sent.params.sshSecret).toBeNull();
+    await reply({ sessionId: "s1" });
+  });
+});
+
+
+it("rejects public writes to timed keyring envelope accounts", async () => {
+  await start();
+  const ws = connect();
+  await send(ws, 1, "secret_set", { profileId: "victim:timed", secret: "not-json" });
+  await send(ws, 2, "secret_delete", { profileId: "victim:ssh:timed" });
+  expect(ws.json().filter((m) => m.id === 1 || m.id === 2)).toEqual([
+    expect.objectContaining({ id: 1, ok: false }), expect.objectContaining({ id: 2, ok: false }),
+  ]);
 });

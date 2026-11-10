@@ -18,6 +18,27 @@ import { clampLeft } from "./tipPosition";
 import { DEFAULT_ENGINE, dialectOf, DIALECTS } from "../engines";
 import type { Engine } from "../ipc/contract";
 
+// Result-owned state survives view switches and is released with the result set.
+interface GridViewMemory {
+  widths: Record<string, number>;
+  selection: GridSelection;
+  order: number;
+  x: number;
+  y: number;
+}
+const gridViews = new WeakMap<ArrowResultSet, Map<string, GridViewMemory>>();
+function gridView(rs: ArrowResultSet, key: string): GridViewMemory {
+  let views = gridViews.get(rs);
+  if (!views) gridViews.set(rs, views = new Map());
+  let view = views.get(key);
+  if (!view) views.set(key, view = { widths: {}, selection: { columns: CompactSelection.empty(), rows: CompactSelection.empty() }, order: rs.viewVersion, x: 0, y: 0 });
+  if (view.order !== rs.viewVersion) {
+    view.selection = { columns: CompactSelection.empty(), rows: CompactSelection.empty() };
+    view.order = rs.viewVersion;
+  }
+  return view;
+}
+
 function cssVar(name: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
@@ -194,9 +215,10 @@ export interface ResultGridHandle {
 export type CellTone = "changed" | "added" | "removed" | "muted" | null;
 
 export function ResultGrid({
-  rs, executionId, handleRef, staging, onStaged, onApply, tone, onStatsChange, onViewCell, engine = DEFAULT_ENGINE,
+  rs, executionId, viewKey = "primary", handleRef, staging, onStaged, onApply, tone, onStatsChange, onViewCell, engine = DEFAULT_ENGINE,
 }: {
   engine?: Engine;
+  viewKey?: string;
   rs: ArrowResultSet; executionId: string; handleRef?: MutableRefObject<ResultGridHandle | null>; staging?: GridStaging;
   /** Read-only grids only: a background per cell (view row, column index). */
   tone?: (row: number, col: number) => CellTone;
@@ -209,8 +231,11 @@ export function ResultGrid({
 }) {
   const version = useSyncExternalStore(rs.subscribe, rs.getVersion);
   const stagingVersion = useSyncExternalStore(staging?.subscribe ?? noSubscribe, staging?.getVersion ?? zero);
-  const [widths, setWidths] = useState<Record<string, number>>({});
-  const [selection, setSelection] = useState<GridSelection>({ columns: CompactSelection.empty(), rows: CompactSelection.empty() });
+  const memory = useMemo(() => gridView(rs, viewKey), [rs, viewKey]);
+  const [widths, setWidths] = useState(memory.widths);
+  const [selection, setSelection] = useState(memory.selection);
+  const initialScroll = useRef({ x: memory.x, y: memory.y });
+  useEffect(() => { memory.widths = widths; memory.selection = selection; }, [memory, widths, selection]);
   const ref = useRef<DataEditorRef>(null);
   const settingTheme = useSettings((s) => s.theme);
   const themeKey = `${settingTheme}|${document.documentElement.dataset.theme}`;
@@ -228,7 +253,11 @@ export function ResultGrid({
   const icons = useMemo(headerIcons, [themeKey]);
   const [tip, setTip] = useState<{ text: string; x: number; y: number } | null>(null);
   // Sorting or filtering moves rows under the selection: drop it rather than copy rows the user did not pick.
-  useEffect(() => setSelection({ columns: CompactSelection.empty(), rows: CompactSelection.empty() }), [rs.viewVersion]);
+  useEffect(() => {
+    if (memory.order === rs.viewVersion) return;
+    memory.order = rs.viewVersion;
+    setSelection({ columns: CompactSelection.empty(), rows: CompactSelection.empty() });
+  }, [memory, rs.viewVersion]);
 
   const committed = staging?.committed.length ?? 0;
   const insertedCount = staging?.inserted.length ?? 0;
@@ -745,11 +774,20 @@ export function ResultGrid({
       aria-label={`Results: result set ${rs.index + 1}, ${rowsText}`}
       className="h-full w-full"
       data-q-grid-edit={staging ? "" : undefined}
+      onScrollCapture={(event) => {
+        const el = event.target as HTMLElement;
+        // Ignore editor overlays; remember the grid's scroll viewport only.
+        if (!el.classList.contains("dvn-scroller")) return;
+        memory.x = el.scrollLeft;
+        memory.y = el.scrollTop;
+      }}
       onMouseDownCapture={() => (downCols.current = selection.columns)}
       onTouchStartCapture={() => (downCols.current = selection.columns)}
     >
     <DataEditor
       ref={ref}
+      scrollOffsetX={initialScroll.current.x}
+      scrollOffsetY={initialScroll.current.y}
       columns={columns}
       rows={totalRows}
       getCellContent={getCellContent}
@@ -768,8 +806,8 @@ export function ResultGrid({
       onGridSelectionChange={setSelection}
       // Clicking a row number selects the whole row; Ctrl/Shift+click adds rows or a range.
       rowMarkers={{ kind: "clickable-number", width: Math.max(44, String(totalRows).length * 8 + 16), theme: markerTheme }}
-      smoothScrollX={false}
-      smoothScrollY={false}
+      smoothScrollX
+      smoothScrollY
       overscrollX={0}
       rowHeight={Math.round(24 * GRID_SCALE)}
       headerHeight={Math.round(28 * GRID_SCALE)}

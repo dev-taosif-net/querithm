@@ -3,6 +3,7 @@
 // where a query will run, what Run will do (actual plan, debugger), and how long a transaction has been open. The
 // status bar keeps the quiet detail. Below 1440 px labels drop, never functions; state (environment, Run/Cancel,
 // transaction) never collapses.
+import { BusySpinner } from "./LoadingStatus";
 import { useEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { useActiveTab, useTabs, type TabState } from "../store/tabs";
 import { useUi } from "../store/ui";
@@ -279,7 +280,7 @@ function LaunchStrip({ tab }: { tab: TabState | undefined }) {
         face={
           <button
             type="button"
-            className={`q-tb !h-auto rounded-none w-[96px] xl:w-[104px] max-[1100px]:w-[88px] font-semibold ${tone}`}
+            className={`q-tb !h-auto rounded-none w-[96px] xl:w-[104px] max-[1100px]:w-[88px] font-semibold ${running ? "!gap-1 !px-1" : ""} ${tone}`}
             aria-disabled={!tab || undefined}
             aria-label={runLabel}
             aria-keyshortcuts={runKeys}
@@ -292,7 +293,8 @@ function LaunchStrip({ tab }: { tab: TabState | undefined }) {
           >
             {running ? (
               <>
-                <Icon name="stop" size={14} strokeWidth={2.5} className="animate-spin motion-reduce:animate-none" />
+                <Icon name="stop" size={14} strokeWidth={2.5} />
+                <BusySpinner />
                 Cancel
               </>
             ) : debugging ? (

@@ -131,7 +131,9 @@ public sealed class PgLanguageService : IDialectService
                 {
                     if (words[i].Text == "(") depth++;
                     else if (words[i].Text == ")") depth--;
-                    else if (depth == 0 && words[i].Is(kw)) return true;
+                    // PT7-1 safety net: a WHERE that ends the statement is no condition, whatever the tokenizer made of
+                    // the text before it.
+                    else if (depth == 0 && words[i].Is(kw) && i + 1 < words.Count && words[i + 1].Text != ";") return true;
                 }
                 return false;
             }

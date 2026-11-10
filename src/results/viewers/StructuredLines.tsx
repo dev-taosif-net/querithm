@@ -36,9 +36,15 @@ export function StructuredLines({ view, label }: { view: StructuredView; label: 
   const box = useRef<HTMLDivElement>(null);
   const pendingLine = useRef<number | null>(null);
 
-  useEffect(() => {
+  // A new view starts unfolded at the top. Reset during render, not in a passive effect: a mount effect that runs late
+  // (a busy main thread) would undo a fold the user made right after the view appeared.
+  const [shownView, setShownView] = useState(view);
+  if (shownView !== view) {
+    setShownView(view);
     setCollapsed(new Set());
     setBlock(0);
+  }
+  useEffect(() => {
     if (box.current) box.current.scrollTop = 0;
   }, [view]);
 

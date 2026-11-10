@@ -130,7 +130,7 @@ public class HostRpcTests : IAsyncDisposable
         var notifier = new RpcNotifier();
         notifier.Attach(server);
         for (var i = 0; i < 50; i++) notifier.Notify("tick", new { n = i });
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await done.Task.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
         Assert.Equal(Enumerable.Range(0, 50), received);
     }
 
@@ -273,7 +273,7 @@ public class DataPlaneServerTests : IAsyncDisposable
     static async Task<byte[]> ReadExactly(Stream s, int n)
     {
         var buf = new byte[n];
-        await s.ReadExactlyAsync(buf).AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        await s.ReadExactlyAsync(buf).AsTask().WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
         return buf;
     }
 
@@ -303,7 +303,7 @@ public class DataPlaneServerTests : IAsyncDisposable
         if (OperatingSystem.IsWindows()) return;
         await using var bad = await Connect("not-the-token");
         var buf = new byte[1];
-        var n = await bad.ReadAsync(buf).AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        var n = await bad.ReadAsync(buf).AsTask().WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
         Assert.Equal(0, n);   // closed by the server
         await using var good = await Connect("launch-token-1");
         await _server.WriteFrameAsync(FrameKind.EndOfExecution, Ulid.New(), 0, ReadOnlyMemory<byte>.Empty, CancellationToken.None);
@@ -369,15 +369,15 @@ public class DataPlaneServerTests : IAsyncDisposable
         var old = new GatedStream();
         await server.AttachAsync(old);
         var inFlight = server.WriteFrameAsync(FrameKind.Batch, Ulid.New(), 1, new byte[] { 1, 2, 3 }, CancellationToken.None).AsTask();
-        await old.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await old.Entered.Task.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
 
         var fresh = new MemoryStream();
         var attach = server.AttachAsync(fresh);
         await Task.Delay(50);
         Assert.False(attach.IsCompleted);   // waits for the frame being written
         old.Gate.SetResult();
-        await inFlight.WaitAsync(TimeSpan.FromSeconds(10));
-        await attach.WaitAsync(TimeSpan.FromSeconds(10));
+        await inFlight.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
+        await attach.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
         Assert.True(old.Disposed);
         Assert.False(old.DisposedMidWrite);
         Assert.Equal(23 + 3, old.Length);
@@ -417,8 +417,8 @@ public class SidecarProcessTests
     {
         Assert.True(File.Exists(SidecarDll), "the host project builds with the tests: " + SidecarDll);
         using var p = Start(new() { ["QUERITHM_TOKEN"] = null, ["QUERITHM_DATA_DIR"] = Path.Combine(Path.GetTempPath(), "qsc-" + Guid.NewGuid().ToString("N")) });
-        var err = await p.StandardError.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(60));
-        await p.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(60));
+        var err = await p.StandardError.ReadToEndAsync().WaitAsync(TestTime.Of(TimeSpan.FromSeconds(60)));
+        await p.WaitForExitAsync().WaitAsync(TestTime.Of(TimeSpan.FromSeconds(60)));
         Assert.Equal(2, p.ExitCode);
         Assert.Contains("QUERITHM_TOKEN is required", err);
     }
@@ -438,7 +438,7 @@ public class SidecarProcessTests
             });
             await p.StandardInput.WriteLineAsync("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"system.ping\"}");
             await p.StandardInput.FlushAsync();
-            var line = await p.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(90));
+            var line = await p.StandardOutput.ReadLineAsync().WaitAsync(TestTime.Of(TimeSpan.FromSeconds(90)));
             Assert.NotNull(line);
             using (var doc = System.Text.Json.JsonDocument.Parse(line!))
             {
@@ -448,7 +448,7 @@ public class SidecarProcessTests
             }
             await p.StandardInput.WriteLineAsync("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"system.shutdown\"}");
             await p.StandardInput.FlushAsync();
-            await p.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(60));
+            await p.WaitForExitAsync().WaitAsync(TestTime.Of(TimeSpan.FromSeconds(60)));
             Assert.Equal(0, p.ExitCode);
             Assert.Contains("Querithm sidecar", string.Concat(Directory.GetFiles(Path.Combine(dir, "logs"), "sidecar-*.log").Select(File.ReadAllText)));
             Assert.False(File.Exists(sock));
@@ -475,7 +475,7 @@ public class SidecarProcessTests
             {
                 await p.StandardInput.WriteLineAsync($"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"{method}\"{@params}}}");
                 await p.StandardInput.FlushAsync();
-                var line = await p.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(90));
+                var line = await p.StandardOutput.ReadLineAsync().WaitAsync(TestTime.Of(TimeSpan.FromSeconds(90)));
                 Assert.NotNull(line);
                 using var doc = System.Text.Json.JsonDocument.Parse(line!);
                 return doc.RootElement.GetProperty("result").Clone();
@@ -493,7 +493,7 @@ public class SidecarProcessTests
             Assert.Contains(tail.GetProperty("lines").EnumerateArray(), l => l.GetString()!.Contains("set aside as " + file, StringComparison.Ordinal));
             await p.StandardInput.WriteLineAsync("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"system.shutdown\"}");
             await p.StandardInput.FlushAsync();
-            await p.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(60));
+            await p.WaitForExitAsync().WaitAsync(TestTime.Of(TimeSpan.FromSeconds(60)));
             Assert.Equal(0, p.ExitCode);
         }
         finally { try { Directory.Delete(dir, true); } catch { } }
@@ -514,7 +514,7 @@ public class SidecarProcessTests
                 ["QUERITHM_TOKEN"] = "tok-123", ["QUERITHM_DATA_DIR"] = dir, ["QUERITHM_PARENT_PID"] = "1999999999",
                 ["QUERITHM_SOCKET"] = Path.Combine(Path.GetTempPath(), $"qsc-{Guid.NewGuid():N}.sock"),
             });
-            await p.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(60));
+            await p.WaitForExitAsync().WaitAsync(TestTime.Of(TimeSpan.FromSeconds(60)));
             Assert.Equal(3, p.ExitCode);
         }
         finally { try { Directory.Delete(dir, true); } catch { } }

@@ -66,11 +66,11 @@ public class MonitorSchedulerTests
             var starts = conn.Starts(job).ToList();
             Assert.True(starts.Count > 10, job);
             var maxGap = starts.Zip(starts.Skip(1), (a, b) => b - a).Max();
-            Assert.True(maxGap <= period + 3 * 2_000, $"{job}: max gap {maxGap} ms");
+            Assert.True(maxGap <= period + TestTime.Budget(3 * 2_000), $"{job}: max gap {maxGap} ms");
         }
         var lags = s.RecentLags.Order().ToArray();
         var p95 = lags[(int)Math.Ceiling(lags.Length * 0.95) - 1];
-        Assert.True(p95 <= 200, $"tick lag p95 {p95} ms");
+        Assert.True(p95 <= TestTime.Budget(200), $"tick lag p95 {p95} ms");
         Assert.Equal(0, conn.Overlaps); // C1
         await s.StopAsync();
     });
