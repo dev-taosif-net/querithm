@@ -17,6 +17,36 @@ public sealed class SchemaCache(MetadataStore store, MetadataStore? ephemeral = 
 {
     readonly ConcurrentDictionary<string, SchemaSnapshot> _snapshots = new();
     readonly ConcurrentDictionary<string, SchemaSnapshot> _session = new();
+
+    /// <summary>
+    /// Bumped by every invalidation. A fill loads outside any lock, so a refresh can apply and invalidate between its
+    /// load and its store; the fill then caches nothing (its snapshot may predate the refresh, and the status is already
+    /// Fresh, so nothing would read it again) and the next read loads again.
+    /// </summary>
+    long _epoch;
+    readonly object _fillGate = new();
+
+    /// <summary>Tests only: runs after a snapshot was loaded from SQLite and before it is cached.</summary>
+    internal Action<string>? AfterLoad { get; set; }
+
+    SchemaSnapshot Fill(ConcurrentDictionary<string, SchemaSnapshot> map, string key, Func<SchemaSnapshot> load)
+    {
+        if (map.TryGetValue(key, out var hit)) return hit;
+        var epoch = Volatile.Read(ref _epoch);
+        var loaded = load();
+        AfterLoad?.Invoke(key);
+        lock (_fillGate)
+            return _epoch == epoch ? map.GetOrAdd(key, loaded) : loaded;
+    }
+
+    void Drop(Action remove)
+    {
+        lock (_fillGate)
+        {
+            _epoch++;
+            remove();
+        }
+    }
     readonly ConcurrentDictionary<string, (string ProfileId, bool InMemory)> _scopes = new();
 
     /// <summary>Session views (in-memory SQLite, dropped when the session closes).</summary>
@@ -30,7 +60,7 @@ public sealed class SchemaCache(MetadataStore store, MetadataStore? ephemeral = 
     public SchemaSnapshot? Get(string? profileId, string? database)
     {
         if (profileId == null || database == null) return null;
-        return _snapshots.GetOrAdd(Key(profileId, database), _ => store.Load(profileId, database));
+        return Fill(_snapshots, Key(profileId, database), () => store.Load(profileId, database));
     }
 
     /// <summary>
@@ -53,7 +83,7 @@ public sealed class SchemaCache(MetadataStore store, MetadataStore? ephemeral = 
     public SchemaSnapshot SessionView(string profileId, string database, string sessionId)
     {
         var db = SessionDatabase(database, sessionId);
-        return _session.GetOrAdd(Key(profileId, db), _ => Ephemeral.Load(profileId, db));
+        return Fill(_session, Key(profileId, db), () => Ephemeral.Load(profileId, db));
     }
 
     public bool IsScoped(string? sessionId, out bool inMemory)
@@ -71,22 +101,25 @@ public sealed class SchemaCache(MetadataStore store, MetadataStore? ephemeral = 
     {
         _scopes.TryRemove(sessionId, out _);
         var marker = $"\u001fsession:{sessionId}";
-        foreach (var key in _session.Keys.Where(k => k.StartsWith(profileId + "|", StringComparison.Ordinal) && k.EndsWith(marker, StringComparison.Ordinal)).ToList())
-            _session.TryRemove(key, out _);
+        Drop(() =>
+        {
+            foreach (var key in _session.Keys.Where(k => k.StartsWith(profileId + "|", StringComparison.Ordinal) && k.EndsWith(marker, StringComparison.Ordinal)).ToList())
+                _session.TryRemove(key, out _);
+        });
         foreach (var db in Ephemeral.KnownDatabases(profileId).Where(d => d.EndsWith(marker, StringComparison.Ordinal))) Ephemeral.Forget(profileId, db);
     }
 
     public IReadOnlyList<string> Databases(string? profileId) => profileId == null ? [] : store.KnownDatabases(profileId);
 
-    public void Invalidate(string profileId, string database) => _snapshots.TryRemove(Key(profileId, database), out _);
+    public void Invalidate(string profileId, string database) => Drop(() => _snapshots.TryRemove(Key(profileId, database), out _));
 
-    public void InvalidateSession(string profileId, string database, string sessionId) => _session.TryRemove(Key(profileId, SessionDatabase(database, sessionId)), out _);
+    public void InvalidateSession(string profileId, string database, string sessionId) => Drop(() => _session.TryRemove(Key(profileId, SessionDatabase(database, sessionId)), out _));
 
-    public void InvalidateProfile(string profileId)
+    public void InvalidateProfile(string profileId) => Drop(() =>
     {
         foreach (var key in _snapshots.Keys.Where(k => k.StartsWith(profileId + "|", StringComparison.Ordinal)).ToList()) _snapshots.TryRemove(key, out _);
         foreach (var key in _session.Keys.Where(k => k.StartsWith(profileId + "|", StringComparison.Ordinal)).ToList()) _session.TryRemove(key, out _);
-    }
+    });
 }
 
 /// <summary>A schema source fixed to one session's view (Phase D0d), for the dialect services.</summary>
