@@ -6,9 +6,9 @@ namespace Querithm.Tests.Integration;
 /// <summary>
 /// The cancel escalation against the real drivers (§7 step 4). SQL Server: closing the connection of a run parked on the
 /// server ends the run promptly, frees the tab and says an open transaction is gone (a real server always acknowledges a
-/// cancel, so the step is called directly). PostgreSQL and MySQL are never closed mid-command — their drivers' Close is no
-/// abort (Npgsql drains the command; MySqlConnector breaks the pending call) and both break a connection whose cancel is
-/// not acknowledged after their own CancellationTimeout — and Cancel alone ends the run.
+/// cancel, so the step is called directly). PostgreSQL, MySQL and Oracle are never closed mid-command — their drivers' Close
+/// is no abort (Npgsql drains the command; MySqlConnector breaks the pending call; ODP.NET's Close waits for the running
+/// call) — and Cancel alone ends the run.
 /// </summary>
 public class CancelEscalationIntegrationTests
 {
@@ -74,6 +74,29 @@ public class CancelEscalationIntegrationTests
         var since = Stopwatch.StartNew();
         await h.Rpc.QueryCancel(new ExecutionRef { ExecutionId = id });
         await AssertEndsPromptly(h.Notifier, id, since, ExecState.Cancelled);
+    }
+
+    /// <summary>D4 S03: ODP.NET's Close waits for the running call (measured), so Oracle joins PostgreSQL and MySQL.</summary>
+    [IntegrationFact]
+    public async Task Oracle_is_never_closed_mid_command_and_cancel_alone_ends_the_run()
+    {
+        await using var h = new TestHost(new Querithm.Providers.Oracle.OracleProvider(Directory.CreateTempSubdirectory("qora-cancel-").FullName));
+        var profile = await h.Rpc.ProfileSave(new Profile
+        {
+            Id = "", Name = "ora", Engine = Engine.Oracle, Host = "127.0.0.1", Port = OracleIntegrationTests.Port, Auth = AuthKind.Password,
+            Username = OracleIntegrationTests.AppUser, DatabaseDefault = OracleIntegrationTests.Service, TlsMode = TlsMode.Disable,
+        });
+        var sid = (await h.Rpc.SessionOpen(new SessionOpenParams { ProfileId = profile.Id, Secret = FixtureSecrets.Password("oracle") })).SessionId;
+
+        // A busy block: the break lands at once (measured 4 ms). DBMS_SESSION.SLEEP notices it only between its sleep
+        // intervals (measured 4.5 s), which OracleProviderIntegrationTests covers with its own bound.
+        var id = await StartParkedAsync(h.Rpc.QueryExecute, sid, "DECLARE n NUMBER := 0; BEGIN LOOP n := n + 1; END LOOP; END;");
+        Assert.False(h.Services.Executions.CloseConnectionOf(id));
+        var since = Stopwatch.StartNew();
+        await h.Rpc.QueryCancel(new ExecutionRef { ExecutionId = id });
+        await AssertEndsPromptly(h.Notifier, id, since, ExecState.Cancelled);
+        var (next, _, _) = await h.RunAsync(sid, "SELECT 1 FROM dual");
+        Assert.Equal(ExecState.Done, next.State);
     }
 
     [IntegrationTheory]

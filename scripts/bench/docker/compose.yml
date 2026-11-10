@@ -64,18 +64,18 @@ services:
   # only when asked for, from a clean state:
   #   docker compose -p querithm-fixture -f scripts/bench/docker/compose.yml --profile oracle up -d --wait oracle
   # ORACLE_PWD (SYS / SYSTEM / PDBADMIN) stays inside the container; tests sign in only as the two users that
-  # oracle/setup/01-users.sh creates in FREEPDB1. ENABLE_TCPS makes the image generate a self-signed certificate (its own
-  # wallet, created at first start) and a TCPS listener on 2484 (D4 owner decision O2, default).
+  # oracle/startup/01-users.sh creates in FREEPDB1. oracle/startup/00-tcps.sh runs the image's TCPS setup once (the image's
+  # own ENABLE_TCPS step runs only when it creates a database, and the Free image ships one): a self-signed certificate for
+  # CN=localhost in the server's wallet and a TCPS listener on 2484 (D4 owner decision O2, default).
   oracle:
     image: container-registry.oracle.com/database/free:23.26.3.0@sha256:f988b0c04c4c386cd306a2a914c0d7a9702d83acc31b064a28ad8eb6278a8fba
     profiles: ["oracle"]
     environment:
       ORACLE_PWD: "Querithm_Dev_2026"
-      ENABLE_TCPS: "true"
       QUERITHM_APP_PASSWORD: "Querithm_App_2026"
       QUERITHM_MON_PASSWORD: "Querithm_Mon_2026"
     volumes:
-      - ./oracle/setup:/opt/oracle/scripts/setup:ro
+      - ./oracle/startup:/opt/oracle/scripts/startup:ro
       - ./oracle/healthcheck.sh:/opt/querithm/healthcheck.sh:ro
     ports: ["127.0.0.1:15210:1521", "127.0.0.1:15211:2484"]
     # Healthy once FREEPDB1 is open and the setup script has created the test user: it signs in as that user.

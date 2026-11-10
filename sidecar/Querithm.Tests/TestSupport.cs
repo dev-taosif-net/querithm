@@ -196,7 +196,7 @@ public static class FixtureSecrets
             "pg" => ComposeValue(Compose.Value, "postgres", "POSTGRES_PASSWORD"),
             "mysql" => ComposeValue(Compose.Value, "mysql84", "MYSQL_ROOT_PASSWORD"),
             "ssh" => ComposeValue(Compose.Value, "ssh", "SSH_PASSWORD"),
-            // Phase D4: Oracle Free's least-privileged test user and its monitor user (oracle/setup/01-users.sh creates both).
+            // Phase D4: Oracle Free's least-privileged test user and its monitor user (oracle/startup/01-users.sh creates both).
             "oracle" => ComposeValue(Compose.Value, "oracle", "QUERITHM_APP_PASSWORD"),
             "oracle-mon" => ComposeValue(Compose.Value, "oracle", "QUERITHM_MON_PASSWORD"),
             _ => throw new ArgumentOutOfRangeException(nameof(engine), engine, "no fixture password"),

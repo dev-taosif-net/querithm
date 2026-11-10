@@ -20,6 +20,6 @@ internal static class EngineSetup
     [
         new Querithm.Providers.SqlServer.SqlServerProvider(), new Querithm.Providers.Postgres.PostgresProvider(),
         new Querithm.Providers.Sqlite.SqliteProvider(), new Querithm.Providers.MySql.MySqlProvider(),
-        new Querithm.Providers.DuckDb.DuckDbProvider(dataDir), new Querithm.Providers.Oracle.OracleProvider(),
+        new Querithm.Providers.DuckDb.DuckDbProvider(dataDir), new Querithm.Providers.Oracle.OracleProvider(dataDir),
     ];
 }

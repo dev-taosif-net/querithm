@@ -634,6 +634,33 @@ public class CancelRecoveryTests
         await rig.Done(run);
     }
 
+    /// <summary>
+    /// D4 S03: ODP.NET's Close is no abort — measured against the fixture, Close() under a running
+    /// <c>DBMS_SESSION.SLEEP(30)</c> returned only when the block ended (28.5 s, 3 of 3) — so Oracle is never closed
+    /// mid-command: a run whose break the server never acknowledges is reported with the way out, its connection kept.
+    /// (A cancel the server acknowledges ends the run and keeps the connection: OracleProviderIntegrationTests.)
+    /// </summary>
+    [Fact]
+    public async Task Oracle_whose_close_waits_for_the_running_call_is_never_closed_and_an_unacknowledged_cancel_is_reported()
+    {
+        await using var rig = new Rig();
+        Assert.False(((IDbProvider)new Querithm.Providers.Oracle.OracleProvider()).CloseAbortsCommand);
+        rig.Provider.CloseAbortsCommand = ((IDbProvider)new Querithm.Providers.Oracle.OracleProvider()).CloseAbortsCommand;
+        rig.StuckOn("WAITFOR", (cmd, _) => UntilClosed(cmd));
+        var s = rig.Open();
+
+        var run = rig.Run(s, Stuck);
+        await rig.Entered.Task.WaitAsync(Wait);
+        rig.Executions.Cancel(run);
+
+        await rig.Until(() => rig.Messages(run).Any(m => m.Severity == Severity.Error && m.Message.Contains("Restart the engine")));
+        var conn = rig.Provider.Opened.Single();
+        Assert.Equal(ConnectionState.Open, conn.State);
+        Assert.DoesNotContain(rig.Messages(run), m => m.Message.Contains("closed this tab's connection"));
+        conn.Close(); // what a restart does
+        await rig.Done(run);
+    }
+
     // ------------------------------------------------------------------ queued, connecting, tool runs
 
     [Fact]

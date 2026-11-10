@@ -11,8 +11,9 @@ using Querithm.Providers.Oracle;
 namespace Querithm.Tests;
 
 /// <summary>
-/// D4 S01: Oracle is a hidden engine skeleton. Every feature refuses with a reason and nothing connects. Since D4 S02 the
-/// SQL is read (OracleIntelligenceTests): a run passes the guard, then fails to connect until D4 S03.
+/// D4 S01: Oracle is a hidden engine. Every feature not implemented yet refuses with a reason (transactions since D4 S03).
+/// Since D4 S02 the SQL is read (OracleIntelligenceTests); since D4 S03 a profile connects (OracleProviderTests and
+/// OracleProviderIntegrationTests).
 /// </summary>
 public class OracleSkeletonTests
 {
@@ -30,8 +31,13 @@ public class OracleSkeletonTests
 
     [Theory]
     [MemberData(nameof(Features))]
-    public void Every_feature_refuses_with_a_reason(Feature feature)
+    public void Every_feature_not_implemented_yet_refuses_with_a_reason(Feature feature)
     {
+        if (feature == Feature.Transactions)
+        {
+            Assert.Null(_oracle.FeatureRefusal(feature));
+            return;
+        }
         var reason = _oracle.FeatureRefusal(feature);
         Assert.False(string.IsNullOrWhiteSpace(reason));
         Assert.Contains("Oracle", reason);
@@ -56,18 +62,15 @@ public class OracleSkeletonTests
     }
 
     [Fact]
-    public async Task Nothing_connects_yet_and_each_refusal_names_the_reason()
+    public void Server_profiles_are_checked_and_the_tunnel_refuses_until_d4_s07()
     {
-        var p = new Profile { Id = "x", Name = "ora", Engine = Engine.Oracle, Host = "db.invalid", Port = 1521, Auth = AuthKind.Password, Username = "u" };
+        var p = new Profile { Id = "x", Name = "ora", Engine = Engine.Oracle, Host = "db.invalid", Port = 1521, Auth = AuthKind.Password, Username = "u", DatabaseDefault = "S" };
         Assert.Null(_oracle.ValidateProfile(p));
         Assert.NotNull(_oracle.ValidateProfile(p with { Location = LocationKind.File }));
         Assert.NotNull(_oracle.ValidateProfile(p with { Auth = AuthKind.Windows }));
-        Assert.Equal(OracleProvider.NotConnectingYet, (await Assert.ThrowsAsync<NotSupportedException>(() => _oracle.OpenAsync(p, "pw", null, null, CancellationToken.None))).Message);
-        Assert.Equal(OracleProvider.NotConnectingYet, Assert.Throws<NotSupportedException>(() => _oracle.BuildConnectionString(p, "pw", null)).Message);
-        Assert.Equal(OracleProvider.NotConnectingYet, _oracle.TunnelTarget(p).Refusal);
-        Assert.Throws<ArgumentException>(() => _oracle.ParseConnectionString("Data Source=//h:1521/s", p));
+        Assert.Equal(OracleProvider.NoTunnelYet, _oracle.TunnelTarget(p).Refusal);
         Assert.NotNull(_oracle.Plans.Refusal("SELECT 1 FROM DUAL", PlanMode.Estimated));
-        Assert.Equal((1521, AuthKind.Password, "Oracle"), (_oracle.Traits.DefaultPort, _oracle.Traits.DefaultAuth, _oracle.Traits.Name));
+        Assert.Equal((2484, AuthKind.Password, "Oracle"), (_oracle.Traits.DefaultPort, _oracle.Traits.DefaultAuth, _oracle.Traits.Name));
         Assert.Equal("Oracle", ProfileRules.EngineName(Engine.Oracle));
     }
 

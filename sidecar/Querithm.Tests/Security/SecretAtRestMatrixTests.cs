@@ -146,7 +146,7 @@ public class SecretAtRestMatrixTests
         {
             _provider = new ScrubbingLoggerProvider(LogDir, LogLevel.Trace, echoToStderr: false);
             _logs = LoggerFactory.Create(b => b.SetMinimumLevel(LogLevel.Trace).AddProvider(_provider));
-            var providers = new ProviderRegistry([new SqlServerProvider(), new PostgresProvider(), new MySqlProvider(), new SqliteProvider(), new DuckDbProvider(DataDir)]);
+            var providers = new ProviderRegistry([new SqlServerProvider(), new PostgresProvider(), new MySqlProvider(), new SqliteProvider(), new DuckDbProvider(DataDir), new Querithm.Providers.Oracle.OracleProvider(DataDir)]);
             Services = Services.Create(Store, new CapturingFrames(), new CapturingNotifier(), _logs, providers, DataDir);
             Rpc = new RpcServer(Services, () => { });
         }
@@ -195,6 +195,7 @@ public class SecretAtRestMatrixTests
     {
         Id = "", Name = $"{engine}-{auth}", Engine = engine, Host = host, Port = port, Auth = auth,
         Username = auth is AuthKind.Windows or AuthKind.EntraDeviceCode ? null : "u", Environment = EnvironmentKind.Dev, TimeoutS = 1,
+        DatabaseDefault = engine == Engine.Oracle ? "FREEPDB1" : null,
         PasswordRetention = "forever",
     };
 
@@ -204,6 +205,7 @@ public class SecretAtRestMatrixTests
         { Engine.Mssql, AuthKind.Sql }, { Engine.Mssql, AuthKind.EntraToken },
         { Engine.Pg, AuthKind.Password }, { Engine.Pg, AuthKind.EntraToken },
         { Engine.MySql, AuthKind.Password },
+        { Engine.Oracle, AuthKind.Password },
     };
 
     [Theory]
@@ -253,6 +255,8 @@ public class SecretAtRestMatrixTests
         { Engine.Pg, "postgresql://app:fake-pg-paste-4@db.local:5432/sales", "fake-pg-paste-4" },
         { Engine.MySql, "Server=db.local;User ID=root;Password=fake-my-paste-5;SslMode=Required", "fake-my-paste-5" },
         { Engine.MySql, "Server=db.local;Uid=root;Pwd=fake-my-paste-6", "fake-my-paste-6" },
+        { Engine.Oracle, "Data Source=//db.local:2484/SALES;User Id=app;Password=fake-ora-paste-7", "fake-ora-paste-7" },
+        { Engine.Oracle, "Data Source=(DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(HOST=db.local)(PORT=2484))(CONNECT_DATA=(SERVICE_NAME=SALES)));User Id=app;Password=\"fake;ora;paste;8\";Proxy Password=fake-ora-proxy-9", "fake;ora;paste;8" },
     };
 
     [Theory]
@@ -278,6 +282,7 @@ public class SecretAtRestMatrixTests
     [InlineData(Engine.Mssql, "Server=db.local;Password=\"fake-unterminated")]
     [InlineData(Engine.Pg, "Host=db.local;Password='fake-unterminated")]
     [InlineData(Engine.MySql, "Server=db.local;Password={fake-unterminated")]
+    [InlineData(Engine.Oracle, "Data Source=//db.local/S;Password=\"fake-unterminated")]
     public async Task A_malformed_pasted_string_is_refused_without_echoing_its_secret(Engine engine, string cs)
     {
         await using var h = new Harness();

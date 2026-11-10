@@ -5,14 +5,15 @@ using Querithm.Contract.Providers;
 namespace Querithm.Providers.Oracle;
 
 /// <summary>
-/// The Oracle skeleton's metadata, plans, scripting, grid edit, import and transaction services (D4 S01): each call refuses
-/// with the reason. Core never reaches them while the profile cannot open and <see cref="OracleProvider.FeatureRefusal"/>
-/// refuses the features; they exist so the engine compiles end to end and a later session replaces one at a time.
+/// The Oracle services a later D4 session implements — metadata (S05), plans (S09), scripting (S11), grid edit and import
+/// (S10): each call refuses with the reason. <see cref="OracleProvider.FeatureRefusal"/> refuses the features that use
+/// them; they exist so the engine compiles end to end and each session replaces one. Transactions are
+/// <see cref="OracleTransactions"/> since D4 S03.
 /// </summary>
-internal sealed class OracleUnavailable : IMetadataProvider, IPlanProvider, IObjectScripter, IDataEditDialect, IImportDialect, ITransactionControl
+internal sealed class OracleUnavailable : IMetadataProvider, IPlanProvider, IObjectScripter, IDataEditDialect, IImportDialect
 {
     public static readonly OracleUnavailable Instance = new();
-    const string Reason = OracleProvider.NotConnectingYet;
+    internal const string Reason = "This is not available for Oracle in this build of Querithm yet.";
     static NotSupportedException Refused() => new(Reason);
     static Task<T> RefusedTask<T>() => Task.FromException<T>(Refused());
 
@@ -65,20 +66,4 @@ internal sealed class OracleUnavailable : IMetadataProvider, IPlanProvider, IObj
     public string AlterColumnType(string schema, string table, SnapColumn column, string newType) => throw Refused();
     public string AddColumn(string schema, string table, string column, string type) => throw Refused();
     public IBulkLoader? Loader => null;
-
-    // ---- transactions (Feature.Transactions refused) ----
-    /// <summary>Oracle's documented facts (ODP.NET autocommits outside a transaction; DDL commits before and after); S03 verifies them against the fixture.</summary>
-    public TransactionTraits Traits { get; } = new()
-    {
-        AutocommitDefault = true, DdlCommitsImplicitly = true, Savepoints = true, ReleaseSavepoint = false, ReadOnlyTransactions = true,
-        FailedStatementAbortsTransaction = false, UserStatements = ["COMMIT", "ROLLBACK", "SAVEPOINT", "SET TRANSACTION"],
-    };
-    public Task BeginAsync(DbConnection connection, CancellationToken ct) => Task.FromException(Refused());
-    public Task<bool> BeginReadOnlyAsync(DbConnection connection, CancellationToken ct) => RefusedTask<bool>();
-    public Task CommitAsync(DbConnection connection, CancellationToken ct) => Task.FromException(Refused());
-    public Task RollbackAsync(DbConnection connection, CancellationToken ct) => Task.FromException(Refused());
-    public Task SavepointAsync(DbConnection connection, string name, CancellationToken ct) => Task.FromException(Refused());
-    public Task RollbackToSavepointAsync(DbConnection connection, string name, CancellationToken ct) => Task.FromException(Refused());
-    public Task ReleaseSavepointAsync(DbConnection connection, string name, CancellationToken ct) => Task.FromException(Refused());
-    public Task<TxState> StateAsync(DbConnection connection, CancellationToken ct) => Task.FromResult(TxState.None);
 }
