@@ -5,27 +5,17 @@ using Querithm.Contract.Providers;
 namespace Querithm.Providers.Oracle;
 
 /// <summary>
-/// The Oracle services a later D4 session implements — metadata (S05), plans (S09), scripting (S11), grid edit and import
-/// (S10): each call refuses with the reason. <see cref="OracleProvider.FeatureRefusal"/> refuses the features that use
+/// The Oracle services a later D4 session implements — plans (S09), scripting (S11), grid edit and import (S10): each call
+/// refuses with the reason (metadata is <see cref="OracleMetadata"/> since D4 S05). <see cref="OracleProvider.FeatureRefusal"/> refuses the features that use
 /// them; they exist so the engine compiles end to end and each session replaces one. Transactions are
 /// <see cref="OracleTransactions"/> since D4 S03.
 /// </summary>
-internal sealed class OracleUnavailable : IMetadataProvider, IPlanProvider, IObjectScripter, IDataEditDialect, IImportDialect
+internal sealed class OracleUnavailable : IPlanProvider, IObjectScripter, IDataEditDialect, IImportDialect
 {
     public static readonly OracleUnavailable Instance = new();
     internal const string Reason = "This is not available for Oracle in this build of Querithm yet.";
     static NotSupportedException Refused() => new(Reason);
     static Task<T> RefusedTask<T>() => Task.FromException<T>(Refused());
-
-    // ---- metadata ----
-    public Task<IReadOnlyList<ObjectStamp>> GetStampsAsync(DbConnection connection, CancellationToken ct) => RefusedTask<IReadOnlyList<ObjectStamp>>();
-    public Task<MetadataBundle> GetDetailsAsync(DbConnection connection, IReadOnlyList<long> objectIds, CancellationToken ct) => RefusedTask<MetadataBundle>();
-    public Task<string?> GetDefinitionAsync(DbConnection connection, ObjectRef obj, CancellationToken ct) => RefusedTask<string?>();
-    public Task<IReadOnlyList<(long Id, string? Definition)>> GetDefinitionsAsync(DbConnection connection, IReadOnlyList<long> objectIds, CancellationToken ct) =>
-        RefusedTask<IReadOnlyList<(long Id, string? Definition)>>();
-    public Task<Dependency[]> GetDependenciesAsync(DbConnection connection, ObjectRef obj, CancellationToken ct) => RefusedTask<Dependency[]>();
-    public string ToEditableScript(string definition, Capabilities caps) => throw Refused();
-    public Task<RowCount[]> GetRowCountsAsync(DbConnection connection, IReadOnlyList<long> objectIds, CancellationToken ct) => RefusedTask<RowCount[]>();
 
     // ---- plans ----
     public Task<PlanResult> GetPlanAsync(DbConnection connection, string sql, PlanMode mode, CancellationToken ct) => RefusedTask<PlanResult>();

@@ -187,14 +187,14 @@ public class StoreMigrationTests : IDisposable
         Exec(path, """
             ALTER TABLE obj DROP COLUMN no_rollback_engine;
             ALTER TABLE idx DROP COLUMN not_key;
-            INSERT INTO schema_snapshot VALUES ('p', 'db', 1000, '8.4', 'fresh', NULL);
+            INSERT INTO schema_snapshot (profile_id, database, refreshed_at, server_version, status, error) VALUES ('p', 'db', 1000, '8.4', 'fresh', NULL);
             INSERT INTO obj (profile_id, database, object_id, schema_name, name, kind, modify_date) VALUES ('p', 'db', 1, 'app', 't', 'table', 5);
             INSERT INTO idx (profile_id, database, object_id, name, is_unique, is_primary, columns_json) VALUES ('p', 'db', 1, 'PRIMARY', 1, 1, '["id"]');
             PRAGMA user_version = 5;
             """);
         SqliteConnection.ClearAllPools();
         var store = new LocalStore(path);
-        Assert.Equal(6L, Scalar(path, "PRAGMA user_version"));
+        Assert.Equal((long)LocalStore.Version, Scalar(path, "PRAGMA user_version"));
         Assert.True(HasColumn(path, "obj", "no_rollback_engine"));
         Assert.True(HasColumn(path, "idx", "not_key"));
         Assert.Equal("empty", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'p'"));
@@ -202,6 +202,30 @@ public class StoreMigrationTests : IDisposable
         var t = Assert.Single(meta.Load("p", "db").Objects);
         Assert.Null(t.NoRollbackEngine);
         Assert.False(Assert.Single(meta.Details("p", "db", 1).Indexes).NotAKey);
+    }
+
+    [Fact]
+    public void A_v6_file_gains_the_note_columns_and_keeps_its_rows_and_its_status()
+    {
+        // D4 S05: obj.note and schema_snapshot.notes. No engine before Oracle wrote either, so nothing needs reading again.
+        var path = Path.Combine(_dir, "v6.db");
+        _ = new LocalStore(path);
+        Exec(path, """
+            ALTER TABLE obj DROP COLUMN note;
+            ALTER TABLE schema_snapshot DROP COLUMN notes;
+            INSERT INTO schema_snapshot (profile_id, database, refreshed_at, server_version, status, error) VALUES ('p', 'db', 1000, '8.4', 'fresh', NULL);
+            INSERT INTO obj (profile_id, database, object_id, schema_name, name, kind, modify_date) VALUES ('p', 'db', 1, 'app', 't', 'table', 5);
+            PRAGMA user_version = 6;
+            """);
+        SqliteConnection.ClearAllPools();
+        var store = new LocalStore(path);
+        Assert.Equal(7L, Scalar(path, "PRAGMA user_version"));
+        Assert.True(HasColumn(path, "obj", "note"));
+        Assert.True(HasColumn(path, "schema_snapshot", "notes"));
+        Assert.Equal("fresh", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'p'"));
+        var snap = new MetadataStore(store).Load("p", "db");
+        Assert.Null(snap.Notes);
+        Assert.Null(Assert.Single(snap.Objects).Note);
     }
 
     [Fact]

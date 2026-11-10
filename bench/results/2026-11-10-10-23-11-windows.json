@@ -1,0 +1,69 @@
+{
+  "date": "2026-11-10T10:23:11.967Z",
+  "os": "Windows_NT 10.0.26200",
+  "cpu": "13th Gen Intel(R) Core(TM) i5-1335U",
+  "cores": 12,
+  "memGb": 16,
+  "results": {
+    "11b.oracle": {
+      "metric": "Oracle: execute → first batch on a cold pool connection (TCP, login, product + identity read, SELECT 1 FROM dual, median)",
+      "unit": "ms",
+      "target": 300,
+      "value": 48.14,
+      "pass": true,
+      "samples": [
+        620,
+        56.2,
+        45,
+        51.9,
+        47.8,
+        49.3,
+        47.3,
+        47.7,
+        48.4,
+        81,
+        68.2,
+        48.1,
+        45,
+        45.5,
+        46.2
+      ]
+    },
+    "9.oracle": {
+      "metric": "Oracle: metadata snapshot load from SQLite (600 tables, 150 views, 200 triggers)",
+      "unit": "ms",
+      "target": 80,
+      "value": 23.93,
+      "pass": true,
+      "objects": 997,
+      "samples": [
+        128.00309999999808,
+        24.800500000001193,
+        23.932300000000396,
+        22.25460000000021,
+        20.26260000000184
+      ],
+      "statuses": [
+        "fresh",
+        "fresh",
+        "fresh",
+        "fresh",
+        "fresh"
+      ]
+    },
+    "10.oracle": {
+      "metric": "Oracle: incremental refresh with 10 changed objects (least-privileged user, ALL_* views)",
+      "unit": "ms",
+      "target": 2000,
+      "value": 1144.07,
+      "pass": true,
+      "samples": [
+        2625,
+        1267,
+        1144,
+        1023,
+        1056
+      ]
+    }
+  }
+}

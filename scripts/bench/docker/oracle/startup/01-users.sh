@@ -32,5 +32,30 @@ GRANT SELECT ON SYS.V_\$SQL TO querithm_mon;
 GRANT SELECT ON SYS.V_\$SQL_PLAN TO querithm_mon;
 GRANT SELECT ON SYS.V_\$SQL_PLAN_STATISTICS_ALL TO querithm_mon;
 GRANT SELECT ON SYS.V_\$LOCK TO querithm_mon;
+-- D4 S05: querithm_own, a schema-only account (NO AUTHENTICATION: nobody signs in as it) owning objects the other two may
+-- use but not define: a synonym into another schema, the schema list, GET_DDL refused (ORA-31603) for a procedure the
+-- least-privileged user may only execute, and allowed for the catalog-role user.
+DECLARE
+  n NUMBER;
+BEGIN
+  SELECT COUNT(*) INTO n FROM dba_users WHERE username = 'QUERITHM_OWN';
+  IF n = 0 THEN
+    EXECUTE IMMEDIATE 'CREATE USER querithm_own NO AUTHENTICATION DEFAULT TABLESPACE USERS QUOTA 16M ON USERS';
+  END IF;
+  SELECT COUNT(*) INTO n FROM dba_objects WHERE owner = 'QUERITHM_OWN' AND object_name = 'SHARED_T';
+  IF n = 0 THEN
+    EXECUTE IMMEDIATE 'CREATE TABLE querithm_own.shared_t (id NUMBER PRIMARY KEY, label VARCHAR2(40))';
+  END IF;
+  EXECUTE IMMEDIATE 'CREATE OR REPLACE PROCEDURE querithm_own.shared_p (p_id IN NUMBER) AS BEGIN NULL; END;';
+  EXECUTE IMMEDIATE 'CREATE OR REPLACE VIEW querithm_own.shared_v AS SELECT id, label FROM querithm_own.shared_t';
+  EXECUTE IMMEDIATE 'GRANT SELECT ON querithm_own.shared_t TO querithm_app, querithm_mon';
+  EXECUTE IMMEDIATE 'GRANT SELECT ON querithm_own.shared_v TO querithm_app';
+  EXECUTE IMMEDIATE 'GRANT EXECUTE ON querithm_own.shared_p TO querithm_app, querithm_mon';
+END;
+/
+-- D4 S05: the metadata tests create a materialized view and an external table (its directory is never read: no file).
+GRANT CREATE MATERIALIZED VIEW TO querithm_app;
+CREATE OR REPLACE DIRECTORY querithm_ext AS '/tmp/querithm-ext';
+GRANT READ ON DIRECTORY querithm_ext TO querithm_app;
 EXIT
 SQL

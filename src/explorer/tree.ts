@@ -53,7 +53,7 @@ export type TreeRow = Base &
   (
     | { t: "env"; env: EnvironmentKind; count: number }
     | { t: "server"; profileId: string; status: ServerStatus; error?: string; pinned: boolean; memory?: boolean; refreshing?: boolean }
-    | { t: "note"; text: string; tone: "muted" | "err"; busy?: boolean }
+    | { t: "note"; text: string; tone: "muted" | "warn" | "err"; busy?: boolean }
     | { t: "action"; action: "reconnect" | "editProfile" | "repick" | "retryMeta" | "retryDetails"; label: string; profileId: string; db?: string; objKey?: string; obj?: SnapObject }
     | { t: "db"; profileId: string; db: string; active: boolean; state: DbState; refreshedAt?: number | null; error?: string | null; dbState?: string | null }
     | { t: "sysdbs"; profileId: string; count: number }
@@ -302,6 +302,10 @@ function addDb(i: TreeInput, rows: TreeRow[], need: Need, p: Profile, db: string
     add({ t: "action", key: `${key}:retry`, level: child, parent: dIdx, expandable: false, expanded: false, action: "retryMeta", label: "Retry", profileId: p.id, db });
     return;
   }
+  // What the last refresh could not read (Oracle: a dictionary view the login may not read): the snapshot is fresh, but
+  // those objects or details are missing, and the reason is shown above them (D4 S05).
+  (entry!.snapshot?.notes ?? []).forEach((text, n) =>
+    add({ t: "note", key: `${key}:catalogNote:${n}`, level: child, parent: dIdx, expandable: false, expanded: false, text, tone: "warn" }));
   const objects = entry!.snapshot?.objects ?? [];
   if (!objects.length) return void add({ t: "note", key: `${key}:reading`, level: child, parent: dIdx, expandable: false, expanded: false, text: state === "ok" ? "No objects" : "Reading the catalog…", tone: "muted", busy: state !== "ok" });
   const b = bucketsOf(objects);

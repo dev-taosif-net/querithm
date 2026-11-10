@@ -5,7 +5,7 @@ using Querithm.Contract.Providers;
 
 namespace Querithm.Core.Store;
 
-public sealed record SnapshotRow(SnapshotStatus Status, long? RefreshedAt, string? ServerVersion, string? Error);
+public sealed record SnapshotRow(SnapshotStatus Status, long? RefreshedAt, string? ServerVersion, string? Error, string[]? Notes = null);
 
 /// <summary>obj/col/param/fk/idx tables (§8). Autocomplete and the explorer read only from here.</summary>
 public sealed class MetadataStore(LocalStore store)
@@ -13,10 +13,10 @@ public sealed class MetadataStore(LocalStore store)
     public SnapshotRow? GetSnapshotRow(string profileId, string database)
     {
         using var c = store.Open();
-        using var cmd = c.Cmd("SELECT status, refreshed_at, server_version, error FROM schema_snapshot WHERE profile_id=$p AND database=$d", null,
+        using var cmd = c.Cmd("SELECT status, refreshed_at, server_version, error, notes FROM schema_snapshot WHERE profile_id=$p AND database=$d", null,
             ("$p", profileId), ("$d", database));
         using var r = cmd.ExecuteReader();
-        return r.Read() ? new SnapshotRow(EnumText.Parse(r.Str(0), SnapshotStatus.Empty), r.Long(1), r.Str(2), r.Str(3)) : null;
+        return r.Read() ? new SnapshotRow(EnumText.Parse(r.Str(0), SnapshotStatus.Empty), r.Long(1), r.Str(2), r.Str(3), NotesOf(r.Str(4))) : null;
     }
 
     public void SetStatus(string profileId, string database, SnapshotStatus status, string? error = null, string? serverVersion = null, long? refreshedAt = null)
@@ -28,6 +28,13 @@ public sealed class MetadataStore(LocalStore store)
               refreshed_at=COALESCE($t, refreshed_at), server_version=COALESCE($v, server_version)
             """, null, ("$p", profileId), ("$d", database), ("$t", refreshedAt), ("$v", serverVersion), ("$s", EnumText.Of(status)), ("$e", error))
             .ExecuteNonQuery();
+    }
+
+    static string[]? NotesOf(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) return null;
+        try { return JsonSerializer.Deserialize(json, StoreJsonContext.Default.StringArray) is { Length: > 0 } notes ? notes : null; }
+        catch (JsonException) { return null; } // a damaged cell loses its notes, never the snapshot
     }
 
     /// <summary>Current change markers (modify_date ticks / xmin) per object id.</summary>
@@ -42,8 +49,9 @@ public sealed class MetadataStore(LocalStore store)
     }
 
     /// <summary>Writes one refresh in one transaction (§8 step 4).</summary>
+    /// <param name="notes">What the provider could not read this time (<see cref="IMetadataProvider.Notes"/>); replaces the last refresh's.</param>
     public void ApplyRefresh(string profileId, string database, bool full, IReadOnlyList<ObjectStamp> changed, IReadOnlyCollection<long> removed,
-        MetadataBundle details, string serverVersion)
+        MetadataBundle details, string serverVersion, IReadOnlyList<string>? notes = null)
     {
         using var c = store.Open();
         using var tx = c.BeginTransaction();
@@ -67,15 +75,16 @@ public sealed class MetadataStore(LocalStore store)
             }
         }
 
-        using (var cmd = c.Cmd("INSERT OR REPLACE INTO obj (profile_id, database, object_id, schema_name, name, kind, modify_date, return_type, parent_object_id, no_rollback_engine) VALUES ($p,$d,$id,$s,$n,$k,$m,$rt,$par,$nr)", tx))
+        using (var cmd = c.Cmd("INSERT OR REPLACE INTO obj (profile_id, database, object_id, schema_name, name, kind, modify_date, return_type, parent_object_id, no_rollback_engine, note) VALUES ($p,$d,$id,$s,$n,$k,$m,$rt,$par,$nr,$note)", tx))
         {
             var pId = Param(cmd, "$p", profileId); var pDb = Param(cmd, "$d", database);
-            var id = Param(cmd, "$id"); var s = Param(cmd, "$s"); var n = Param(cmd, "$n"); var k = Param(cmd, "$k"); var m = Param(cmd, "$m"); var rt = Param(cmd, "$rt"); var par = Param(cmd, "$par"); var nr = Param(cmd, "$nr");
+            var id = Param(cmd, "$id"); var s = Param(cmd, "$s"); var n = Param(cmd, "$n"); var k = Param(cmd, "$k"); var m = Param(cmd, "$m"); var rt = Param(cmd, "$rt"); var par = Param(cmd, "$par"); var nr = Param(cmd, "$nr"); var note = Param(cmd, "$note");
             foreach (var o in changed)
             {
                 id.Value = o.Id; s.Value = o.Schema; n.Value = o.Name; k.Value = EnumText.Of(o.Kind); m.Value = o.Marker; rt.Value = (object?)o.ReturnType ?? DBNull.Value;
                 par.Value = (object?)o.ParentObjectId ?? DBNull.Value;
                 nr.Value = (object?)o.NoRollbackEngine ?? DBNull.Value;
+                note.Value = (object?)o.Note ?? DBNull.Value;
                 cmd.ExecuteNonQuery();
             }
         }
@@ -126,9 +135,10 @@ public sealed class MetadataStore(LocalStore store)
             }
         }
         c.Cmd("""
-            INSERT INTO schema_snapshot (profile_id, database, refreshed_at, server_version, status, error) VALUES ($p,$d,$t,$v,'fresh',NULL)
-            ON CONFLICT(profile_id, database) DO UPDATE SET refreshed_at=$t, server_version=$v, status='fresh', error=NULL
-            """, tx, ("$p", profileId), ("$d", database), ("$t", Time.NowMs()), ("$v", serverVersion)).ExecuteNonQuery();
+            INSERT INTO schema_snapshot (profile_id, database, refreshed_at, server_version, status, error, notes) VALUES ($p,$d,$t,$v,'fresh',NULL,$n)
+            ON CONFLICT(profile_id, database) DO UPDATE SET refreshed_at=$t, server_version=$v, status='fresh', error=NULL, notes=$n
+            """, tx, ("$p", profileId), ("$d", database), ("$t", Time.NowMs()), ("$v", serverVersion),
+            ("$n", notes is { Count: > 0 } ? JsonSerializer.Serialize(notes.ToArray(), StoreJsonContext.Default.StringArray) : null)).ExecuteNonQuery();
         tx.Commit();
     }
 
@@ -183,7 +193,7 @@ public sealed class MetadataStore(LocalStore store)
             }
 
         var objects = new List<SnapObject>();
-        using (var cmd = c.Cmd($"SELECT object_id, schema_name, name, kind, return_type, modify_date, parent_object_id, no_rollback_engine FROM obj WHERE profile_id=$p AND database=$d{filter} ORDER BY schema_name, name", null, key))
+        using (var cmd = c.Cmd($"SELECT object_id, schema_name, name, kind, return_type, modify_date, parent_object_id, no_rollback_engine, note FROM obj WHERE profile_id=$p AND database=$d{filter} ORDER BY schema_name, name", null, key))
         using (var r = cmd.ExecuteReader())
             while (r.Read())
             {
@@ -192,7 +202,7 @@ public sealed class MetadataStore(LocalStore store)
                 {
                     Id = oid, Schema = r.Str(1) ?? "", Name = r.Str(2) ?? "", Kind = EnumText.Parse(r.Str(3), ObjectKind.Table), ReturnType = r.Str(4),
                     ModifyDate = r.Long(5), ParentObjectId = r.Long(6),
-                    NoRollbackEngine = r.Str(7),
+                    NoRollbackEngine = r.Str(7), Note = r.Str(8),
                     Columns = columns.TryGetValue(oid, out var cl) ? cl.ToArray() : null,
                     Params = parms.TryGetValue(oid, out var pl) ? pl.ToArray() : null,
                 });
@@ -214,6 +224,7 @@ public sealed class MetadataStore(LocalStore store)
             RefreshedAt = row?.RefreshedAt,
             ServerVersion = row?.ServerVersion,
             Error = row?.Error,
+            Notes = row?.Notes,
             Objects = objects.ToArray(),
             Fks = fks.ToArray(),
         };

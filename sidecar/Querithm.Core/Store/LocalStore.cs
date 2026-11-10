@@ -176,7 +176,7 @@ public sealed class LocalStore
     }
 
     /// <summary>The schema version Schema.sql describes (PRAGMA user_version).</summary>
-    public const int Version = 6;
+    public const int Version = 7;
 
     /// <summary>
     /// Steps from version N-1 to N for files written by older builds, run before Schema.sql so its CREATE … IF NOT
@@ -228,6 +228,15 @@ public sealed class LocalStore
             if (HasTable(c, tx, "idx") && !HasColumn(c, tx, "idx", "not_key"))
                 c.Cmd("ALTER TABLE idx ADD COLUMN not_key INTEGER;", tx).ExecuteNonQuery();
             if (HasTable(c, tx, "schema_snapshot")) c.Cmd("UPDATE schema_snapshot SET status = 'empty';", tx).ExecuteNonQuery();
+        }),
+        // Phase D4: an object's note (Oracle: invalid, materialized view, external table) and a snapshot's notes (an object
+        // kind the login cannot read). Additive: an older build ignores both. No engine before Oracle sets either, so the
+        // cached rows stay as they are.
+        (7, (_, c, tx) =>
+        {
+            if (HasTable(c, tx, "obj") && !HasColumn(c, tx, "obj", "note")) c.Cmd("ALTER TABLE obj ADD COLUMN note TEXT;", tx).ExecuteNonQuery();
+            if (HasTable(c, tx, "schema_snapshot") && !HasColumn(c, tx, "schema_snapshot", "notes"))
+                c.Cmd("ALTER TABLE schema_snapshot ADD COLUMN notes TEXT;", tx).ExecuteNonQuery();
         }),
     ];
 

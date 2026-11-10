@@ -74,6 +74,8 @@ public sealed record SnapObject
     /// contract (ContractGen and the JSON context read public properties only).
     /// </summary>
     internal string? NoRollbackEngine { get; init; }
+    /// <summary>Phase D4: shown beside the name in the explorer — "invalid", "materialized view", "external table"; null for most objects.</summary>
+    public string? Note { get; init; }
 }
 
 public sealed record SchemaSnapshot
@@ -88,6 +90,11 @@ public sealed record SchemaSnapshot
     public required SnapFk[] Fks { get; init; }
     /// <summary>Phase D0d: set when this view is a session's (an in-memory database, or a shared snapshot with the session's own objects).</summary>
     public string? SessionId { get; init; }
+    /// <summary>
+    /// Phase D4: what the last refresh could not read (an object kind the login has no access to, with the reason): the
+    /// snapshot is fresh but those objects are missing from it. Null when nothing was left out.
+    /// </summary>
+    public string[]? Notes { get; init; }
 }
 
 public sealed record ObjectsParams
@@ -132,6 +139,8 @@ public sealed record MetaUpdatedEvent
     public double ElapsedMs { get; init; }
     /// <summary>Phase D0d: the session whose view changed; null = the shared snapshot every tab on the profile sees.</summary>
     public string? SessionId { get; init; }
+    /// <summary>Phase D4: <see cref="SchemaSnapshot.Notes"/> after a fresh refresh (null: nothing was left out).</summary>
+    public string[]? Notes { get; init; }
 }
 
 public sealed record ObjectRef
@@ -243,4 +252,6 @@ public sealed record RowCount
     public long? Rows { get; init; }
     /// <summary>Planner statistics (PostgreSQL reltuples, SQL Server sys.partitions), not an exact count.</summary>
     public bool Estimated { get; init; }
+    /// <summary>Phase D4: when the statistics the estimate comes from were gathered (Unix ms; Oracle LAST_ANALYZED), null when the engine does not say.</summary>
+    public long? AnalyzedAt { get; init; }
 }

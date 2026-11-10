@@ -63,7 +63,7 @@ export const ErdTab = memo(function ErdTab({ tool }: { tool: ToolTab }) {
   const [selected, setSelected] = useState<number[]>([]);
   const [hoverEdge, setHoverEdge] = useState<string | null>(null);
   const [positions, setPositions] = useState<Positioned[] | null>(null);
-  const [rowCounts, setRowCounts] = useState<Map<number, { rows: number; estimated: boolean }>>(new Map());
+  const [rowCounts, setRowCounts] = useState<Map<number, { rows: number; estimated: boolean; analyzedAt?: number | null }>>(new Map());
   const [layoutMs, setLayoutMs] = useState<number | null>(null);
 
   const ids = useMemo(() => {
@@ -162,7 +162,7 @@ export const ErdTab = memo(function ErdTab({ tool }: { tool: ToolTab }) {
     try {
       const sessionId = await toolSession(tool);
       const counts = await rpc("meta.rowCounts", { sessionId, database, objectIds: graph.nodes.map((n) => n.id) });
-      setRowCounts(new Map(counts.filter((c) => c.rows != null).map((c) => [c.objectId, { rows: c.rows!, estimated: c.estimated }])));
+      setRowCounts(new Map(counts.filter((c) => c.rows != null).map((c) => [c.objectId, { rows: c.rows!, estimated: c.estimated, analyzedAt: c.analyzedAt }])));
     } catch (e) {
       toast("error", (e as Error).message);
     }

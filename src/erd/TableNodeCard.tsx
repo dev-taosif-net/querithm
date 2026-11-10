@@ -12,12 +12,19 @@ export type TableNodeData = {
   selected: boolean;
   matched: boolean;
   dimmed: boolean;
-  rowCount?: { rows: number; estimated: boolean };
+  rowCount?: { rows: number; estimated: boolean; analyzedAt?: number | null };
   onExpand?: (id: number) => void;
 };
 
 export const handleId = (side: "in" | "out", column: string) => `${side}:${column.toLowerCase()}`;
 export const HEADER_HANDLE = "hdr";
+
+/** Estimated counts say where they come from, and when the statistics were gathered if the engine says (Oracle LAST_ANALYZED). */
+export function rowCountTitle(c: { estimated: boolean; analyzedAt?: number | null }): string {
+  if (!c.estimated) return "Row count";
+  const base = "Estimated row count (from the engine's statistics";
+  return c.analyzedAt != null ? `${base}, gathered ${new Date(c.analyzedAt).toLocaleString()})` : `${base})`;
+}
 
 export const TableNodeCard = memo(function TableNodeCard({ data }: NodeProps<Node<TableNodeData>>) {
   const t = data.table;
@@ -33,7 +40,7 @@ export const TableNodeCard = memo(function TableNodeCard({ data }: NodeProps<Nod
         <span className="text-obj-table">⊞</span>
         <span className="font-bold text-fg truncate flex-1">{qualified}</span>
         {data.rowCount && (
-          <span className="text-[10px] text-muted shrink-0" title={data.rowCount.estimated ? "Estimated row count (from the engine's statistics)" : "Row count"}>
+          <span className="text-[10px] text-muted shrink-0" title={rowCountTitle(data.rowCount)}>
             {data.rowCount.estimated ? "~" : ""}{data.rowCount.rows.toLocaleString()}
           </span>
         )}

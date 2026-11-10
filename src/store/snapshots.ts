@@ -251,7 +251,8 @@ async function applyUpdate(entry: SnapEntry, e: MetaUpdatedEvent) {
     return;
   }
   if (e.changed === 0) {
-    useSnapshots.setState((s) => (s.entries[k] ? { entries: { ...s.entries, [k]: { ...s.entries[k], status: "fresh", version: s.entries[k].version + 1 } } } : s));
+    // Nothing changed, but what the refresh could not read may have (D4 S05): the notes come with the event.
+    useSnapshots.setState((s) => (s.entries[k] ? { entries: { ...s.entries, [k]: { ...s.entries[k], status: "fresh", snapshot: s.entries[k].snapshot && { ...s.entries[k].snapshot!, notes: e.notes ?? null }, version: s.entries[k].version + 1 } } } : s));
     return;
   }
   const changed = e.changedIds.length ? await rpc("meta.objects", { profileId, database, ids: e.changedIds, ...sessionParam(sessionId) }) : [];
@@ -261,7 +262,7 @@ async function applyUpdate(entry: SnapEntry, e: MetaUpdatedEvent) {
   const drop = new Set<number>([...(e.removedIds ?? []), ...e.changedIds]);
   const objects = base.objects.filter((o) => !drop.has(o.id)).concat(changed);
   objects.sort((a, b) => (a.schema + "." + a.name).localeCompare(b.schema + "." + b.name));
-  const snapshot: SchemaSnapshot = { ...base, objects, status: "fresh" };
+  const snapshot: SchemaSnapshot = { ...base, objects, status: "fresh", notes: e.notes ?? null };
   const idx = buildSchemaIndex(snapshot, dialectOf(profileId), databasesOf(profileId));
   useSnapshots.setState((s) => (s.entries[k] ? { entries: { ...s.entries, [k]: { ...s.entries[k], snapshot, index: idx, status: "fresh", version: s.entries[k].version + 1 } } } : s));
 }

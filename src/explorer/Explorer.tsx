@@ -1109,6 +1109,7 @@ function RowBody({ r, view, handlers }: { r: TreeRow; view: RowView; handlers: H
             {!r.bare && <span className="text-muted">{r.obj.schema}.</span>}
             {r.obj.name}
           </span>
+          {r.obj.note && <span className={`shrink-0 text-[10.5px] ${/invalid/.test(r.obj.note) ? "text-warn" : "text-muted"}`}>{r.obj.note}</span>}
         </>
       );
     case "sub":
@@ -1123,7 +1124,7 @@ function RowBody({ r, view, handlers }: { r: TreeRow; view: RowView; handlers: H
       );
     case "note":
       return (
-        <span className={`flex-1 min-w-0 flex items-center gap-1.5 ${r.tone === "err" ? "text-err" : "text-muted"}`} title={r.text}>
+        <span className={`flex-1 min-w-0 flex items-center gap-1.5 ${r.tone === "err" ? "text-err" : r.tone === "warn" ? "text-warn" : "text-muted"}`} title={r.text}>
           {r.busy && <Icon name="spinner" size={12} className="animate-spin motion-reduce:animate-none" />}
           <span className="truncate">{r.text}</span>
         </span>

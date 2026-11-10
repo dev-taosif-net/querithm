@@ -278,3 +278,27 @@ describe("snapshot buckets", () => {
     expect(b.schemaCount.get("dbo")).toBe(1);
   });
 });
+
+describe("Oracle catalog notes (D4 S05)", () => {
+  const p = profile("o", "oracle" as Engine, { databaseDefault: "FREEPDB1" });
+  const objects = [obj(1, "APP", "T", "table"), obj(2, "APP", "MV", "view", { note: "materialized view" }), obj(3, "APP", "F", "func", { note: "invalid" })];
+  const note = "Triggers are not listed: this login cannot read ALL_TRIGGERS (ORA-00942).";
+  const e = entry("o", "FREEPDB1", objects);
+  const tree = (notes: string[] | null) => buildTree(input({
+    profiles: [p], servers: { o: conn("o", { databases: [{ name: "FREEPDB1", isSystem: false }] }) }, order: ["o"],
+    entries: { [snapKey("o", "FREEPDB1")]: { ...e, snapshot: { ...e.snapshot!, notes } } },
+    expanded: new Set([serverKey("o"), dbKey("o", "FREEPDB1")]),
+  })).rows;
+
+  it("a fresh snapshot that left something out says so under its database, as a warning, above the objects it could read", () => {
+    const rows = tree([note]);
+    const db = rows.findIndex((r) => r.t === "db");
+    expect(rows[db + 1]).toMatchObject({ t: "note", text: note, tone: "warn" });
+    expect(rows.some((r) => r.t === "cat")).toBe(true);
+  });
+
+  it("no notes, no rows for them", () => {
+    expect(tree(null).some((r) => r.t === "note")).toBe(false);
+    expect(tree([]).some((r) => r.t === "note")).toBe(false);
+  });
+});

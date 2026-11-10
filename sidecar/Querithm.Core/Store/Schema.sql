@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS schema_snapshot (
   profile_id TEXT, database TEXT, refreshed_at INTEGER, server_version TEXT,
   status TEXT,                                                            -- 'fresh' | 'stale' | 'refreshing' | 'error'
   error TEXT,
+  notes TEXT,                                                             -- JSON array: what the last refresh could not read (v7)
   PRIMARY KEY (profile_id, database)
 );
 
@@ -23,6 +24,7 @@ CREATE TABLE IF NOT EXISTS obj (
   modify_date INTEGER, definition_hash TEXT, return_type TEXT,
   parent_object_id INTEGER,                                               -- a trigger's table or view (v2)
   no_rollback_engine TEXT,                                                -- MySQL / MariaDB: a table engine without transactions (v6)
+  note TEXT,                                                              -- shown beside the name: invalid, materialized view … (v7)
   PRIMARY KEY (profile_id, database, object_id)
 );
 CREATE INDEX IF NOT EXISTS obj_name ON obj (profile_id, database, name COLLATE NOCASE);

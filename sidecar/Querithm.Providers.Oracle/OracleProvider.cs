@@ -17,8 +17,9 @@ namespace Querithm.Providers.Oracle;
 /// password from the keyring, no sqlnet.ora / tnsnames.ora (O1), Oracle 19c or later. Transactions (<see
 /// cref="OracleTransactions"/>), cancel (OracleCommand.Cancel: a break on the command's own connection) and ORA- errors
 /// with their position work. Since D4 S04 every Oracle type reaches the grid typed or as exact text (<see cref="OracleTypes"/>),
-/// DBMS_OUTPUT and compile errors are read after each batch (<see cref="OracleOutput"/>) and <c>:name</c> binds by name;
-/// metadata, plans, scripting, grid edit and import still refuse with a reason until their session (D4 S05–S12).
+/// DBMS_OUTPUT and compile errors are read after each batch (<see cref="OracleOutput"/>) and <c>:name</c> binds by name.
+/// Since D4 S05 the catalog is read (<see cref="OracleMetadata"/>); plans, scripting, grid edit and import still refuse with
+/// a reason until their session (D4 S08–S12).
 /// </summary>
 public sealed class OracleProvider : IDbProvider
 {
@@ -39,7 +40,7 @@ public sealed class OracleProvider : IDbProvider
     public bool DatabaseScopedConnections => false;
     public IDialectService Language { get; } = new OracleLanguageService();
     public bool StopOnBatchError => true;
-    public IMetadataProvider Metadata { get; } = OracleUnavailable.Instance;
+    public IMetadataProvider Metadata { get; } = new OracleMetadata();
     public IPlanProvider Plans { get; } = OracleUnavailable.Instance;
     public IObjectScripter Scripter { get; } = OracleUnavailable.Instance;
     public ITraceProvider? Trace => null;

@@ -96,6 +96,8 @@ const TARGETS = {
   // Phase D2: MySQL 8.4 (the fixture's mysql84, TLS required), hidden behind the dev setting like SQLite.
   // Phase D4: Oracle (hidden engine), the fixture's Oracle Free.
   "11b.oracle": ["Oracle: execute → first batch on a cold pool connection (TCP, login, product + identity read, SELECT 1 FROM dual, median)", "ms", 300],
+  "9.oracle": ["Oracle: metadata snapshot load from SQLite (600 tables, 150 views, 200 triggers)", "ms", 80],
+  "10.oracle": ["Oracle: incremental refresh with 10 changed objects (least-privileged user, ALL_* views)", "ms", 2000],
   "11cold.mysql": ["MySQL: execute → first batch on a cold pool connection (TCP, TLS, login, identity read, SELECT 1, median)", "ms", 300],
   "8.mysql": ["MySQL: database switch on an existing connection (COM_INIT_DB, median)", "ms", 20],
   "15.mysql": ["MySQL: cancel latency (KILL QUERY on a side connection)", "ms", 500],
@@ -929,6 +931,64 @@ async function oracleMetrics() {
       await call("profile.delete", { profileId: profile.id });
     }
     record("11b.oracle", median(cold), { samples: cold.map((x) => Math.round(x * 10) / 10) });
+
+    // #9.oracle / #10.oracle: the MySQL schema shape in the app user's own schema (600 tables × 15 columns, 150 views, 200
+    // triggers), made in one PL/SQL block (DDL commits on its own) and dropped again at the end, so the fixture keeps no bench
+    // objects. The refresh runs as the least-privileged user: every read goes through the ALL_* views.
+    const profile = await profileOf("Bench Oracle");
+    const { sessionId } = await call("session.open", { profileId: profile.id, secret: ORACLE.password });
+    const run = async (sql) => {
+      const ex = await call("query.execute", { sessionId, sql, options: { noHistory: true } });
+      const done = await until((m, p) => m === "query.done" && p.executionId === ex.executionId, 900_000, "oracle run", true);
+      if (done.error) throw new Error(`oracle bench schema: ${done.error.message}`);
+      return done;
+    };
+    const dropAll = `BEGIN
+  FOR o IN (SELECT object_name, object_type FROM user_objects WHERE SUBSTR(object_name, 1, 3) = 'QB_' AND object_type IN ('VIEW', 'TABLE') ORDER BY CASE object_type WHEN 'VIEW' THEN 0 ELSE 1 END) LOOP
+    EXECUTE IMMEDIATE 'DROP ' || o.object_type || ' ' || o.object_name || CASE o.object_type WHEN 'TABLE' THEN ' CASCADE CONSTRAINTS PURGE' END;
+  END LOOP;
+END;
+/`;
+    await run(dropAll);
+    const cols = Array.from({ length: 14 }, (_, c) => `c${c} VARCHAR2(40)`).join(", ");
+    await run(`BEGIN
+  FOR t IN 1 .. 600 LOOP EXECUTE IMMEDIATE 'CREATE TABLE qb_t' || t || ' (id NUMBER PRIMARY KEY, ${cols})'; END LOOP;
+  FOR v IN 1 .. 150 LOOP EXECUTE IMMEDIATE 'CREATE VIEW qb_v' || v || ' AS SELECT id, c0 FROM qb_t' || v || ' WHERE id > ' || v; END LOOP;
+  FOR g IN 1 .. 200 LOOP EXECUTE IMMEDIATE 'CREATE TRIGGER qb_tr' || g || ' BEFORE INSERT ON qb_t' || g || ' FOR EACH ROW BEGIN :NEW.c0 := :NEW.c1; END;'; END LOOP;
+END;
+/`);
+    try {
+      const refreshed = until((m, p) => m === "meta.updated" && p.profileId === profile.id && p.status === "fresh" && p.full, 900_000, "oracle full refresh");
+      await call("meta.refresh", { profileId: profile.id, database: ORACLE.service, full: true });
+      await refreshed;
+      const snaps = [];
+      const statuses = [];
+      let objects = 0;
+      for (let i = 0; i < RUNS; i++) {
+        const t0 = performance.now();
+        const s = await call("meta.snapshot", { profileId: profile.id, database: ORACLE.service });
+        snaps.push(performance.now() - t0);
+        statuses.push(s.status);
+        objects = s.objects.length;
+      }
+      record("9.oracle", median(snaps), { objects, samples: snaps, statuses });
+
+      const incr = [];
+      for (let r = 0; r < RUNS; r++) {
+        const changes = Array.from({ length: 10 }, (_, k) => `CREATE OR REPLACE VIEW qb_v${k + 1} AS SELECT id, c0, c1 FROM qb_t${k + 1} WHERE id > ${r};`).join("\n");
+        await run(changes);
+        await sleep(300); // let the DDL-triggered refresh settle first
+        const done = until((m, p) => m === "meta.updated" && p.profileId === profile.id && p.status === "fresh", 120_000, "oracle incremental");
+        const t0 = performance.now();
+        await call("meta.refresh", { profileId: profile.id, database: ORACLE.service });
+        const e = await done;
+        incr.push(performance.now() - t0);
+        if (e.changed < 10) throw new Error(`#10.oracle: the refresh saw ${e.changed} changed objects, not 10`);
+      }
+      record("10.oracle", median(incr), { samples: incr.map((x) => Math.round(x)) });
+    } finally {
+      await run(dropAll);
+    }
   } catch (e) {
     console.log(`  oracle metrics failed: ${e.message}`);
     throw e;

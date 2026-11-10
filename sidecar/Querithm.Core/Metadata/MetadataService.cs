@@ -182,7 +182,7 @@ public sealed class MetadataService
         var cached = (scope != null ? _cache.Get(p.ProfileId, p.Database, scope.Id) : _cache.Get(p.ProfileId, p.Database)) ?? _store.Load(p.ProfileId, p.Database);
         var snap = cached with
         {
-            Status = row?.Status ?? SnapshotStatus.Empty, RefreshedAt = row?.RefreshedAt, ServerVersion = row?.ServerVersion, Error = row?.Error,
+            Status = row?.Status ?? SnapshotStatus.Empty, RefreshedAt = row?.RefreshedAt, ServerVersion = row?.ServerVersion, Error = row?.Error, Notes = row?.Notes,
         };
         var stale = snap.Status == SnapshotStatus.Empty
                     || !_refreshedThisLaunch.ContainsKey(Key(p.ProfileId, p.Database))
@@ -206,7 +206,7 @@ public sealed class MetadataService
         var snap = _cache.SessionView(s.Profile.Id, database, s.Id) with
         {
             Database = database, SessionId = s.Id,
-            Status = row?.Status ?? SnapshotStatus.Empty, RefreshedAt = row?.RefreshedAt, ServerVersion = row?.ServerVersion, Error = row?.Error,
+            Status = row?.Status ?? SnapshotStatus.Empty, RefreshedAt = row?.RefreshedAt, ServerVersion = row?.ServerVersion, Error = row?.Error, Notes = row?.Notes,
         };
         // Nothing to read before the tab's first execution: refreshing would open the database just to find it empty.
         if (snap.Status is SnapshotStatus.Empty or SnapshotStatus.Stale && s.Connected && !s.MemoryLost)
@@ -332,6 +332,8 @@ public sealed class MetadataService
             var (localChanged, localRemoved) = localDb != null && !inMemory ? Diff(_cache.Ephemeral.GetMarkers(p.ProfileId, localDb), local, p.Full) : ([], []);
             var wanted = mainChanged.Concat(localChanged).Select(c => c.Id).ToList();
             var details = wanted.Count == 0 ? new MetadataBundle([], [], [], []) : await provider.Metadata.GetDetailsAsync(db, wanted, ct).ConfigureAwait(false);
+            // What the login could not read (Phase D4, Oracle): kept with the snapshot and shown, instead of failing the refresh.
+            var notes = provider.Metadata.Notes(db).ToArray();
             var version = provider.ServerVersion(db);
             if (lease != null) { await lease.DisposeAsync().ConfigureAwait(false); lease = null; }
             if (dedicated != null) { await dedicated.DisposeAsync().ConfigureAwait(false); dedicated = null; }
@@ -339,7 +341,7 @@ public sealed class MetadataService
 
             // A session closed while this ran keeps nothing in memory (its view was dropped with it).
             if (session is { Closed: true }) return;
-            mainStore.ApplyRefresh(p.ProfileId, mainDb, p.Full, mainChanged, mainRemoved, Only(details, mainChanged), version);
+            mainStore.ApplyRefresh(p.ProfileId, mainDb, p.Full, mainChanged, mainRemoved, Only(details, mainChanged), version, notes);
             // A tab of this file deferred its refresh while this one ran (DDL inside its transaction): the snapshot stays
             // Stale until that refresh runs, instead of this one calling it Fresh.
             var status = SnapshotStatus.Fresh;
@@ -360,7 +362,7 @@ public sealed class MetadataService
             {
                 ProfileId = p.ProfileId, Database = p.Database, Status = status, Changed = mainChanged.Count + mainRemoved.Count,
                 ChangedIds = p.Full ? null : mainChanged.Select(c => c.Id).ToArray(), RemovedIds = p.Full ? null : mainRemoved.ToArray(), Full = p.Full,
-                ElapsedMs = sw.Elapsed.TotalMilliseconds, SessionId = inMemory ? session!.Id : null,
+                ElapsedMs = sw.Elapsed.TotalMilliseconds, SessionId = inMemory ? session!.Id : null, Notes = notes.Length > 0 ? notes : null,
             });
             if (localChanged.Count + localRemoved.Count > 0)
                 _notifier.Notify("meta.updated", new MetaUpdatedEvent

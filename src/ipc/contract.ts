@@ -907,6 +907,7 @@ export interface MetaUpdatedEvent {
   error?: string | null;
   elapsedMs: number;
   sessionId?: string | null;
+  notes?: string[] | null;
 }
 export interface MetricSample {
   at: number;
@@ -1360,6 +1361,7 @@ export interface RowCount {
   objectId: number;
   rows?: number | null;
   estimated: boolean;
+  analyzedAt?: number | null;
 }
 export interface RowCountsParams {
   sessionId: string;
@@ -1423,6 +1425,7 @@ export interface SchemaSnapshot {
   objects: SnapObject[];
   fks: SnapFk[];
   sessionId?: string | null;
+  notes?: string[] | null;
 }
 export interface ScriptParams {
   sessionId: string;
@@ -1550,6 +1553,7 @@ export interface SnapObject {
   returnType?: string | null;
   modifyDate?: number | null;
   parentObjectId?: number | null;
+  note?: string | null;
 }
 export interface SnapParam {
   name: string;

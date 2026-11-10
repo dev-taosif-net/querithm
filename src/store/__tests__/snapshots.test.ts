@@ -245,6 +245,14 @@ describe("snapshots: meta.updated", () => {
     await emit(event({ changed: 301, changedIds: Array.from({ length: 301 }, (_, i) => i) }));
     expect(rpc.mock.calls.map((c) => c[0])).toEqual(["meta.snapshot", "meta.snapshot", "meta.snapshot"]);
   });
+  it("what the refresh could not read comes with the event and replaces the last refresh's notes (D4 S05)", async () => {
+    await emit(event({ changed: 0, changedIds: [], notes: ["Triggers are not listed: this login cannot read ALL_TRIGGERS (ORA-00942)."] }));
+    expect(s().get("p1", "Sales")?.snapshot?.notes).toEqual(["Triggers are not listed: this login cannot read ALL_TRIGGERS (ORA-00942)."]);
+    expect(s().get("p1", "Sales")?.snapshot?.objects).toHaveLength(3); // the objects it could read stay
+    rpc.mockResolvedValueOnce([obj(1, "dbo", "Orders")]);
+    await emit(event({ changed: 1, changedIds: [1] }));
+    expect(s().get("p1", "Sales")?.snapshot?.notes).toBeNull();
+  });
   it("a patch that lands after forget (disconnect) does not re-create the entry", async () => {
     const d = deferred<SnapObject[]>();
     rpc.mockReturnValueOnce(d.promise);

@@ -37,9 +37,10 @@ public interface IDialectService
 /// <paramref name="SessionLocal"/> (Phase D0d): the object exists only for the connection that read it (a temporary
 /// table): it goes to that session's view, never into the snapshot other tabs share.
 /// <paramref name="NoRollbackEngine"/> (MySQL / MariaDB): the storage engine of a table whose changes cannot be rolled back.
+/// <paramref name="Note"/> (Phase D4): what the explorer shows beside the name — "invalid", "materialized view", "external table".
 /// </summary>
 public sealed record ObjectStamp(long Id, string Schema, string Name, ObjectKind Kind, long Marker, string? ReturnType, long? ParentObjectId = null, bool SessionLocal = false,
-    string? NoRollbackEngine = null);
+    string? NoRollbackEngine = null, string? Note = null);
 
 public sealed record ColumnRow(
     long ObjectId, int Ordinal, string Name, string TypeName, int? MaxLen, int? Precision, int? Scale,
@@ -72,6 +73,13 @@ public interface IMetadataProvider
     string ToEditableScript(string definition, Capabilities caps);
     /// <summary>Row counts of tables from catalog statistics in one query (no table scans), chunked by 500 ids.</summary>
     Task<RowCount[]> GetRowCountsAsync(DbConnection connection, IReadOnlyList<long> objectIds, CancellationToken ct);
+
+    /// <summary>
+    /// Phase D4: what the last <see cref="GetStampsAsync"/> / <see cref="GetDetailsAsync"/> on this connection could not read
+    /// — an object kind the login has no access to, with the reason — shown with the snapshot instead of failing the
+    /// refresh. Empty for an engine whose catalog is read whole or not at all.
+    /// </summary>
+    IReadOnlyList<string> Notes(DbConnection connection) => [];
 }
 
 /// <summary>
