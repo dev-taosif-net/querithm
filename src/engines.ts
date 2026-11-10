@@ -113,6 +113,22 @@ export const DIALECTS: Record<Dialect, DialectTraits> = {
     serverDiagnostics: false,
     dollarQuotedBodies: false,
   },
+  // Phase D4, hidden engine: a placeholder until D4 S06 (the sidecar refuses every Oracle statement until D4 S02). Oracle
+  // folds unquoted names to UPPER case, which no trait expresses yet; S06 adds it instead of borrowing PostgreSQL's folding.
+  oracle: {
+    label: "Oracle SQL",
+    language: "oracle",
+    defaultSchema: null,
+    quote: doubleQuote,
+    regularIdentifier: /^[A-Z][A-Z0-9_$#]*$/,
+    foldsIdentifiers: false,
+    // No backslash escapes in Oracle strings: quotes doubled is the whole rule.
+    stringLiteral: singleQuoted,
+    // ALTER SESSION SET CURRENT_SCHEMA selects a schema; the service is the connection target, never switched.
+    useStatement: false,
+    serverDiagnostics: false,
+    dollarQuotedBodies: false,
+  },
 };
 
 export interface EngineTraits {
@@ -285,6 +301,32 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     procedures: false,
     monitor: false,
     locations: ["file", "memory"],
+  },
+  // Phase D4, hidden engine (the picker offers only what the sidecar exposes): every feature off until the session that
+  // implements it (D4 S06–S12) turns it on.
+  oracle: {
+    label: "Oracle Database",
+    shortLabel: "Oracle",
+    badge: "OR",
+    dialect: "oracle",
+    language: DIALECTS.oracle.language,
+    defaultSchema: DIALECTS.oracle.defaultSchema,
+    defaultPort: 1521,
+    defaultAuth: "password",
+    defaultUser: "system",
+    // The service name (Easy Connect host:port/service) is the connection target; the profile names it.
+    defaultDatabase: null,
+    statisticsIo: false,
+    statisticsTime: false,
+    actualPlan: "none",
+    actualPlanConfirm: null,
+    trace: false,
+    debugger: false,
+    synonyms: false,
+    triggerFunctions: false,
+    procedures: false,
+    monitor: false,
+    locations: ["server"],
   },
 };
 

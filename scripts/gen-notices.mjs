@@ -62,6 +62,16 @@ if (existsSync(assets)) {
       license = expr ?? (file ? `file: ${file}` : url ?? "see package");
       if (file && /SqlManagementObjects|Smo|Sfc|ConnectionInfo/i.test(name) && existsSync(path.join(dir, file)))
         verbatim.push({ title: `${name} ${version}`, text: readFileSync(path.join(dir, file), "utf8") });
+      // Phase D4: ODP.NET is redistributed under the Oracle Free Distribution, Hosting, and Use Terms, which require a
+      // copy of the license with every distribution, and its info.txt carries the third-party notices (MIT Kerberos and
+      // others) that must be kept. Both verbatim.
+      if (name === "Oracle.ManagedDataAccess.Core") {
+        for (const f of [file, "info.txt"].filter(Boolean)) {
+          const p = path.join(dir, f);
+          if (!existsSync(p)) throw new Error(`${name} ${version}: ${f} is missing from the package; its notices must ship`);
+          verbatim.push({ title: `${name} ${version} — ${f}`, text: readFileSync(p, "utf8").replace(/^﻿/, "") });
+        }
+      }
     }
     rows.push(`| ${name} | ${version} | ${license} |`);
   }

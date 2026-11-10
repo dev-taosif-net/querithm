@@ -71,6 +71,18 @@ const PINNED: Record<Dialect, [name: string, sql: string][]> = {
     ['we"ird', '"we""ird"'],
     ["1st", '"1st"'],
   ],
+  // Oracle (D4 placeholder): unquoted names fold to upper case, so only an upper-case name stays plain; a reserved word
+  // or any other case is delimited.
+  oracle: [
+    ["ORDERS", "ORDERS"],
+    ["ORDER_LINES$2", "ORDER_LINES$2"],
+    ["T#1", "T#1"],
+    ["Orders", '"Orders"'],
+    ["ORDER", '"ORDER"'],
+    ["ROWNUM", '"ROWNUM"'],
+    ['we"ird', '"we""ird"'],
+    ["1ST", '"1ST"'],
+  ],
 };
 
 describe("quoteIdentifier (the per-dialect table)", () => {

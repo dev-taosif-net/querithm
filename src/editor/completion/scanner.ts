@@ -18,7 +18,7 @@ export type { Token, TokenKind } from "./lexer";
  * ending in `;`, table hints). SQLite has no procedural code and MySQL scripts end statements with `;`: both take the
  * T-SQL rules, whose extra cases (hints, `@x =` arguments) never match their text.
  */
-const PG_RULES: Record<Dialect, boolean> = { tsql: false, pg: true, sqlite: false, mySql: false, duckDb: false };
+const PG_RULES: Record<Dialect, boolean> = { tsql: false, pg: true, sqlite: false, mySql: false, duckDb: false, oracle: false };
 
 // ---------------------------------------------------------------------------------------------
 // Token helpers

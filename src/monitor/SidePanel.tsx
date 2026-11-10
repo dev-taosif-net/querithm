@@ -48,7 +48,7 @@ export function SidePanel({ model, view, engine, profileId, onClose }: { model: 
 }
 
 /** The session's text can be opened in a new tab behind EXPLAIN (PostgreSQL); SQL Server's detail carries its live or cached plan. */
-const EXPLAIN_TEXT: Record<Engine, boolean> = { mssql: false, pg: true, sqlite: false, mySql: true, duckDb: false };
+const EXPLAIN_TEXT: Record<Engine, boolean> = { mssql: false, pg: true, sqlite: false, mySql: true, duckDb: false, oracle: false };
 
 function Detail({ model, row, engine, profileId }: { model: MonitorModel; row: ActivityRow; engine: Engine; profileId: string }) {
   const [d, setD] = useState<RequestDetail | null>(null);

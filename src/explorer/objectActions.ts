@@ -34,6 +34,7 @@ export function columnName(name: string, engine: Engine | undefined) {
     case "sqlite":
     case "mySql":
     case "duckDb":
+    case "oracle":
       return quoteIdentifier(name, dialect);
     default: return assertNever(dialect);
   }

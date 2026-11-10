@@ -29,7 +29,7 @@ describe("connect dialog: search", () => {
     const list = ALL_ENGINES.map((e) => prof(e, { engine: e }));
     for (const term of ENGINE_TERMS[engine]) expect(filterProfiles(list, term, "all").map((p) => p.id)).toContain(engine);
     // The full product name is specific to one engine.
-    const full = ({ mssql: "sql server", pg: "postgresql", sqlite: "sqlite", mySql: "mariadb", duckDb: "duckdb" } satisfies Record<Engine, string>)[engine];
+    const full = ({ mssql: "sql server", pg: "postgresql", sqlite: "sqlite", mySql: "mariadb", duckDb: "duckdb", oracle: "oracle" } satisfies Record<Engine, string>)[engine];
     expect(filterProfiles(list, full, "all").map((p) => p.id)).toEqual([engine]);
   });
 });

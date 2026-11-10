@@ -12,7 +12,7 @@ import { assertNever, DIALECTS, knownDialect } from "../../engines";
 
 const norm = knownDialect;
 /** The prefixes that mark a variable or parameter name under the cursor (hover shows it as one). */
-const VARIABLE_PREFIXES: Record<Dialect, string[]> = { tsql: ["@"], pg: ["$", ":"], sqlite: ["?", ":", "@", "$"], mySql: ["@"], duckDb: ["$", "?"] };
+const VARIABLE_PREFIXES: Record<Dialect, string[]> = { tsql: ["@"], pg: ["$", ":"], sqlite: ["?", ":", "@", "$"], mySql: ["@"], duckDb: ["$", "?"], oracle: [":"] };
 const eq = (a: string | undefined, b: string | undefined): boolean => (a ?? "").toLowerCase() === (b ?? "").toLowerCase();
 
 /** Offsets of the statement around `offset` (for "execute current statement"); empty range at offset if none. */
@@ -88,6 +88,8 @@ export function undeclaredParameters(text: string, dialect: Dialect): string[] {
       case "sqlite": return sqliteParams(T);
       case "mySql": return [];
       case "duckDb": return duckDbParams(T);
+      // Phase D4 placeholder: :binds (minus :NEW / :OLD in trigger bodies) are found by the sidecar's scanner (S02, S04).
+      case "oracle": return [];
       default: return assertNever(d);
     }
   } catch {

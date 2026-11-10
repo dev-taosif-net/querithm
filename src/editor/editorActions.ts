@@ -21,6 +21,8 @@ const PRINT_VARIABLE: Record<Dialect, ((name: string) => string) | null> = {
   sqlite: null,
   mySql: null,
   duckDb: null,
+  // DBMS_OUTPUT needs SET SERVEROUTPUT (D4 owner decision O5, S04); nothing is offered until then.
+  oracle: null,
 };
 
 export async function goToDefinition(tabId: string) {

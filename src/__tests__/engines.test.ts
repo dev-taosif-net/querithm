@@ -85,6 +85,32 @@ describe("engine table", () => {
   });
 });
 
+describe("Oracle (Phase D4, hidden engine placeholder)", () => {
+  it("is a server engine with every feature off until the session that implements it", () => {
+    expect(ENGINES.oracle).toEqual({
+      label: "Oracle Database", shortLabel: "Oracle", badge: "OR", dialect: "oracle", language: "oracle", defaultSchema: null,
+      defaultPort: 1521, defaultAuth: "password", defaultUser: "system", defaultDatabase: null, statisticsIo: false,
+      statisticsTime: false, actualPlan: "none", actualPlanConfirm: null, trace: false, debugger: false, synonyms: false,
+      triggerFunctions: false, procedures: false, monitor: false, locations: ["server"],
+    });
+    expect(isLocalEngine("oracle")).toBe(false);
+    expect(actualPlanWithRun("oracle")).toBe(false);
+  });
+
+  it("quotes with \"\", has no USE statement, and only an upper-case name is a regular identifier", () => {
+    expect(DIALECTS.oracle).toMatchObject({ label: "Oracle SQL", defaultSchema: null, useStatement: false, serverDiagnostics: false, dollarQuotedBodies: false });
+    expect(DIALECTS.oracle.quote).toBe(DELIMIT.doubleQuote);
+    expect(DIALECTS.oracle.regularIdentifier.test("ORDER_LINES$2")).toBe(true);
+    expect(DIALECTS.oracle.regularIdentifier.test("T#1")).toBe(true);
+    expect(DIALECTS.oracle.regularIdentifier.test("Orders")).toBe(false);
+    expect(DIALECTS.oracle.regularIdentifier.test("_X")).toBe(false);
+    // No backslash escapes: only quotes are doubled.
+    expect(DIALECTS.oracle.stringLiteral("C:\\temp's")).toBe("'C:\\temp''s'");
+    expect(languageOf("oracle")).toBe("oracle");
+    expect(dialectOf("oracle")).toBe("oracle");
+  });
+});
+
 describe("dialect table", () => {
   it("has exactly the generated dialects", () => {
     expect([...DIALECT_LIST].sort()).toEqual([...DialectValues].sort());
@@ -122,6 +148,7 @@ describe("identifier quoting table", () => {
     sqlite: [["Orders", '"Orders"'], ['we"ird', '"we""ird"'], ["x]y", '"x]y"'], ["a`b", '"a`b"'], ["", '""']],
     mySql: [["Orders", "`Orders`"], ["we`ird", "`we``ird`"], ["``", "``````"], ['say "hi"', '`say "hi"`'], ["x]y", "`x]y`"], ["", "``"]],
     duckDb: [["Orders", '"Orders"'], ['we"ird', '"we""ird"'], ["x]y", '"x]y"'], ["{a}", '"{a}"'], ["", '""']],
+    oracle: [["ORDERS", '"ORDERS"'], ['we"ird', '"we""ird"'], ["x]y", '"x]y"'], ["", '""']],
   };
   it.each(DIALECT_LIST)("%s delimits and doubles its closing delimiter", (d) => {
     for (const [name, quoted] of cases[d]) expect(DIALECTS[d].quote(name)).toBe(quoted);

@@ -33,11 +33,11 @@ describe("fixture secrets (L33)", () => {
   it("refuses a missing service or a key of another service, naming neither value", () => {
     expect(() => composeValue("missing", "DB_PASSWORD", compose)).toThrow(/no service missing/);
     expect(() => composeValue("other", "SSH_PASSWORD", compose)).toThrow(/no SSH_PASSWORD for other/);
-    expect(() => fixturePassword("oracle", compose)).toThrow(/no fixture password/);
+    expect(() => fixturePassword("db2", compose)).toThrow(/no fixture password/);
   });
 
   it("finds every engine's password and the bastion's in the real compose file", () => {
     const text = readFileSync(COMPOSE_FILE, "utf8");
-    for (const engine of ["mssql", "pg", "mysql", "mariadb", "ssh"]) expect(fixturePassword(engine, text).length).toBeGreaterThanOrEqual(6);
+    for (const engine of ["mssql", "pg", "mysql", "mariadb", "ssh", "oracle"]) expect(fixturePassword(engine, text).length).toBeGreaterThanOrEqual(6);
   });
 });

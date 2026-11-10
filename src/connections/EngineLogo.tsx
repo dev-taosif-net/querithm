@@ -73,6 +73,15 @@ export function EngineLogo({ engine, size = 14, mono = false, decorative = false
           <path d="M8.5 16.5v-5M12 16.5v-9M15.5 16.5v-3" stroke={cut} strokeWidth="1.8" strokeLinecap="round" />
         </svg>
       );
+    case "oracle":
+      // Our own mark (not Oracle's logo): a schema of three linked tables.
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" {...a11y} className="shrink-0">
+          {!decorative && <title>{name}</title>}
+          <rect x="3.5" y="3.5" width="17" height="17" rx="2.5" fill={mono ? "currentColor" : "#6b5bd2"} />
+          <path d="M7 8h4M7 12h10M13 16h4M11 8v4M13 12v4" stroke={cut} strokeWidth="1.6" strokeLinecap="round" />
+        </svg>
+      );
     default:
       return assertNever(shown);
   }

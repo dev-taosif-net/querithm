@@ -46,6 +46,8 @@
     <ProjectReference Include="..\Querithm.Intelligence.MySql\Querithm.Intelligence.MySql.csproj" />
     <ProjectReference Include="..\Querithm.Providers.DuckDb\Querithm.Providers.DuckDb.csproj" />
     <ProjectReference Include="..\Querithm.Intelligence.DuckDb\Querithm.Intelligence.DuckDb.csproj" />
+    <ProjectReference Include="..\Querithm.Providers.Oracle\Querithm.Providers.Oracle.csproj" />
+    <ProjectReference Include="..\Querithm.Intelligence.Oracle\Querithm.Intelligence.Oracle.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="StreamJsonRpc" />
@@ -82,6 +84,11 @@
     <TrimmerRootAssembly Include="Querithm.Intelligence.DuckDb" />
     <TrimmerRootAssembly Include="DuckDB.NET.Data" />
     <TrimmerRootAssembly Include="DuckDB.NET.Bindings" />
+    <!-- Phase D4 (hidden): Oracle. ODP.NET's license allows redistributing it unmodified only, and trimming rewrites the
+         assembly, so it is rooted whole (kept byte-for-byte; the Host self-test proves it loads in the trimmed Host). -->
+    <TrimmerRootAssembly Include="Querithm.Providers.Oracle" />
+    <TrimmerRootAssembly Include="Querithm.Intelligence.Oracle" />
+    <TrimmerRootAssembly Include="Oracle.ManagedDataAccess" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Querithm.Tests" />

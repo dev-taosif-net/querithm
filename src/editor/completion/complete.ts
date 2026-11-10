@@ -101,6 +101,13 @@ const RULES: Record<Dialect, CompletionRules> = {
     call: null,
     namedArguments: null,
   },
+  // Phase D4 placeholder (hidden engine): no procedure call snippet until S06; PL/SQL names arguments with =>.
+  oracle: {
+    plainName: DIALECTS.oracle.regularIdentifier,
+    qualifyScalarFunctions: false,
+    call: null,
+    namedArguments: "arrow",
+  },
 };
 /** Tier-1 completion items for the cursor in `req` (§9). Never throws. */
 export function complete(req: CompletionRequest): CompletionResult {

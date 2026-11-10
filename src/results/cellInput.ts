@@ -41,6 +41,9 @@ const VALUE_RULES: Record<Engine, ValueRules> = {
       uinteger: [0n, 4294967295n], ubigint: [0n, (1n << 64n) - 1n], uhugeint: [0n, (1n << 128n) - 1n],
     },
   },
+  // Phase D4 placeholder (hidden engine; grid edit refused in the sidecar): Oracle's DATE holds a time of day, and
+  // BINARY_FLOAT / BINARY_DOUBLE take NaN and Infinity. S10 sets the rest with the grid-edit tests.
+  oracle: { nanInfinity: true, moneyIsNumber: true, timestampIsDateTime: true, byteaHex: false, anyValue: false },
 };
 
 const INT_RANGES: Record<string, [bigint, bigint]> = {

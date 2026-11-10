@@ -494,6 +494,9 @@ function ExecProcDialog({ d, close }: { d: Extract<Dialog, { kind: "execProc" }>
       case "sqlite":
       case "duckDb":
         return null;
+      // Phase D4 placeholder (hidden engine): Oracle procedures are not offered yet (ENGINES.oracle.procedures is false).
+      case "oracle":
+        return null;
       default:
         return assertNever(dialect);
     }

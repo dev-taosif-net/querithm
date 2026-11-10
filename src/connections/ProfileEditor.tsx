@@ -70,6 +70,12 @@ const FIELDS: Record<Engine, EngineFields> = {
     instanceNames: false, trustServerCertificate: false, multiSubnetFailover: false, applicationIntent: false, certNotChecked: [],
     aliases: "duckdb duck file parquet",
   },
+  // Phase D4 placeholder (hidden engine): the profile dialog's Oracle fields arrive in S06.
+  oracle: {
+    connectionStringExample: "",
+    instanceNames: false, trustServerCertificate: false, multiSubnetFailover: false, applicationIntent: false, certNotChecked: [],
+    aliases: "oracle ora plsql",
+  },
 };
 
 /** Where an engine's databases live: the sidecar's answer when it gave one, else the engine table's. */
@@ -97,6 +103,7 @@ const AUTH: Record<Engine, { id: AuthKind; label: string }[]> = {
   sqlite: [{ id: "none", label: "None (a database on this computer)" }],
   mySql: [{ id: "password", label: "Password" }],
   duckDb: [{ id: "none", label: "None (a database on this computer)" }],
+  oracle: [{ id: "password", label: "Password" }],
 };
 
 const TLS: Record<Engine, { id: TlsMode; label: string }[]> = {
@@ -115,6 +122,8 @@ const TLS: Record<Engine, { id: TlsMode; label: string }[]> = {
   ],
   sqlite: [],
   duckDb: [],
+  // Phase D4 placeholder: TCPS modes arrive with S03 / S06.
+  oracle: [],
   mySql: [
     { id: "default", label: "Default — Verify full (certificate and host name)" },
     { id: "verifyCa", label: "Verify CA" },
@@ -1236,7 +1245,7 @@ function SshSection({ id, open, onToggle, ssh, onChange, secret, onSecret, saved
 }
 
 /** Bundled engine logos; null draws Querithm's own engine mark (EngineLogo) instead. */
-const LOGOS: Record<Engine, string | null> = { mssql: mssqlLogo, pg: pgLogo, sqlite: null, mySql: null, duckDb: null };
+const LOGOS: Record<Engine, string | null> = { mssql: mssqlLogo, pg: pgLogo, sqlite: null, mySql: null, duckDb: null, oracle: null };
 
 function EngineMark({ engine, logo, size }: { engine: Engine; logo: string | null; size: number }) {
   return logo ? <img src={logo} alt="" style={{ width: size, height: size }} className="shrink-0" draggable={false} /> : <EngineLogo engine={engine} size={size} decorative />;

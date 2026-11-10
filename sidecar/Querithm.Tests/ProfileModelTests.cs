@@ -63,7 +63,7 @@ public class ProfileModelTests
     [InlineData("1")]
     [InlineData("-1")]
     [InlineData("mssql,pg")]
-    [InlineData("oracle")]
+    [InlineData("db2")]
     [InlineData("")]
     [InlineData(null)]
     public void Strict_enum_parsing_refuses_numbers_lists_and_unknown_names(string? text) =>
@@ -129,7 +129,7 @@ public class ProfileModelTests
     }
 
     [Theory]
-    [InlineData("engine", "oracle")]
+    [InlineData("engine", "db2")]
     [InlineData("engine", "1")]
     [InlineData("auth", "passkey")]
     [InlineData("location", "cloud")]
@@ -162,7 +162,7 @@ public class ProfileModelTests
     {
         await using var host = new TestHost();
         var saved = await host.Rpc.ProfileSave(new Profile { Id = "", Name = "p", Engine = Engine.Mssql, Host = "h", Auth = AuthKind.Sql });
-        Raw(host.Services.Store, "UPDATE profile SET engine = 'oracle' WHERE id = $id", ("$id", saved.Id));
+        Raw(host.Services.Store, "UPDATE profile SET engine = 'db2' WHERE id = $id", ("$id", saved.Id));
 
         var listed = Assert.Single(await host.Rpc.ProfileList());
         Assert.NotNull(listed.Unsupported);
@@ -170,10 +170,10 @@ public class ProfileModelTests
         Assert.Equal("unsupportedProfile", open.Code);
         var test = await host.Rpc.ProfileTest(new ProfileTestParams { ProfileId = saved.Id, Secret = "x" });
         Assert.False(test.Ok);
-        Assert.Contains("oracle", test.Error);
+        Assert.Contains("db2", test.Error);
         var save = await Assert.ThrowsAsync<QuerithmException>(() => host.Rpc.ProfileSave(saved with { Name = "renamed" }));
         Assert.Equal("unsupportedProfile", save.Code);
-        Assert.Equal("oracle", Scalar(host.Services.Store, "SELECT engine FROM profile WHERE id = $id", saved.Id));
+        Assert.Equal("db2", Scalar(host.Services.Store, "SELECT engine FROM profile WHERE id = $id", saved.Id));
 
         await host.Rpc.ProfileDelete(new ProfileRef { ProfileId = saved.Id });
         Assert.Empty(await host.Rpc.ProfileList());

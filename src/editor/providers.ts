@@ -362,7 +362,7 @@ function scheduleDiagnostics(tabId: string, model: monaco.editor.ITextModel) {
 }
 
 /** Formats with the bundled sql-formatter in one of its languages (no network, no sidecar). */
-async function formatLocally(text: string, language: "postgresql" | "sqlite" | "mysql" | "duckdb"): Promise<{ text: string; error?: string | null }> {
+async function formatLocally(text: string, language: "postgresql" | "sqlite" | "mysql" | "duckdb" | "plsql"): Promise<{ text: string; error?: string | null }> {
   const s = useSettings.getState();
   try {
     const { format } = await import("sql-formatter");
@@ -385,6 +385,8 @@ export async function formatText(text: string, dialect: Dialect): Promise<{ text
     case "sqlite": return formatLocally(text, "sqlite");
     case "mySql": return formatLocally(text, "mysql");
     case "duckDb": return formatLocally(text, "duckdb");
+    // Phase D4 placeholder: sql-formatter's PL/SQL language, offline like the others (S06 decides the formatter).
+    case "oracle": return formatLocally(text, "plsql");
     case "tsql":
       return rpc("lang.format", {
         text, dialect, options: { keywordCase: s.keywordCase, indentSize: s.indentSize, leadingCommas: s.leadingCommas, newlineBeforeJoin: s.newlineBeforeJoin },

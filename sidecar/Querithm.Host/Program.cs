@@ -6,8 +6,6 @@ using Querithm.Core;
 using Querithm.Core.Sessions;
 using Querithm.Core.Store;
 using Querithm.Host;
-using Querithm.Providers.Postgres;
-using Querithm.Providers.SqlServer;
 using StreamJsonRpc;
 
 // §4: the sidecar owns every database byte. Control plane = JSON-RPC on stdio; data plane = Arrow frames on a local socket.
@@ -140,7 +138,22 @@ if (args is ["--self-test"])
     }
     catch (Exception ex) { Console.Error.WriteLine($"duckdb self-test error: {ex.GetType().Name}: {ex.Message}"); }
     Console.Error.WriteLine($"duckdb {(duckdbOk ? "ok" : "FAILED")}");
-    return dictionary.SqlServer.Count > 0 && dictionary.Postgres.Count > 0 && jsonOk && historyOk && sqliteOk && mysqlOk && arrowOk && duckdbOk ? 0 : 1;
+    // Phase D4 (hidden): the trimmed build loads ODP.NET whole (rooted untrimmed: its license allows unmodified copies
+    // only) — its connection-string table and a connection object, without dialing — and the skeleton still refuses SQL.
+    var oracleOk = false;
+    try
+    {
+        var ob = new Oracle.ManagedDataAccess.Client.OracleConnectionStringBuilder { DataSource = "//db.invalid:1521/FREEPDB1", UserID = "u", Pooling = false };
+        await using var oc = new Oracle.ManagedDataAccess.Client.OracleConnection(ob.ConnectionString);
+        var read = new Oracle.ManagedDataAccess.Client.OracleConnectionStringBuilder(oc.ConnectionString);
+        var refused = new Querithm.Providers.Oracle.OracleProvider().Language.Classify("SELECT 1 FROM DUAL").Refusal != null;
+        oracleOk = read.DataSource == "//db.invalid:1521/FREEPDB1" && !read.Pooling && oc.State == System.Data.ConnectionState.Closed && refused
+                   && Querithm.Providers.Oracle.OracleProvider.DriverVersion.StartsWith("23.", StringComparison.Ordinal);
+        Console.Error.WriteLine($"oracle driver {Querithm.Providers.Oracle.OracleProvider.DriverVersion}");
+    }
+    catch (Exception ex) { Console.Error.WriteLine($"oracle self-test error: {ex.GetType().Name}: {ex.Message}"); }
+    Console.Error.WriteLine($"oracle {(oracleOk ? "ok" : "FAILED")}");
+    return dictionary.SqlServer.Count > 0 && dictionary.Postgres.Count > 0 && jsonOk && historyOk && sqliteOk && mysqlOk && arrowOk && duckdbOk && oracleOk ? 0 : 1;
 }
 
 var dataDir = Environment.GetEnvironmentVariable("QUERITHM_DATA_DIR") ?? Paths.DefaultDataDir();
@@ -175,8 +188,7 @@ data.Start();
 var notifier = new RpcNotifier();
 // A run whose rows have no reader fails with the reason; the webview also gets the state for its banner (§5).
 data.StateChanged += connected => notifier.Notify("dataPlane.state", new DataPlaneStateEvent { Connected = connected });
-IDbProvider[] engines = [new SqlServerProvider(), new PostgresProvider(), new Querithm.Providers.Sqlite.SqliteProvider(), new Querithm.Providers.MySql.MySqlProvider(),
-    new Querithm.Providers.DuckDb.DuckDbProvider(dataDir)];
+IDbProvider[] engines = EngineSetup.Providers(dataDir);
 // M22: a damaged store.db is set aside and replaced by a fresh one (the user is told once, system.notices) instead of
 // failing every start; a store this build must upgrade is copied first, and its history's secrets are masked with each
 // engine's rules (8a review). One this build must not touch (written by a newer build, a schema it cannot parse) is left as
@@ -189,10 +201,9 @@ catch (StoreRefusedException ex)
     storeRefused = ex.Message;
     store = LocalStore.InMemory();
 }
-// Phase D merge model: a new engine's provider ships hidden until its release gates pass; QUERITHM_DEV_ENGINES or the
-// dev.engines setting (comma-separated engine names) exposes it for testing. SQLite, MySQL / MariaDB and DuckDB left the
-// flag in 0.2.0 (owner decision 2026-11-01, after release-smoke passed on every RID).
-Engine[] behindFlag = [];
+// Phase D merge model: engines behind the flag (EngineSetup.BehindFlag) stay hidden unless QUERITHM_DEV_ENGINES or the
+// dev.engines setting (comma-separated engine names) exposes them for testing.
+var behindFlag = EngineSetup.BehindFlag;
 // Spill files a crashed sidecar left behind (Phase D3): their owner no longer runs.
 Querithm.Providers.DuckDb.DuckDbInstances.SweepTemp(dataDir);
 var devEngines = Environment.GetEnvironmentVariable("QUERITHM_DEV_ENGINES")

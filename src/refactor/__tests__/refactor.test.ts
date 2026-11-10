@@ -52,6 +52,7 @@ describe("local rename", () => {
     sqlite: [["order", '"order"'], ["pragma", '"pragma"'], ["Group", '"Group"'], ["orders", "orders"]],
     mySql: [["order", "`order`"], ["key", "`key`"], ["Unsigned", "`Unsigned`"], ["orders", "orders"]],
     duckDb: [["order", '"order"'], ["qualify", '"qualify"'], ["pivot", '"pivot"'], ["orders", "orders"]],
+    oracle: [["ORDER", '"ORDER"'], ["LEVEL", '"LEVEL"'], ["order", '"order"'], ["ORDERS", "ORDERS"]],
   };
 
   it.each(DIALECT_LIST)("%s: a reserved word as the new name is delimited the dialect's way, any case", (d) => {

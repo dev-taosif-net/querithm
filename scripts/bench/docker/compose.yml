@@ -1,4 +1,5 @@
-# Benchmark/test fixture (§14): SQL Server 2022 + PostgreSQL 16 + an SSH bastion (+ MySQL 8.4 / MariaDB 11.8, Phase D2). Development credentials only.
+# Benchmark/test fixture (§14): SQL Server 2022 + PostgreSQL 16 + an SSH bastion (+ MySQL 8.4 / MariaDB 11.8, Phase D2;
+# + Oracle Free 26ai behind the `oracle` profile, Phase D4). Development credentials only.
 name: querithm-fixture
 services:
   mssql:
@@ -58,6 +59,32 @@ services:
       MARIADB_ROOT_PASSWORD: "Querithm_Dev_2026!"
       MARIADB_DATABASE: "querithm"
     ports: ["127.0.0.1:33118:3306"]
+  # Phase D4 (hidden engine): Oracle AI Database 26ai Free (Oracle Free Use Terms: 2 cores, 2 GB RAM, 12 GB user data, no
+  # security patches), pinned by tag and multi-arch index digest. About 2 GB RAM and minutes on a first start, so it runs
+  # only when asked for, from a clean state:
+  #   docker compose -p querithm-fixture -f scripts/bench/docker/compose.yml --profile oracle up -d --wait oracle
+  # ORACLE_PWD (SYS / SYSTEM / PDBADMIN) stays inside the container; tests sign in only as the two users that
+  # oracle/setup/01-users.sh creates in FREEPDB1. ENABLE_TCPS makes the image generate a self-signed certificate (its own
+  # wallet, created at first start) and a TCPS listener on 2484 (D4 owner decision O2, default).
+  oracle:
+    image: container-registry.oracle.com/database/free:23.26.3.0@sha256:f988b0c04c4c386cd306a2a914c0d7a9702d83acc31b064a28ad8eb6278a8fba
+    profiles: ["oracle"]
+    environment:
+      ORACLE_PWD: "Querithm_Dev_2026"
+      ENABLE_TCPS: "true"
+      QUERITHM_APP_PASSWORD: "Querithm_App_2026"
+      QUERITHM_MON_PASSWORD: "Querithm_Mon_2026"
+    volumes:
+      - ./oracle/setup:/opt/oracle/scripts/setup:ro
+      - ./oracle/healthcheck.sh:/opt/querithm/healthcheck.sh:ro
+    ports: ["127.0.0.1:15210:1521", "127.0.0.1:15211:2484"]
+    # Healthy once FREEPDB1 is open and the setup script has created the test user: it signs in as that user.
+    healthcheck:
+      test: ["CMD", "bash", "/opt/querithm/healthcheck.sh"]
+      interval: 15s
+      timeout: 10s
+      start_period: 15m
+      retries: 40
   ssh:
     build:
       context: .

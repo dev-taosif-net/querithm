@@ -528,6 +528,64 @@ export function duckdbLanguage(): Monaco.languages.IMonarchLanguage {
   } as Monaco.languages.IMonarchLanguage;
 }
 
+/** Phase D4 placeholder (hidden engine): a small keyword list until D4 S06 writes Oracle's own word lists. */
+export const ORACLE_KEYWORDS = `ALL ALTER AND AS ASC BEGIN BETWEEN BY CASE COMMIT CONNECT CREATE DECLARE DEFAULT DELETE DESC DISTINCT DROP ELSE
+END EXCEPTION EXISTS FETCH FROM FUNCTION GRANT GROUP HAVING IN INDEX INSERT INTO IS JOIN LIKE MERGE MINUS NOT NULL OF ON
+OR ORDER PACKAGE PROCEDURE REPLACE REVOKE ROLLBACK SAVEPOINT SELECT SEQUENCE SET TABLE THEN TRIGGER TRUNCATE UNION
+UPDATE USING VALUES VIEW WHEN WHERE WITH`.split(/\s+/);
+
+export const ORACLE_TYPES = `binary_double binary_float blob char clob date float integer interval long nchar nclob number nvarchar2 raw rowid
+timestamp varchar2 xmltype`.split(/\s+/);
+
+export const ORACLE_FUNCTIONS = `coalesce count decode lower max min nvl nvl2 round substr sum sysdate systimestamp to_char to_date to_number trim
+trunc upper`.split(/\s+/);
+
+/** Phase D4 placeholder: generic SQL lexical forms (-- and non-nesting block comments, '' strings, "" names, :binds). */
+export function oracleLanguage(): Monaco.languages.IMonarchLanguage {
+  return {
+    defaultToken: "",
+    ignoreCase: true,
+    tokenPostfix: ".oracle",
+    keywords: ORACLE_KEYWORDS.map((k) => k.toLowerCase()),
+    typeKeywords: ORACLE_TYPES,
+    builtinFunctions: ORACLE_FUNCTIONS,
+    operators: [],
+    tokenizer: {
+      root: [
+        { include: "@comments" },
+        [/\s+/, "white"],
+        [/:[A-Za-z_]\w*/, "variable"],
+        [/'/, { token: "string.quote", next: "@string" }],
+        [/"/, { token: "identifier.quote", next: "@quoted" }],
+        [/[0-9]+(\.[0-9]*)?([eE][+-]?[0-9]+)?/, "number"],
+        [/[;,.]/, "delimiter"],
+        [/[()]/, "@brackets"],
+        [/[A-Za-z_][\w$#]*/, wordCases],
+        [/\|\||:=|=>|<>|!=|<=|>=|[<>=+\-*/]/, "operator"],
+      ],
+      comments: [
+        [/--.*/, "comment"],
+        [/\/\*/, { token: "comment.quote", next: "@comment" }],
+      ],
+      comment: [
+        [/[^*]+/, "comment"],
+        [/\*\//, { token: "comment.quote", next: "@pop" }],
+        [/\*/, "comment"],
+      ],
+      string: [
+        [/[^']+/, "string"],
+        [/''/, "string"],
+        [/'/, { token: "string.quote", next: "@pop" }],
+      ],
+      quoted: [
+        [/[^"]+/, "identifier"],
+        [/""/, "identifier"],
+        [/"/, { token: "identifier.quote", next: "@pop" }],
+      ],
+    },
+  } as Monaco.languages.IMonarchLanguage;
+}
+
 export interface EditorLanguage {
   /** Names Monaco shows for the language, and the file extensions it claims. */
   aliases: string[];
@@ -559,5 +617,10 @@ export const LANGUAGES: Record<Dialect, EditorLanguage> = {
   duckDb: {
     aliases: ["DuckDB", "duckdb"], extensions: [], tokens: duckdbLanguage, configuration: duckdbLanguageConfiguration,
     words: [DUCKDB_KEYWORDS, DUCKDB_TYPES, DUCKDB_FUNCTIONS],
+  },
+  // Phase D4 placeholder (hidden engine); the generic configuration until S06.
+  oracle: {
+    aliases: ["Oracle", "oracle"], extensions: [], tokens: oracleLanguage, configuration: sqliteLanguageConfiguration,
+    words: [ORACLE_KEYWORDS, ORACLE_TYPES, ORACLE_FUNCTIONS],
   },
 };

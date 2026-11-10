@@ -32,6 +32,8 @@ const EXECUTE_LABEL: Record<Engine, ((kind: ObjectKind) => string) | null> = {
   mySql: (kind) => (kind === "proc" ? "CALL" : "SELECT"),
   // Macros are called in SELECT; a table macro in FROM.
   duckDb: () => "SELECT",
+  // Phase D4 placeholder (hidden engine): routine scripting arrives with S11.
+  oracle: null,
 };
 /**
  * Why a trigger cannot be enabled or disabled from here: `always` where the engine has no such statement, `onView`
@@ -43,6 +45,7 @@ const TRIGGER_TOGGLE: Record<Engine, { always?: string; onView?: string }> = {
   sqlite: { always: "SQLite cannot disable a trigger; drop and create it instead" },
   mySql: { always: "MySQL cannot disable a trigger; drop and create it instead" },
   duckDb: { always: "DuckDB has no triggers" },
+  oracle: { always: "Enabling and disabling Oracle triggers is not available yet" },
 };
 /**
  * "Group by …" on a database, named after the level its objects are grouped in (`Capabilities.namespaces`): schemas,

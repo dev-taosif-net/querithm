@@ -40,6 +40,8 @@ export function fixturePassword(engine, text) {
     case "mysql": return composeValue("mysql84", "MYSQL_ROOT_PASSWORD", text);
     case "mariadb": return composeValue("mariadb118", "MARIADB_ROOT_PASSWORD", text);
     case "ssh": return composeValue("ssh", "SSH_PASSWORD", text);
+    // Phase D4: Oracle Free's least-privileged test user (the admin password stays inside the fixture's setup).
+    case "oracle": return composeValue("oracle", "QUERITHM_APP_PASSWORD", text);
     default: throw new Error(`no fixture password for ${engine}`);
   }
 }

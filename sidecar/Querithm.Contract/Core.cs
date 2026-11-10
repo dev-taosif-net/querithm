@@ -7,10 +7,10 @@ public static class ContractInfo
 }
 
 /// <summary>Members are appended as providers land (Phase D); existing spellings never change ("mssql", "pg").</summary>
-public enum Engine { Mssql, Pg, Sqlite, MySql, DuckDb }
+public enum Engine { Mssql, Pg, Sqlite, MySql, DuckDb, Oracle }
 
 /// <summary>Every engine has a dialect of its own (Phase D0a): language calls route by dialect to exactly one provider.</summary>
-public enum Dialect { Tsql, Pg, Sqlite, MySql, DuckDb }
+public enum Dialect { Tsql, Pg, Sqlite, MySql, DuckDb, Oracle }
 
 public enum EnvironmentKind { Dev, Staging, Prod, Local, Test }
 

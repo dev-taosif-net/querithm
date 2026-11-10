@@ -5,11 +5,13 @@
   <Project Path="Querithm.Host/Querithm.Host.csproj" />
   <Project Path="Querithm.Intelligence.DuckDb/Querithm.Intelligence.DuckDb.csproj" />
   <Project Path="Querithm.Intelligence.MySql/Querithm.Intelligence.MySql.csproj" />
+  <Project Path="Querithm.Intelligence.Oracle/Querithm.Intelligence.Oracle.csproj" />
   <Project Path="Querithm.Intelligence.PgSql/Querithm.Intelligence.PgSql.csproj" />
   <Project Path="Querithm.Intelligence.Sqlite/Querithm.Intelligence.Sqlite.csproj" />
   <Project Path="Querithm.Intelligence.TSql/Querithm.Intelligence.TSql.csproj" />
   <Project Path="Querithm.Providers.DuckDb/Querithm.Providers.DuckDb.csproj" />
   <Project Path="Querithm.Providers.MySql/Querithm.Providers.MySql.csproj" />
+  <Project Path="Querithm.Providers.Oracle/Querithm.Providers.Oracle.csproj" />
   <Project Path="Querithm.Providers.Postgres/Querithm.Providers.Postgres.csproj" />
   <Project Path="Querithm.Providers.SqlServer/Querithm.Providers.SqlServer.csproj" />
   <Project Path="Querithm.Providers.Sqlite/Querithm.Providers.Sqlite.csproj" />

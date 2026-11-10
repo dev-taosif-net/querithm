@@ -28,9 +28,9 @@ describe("monaco bootstrap", () => {
     m.initMonaco();
     m.initMonaco();
     const ids = fake.monaco.languages.register.mock.calls.map((c) => c[0].id);
-    expect(ids).toEqual(["tsql", "pgsql", "sqlite", "mysql", "duckdb"]);
-    expect(fake.monaco.languages.setMonarchTokensProvider).toHaveBeenCalledTimes(5);
-    expect(fake.monaco.languages.setLanguageConfiguration).toHaveBeenCalledTimes(5);
+    expect(ids).toEqual(["tsql", "pgsql", "sqlite", "mysql", "duckdb", "oracle"]);
+    expect(fake.monaco.languages.setMonarchTokensProvider).toHaveBeenCalledTimes(6);
+    expect(fake.monaco.languages.setLanguageConfiguration).toHaveBeenCalledTimes(6);
     expect(fake.monaco.editor.defineTheme).toHaveBeenCalledTimes(1);
     expect(fake.monaco.editor.setTheme).toHaveBeenCalledWith("querithm");
     expect((self as any).MonacoEnvironment.getWorker()).toBeTruthy();

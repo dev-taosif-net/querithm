@@ -127,7 +127,7 @@ public class ProfileStoreTests
         using (var c = store.Open())
         using (var cmd = c.CreateCommand())
         {
-            cmd.CommandText = "INSERT INTO profile (id, name, engine, auth, environment, tls_mode) VALUES ('x', 'n', 'oracle', 'magic', 'mars', '???')";
+            cmd.CommandText = "INSERT INTO profile (id, name, engine, auth, environment, tls_mode) VALUES ('x', 'n', 'db2', 'magic', 'mars', '???')";
             cmd.ExecuteNonQuery();
         }
         var p = new ProfileStore(store).Get("x")!;

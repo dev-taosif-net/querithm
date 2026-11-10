@@ -289,6 +289,7 @@ public static class ProfileRules
         Engine.Sqlite => "SQLite",
         Engine.MySql => "MySQL / MariaDB",
         Engine.DuckDb => "DuckDB",
+        Engine.Oracle => "Oracle",
         _ => engine.ToString(),
     };
 }

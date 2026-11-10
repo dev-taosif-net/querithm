@@ -79,8 +79,22 @@ UNPACK VERBOSE
 INSERT UPDATE DELETE SET VALUES BEGIN COMMIT ROLLBACK CALL EXPLAIN VACUUM CHECKPOINT TRUNCATE DROP ALTER PRAGMA USE
 `);
 
+/**
+ * Phase D4 placeholder (hidden engine): Oracle's reserved words (SQL Language Reference, "Oracle SQL Reserved Words") plus
+ * the statement verbs statement analysis meets. D4 S06 checks the list against V$RESERVED_WORDS.
+ */
+const ORACLE_RESERVED = set(`
+ACCESS ADD ALL ALTER AND ANY AS ASC AUDIT BETWEEN BY CHAR CHECK CLUSTER COLUMN COMMENT COMPRESS CONNECT CREATE CURRENT
+DATE DECIMAL DEFAULT DELETE DESC DISTINCT DROP ELSE EXCLUSIVE EXISTS FILE FLOAT FOR FROM GRANT GROUP HAVING IDENTIFIED
+IMMEDIATE IN INCREMENT INDEX INITIAL INSERT INTEGER INTERSECT INTO IS LEVEL LIKE LOCK LONG MAXEXTENTS MINUS MLSLABEL MODE
+MODIFY NOAUDIT NOCOMPRESS NOT NOWAIT NULL NUMBER OF OFFLINE ON ONLINE OPTION OR ORDER PCTFREE PRIOR PUBLIC RAW RENAME
+RESOURCE REVOKE ROW ROWID ROWNUM ROWS SELECT SESSION SET SHARE SIZE SMALLINT START SUCCESSFUL SYNONYM SYSDATE TABLE THEN
+TO TRIGGER UID UNION UNIQUE UPDATE USER VALIDATE VALUES VARCHAR VARCHAR2 VIEW WHENEVER WHERE WITH
+BEGIN END COMMIT ROLLBACK SAVEPOINT MERGE TRUNCATE DECLARE CALL EXPLAIN
+`);
+
 const RESERVED: Record<Dialect, Set<string>> = {
-  tsql: TSQL_RESERVED, pg: PG_RESERVED, sqlite: SQLITE_RESERVED, mySql: MYSQL_RESERVED, duckDb: DUCKDB_RESERVED,
+  tsql: TSQL_RESERVED, pg: PG_RESERVED, sqlite: SQLITE_RESERVED, mySql: MYSQL_RESERVED, duckDb: DUCKDB_RESERVED, oracle: ORACLE_RESERVED,
 };
 
 export function reservedWords(dialect: Dialect): Set<string> {
@@ -116,7 +130,14 @@ SELECT FROM INSERT UPDATE DELETE WITH CREATE ALTER DROP TRUNCATE BEGIN COMMIT EN
 DESCRIBE SUMMARIZE EXPLAIN PRAGMA CALL CHECKPOINT VACUUM ANALYZE PIVOT UNPIVOT COMMENT PREPARE EXECUTE DEALLOCATE
 `);
 
-const STMT: Record<Dialect, Set<string>> = { tsql: TSQL_STMT, pg: PG_STMT, sqlite: SQLITE_STMT, mySql: MYSQL_STMT, duckDb: DUCKDB_STMT };
+/** Phase D4 placeholder: Oracle statement verbs (PL/SQL-aware splitting is the sidecar's, D4 S02). */
+const ORACLE_STMT = set(`
+SELECT INSERT UPDATE DELETE MERGE WITH CREATE ALTER DROP TRUNCATE RENAME COMMENT GRANT REVOKE COMMIT ROLLBACK SAVEPOINT
+SET LOCK EXPLAIN CALL DECLARE BEGIN END IF ELSIF ELSE LOOP WHILE FOR EXIT RETURN RAISE OPEN CLOSE FETCH EXECUTE PURGE
+FLASHBACK ANALYZE AUDIT NOAUDIT
+`);
+
+const STMT: Record<Dialect, Set<string>> = { tsql: TSQL_STMT, pg: PG_STMT, sqlite: SQLITE_STMT, mySql: MYSQL_STMT, duckDb: DUCKDB_STMT, oracle: ORACLE_STMT };
 
 export function statementKeywords(dialect: Dialect): Set<string> {
   return STMT[dialect];
@@ -203,7 +224,15 @@ const DUCKDB_TYPES: DataType[] = [
   { name: "UNION", snippet: "UNION(${1:n} ${2:INTEGER}, ${3:s} ${4:VARCHAR})" },
 ];
 
-const TYPES: Record<Dialect, DataType[]> = { tsql: TSQL_TYPES, pg: PG_TYPES, sqlite: SQLITE_TYPES, mySql: MYSQL_TYPES, duckDb: DUCKDB_TYPES };
+const ORACLE_TYPES: DataType[] = [
+  { name: "NUMBER", snippet: "NUMBER(${1:10}, ${2:0})" }, { name: "INTEGER" }, { name: "BINARY_FLOAT" }, { name: "BINARY_DOUBLE" },
+  { name: "VARCHAR2", snippet: "VARCHAR2(${1:100} CHAR)" }, { name: "NVARCHAR2", snippet: "NVARCHAR2(${1:100})" },
+  { name: "CHAR", snippet: "CHAR(${1:1})" }, { name: "CLOB" }, { name: "NCLOB" }, { name: "BLOB" }, { name: "RAW", snippet: "RAW(${1:16})" },
+  { name: "DATE" }, { name: "TIMESTAMP" }, { name: "TIMESTAMP WITH TIME ZONE" }, { name: "TIMESTAMP WITH LOCAL TIME ZONE" },
+  { name: "INTERVAL YEAR TO MONTH" }, { name: "INTERVAL DAY TO SECOND" }, { name: "BOOLEAN" }, { name: "JSON" }, { name: "ROWID" },
+];
+
+const TYPES: Record<Dialect, DataType[]> = { tsql: TSQL_TYPES, pg: PG_TYPES, sqlite: SQLITE_TYPES, mySql: MYSQL_TYPES, duckDb: DUCKDB_TYPES, oracle: ORACLE_TYPES };
 
 export function dataTypes(dialect: Dialect): DataType[] {
   return TYPES[dialect];
@@ -241,9 +270,15 @@ format printf round abs ceil floor power sqrt row_number rank dense_rank ntile l
 list_value list_transform list_filter list_sort list_contains unnest range generate_series struct_pack map
 json_extract json_extract_string to_json from_json gen_random_uuid random hash md5 typeof try_cast`;
 
+const ORACLE_FUNCS = `COUNT SUM AVG MIN MAX LISTAGG SYSDATE SYSTIMESTAMP CURRENT_DATE CURRENT_TIMESTAMP ADD_MONTHS MONTHS_BETWEEN
+LAST_DAY NEXT_DAY TRUNC ROUND EXTRACT TO_CHAR TO_DATE TO_TIMESTAMP TO_NUMBER CAST NVL NVL2 COALESCE NULLIF DECODE GREATEST
+LEAST LENGTH LOWER UPPER INITCAP SUBSTR INSTR REPLACE TRIM LTRIM RTRIM LPAD RPAD CONCAT REGEXP_LIKE REGEXP_SUBSTR
+REGEXP_REPLACE ABS CEIL FLOOR POWER SQRT MOD ROW_NUMBER RANK DENSE_RANK NTILE LAG LEAD FIRST_VALUE LAST_VALUE SYS_GUID
+SYS_CONTEXT USER JSON_VALUE JSON_QUERY JSON_OBJECT JSON_ARRAY`;
+
 const FUNCS: Record<Dialect, string[]> = {
   tsql: TSQL_FUNCS.split(/\s+/), pg: PG_FUNCS.split(/\s+/), sqlite: SQLITE_FUNCS.split(/\s+/), mySql: MYSQL_FUNCS.split(/\s+/),
-  duckDb: DUCKDB_FUNCS.split(/\s+/),
+  duckDb: DUCKDB_FUNCS.split(/\s+/), oracle: ORACLE_FUNCS.split(/\s+/),
 };
 export function builtinFunctions(dialect: Dialect): string[] {
   return FUNCS[dialect];
@@ -283,6 +318,7 @@ const CLAUSE_KW: Record<string, Record<Dialect, string[]>> = {
     sqlite: kw(`FROM | AS | DISTINCT | OVER | PARTITION BY | WHERE | GROUP BY | ORDER BY | UNION | UNION ALL | LIMIT`),
     mySql: kw(`FROM | AS | DISTINCT | INTO | OVER | PARTITION BY | WHERE | GROUP BY | ORDER BY | UNION | UNION ALL | LIMIT`),
     duckDb: kw(`FROM | AS | DISTINCT | EXCLUDE | REPLACE | OVER | PARTITION BY | WHERE | GROUP BY | GROUP BY ALL | ORDER BY | QUALIFY | UNION | UNION ALL | UNION BY NAME | LIMIT`),
+    oracle: kw(`FROM | AS | DISTINCT | INTO | BULK COLLECT INTO | OVER | PARTITION BY | WHERE | GROUP BY | ORDER BY | UNION | UNION ALL | MINUS | FETCH FIRST`),
   },
   where: {
     tsql: kw(`GROUP BY | ORDER BY | HAVING | UNION | UNION ALL | EXCEPT | INTERSECT | OPTION`),
@@ -290,6 +326,7 @@ const CLAUSE_KW: Record<string, Record<Dialect, string[]>> = {
     sqlite: kw(`GROUP BY | ORDER BY | HAVING | UNION | UNION ALL | EXCEPT | INTERSECT | LIMIT | OFFSET | RETURNING | GLOB`),
     mySql: kw(`GROUP BY | ORDER BY | HAVING | UNION | UNION ALL | EXCEPT | INTERSECT | LIMIT | REGEXP | FOR UPDATE`),
     duckDb: kw(`GROUP BY | GROUP BY ALL | ORDER BY | HAVING | QUALIFY | UNION | UNION ALL | EXCEPT | INTERSECT | LIMIT | OFFSET | RETURNING | ILIKE | GLOB`),
+    oracle: kw(`GROUP BY | ORDER BY | HAVING | CONNECT BY | START WITH | UNION | UNION ALL | MINUS | INTERSECT | FETCH FIRST | FOR UPDATE | RETURNING`),
   },
   on: {
     tsql: kw(`WHERE | INNER JOIN | LEFT JOIN | RIGHT JOIN | FULL JOIN | CROSS JOIN | JOIN | CROSS APPLY | OUTER APPLY | GROUP BY | ORDER BY`),
@@ -297,25 +334,29 @@ const CLAUSE_KW: Record<string, Record<Dialect, string[]>> = {
     sqlite: kw(`WHERE | INNER JOIN | LEFT JOIN | RIGHT JOIN | FULL JOIN | CROSS JOIN | JOIN | GROUP BY | ORDER BY | LIMIT`),
     mySql: kw(`WHERE | INNER JOIN | LEFT JOIN | RIGHT JOIN | CROSS JOIN | STRAIGHT_JOIN | JOIN | GROUP BY | ORDER BY | LIMIT`),
     duckDb: kw(`WHERE | INNER JOIN | LEFT JOIN | RIGHT JOIN | FULL JOIN | CROSS JOIN | ASOF JOIN | POSITIONAL JOIN | JOIN | GROUP BY | ORDER BY | LIMIT`),
+    oracle: kw(`WHERE | INNER JOIN | LEFT JOIN | RIGHT JOIN | FULL JOIN | CROSS JOIN | JOIN | CROSS APPLY | OUTER APPLY | GROUP BY | ORDER BY`),
   },
   groupBy: {
     tsql: kw(`HAVING | ORDER BY | ROLLUP | CUBE | GROUPING SETS`), pg: kw(`HAVING | ORDER BY | ROLLUP | CUBE | GROUPING SETS | LIMIT`),
     sqlite: kw(`HAVING | ORDER BY | LIMIT`), mySql: kw(`HAVING | ORDER BY | WITH ROLLUP | LIMIT`),
     duckDb: kw(`HAVING | QUALIFY | ORDER BY | ROLLUP | CUBE | GROUPING SETS | LIMIT`),
+    oracle: kw(`HAVING | ORDER BY | ROLLUP | CUBE | GROUPING SETS`),
   },
   having: { tsql: kw(`ORDER BY | UNION`), pg: kw(`ORDER BY | UNION | LIMIT`), sqlite: kw(`ORDER BY | UNION | LIMIT`), mySql: kw(`ORDER BY | UNION | LIMIT`),
-    duckDb: kw(`QUALIFY | ORDER BY | UNION | LIMIT`) },
+    duckDb: kw(`QUALIFY | ORDER BY | UNION | LIMIT`), oracle: kw(`ORDER BY | UNION | MINUS`) },
   orderBy: {
     tsql: kw(`ASC | DESC | OFFSET | FETCH NEXT | ROWS | ONLY | OPTION`),
     pg: kw(`ASC | DESC | NULLS FIRST | NULLS LAST | LIMIT | OFFSET | FETCH FIRST`),
     sqlite: kw(`ASC | DESC | NULLS FIRST | NULLS LAST | COLLATE NOCASE | LIMIT | OFFSET`),
     mySql: kw(`ASC | DESC | LIMIT | FOR UPDATE`),
     duckDb: kw(`ASC | DESC | NULLS FIRST | NULLS LAST | LIMIT | OFFSET`),
+    oracle: kw(`ASC | DESC | NULLS FIRST | NULLS LAST | OFFSET | FETCH FIRST | FOR UPDATE`),
   },
   set: {
     tsql: kw(`WHERE | FROM | OUTPUT | DEFAULT`), pg: kw(`WHERE | FROM | RETURNING | DEFAULT`),
     sqlite: kw(`WHERE | FROM | RETURNING | DEFAULT`), mySql: kw(`WHERE | ORDER BY | LIMIT | DEFAULT`),
     duckDb: kw(`WHERE | FROM | RETURNING | DEFAULT`),
+    oracle: kw(`WHERE | RETURNING | DEFAULT`),
   },
 };
 
@@ -333,19 +374,26 @@ ON | USING | USE INDEX | FORCE INDEX | IGNORE INDEX | GROUP BY | ORDER BY | HAVI
 const AFTER_REF_D = kw(`WHERE | AS | INNER JOIN | LEFT JOIN | LEFT OUTER JOIN | RIGHT JOIN | FULL OUTER JOIN | CROSS JOIN | JOIN |
 ASOF JOIN | POSITIONAL JOIN | ANTI JOIN | SEMI JOIN | JOIN LATERAL | ON | USING | GROUP BY | GROUP BY ALL | ORDER BY | HAVING |
 QUALIFY | UNION | UNION ALL | UNION BY NAME | EXCEPT | INTERSECT | LIMIT | OFFSET | RETURNING | USING SAMPLE | PIVOT | UNPIVOT`);
-const AFTER_REF: Record<Dialect, string[]> = { tsql: AFTER_REF_T, pg: AFTER_REF_P, sqlite: AFTER_REF_S, mySql: AFTER_REF_M, duckDb: AFTER_REF_D };
+const AFTER_REF_O = kw(`WHERE | INNER JOIN | LEFT JOIN | LEFT OUTER JOIN | RIGHT JOIN | FULL OUTER JOIN | CROSS JOIN | JOIN |
+CROSS APPLY | OUTER APPLY | ON | USING | GROUP BY | ORDER BY | HAVING | CONNECT BY | START WITH | UNION | UNION ALL | MINUS |
+INTERSECT | FETCH FIRST | FOR UPDATE | PIVOT | UNPIVOT | SAMPLE | AS OF`);
+const AFTER_REF: Record<Dialect, string[]> = { tsql: AFTER_REF_T, pg: AFTER_REF_P, sqlite: AFTER_REF_S, mySql: AFTER_REF_M, duckDb: AFTER_REF_D, oracle: AFTER_REF_O };
 const AFTER_UPDATE: Record<Dialect, string[]> = {
-  tsql: kw(`SET | AS | WITH (ROWLOCK)`), pg: kw(`SET | AS`), sqlite: kw(`SET | AS`), mySql: kw(`SET | AS`), duckDb: kw(`SET | AS`),
+  tsql: kw(`SET | AS | WITH (ROWLOCK)`), pg: kw(`SET | AS`), sqlite: kw(`SET | AS`), mySql: kw(`SET | AS`), duckDb: kw(`SET | AS`), oracle: kw(`SET`),
 };
 const AFTER_DELETE: Record<Dialect, string[]> = {
   tsql: kw(`FROM | WHERE | OUTPUT | AS`), pg: kw(`WHERE | USING | RETURNING | AS`), sqlite: kw(`WHERE | RETURNING | AS`),
-  mySql: kw(`WHERE | ORDER BY | LIMIT | AS`), duckDb: kw(`WHERE | USING | RETURNING | AS`),
+  mySql: kw(`WHERE | ORDER BY | LIMIT | AS`), duckDb: kw(`WHERE | USING | RETURNING | AS`), oracle: kw(`WHERE | RETURNING`),
 };
 const AFTER_INSERT_INTO: Record<Dialect, string> = {
   tsql: `VALUES | SELECT | DEFAULT VALUES | EXEC | OUTPUT`, pg: `VALUES | SELECT | DEFAULT VALUES`, sqlite: `VALUES | SELECT | DEFAULT VALUES`,
-  mySql: `VALUES | SELECT | SET`, duckDb: `VALUES | SELECT | DEFAULT VALUES | BY NAME`,
+  mySql: `VALUES | SELECT | SET`, duckDb: `VALUES | SELECT | DEFAULT VALUES | BY NAME`, oracle: `VALUES | SELECT`,
 };
-const STMT_KW: Record<Dialect, string[]> = { tsql: STMT_KW_T, pg: STMT_KW_P, sqlite: STMT_KW_S, mySql: STMT_KW_M, duckDb: STMT_KW_D };
+const STMT_KW_O = kw(`SELECT | INSERT INTO | INSERT ALL | UPDATE | DELETE FROM | MERGE INTO | WITH | CREATE TABLE | CREATE OR REPLACE VIEW |
+CREATE INDEX | CREATE SEQUENCE | CREATE OR REPLACE PROCEDURE | CREATE OR REPLACE FUNCTION | CREATE OR REPLACE PACKAGE |
+CREATE OR REPLACE PACKAGE BODY | CREATE OR REPLACE TRIGGER | ALTER TABLE | DROP TABLE | DROP VIEW | TRUNCATE TABLE | COMMIT |
+ROLLBACK | SAVEPOINT | DECLARE | BEGIN | EXPLAIN PLAN FOR | ALTER SESSION SET CURRENT_SCHEMA`);
+const STMT_KW: Record<Dialect, string[]> = { tsql: STMT_KW_T, pg: STMT_KW_P, sqlite: STMT_KW_S, mySql: STMT_KW_M, duckDb: STMT_KW_D, oracle: STMT_KW_O };
 
 export function statementStartKeywords(dialect: Dialect): string[] {
   return STMT_KW[dialect];
@@ -366,7 +414,7 @@ export function afterReferenceKeywords(clause: string, dialect: Dialect): string
 
 const TABLE_CONTEXT: Record<Dialect, string> = {
   tsql: `OPENJSON | OPENROWSET | OPENQUERY | STRING_SPLIT | SELECT`, pg: `LATERAL | ONLY | SELECT`, sqlite: `json_each | json_tree | SELECT`,
-  mySql: `LATERAL | JSON_TABLE | SELECT`, duckDb: `LATERAL | range | generate_series | unnest | SELECT`,
+  mySql: `LATERAL | JSON_TABLE | SELECT`, duckDb: `LATERAL | range | generate_series | unnest | SELECT`, oracle: `LATERAL | TABLE | JSON_TABLE | XMLTABLE | SELECT`,
 };
 export function tableContextKeywords(dialect: Dialect): string[] {
   return kw(TABLE_CONTEXT[dialect]);
@@ -374,19 +422,19 @@ export function tableContextKeywords(dialect: Dialect): string[] {
 
 const VALUES_KW: Record<Dialect, string> = {
   tsql: `VALUES | SELECT | DEFAULT VALUES | EXEC | OUTPUT`, pg: `VALUES | SELECT | DEFAULT VALUES | RETURNING`,
-  sqlite: `VALUES | SELECT | DEFAULT VALUES | RETURNING`, mySql: `VALUES | SELECT | SET`, duckDb: `VALUES | SELECT | DEFAULT VALUES | RETURNING`,
+  sqlite: `VALUES | SELECT | DEFAULT VALUES | RETURNING`, mySql: `VALUES | SELECT | SET`, duckDb: `VALUES | SELECT | DEFAULT VALUES | RETURNING`, oracle: `VALUES | SELECT`,
 };
 export function valuesKeywords(dialect: Dialect): string[] {
   return kw(VALUES_KW[dialect]);
 }
 
-const EXEC_ARG_VALUE: Record<Dialect, string> = { tsql: `NULL | DEFAULT | OUTPUT`, pg: `NULL | DEFAULT`, sqlite: `NULL`, mySql: `NULL`, duckDb: `NULL` };
+const EXEC_ARG_VALUE: Record<Dialect, string> = { tsql: `NULL | DEFAULT | OUTPUT`, pg: `NULL | DEFAULT`, sqlite: `NULL`, mySql: `NULL`, duckDb: `NULL`, oracle: `NULL | DEFAULT` };
 export function argValueKeywords(clause: string, dialect: Dialect): string[] {
   if (clause === "execArgs") return kw(EXEC_ARG_VALUE[dialect]);
   return kw(`NULL | DEFAULT`);
 }
 
-const EXEC_ARGS: Record<Dialect, string | null> = { tsql: `OUTPUT | DEFAULT | NULL | WITH RECOMPILE`, pg: null, sqlite: null, mySql: null, duckDb: null };
+const EXEC_ARGS: Record<Dialect, string | null> = { tsql: `OUTPUT | DEFAULT | NULL | WITH RECOMPILE`, pg: null, sqlite: null, mySql: null, duckDb: null, oracle: null };
 export function execArgsKeywords(dialect: Dialect): string[] {
   const k = EXEC_ARGS[dialect];
   return k ? kw(k) : [];
@@ -394,7 +442,7 @@ export function execArgsKeywords(dialect: Dialect): string[] {
 
 const DECLARE_KW: Record<Dialect, string> = {
   tsql: `TABLE | CURSOR FOR | AS`, pg: `CONSTANT | NOT NULL | DEFAULT`, sqlite: `DEFAULT`, mySql: `DEFAULT | CURSOR FOR | CONDITION FOR | HANDLER FOR`,
-  duckDb: `DEFAULT`,
+  duckDb: `DEFAULT`, oracle: `CONSTANT | NOT NULL | DEFAULT | CURSOR IS | EXCEPTION`,
 };
 export function declareKeywords(dialect: Dialect): string[] {
   return kw(DECLARE_KW[dialect]);

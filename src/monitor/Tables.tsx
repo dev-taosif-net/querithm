@@ -201,7 +201,7 @@ export function IoPane({ model }: { model: MonitorModel }) {
  */
 type TopQuerySource = "statistics" | "pgStatStatements" | "digests";
 const TOP_QUERY_SOURCE: Record<Engine, TopQuerySource> = {
-  mssql: "statistics", pg: "pgStatStatements", sqlite: "statistics", mySql: "digests", duckDb: "statistics",
+  mssql: "statistics", pg: "pgStatStatements", sqlite: "statistics", mySql: "digests", duckDb: "statistics", oracle: "statistics",
 };
 
 export function TopQueriesPane({ model, engine, onOpenText }: { model: MonitorModel; engine: Engine; onOpenText: (text: string) => void }) {

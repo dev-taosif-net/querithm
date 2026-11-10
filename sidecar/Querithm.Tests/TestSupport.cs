@@ -169,7 +169,7 @@ static class Log
 /// <summary>
 /// L33: the dev fixture's credentials live only in scripts/bench/docker — compose.yml (the engines' passwords, the SSH
 /// bastion's as the build arg SSH_PASSWORD) and ssh/ (the key passphrase) — so the tests read them from there, or from
-/// QUERITHM_IT_&lt;ENGINE&gt;_PASSWORD when set (MSSQL, PG, MYSQL, SSH). A reader for the compose file's own plain layout,
+/// QUERITHM_IT_&lt;ENGINE&gt;_PASSWORD when set (MSSQL, PG, MYSQL, SSH, ORACLE, ORACLE-MON). A reader for the compose file's own plain layout,
 /// not a YAML parser; the JS scripts use scripts/fixture/fixture-secrets.mjs. Never print the values.
 /// </summary>
 public static class FixtureSecrets
@@ -196,6 +196,9 @@ public static class FixtureSecrets
             "pg" => ComposeValue(Compose.Value, "postgres", "POSTGRES_PASSWORD"),
             "mysql" => ComposeValue(Compose.Value, "mysql84", "MYSQL_ROOT_PASSWORD"),
             "ssh" => ComposeValue(Compose.Value, "ssh", "SSH_PASSWORD"),
+            // Phase D4: Oracle Free's least-privileged test user and its monitor user (oracle/setup/01-users.sh creates both).
+            "oracle" => ComposeValue(Compose.Value, "oracle", "QUERITHM_APP_PASSWORD"),
+            "oracle-mon" => ComposeValue(Compose.Value, "oracle", "QUERITHM_MON_PASSWORD"),
             _ => throw new ArgumentOutOfRangeException(nameof(engine), engine, "no fixture password"),
         };
     }

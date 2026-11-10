@@ -63,6 +63,7 @@ Pin the versions below; upgrade only at milestone boundaries.
 | Sidecar | Npgsql | 10.x | PostgreSQL | PostgreSQL driver |
 | Sidecar | MySqlConnector | 2.6.2 | MIT | MySQL / MariaDB driver (Phase D2, shipped in 0.2.0); managed, no native code; local-infile always off |
 | Sidecar | DuckDB.NET.Data.Full (+ DuckDB.NET.Bindings.Full and native DuckDB 1.5.6, MIT; EOL 2027-03-01) | 1.5.6.1 | MIT | DuckDB driver (Phase D3, shipped in 0.2.0); no IsTrimmable metadata, rooted whole; native library per RID (sidecar single file +23.3 MB on linux-x64) |
+| Sidecar | Oracle.ManagedDataAccess.Core (ODP.NET Core; pulls System.DirectoryServices.Protocols 8.0.2, MIT) | 23.26.400 | Oracle Free Distribution, Hosting, and Use Terms (redistribute unmodified; license and info.txt notices in THIRD-PARTY-NOTICES.md) | Oracle driver (Phase D4, **hidden engine** behind the dev setting); one managed assembly, rooted untrimmed so it ships byte-identical to the package (SHA-256 checked); trimmed win-x64 sidecar +6.9 MB (108.6 → 115.5 MB), +3.2 MB after gzip -9 (39.9 → 43.1 MB); Intel macOS unsupported by the driver |
 | Sidecar | SSH.NET (+ BouncyCastle.Cryptography, transitive) | 2026.0.x / 2.x | MIT | SSH tunnels to servers behind a bastion |
 | Sidecar | Microsoft.SqlServer.TransactSql.ScriptDom | 180.x (spec: 161+) | MIT | T-SQL parse, AST, formatting |
 | Sidecar | Microsoft.SqlServer.SqlManagementObjects | 181.x (spec: 170+) | MIT (since 171) | Table scripting (modules and dependencies use catalog views) |

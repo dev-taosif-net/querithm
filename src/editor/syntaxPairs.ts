@@ -8,7 +8,7 @@ import { lastStartingBefore, W } from "./completion/scanner";
  * (`IF` has no END IF: an `IF` pairs with its `ELSE`). MySQL's compound statements read like PL/pgSQL (END IF,
  * END LOOP, `BEGIN;` starts a transaction); SQLite has no IF statement, and its `BEGIN;` is a transaction too.
  */
-const PLPGSQL_BLOCKS: Record<Dialect, boolean> = { tsql: false, pg: true, sqlite: true, mySql: true, duckDb: true };
+const PLPGSQL_BLOCKS: Record<Dialect, boolean> = { tsql: false, pg: true, sqlite: true, mySql: true, duckDb: true, oracle: true };
 
 export interface Span {
   start: number;

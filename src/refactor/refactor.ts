@@ -51,7 +51,7 @@ export function targetKindOf(kind: ObjectKind): RefactorKind {
 /** A local symbol (alias, CTE, column alias) that reads the same without delimiters. */
 const PLAIN_LOCAL: Record<Dialect, RegExp> = {
   tsql: /^[A-Za-z_][A-Za-z0-9_]*$/, pg: DIALECTS.pg.regularIdentifier, sqlite: DIALECTS.sqlite.regularIdentifier,
-  mySql: DIALECTS.mySql.regularIdentifier, duckDb: DIALECTS.duckDb.regularIdentifier,
+  mySql: DIALECTS.mySql.regularIdentifier, duckDb: DIALECTS.duckDb.regularIdentifier, oracle: DIALECTS.oracle.regularIdentifier,
 };
 
 /**

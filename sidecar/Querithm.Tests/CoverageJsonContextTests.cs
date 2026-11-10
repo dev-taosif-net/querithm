@@ -93,7 +93,7 @@ public class JsonContextRoundTripTests
     [Fact]
     public void Model_files_with_unknown_enum_values_are_rejected_rather_than_guessed()
     {
-        const string json = """{"engine":"oracle","database":"d","schemas":[],"tables":[],"modules":[]}""";
+        const string json = """{"engine":"db2","database":"d","schemas":[],"tables":[],"modules":[]}""";
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize(json, Json.Context.SchemaModel));
     }
 }

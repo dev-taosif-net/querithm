@@ -34,7 +34,7 @@ function bytes(n: number) {
 }
 
 /** The bulk loader takes trigger, constraint-check and table-lock options (SQL Server's SqlBulkCopy only). */
-const BULK_COPY_OPTIONS: Record<Engine, boolean> = { mssql: true, pg: false, sqlite: false, mySql: false, duckDb: false };
+const BULK_COPY_OPTIONS: Record<Engine, boolean> = { mssql: true, pg: false, sqlite: false, mySql: false, duckDb: false, oracle: false };
 
 export function ImportWizardDialog({ d }: { d: Extract<Dialog, { kind: "import" }> }) {
   const close = () => useUi.getState().closeDialog(d);

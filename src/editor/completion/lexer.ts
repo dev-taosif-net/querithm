@@ -62,6 +62,7 @@ const OPS_T = ["<=", ">=", "<>", "!=", "!<", "!>", "+=", "-=", "*=", "/=", "%=",
 const OPS_P = ["->>", "#>>", "<=", ">=", "<>", "!=", "||", "::", "->", "#>", "@>", "<@", "=>", "~~", "!~", "~*", "&&", "<<", ">>", ":="];
 const OPS_S = ["->>", "->", "||", "==", "!=", "<>", "<=", ">=", "<<", ">>"];
 const OPS_M = ["<=>", "->>", "->", ":=", "||", "&&", "<=", ">=", "<>", "!=", "<<", ">>"];
+const OPS_O = ["||", ":=", "=>", "<>", "!=", "^=", "<=", ">=", "**", ".."];
 const OPS_D = ["->>", "->", "::", "//", "**", "||", "==", "!=", "<>", "<=", ">=", "<<", ">>", ":=", "=>"];
 
 /** The lexical rules of a dialect. Each flag is one rule; the T-SQL and PostgreSQL rows reproduce the older two modes. */
@@ -125,6 +126,13 @@ const LEXING: Record<Dialect, LexRules> = {
     tsql: false, ops: OPS_D, prefixes: "EeXx", backslashPrefixes: "Ee", backslashStrings: false, doubleQuoteStrings: false,
     brackets: false, backticks: false, dollar: "all", at: null, colonParams: false, questionParams: true, hashComments: false,
     dashNeedsSpace: false, nestedComments: true, hexLiterals: true, go: false, dollarStart: false,
+  },
+  // Phase D4 placeholder (hidden engine): N'' strings, "" names, :binds, non-nesting comments. Alternative quoting (q'[…]')
+  // and the / terminator arrive with the real scanner (D4 S02 in the sidecar, S06 here).
+  oracle: {
+    tsql: false, ops: OPS_O, prefixes: "Nn", backslashPrefixes: "", backslashStrings: false, doubleQuoteStrings: false,
+    brackets: false, backticks: false, dollar: null, at: null, colonParams: true, questionParams: false, hashComments: false,
+    dashNeedsSpace: false, nestedComments: false, hexLiterals: false, go: false, dollarStart: false,
   },
 };
 

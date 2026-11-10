@@ -14,6 +14,7 @@ export const ENGINE_TERMS: Record<Engine, string[]> = {
   sqlite: ["sqlite", "sqlite3"],
   mySql: ["mysql", "mariadb", "my sql"],
   duckDb: ["duckdb", "duck db", "duck"],
+  oracle: ["oracle", "ora", "plsql", "pl/sql"],
 };
 
 function haystack(p: Profile): string {
