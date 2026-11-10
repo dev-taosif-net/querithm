@@ -32,7 +32,7 @@ internal static class OracleErrors
             var (line, column) = Position(commandText, e.ParseErrorOffset);
             var text = Clean(e.Message);
             if (column is { } col) text += string.Create(CultureInfo.InvariantCulture, $" (line {line}, column {col})");
-            list.Add(new ProviderMessage(Severity.Error, text, Line: line, Procedure: string.IsNullOrEmpty(e.Procedure) ? null : e.Procedure, Number: e.Number));
+            list.Add(new ProviderMessage(Severity.Error, text, Line: line, Procedure: string.IsNullOrEmpty(e.Procedure) ? null : e.Procedure, Number: e.Number, Column: column));
         }
         return list;
     }

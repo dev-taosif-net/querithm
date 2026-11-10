@@ -1,0 +1,87 @@
+{
+  "date": "2026-11-10T11:31:23.862Z",
+  "os": "Windows_NT 10.0.26200",
+  "cpu": "13th Gen Intel(R) Core(TM) i5-1335U",
+  "cores": 12,
+  "memGb": 16,
+  "results": {
+    "11b.oracle": {
+      "metric": "Oracle: execute → first batch on a cold pool connection (TCP, login, product + identity read, SELECT 1 FROM dual, median)",
+      "unit": "ms",
+      "target": 300,
+      "value": 49.38,
+      "pass": true,
+      "samples": [
+        616.4,
+        61.5,
+        45.4,
+        47,
+        49.7,
+        49.7,
+        45.6,
+        51.4,
+        48.8,
+        56.5,
+        48.6,
+        44.6,
+        46.2,
+        50.8,
+        49.4
+      ]
+    },
+    "9.oracle": {
+      "metric": "Oracle: metadata snapshot load from SQLite (600 tables, 150 views, 200 triggers)",
+      "unit": "ms",
+      "target": 80,
+      "value": 42.66,
+      "pass": true,
+      "objects": 988,
+      "samples": [
+        151.95969999999943,
+        40.949000000000524,
+        42.65639999999985,
+        45.06130000000121,
+        37.32650000000285
+      ],
+      "statuses": [
+        "fresh",
+        "fresh",
+        "fresh",
+        "fresh",
+        "fresh"
+      ]
+    },
+    "10.oracle": {
+      "metric": "Oracle: incremental refresh with 10 changed objects (least-privileged user, ALL_* views)",
+      "unit": "ms",
+      "target": 2000,
+      "value": 1628.02,
+      "pass": true,
+      "samples": [
+        3992,
+        1023,
+        989,
+        1628,
+        2010
+      ]
+    },
+    "4.oracle": {
+      "metric": "Oracle: tier-1 completion latency in a 12k-line PL/SQL package body (p95)",
+      "unit": "ms",
+      "target": 5,
+      "value": 4.3,
+      "pass": true,
+      "samples": 300,
+      "schemaObjects": 34
+    },
+    "3.oracle": {
+      "metric": "Oracle: typing latency in a 12k-line PL/SQL package body (p95)",
+      "unit": "ms",
+      "target": 16,
+      "value": 9.5,
+      "pass": true,
+      "samples": 200,
+      "toPaintP95IncludingVsync": 18.4
+    }
+  }
+}

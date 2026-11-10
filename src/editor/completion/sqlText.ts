@@ -9,6 +9,7 @@ import {
 } from "./scanner";
 import { ALL_KINDS, findObject, resolveTable } from "./schemaIndex";
 import { assertNever, DIALECTS, knownDialect } from "../../engines";
+import { oracleBinds, oracleStatementAt } from "./oracleStatements";
 
 const norm = knownDialect;
 /** The prefixes that mark a variable or parameter name under the cursor (hover shows it as one). */
@@ -20,6 +21,8 @@ export function statementBoundsAt(text: string, offset: number, dialect: Dialect
   const src = typeof text === "string" ? text : "";
   const off = Math.max(0, Math.min(Number.isFinite(offset) ? offset : 0, src.length));
   try {
+    // Oracle: SQL*Plus boundaries (a PL/SQL unit runs to its / line, ; inside it ends nothing), as the sidecar splits.
+    if (norm(dialect) === "oracle") return oracleStatementAt(src, off) ?? { start: off, end: off };
     const T = getStream(src, norm(dialect)).code;
     let k = lastStartingBefore(T, off);
     if (k >= 0 && T[k].end < off) {
@@ -76,6 +79,8 @@ export function detectUse(text: string, dialect: Dialect): string | undefined {
  * SQLite: `?`, `?NNN`, `:name`, `@name`, `$name`, in SQLite's own index order (see sqliteParams).
  * MySQL: none. `@x` is a user variable there, which the script sets itself (`SET @x = …`) and the session keeps; a
  * prompt would bind nothing.
+ * Oracle: `:name`, `:1` and `:"name"` binds in first-use order (names compare as the server folds them), none in SQL*Plus
+ * commands or in stored PL/SQL (a trigger's `:NEW` / `:OLD`), exactly as the sidecar binds them (oracleStatements.ts).
  */
 export function undeclaredParameters(text: string, dialect: Dialect): string[] {
   if (typeof text !== "string") return [];
@@ -88,8 +93,7 @@ export function undeclaredParameters(text: string, dialect: Dialect): string[] {
       case "sqlite": return sqliteParams(T);
       case "mySql": return [];
       case "duckDb": return duckDbParams(T);
-      // Phase D4 placeholder: :binds (minus :NEW / :OLD in trigger bodies) are found by the sidecar's scanner (S02, S04).
-      case "oracle": return [];
+      case "oracle": return oracleBinds(text);
       default: return assertNever(d);
     }
   } catch {

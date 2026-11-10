@@ -401,15 +401,16 @@ public sealed class ExecutionService : IAsyncDisposable
             {
                 var b = batches.Length > 0 ? batches[Math.Min(batchIndex, batches.Length - 1)] : null;
                 int? editorLine = m.Line is > 0 && b != null ? b.StartLine + m.Line.Value - 1 + lineOffset : null;
+                var editorColumn = editorLine != null ? EditorColumn(exec.Sql, b, m.Line, m.Column) : null;
                 if (m.Severity == Severity.Error)
                 {
                     hadError = true;
-                    firstError ??= new ErrorInfo { Message = m.Message, Number = m.Number, Line = m.Line, EditorLine = editorLine, Procedure = m.Procedure, BatchIndex = batchIndex };
+                    firstError ??= new ErrorInfo { Message = m.Message, Number = m.Number, Line = m.Line, EditorLine = editorLine, EditorColumn = editorColumn, Procedure = m.Procedure, BatchIndex = batchIndex };
                 }
                 if (StatisticsParser.Parse(m.Message, batchIndex) is { } stat) messages.Enqueue(stat);
                 Message(exec, new ServerMessage
                 {
-                    ExecutionId = exec.IdText, Severity = m.Severity, Message = m.Message, Line = m.Line, EditorLine = editorLine,
+                    ExecutionId = exec.IdText, Severity = m.Severity, Message = m.Message, Line = m.Line, EditorLine = editorLine, EditorColumn = editorColumn,
                     Procedure = m.Procedure, Number = m.Number, State = m.State, Class = m.Class, BatchIndex = batchIndex, Ts = Time.NowMs(),
                 });
             });
@@ -453,14 +454,15 @@ public sealed class ExecutionService : IAsyncDisposable
                             foreach (var m in await session.Provider.AfterBatchMessagesAsync(conn.Db, text, ct).ConfigureAwait(false))
                             {
                                 int? editorLine = m.Line is > 0 ? batch.StartLine + m.Line.Value - 1 + lineOffset : null;
+                                var editorColumn = editorLine != null ? EditorColumn(exec.Sql, batch, m.Line, m.Column) : null;
                                 if (m.Severity == Severity.Error)
                                 {
                                     hadError = true;
-                                    firstError ??= new ErrorInfo { Message = m.Message, Number = m.Number, Line = m.Line, EditorLine = editorLine, Procedure = m.Procedure, BatchIndex = batchIndex };
+                                    firstError ??= new ErrorInfo { Message = m.Message, Number = m.Number, Line = m.Line, EditorLine = editorLine, EditorColumn = editorColumn, Procedure = m.Procedure, BatchIndex = batchIndex };
                                 }
                                 Message(exec, new ServerMessage
                                 {
-                                    ExecutionId = exec.IdText, Severity = m.Severity, Message = m.Message, Line = m.Line, EditorLine = editorLine, Procedure = m.Procedure,
+                                    ExecutionId = exec.IdText, Severity = m.Severity, Message = m.Message, Line = m.Line, EditorLine = editorLine, EditorColumn = editorColumn, Procedure = m.Procedure,
                                     Number = m.Number, BatchIndex = batchIndex, Ts = Time.NowMs(),
                                 });
                             }
@@ -473,10 +475,11 @@ public sealed class ExecutionService : IAsyncDisposable
                             foreach (var m in session.Provider.TranslateException(ex, text))
                             {
                                 int? editorLine = m.Line is > 0 ? batch.StartLine + m.Line.Value - 1 + lineOffset : null;
-                                firstError ??= new ErrorInfo { Message = m.Message, Number = m.Number, Line = m.Line, EditorLine = editorLine, Procedure = m.Procedure, BatchIndex = batchIndex };
+                                var editorColumn = editorLine != null ? EditorColumn(exec.Sql, batch, m.Line, m.Column) : null;
+                                firstError ??= new ErrorInfo { Message = m.Message, Number = m.Number, Line = m.Line, EditorLine = editorLine, EditorColumn = editorColumn, Procedure = m.Procedure, BatchIndex = batchIndex };
                                 Message(exec, new ServerMessage
                                 {
-                                    ExecutionId = exec.IdText, Severity = Severity.Error, Message = m.Message, Line = m.Line, EditorLine = editorLine,
+                                    ExecutionId = exec.IdText, Severity = Severity.Error, Message = m.Message, Line = m.Line, EditorLine = editorLine, EditorColumn = editorColumn,
                                     Procedure = m.Procedure, Number = m.Number, State = m.State, Class = m.Class, BatchIndex = batchIndex, Ts = Time.NowMs(),
                                 });
                             }
@@ -794,6 +797,21 @@ public sealed class ExecutionService : IAsyncDisposable
 
     /// <summary>The run's messages so far go out first, so the webview sees them before the result set, plan or end.</summary>
     static void FlushMessages(Execution exec) => exec.Batcher?.Flush();
+
+    /// <summary>
+    /// Phase D4: a message's column in the editor. The server counts columns in the batch's text, so only the batch's first
+    /// line shifts — by where the batch starts on its line in the run's text (a statement after another on the same line).
+    /// A selection run that starts mid-line is not shifted by the selection's own column (the run's text starts there).
+    /// </summary>
+    internal static int? EditorColumn(string sql, BatchInfo? batch, int? line, int? column)
+    {
+        if (column is not > 0 || line is not > 0) return null;
+        if (line != 1 || batch == null) return column;
+        var start = Math.Clamp(batch.StartOffset, 0, sql.Length);
+        var lineStart = start;
+        while (lineStart > 0 && sql[lineStart - 1] != '\n') lineStart--;
+        return start - lineStart + column;
+    }
 
     static async Task ExecuteNonQueryAsync(DbConnection db, string sql, CancellationToken ct)
     {

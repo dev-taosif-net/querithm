@@ -9,7 +9,7 @@
 //   pnpm bench -- --sqlite     # SQLite per-engine metrics only (temp-dir files, no Docker)
 //   pnpm bench -- --mysql      # MySQL per-engine metrics only (the mysql84 fixture)
 //   pnpm bench -- --duckdb     # DuckDB per-engine metrics only (temp-dir files, no Docker)
-//   pnpm bench -- --oracle     # Oracle per-engine metrics only (the oracle fixture, --profile oracle)
+//   pnpm bench -- --oracle     # Oracle per-engine metrics only (the oracle fixture, --profile oracle), and 3 / 4 on Oracle
 //   pnpm bench -- --app <bin>  # also measure the bundled app (cold start, RSS, orphan check) — Linux/macOS
 import { spawn, spawnSync, execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -98,6 +98,9 @@ const TARGETS = {
   "11b.oracle": ["Oracle: execute → first batch on a cold pool connection (TCP, login, product + identity read, SELECT 1 FROM dual, median)", "ms", 300],
   "9.oracle": ["Oracle: metadata snapshot load from SQLite (600 tables, 150 views, 200 triggers)", "ms", 80],
   "10.oracle": ["Oracle: incremental refresh with 10 changed objects (least-privileged user, ALL_* views)", "ms", 2000],
+  // D4 S06: the editor on an Oracle tab (oracle language, Oracle lexer rules, the app user's snapshot).
+  "3.oracle": ["Oracle: typing latency in a 12k-line PL/SQL package body (p95)", "ms", 16],
+  "4.oracle": ["Oracle: tier-1 completion latency in a 12k-line PL/SQL package body (p95)", "ms", 5],
   "11cold.mysql": ["MySQL: execute → first batch on a cold pool connection (TCP, TLS, login, identity read, SELECT 1, median)", "ms", 300],
   "8.mysql": ["MySQL: database switch on an existing connection (COM_INIT_DB, median)", "ms", 20],
   "15.mysql": ["MySQL: cancel latency (KILL QUERY on a side connection)", "ms", 500],
@@ -1332,6 +1335,41 @@ async function uiMetrics() {
   }
 }
 
+/**
+ * Metrics 3.oracle / 4.oracle (D4 S06): typing and tier-1 completion in a 12k-line PL/SQL package body on a tab bound to
+ * the Oracle fixture (the hidden engine exposed with QUERITHM_DEV_ENGINES), measured as metrics 3 and 4 are.
+ */
+async function oracleUiMetrics() {
+  console.log("oracle ui metrics (dev bridge + headless Chrome)");
+  const chrome = ["/usr/bin/google-chrome", "/usr/bin/chromium", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "C:/Program Files/Google/Chrome/Application/chrome.exe"].find(existsSync);
+  if (!chrome) return console.log("  skipped: no Chrome found");
+  const { default: puppeteer } = await import("puppeteer-core");
+  const uiPort = Number(process.env.QUERITHM_UI_PORT ?? 1420);
+  const bridgePort = Number(process.env.QUERITHM_BRIDGE_PORT ?? 1421);
+  for (const step of [[path.join(root, "node_modules", "typescript", "bin", "tsc"), "-b"], [path.join(path.dirname(fileURLToPath(import.meta.resolve("vite/package.json"))), "bin", "vite.js"), "build"]]) {
+    const r = spawnSync(process.execPath, step, { cwd: root, stdio: "inherit", env: { ...process.env, VITE_BRIDGE_URL: `ws://127.0.0.1:${bridgePort}` } });
+    if (r.status !== 0) throw new Error(`web build failed: ${path.basename(step[0])} ${step[1]} (${r.error?.message ?? "exit " + r.status})`);
+  }
+  const bridge = spawn(process.execPath, [path.join(root, "scripts", "dev-bridge.mjs")], { env: { ...process.env, QUERITHM_BENCH: "1", QUERITHM_DEV_ENGINES: "oracle", QUERITHM_SIDECAR: sidecarBin(), QUERITHM_BRIDGE_PORT: String(bridgePort), QUERITHM_UI_PORT: String(uiPort), QUERITHM_DATA_DIR: mkdtempSync(path.join(os.tmpdir(), "qbench-ora-ui-")) }, stdio: "ignore" });
+  const preview = spawn(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.resolve("vite/package.json"))), "bin", "vite.js"), "preview", "--port", String(uiPort), "--strictPort", "--host", "127.0.0.1"], { cwd: root, stdio: "ignore" });
+  await sleep(2500);
+  const browser = await puppeteer.launch({ executablePath: chrome, headless: true, args: ["--window-size=1440,900"], defaultViewport: { width: 1440, height: 900 } });
+  try {
+    const page = await browser.newPage();
+    await page.goto(`http://127.0.0.1:${uiPort}/?bench`, { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => window.__bench?.ready === true, { timeout: 30_000 });
+    const fx = await page.evaluate((m) => window.__bench.setupOracle(m), ORACLE);
+    const t1 = await page.evaluate(() => window.__bench.tier1(300, 12000, "oracle"));
+    record("4.oracle", p95(t1), { samples: t1.length, schemaObjects: fx.objects });
+    const typing = await page.evaluate(() => window.__bench.typing(200, 12000, "oracle"));
+    record("3.oracle", p95(typing.work), { samples: typing.work.length, toPaintP95IncludingVsync: Math.round(p95(typing.toPaint) * 10) / 10 });
+  } finally {
+    await browser.close();
+    preview.kill();
+    bridge.kill();
+  }
+}
+
 /** Bundled app: cold start (#1), total RSS (#2), orphan check against the real shell (#16), installer size (#17). */
 async function appMetrics() {
   if (!appBin) {
@@ -1403,6 +1441,10 @@ if (only === "all" || only === "engine" || only === "sqlite") await sqliteMetric
 if (only === "all" || only === "engine" || only === "mysql") await mysqlMetrics();
 if (only === "all" || only === "engine" || only === "duckdb") await duckdbMetrics();
 if (only === "all" || only === "engine" || only === "oracle") await oracleMetrics();
+if (only === "all" || only === "oracle") await oracleUiMetrics().catch((e) => {
+  for (const k of ["3.oracle", "4.oracle"]) if (!results[k]) results[k] = { metric: TARGETS[k][0], unit: TARGETS[k][1], target: TARGETS[k][2], value: null, error: String(e?.message ?? e), pass: false };
+  console.log(`  oracle ui metrics failed: ${e.message}`);
+});
 // A ui run that broke off measured nothing: it fails the run instead of reading as "0 outside target".
 let uiError = null;
 if (only === "ui" || only === "all") await uiMetrics().catch((e) => { uiError = e; console.log(`  ui metrics failed: ${e.message}`); });

@@ -21,7 +21,7 @@ import { confirmDeleteProfile } from "./deleteProfile";
 import { PasswordRetention } from "./PasswordRetention";
 import { duplicateProfile, endpointKey, isLocal, locationOf, needsSecretFor } from "./auth";
 import { pickDatabaseFile, requestWriteAccess } from "./fileGrants";
-import { loadEngineInfo, offeredEngines } from "./engineInfo";
+import { loadEngineInfo, offeredEngines, unavailableEngines } from "./engineInfo";
 import { EngineLogo } from "./EngineLogo";
 import mssqlLogo from "./logos/mssql.svg";
 import pgLogo from "./logos/postgresql.svg";
@@ -70,11 +70,12 @@ const FIELDS: Record<Engine, EngineFields> = {
     instanceNames: false, trustServerCertificate: false, multiSubnetFailover: false, applicationIntent: false, certNotChecked: [],
     aliases: "duckdb duck file parquet",
   },
-  // Phase D4 placeholder (hidden engine): the profile dialog's Oracle fields arrive in S06.
+  // Phase D4 (hidden engine). Easy Connect or a descriptor in Data Source; the driver always checks the certificate over
+  // TCPS, so no mode encrypts without checking it.
   oracle: {
-    connectionStringExample: "",
+    connectionStringExample: "Data Source=//localhost:2484/FREEPDB1;User Id=app;Password=…",
     instanceNames: false, trustServerCertificate: false, multiSubnetFailover: false, applicationIntent: false, certNotChecked: [],
-    aliases: "oracle ora plsql",
+    aliases: "oracle ora plsql pl/sql",
   },
 };
 
@@ -85,6 +86,27 @@ function locationsOf(info: readonly EngineInfo[] | null, engine: Engine): Locati
 }
 
 const LOCATION_LABEL: Record<LocationKind, string> = { server: "Server", file: "Database file", memory: "In-memory database" };
+
+/**
+ * Sign-ins an engine has that this build cannot use yet, each with the reason (shown under Sign in, never selectable).
+ * The sidecar refuses them too (OracleConnectionStrings.Validate).
+ */
+export const AUTH_UNAVAILABLE: Record<Engine, { label: string; reason: string }[]> = {
+  mssql: [], pg: [], sqlite: [], mySql: [], duckDb: [],
+  oracle: [
+    { label: "Oracle wallet", reason: "not available yet: give the CA file under Encryption for TCPS, and sign in with a password." },
+    { label: "OS authentication (/)", reason: "not available yet: sign in as the database user with its password." },
+  ],
+};
+
+/** The default port a profile goes to when Port is empty: Oracle's depends on the transport (TCPS 2484, TCP 1521). */
+export function defaultPortOf(p: Pick<Profile, "engine" | "tlsMode">): number | null {
+  if (knownEngine(p.engine) === "oracle") return p.tlsMode === "disable" ? 1521 : 2484;
+  return engineTraits(p.engine).defaultPort;
+}
+
+/** Profile option: the service name is a SID (CONNECT_DATA=(SID=…)) — the sidecar's OracleConnectionStrings.SidOption. */
+export const ORACLE_SID_OPTION = "oracleSid";
 
 const AUTH: Record<Engine, { id: AuthKind; label: string }[]> = {
   mssql: [
@@ -122,8 +144,12 @@ const TLS: Record<Engine, { id: TlsMode; label: string }[]> = {
   ],
   sqlite: [],
   duckDb: [],
-  // Phase D4 placeholder: TCPS modes arrive with S03 / S06.
-  oracle: [],
+  // The sidecar's OracleConnectionStrings.TransportFor: TCPS always checks the chain; Oracle has no opportunistic TLS.
+  oracle: [
+    { id: "default", label: "TCPS — Verify full (certificate and server name, default)" },
+    { id: "verifyCa", label: "TCPS — Verify CA (certificate chain; server name not checked)" },
+    { id: "disable", label: "TCP — not encrypted (not recommended)" },
+  ],
   mySql: [
     { id: "default", label: "Default — Verify full (certificate and host name)" },
     { id: "verifyCa", label: "Verify CA" },
@@ -144,10 +170,10 @@ const empty = (engine: Engine): Profile => {
 };
 
 /** The fields the editor checks itself and shows a message at (L25); the sidecar names the same ones when it refuses. */
-export type FieldKey = "name" | "host" | "port" | "file";
-const FIELD_ORDER: FieldKey[] = ["name", "host", "port", "file"];
+export type FieldKey = "name" | "host" | "port" | "service" | "file";
+const FIELD_ORDER: FieldKey[] = ["name", "host", "port", "service", "file"];
 /** What Test checks (a name is needed only to save). */
-const CONNECT_FIELDS: FieldKey[] = ["host", "port", "file"];
+const CONNECT_FIELDS: FieldKey[] = ["host", "port", "service", "file"];
 /** As the sidecar's ProfileRules.MaxHostLength. */
 const MAX_HOST = 1024;
 
@@ -168,8 +194,15 @@ export function profileFieldErrors(p: Profile): Partial<Record<FieldKey, string>
   // eslint-disable-next-line no-control-regex
   if (host.length > MAX_HOST || /[\u0000-\u001f\u007f-\u009f]/.test(host)) e.host = `The host must be at most ${MAX_HOST} characters, without line breaks or control characters.`;
   if (p.port != null && !(Number.isInteger(p.port) && p.port >= 1 && p.port <= 65535)) {
-    const dflt = engineTraits(p.engine).defaultPort;
+    const dflt = defaultPortOf(p);
     e.port = `Enter a port from 1 to 65535${dflt == null ? "" : `, or leave it empty for ${dflt}`}.`;
+  }
+  // Oracle: the service (or SID) is the connection target, as the sidecar's OracleConnectionStrings.ValidService reads it.
+  if (knownEngine(p.engine) === "oracle") {
+    const service = (p.databaseDefault ?? "").trim();
+    const sid = p.options?.[ORACLE_SID_OPTION] === "true";
+    if (!service) e.service = sid ? "Enter the SID." : "Enter the service name (for example FREEPDB1 or ORCLPDB1).";
+    else if (service.length > 128 || !/^[A-Za-z0-9_.$#-]+$/.test(service)) e.service = `The ${sid ? "SID" : "service name"} may hold letters, digits and _ . $ # - only.`;
   }
   return e;
 }
@@ -349,6 +382,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
   const fid = useId();
   const refs = {
     name: useRef<HTMLInputElement>(null), host: useRef<HTMLInputElement>(null), port: useRef<HTMLInputElement>(null), file: useRef<HTMLButtonElement>(null),
+    service: useRef<HTMLInputElement>(null),
     engine: useRef<HTMLButtonElement>(null), environment: useRef<HTMLInputElement>(null), ack: useRef<HTMLInputElement>(null),
     sshHost: useRef<HTMLInputElement>(null), sshUser: useRef<HTMLInputElement>(null),
   };
@@ -368,8 +402,11 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
   const local = isLocal(p);
   const traits = engineTraits(p.engine);
   const fields = FIELDS[knownEngine(p.engine)];
-  const defaultPort = traits.defaultPort;
+  const defaultPort = defaultPortOf(p);
+  const oracle = knownEngine(p.engine) === "oracle";
+  const oracleSid = oracle && p.options?.[ORACLE_SID_OPTION] === "true";
   const offered = offeredEngines(engineInfo, existing?.engine);
+  const unavailable = unavailableEngines(engineInfo);
   // Until the user types a name the suggestion is the name; an emptied name falls back to it (its placeholder).
   const withName = (x: Profile): Profile => ({ ...x, name: nameTouched && x.name.trim() ? x.name : suggestedName(x) });
   const name = nameTouched ? p.name : suggestedName(p);
@@ -423,7 +460,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
   const problems = (d: Profile): { key: Focusable; text: string }[] => {
     const list: { key: Focusable; text: string }[] = [];
     const errs = profileFieldErrors(d);
-    for (const f of ["host", "port", "file"] as FieldKey[]) if (errs[f]) list.push({ key: f, text: errs[f]! });
+    for (const f of ["host", "port", "service", "file"] as FieldKey[]) if (errs[f]) list.push({ key: f, text: errs[f]! });
     list.push(...sshProblems(d));
     if (!envChosen) list.push({ key: "environment", text: "Choose the environment: Local, Dev, Test, Staging or Prod." });
     // A missing file is the reason there is no name yet: it is said once, at the file.
@@ -445,7 +482,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
   /** Shows these fields' messages and focuses the first one that has a message (opening its row if folded). */
   const reveal = (fieldsToShow: FieldKey[], bad: Focusable[]) => {
     setShown((cur) => new Set([...cur, ...fieldsToShow]));
-    const order: Focusable[] = ["host", "port", "file", "sshHost", "sshUser", "environment", "name", "ack"];
+    const order: Focusable[] = ["host", "port", "service", "file", "sshHost", "sshUser", "environment", "name", "ack"];
     const first = order.find((f) => bad.includes(f));
     if (!first) return;
     if (first === "ack") setOpen((o) => ({ ...o, enc: true }));
@@ -820,7 +857,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
 
           <Line label="Server type">
             <div className="space-y-1.5 min-w-0">
-              <EngineSelect ref={refs.engine} value={engineChosen ? p.engine : null} options={offered} autoFocus={!engineChosen} onChange={chooseEngine} />
+              <EngineSelect ref={refs.engine} value={engineChosen ? p.engine : null} options={offered} unavailable={unavailable} autoFocus={!engineChosen} onChange={chooseEngine} />
               {!engineChosen && recent.length > 0 && (
                 <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
                   Recent:
@@ -908,9 +945,29 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
                   <button type="button" className="text-accent hover:underline" onClick={() => setPortOffer(null)}>Keep {traits.shortLabel}</button>
                 </Offer>
               )}
-              <Line label="Database" htmlFor={`${fid}-db`}>
-                <input id={`${fid}-db`} className={`${INPUT} q-mono`} value={p.databaseDefault ?? ""} onChange={(e) => set({ databaseDefault: e.target.value || null })} placeholder={traits.defaultDatabase ?? "(login default)"} />
-              </Line>
+              {oracle && p.tlsMode !== "disable" && p.port === 1521 && (
+                <p className="q-profile-reveal pl-[108px] text-[10.5px] text-warn" data-q-oracle-port>
+                  1521 is usually the plain TCP listener; TCPS listens on 2484 unless the server says otherwise. Use the server&apos;s TCPS port, or choose TCP under Encryption.
+                </p>
+              )}
+              {oracle ? (
+                <div className="grid grid-cols-[96px_1fr] items-center gap-x-3 gap-y-1">
+                  <label htmlFor={`${fid}-db`} className="text-[11.5px] text-muted">{oracleSid ? "SID" : "Service name"}</label>
+                  <input
+                    id={`${fid}-db`} ref={refs.service} className={`${INPUT} q-mono`} value={p.databaseDefault ?? ""} onChange={(e) => set({ databaseDefault: e.target.value || null })}
+                    placeholder={oracleSid ? "ORCL" : "FREEPDB1"} autoComplete="off" spellCheck={false} aria-required {...invalidProps("service")}
+                  />
+                  {errorLine("service", "col-start-2")}
+                  <label className="col-start-2 flex items-center gap-2 h-7 text-[11.5px] text-fg cursor-pointer">
+                    <input type="checkbox" checked={oracleSid} onChange={(e) => set({ options: { ...(p.options ?? {}), [ORACLE_SID_OPTION]: String(e.target.checked) } })} />
+                    Connect by SID (older servers without a service name)
+                  </label>
+                </div>
+              ) : (
+                <Line label="Database" htmlFor={`${fid}-db`}>
+                  <input id={`${fid}-db`} className={`${INPUT} q-mono`} value={p.databaseDefault ?? ""} onChange={(e) => set({ databaseDefault: e.target.value || null })} placeholder={traits.defaultDatabase ?? "(login default)"} />
+                </Line>
+              )}
               <div className="pl-[108px]">{pasteBox || pasteLink}</div>
             </div>
           )}
@@ -1015,6 +1072,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
                         className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-6 flex items-center justify-center rounded text-muted hover:text-fg hover:bg-hover"
                         title={showSecret ? "Hide" : "Show"}
                         aria-label={`${showSecret ? "Hide" : "Show"} ${p.auth === "entraToken" ? "token" : "password"}`}
+                        data-layout-adornment
                         aria-pressed={showSecret}
                         onClick={() => setShowSecret((v) => !v)}
                       >
@@ -1040,6 +1098,13 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
                 </>
               ) : <span className="col-span-2" />}
             </div>
+            {AUTH_UNAVAILABLE[knownEngine(p.engine)].length > 0 && (
+              <ul className="pl-[108px] text-[10.5px] text-muted space-y-0.5" data-q-auth-unavailable>
+                {AUTH_UNAVAILABLE[knownEngine(p.engine)].map((a) => (
+                  <li key={a.label}><span className="text-fg">{a.label}</span>: {a.reason}</li>
+                ))}
+              </ul>
+            )}
             {existing && needsSecretFor(existing.auth) && !needsSecret && savedSecret !== false && (
               <p className="pl-[108px] text-[10.5px] text-warn">The saved {secretKind(existing.auth) === "token" ? "token" : "password"} is removed when you save, because this sign-in needs none.</p>
             )}
@@ -1083,7 +1148,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
                     <Row label="Certificate" hint={p.trustCert ? <span className="q-profile-reveal text-warn">The server certificate is not validated: anyone on the network path could pose as this server. Use only for development servers.</span> : undefined}>
                       <Check checked={p.trustCert} onChange={(v) => set({ trustCert: v })}>Trust server certificate</Check>
                     </Row>
-                  ) : (p.tlsMode === "verifyCa" || p.tlsMode === "verifyFull" || (knownEngine(p.engine) === "mySql" && p.tlsMode === "default") || !!p.caPath) && (
+                  ) : (p.tlsMode === "verifyCa" || p.tlsMode === "verifyFull" || ((knownEngine(p.engine) === "mySql" || oracle) && p.tlsMode === "default") || !!p.caPath) && (
                     <Row label="CA certificate" hint="Used by Verify CA / Verify full.">
                       <input className={`${INPUT} q-mono`} value={p.caPath ?? ""} onChange={(e) => set({ caPath: e.target.value || null })} placeholder="/etc/ssl/certs/root.crt" />
                     </Row>
@@ -1497,8 +1562,11 @@ function engineMatches(options: Engine[], query: string): Engine[] {
  * Server-type picker: a button showing the chosen type (or "Choose a server type…"), opening a searchable list grouped
  * into server and file engines, so it stays usable as engines are added. Escape is left to it while open (see Modal).
  */
-const EngineSelect = ({ ref, value, options, onChange, autoFocus }: {
-  ref: RefObject<HTMLButtonElement | null>; value: Engine | null; autoFocus?: boolean; options: Engine[]; onChange: (e: Engine) => void;
+const EngineSelect = ({ ref, value, options, unavailable = {}, onChange, autoFocus }: {
+  ref: RefObject<HTMLButtonElement | null>; value: Engine | null; autoFocus?: boolean; options: Engine[];
+  /** Engines the sidecar cannot run on this computer (O6): listed, never chosen, with the reason. */
+  unavailable?: Partial<Record<Engine, string>>;
+  onChange: (e: Engine) => void;
 }) => {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -1523,6 +1591,7 @@ const EngineSelect = ({ ref, value, options, onChange, autoFocus }: {
     if (refocus) ref.current?.focus();
   };
   const choose = (e: Engine) => {
+    if (unavailable[e]) return;
     close();
     onChange(e);
   };
@@ -1621,13 +1690,18 @@ const EngineSelect = ({ ref, value, options, onChange, autoFocus }: {
                   id={`${id}-opt-${e}`}
                   role="option"
                   aria-selected={e === value}
+                  aria-disabled={unavailable[e] ? true : undefined}
+                  title={unavailable[e]}
                   onMouseEnter={() => setActive(i)}
                   onMouseDown={(ev) => ev.preventDefault()}
                   onClick={() => choose(e)}
-                  className={`flex items-center gap-2.5 h-[32px] px-2.5 rounded text-[12px] cursor-pointer ${i === active ? "bg-hover text-fg" : "text-fg"}`}
+                  className={`flex items-center gap-2.5 min-h-[32px] px-2.5 rounded text-[12px] ${unavailable[e] ? "cursor-not-allowed text-muted" : "cursor-pointer text-fg"} ${i === active ? "bg-hover" : ""}`}
                 >
                   <EngineMark engine={e} logo={LOGOS[e]} size={18} />
-                  <span className="flex-1 truncate">{ENGINE_TRAITS[e].label}</span>
+                  <span className="flex-1 min-w-0">
+                    <span className="block truncate">{ENGINE_TRAITS[e].label}</span>
+                    {unavailable[e] && <span className="block text-[10.5px] leading-snug whitespace-normal" data-q-engine-unavailable>{unavailable[e]}</span>}
+                  </span>
                   {e === value && <span className="text-accent"><Icon d={ICON.check} size={14} /></span>}
                 </li>,
               ];

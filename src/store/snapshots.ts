@@ -4,7 +4,7 @@ import type { MetaUpdatedEvent, SchemaSnapshot, SnapshotStatus } from "../ipc/co
 import { onNotify, rpc } from "../ipc/client";
 import { buildSchemaIndex } from "../editor/completion/schemaIndex";
 import type { SchemaIndex } from "../editor/completion/types";
-import { isLocalEngine } from "../engines";
+import { DIALECTS, foldIdentifier, isLocalEngine } from "../engines";
 import { locationOf } from "../connections/auth";
 import { profileDialect as dialectOf, useProfiles } from "./profiles";
 import { isDisconnected, useConnections } from "./connections";
@@ -156,6 +156,19 @@ export function useToolSnapshot(b: ToolBinding | undefined, load = true): { scop
 /** `sessionId` in a scoped request only when there is one (server engines send what they always sent). */
 export const sessionParam = (sessionId: string | undefined) => (sessionId ? { sessionId } : {});
 
+/**
+ * The schema a profile's sign-in owns, where unqualified names resolve to it (DialectTraits.loginSchema: Oracle): the
+ * user name as the server spells it, a "quoted" one exact. ALTER SESSION SET CURRENT_SCHEMA in a script moves it only for
+ * the sidecar's tier 2 (OracleLanguageService.CurrentSchemaAt).
+ */
+export function loginSchemaOf(profileId: string): string | null {
+  const p = useProfiles.getState().byId(profileId);
+  if (!p?.username || !DIALECTS[dialectOf(profileId)].loginSchema) return null;
+  const user = p.username.trim();
+  const quoted = user.length > 1 && user.startsWith('"') && user.endsWith('"');
+  return foldIdentifier(quoted ? user.slice(1, -1) : user, quoted, dialectOf(profileId)) || null;
+}
+
 function databasesOf(profileId: string): string[] {
   return useConnections.getState().servers[profileId]?.databases.map((d) => d.name) ?? [];
 }
@@ -178,7 +191,7 @@ interface SnapStore {
 
 export const useSnapshots = create<SnapStore>((set, get) => {
   const put = (e: SnapEntry) => set((s) => ({ entries: { ...s.entries, [e.key]: e } }));
-  const index = (snap: SchemaSnapshot) => buildSchemaIndex(snap, dialectOf(snap.profileId), databasesOf(snap.profileId));
+  const index = (snap: SchemaSnapshot) => buildSchemaIndex(snap, dialectOf(snap.profileId), databasesOf(snap.profileId), loginSchemaOf(snap.profileId));
 
   return {
     entries: {},
@@ -263,7 +276,7 @@ async function applyUpdate(entry: SnapEntry, e: MetaUpdatedEvent) {
   const objects = base.objects.filter((o) => !drop.has(o.id)).concat(changed);
   objects.sort((a, b) => (a.schema + "." + a.name).localeCompare(b.schema + "." + b.name));
   const snapshot: SchemaSnapshot = { ...base, objects, status: "fresh", notes: e.notes ?? null };
-  const idx = buildSchemaIndex(snapshot, dialectOf(profileId), databasesOf(profileId));
+  const idx = buildSchemaIndex(snapshot, dialectOf(profileId), databasesOf(profileId), loginSchemaOf(profileId));
   useSnapshots.setState((s) => (s.entries[k] ? { entries: { ...s.entries, [k]: { ...s.entries[k], snapshot, index: idx, status: "fresh", version: s.entries[k].version + 1 } } } : s));
 }
 

@@ -274,3 +274,39 @@ describe("lexer: MySQL rules", () => {
     expect(kt("#x", "pg")[0]).toBe("operator:#");
   });
 });
+
+// D4 S06: the sidecar's OracleTokenizer forms (OracleIntelligenceTests), read the same way here.
+describe("lexer: Oracle rules", () => {
+  it("reads alternative quoting q'X…X' and nq'X…X' as one string, whatever the delimiter, a lone ' and ; inside", () => {
+    for (const lit of ["q'[it's; /]'", "q'{a}'", "q'(a)'", "q'<a>'", "q'!it's!'", "Q'#a'#'", "nq'[x]'", "NQ'|y|'", "q'.a.'"]) {
+      expect(kt(`SELECT ${lit} FROM dual`, "oracle"), lit).toEqual(["keyword:SELECT", `string:${lit}`, "keyword:FROM", "ident:dual"]);
+    }
+  });
+
+  it("an unterminated q'…' runs to the end, flagged open; q followed by a space is a name", () => {
+    const t = tokenize("SELECT q'[never closed", "oracle")[1];
+    expect([t.kind, t.end, t.open]).toEqual(["string", 22, true]);
+    expect(kt("SELECT q 'a'", "oracle")).toEqual(["keyword:SELECT", "ident:q", "string:'a'"]);
+  });
+
+  it("binds :name, :1 and :\"name\"; := and => are operators", () => {
+    expect(kt(`x := :a + :1 + :"Mixed" + :b#2`, "oracle")).toEqual([
+      "ident:x", "operator::=", "param::a", "operator:+", "param::1", "operator:+", 'param::"Mixed"', "operator:+", "param::b#2",
+    ]);
+    expect(kt("f(p => 1)", "oracle")).toContain("operator:=>");
+  });
+
+  it("names hold # and $; 1..10 is a range; << >> are label operators; hints are comments", () => {
+    expect(kt("FOR i IN 1..10 LOOP", "oracle")).toEqual(["keyword:FOR", "ident:i", "keyword:IN", "number:1", "operator:..", "number:10", "keyword:LOOP"]);
+    expect(kt("SELECT t#1.c$x FROM t#1", "oracle")).toEqual(["keyword:SELECT", "ident:t#1", "punct:.", "ident:c$x", "keyword:FROM", "ident:t#1"]);
+    expect(kt("<<outer>> BEGIN", "oracle")).toEqual(["operator:<<", "ident:outer", "operator:>>", "keyword:BEGIN"]);
+    expect(kt("SELECT /*+ FULL(t) */ 1 --+ hint\nFROM dual", "oracle")).toEqual([
+      "keyword:SELECT", "comment:/*+ FULL(t) */", "number:1", "comment:--+ hint", "keyword:FROM", "ident:dual",
+    ]);
+  });
+
+  it("other dialects keep their lexing: q'…' is a name and a string there, # ends a name", () => {
+    expect(kt("q'[x]'", "pg")[0]).toBe("ident:q");
+    expect(kt("t#1", "pg")[0]).toBe("ident:t");
+  });
+});

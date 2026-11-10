@@ -1,0 +1,307 @@
+[
+  {
+    "name": "named binds, first use, upper-cased",
+    "text": "SELECT :a, :B FROM dual WHERE x = :a",
+    "binds": [
+      "A",
+      "B"
+    ],
+    "statements": [
+      {
+        "kind": "sql",
+        "start": 0,
+        "end": 36
+      }
+    ]
+  },
+  {
+    "name": "q-quote holding ; and :x, two statements",
+    "text": "SELECT q'[a;:x]' FROM dual; SELECT :y FROM dual",
+    "binds": [
+      "Y"
+    ],
+    "statements": [
+      {
+        "kind": "sql",
+        "start": 0,
+        "end": 26
+      },
+      {
+        "kind": "sql",
+        "start": 28,
+        "end": 47
+      }
+    ]
+  },
+  {
+    "name": "trigger :NEW is no bind; the next statement's is",
+    "text": "CREATE OR REPLACE TRIGGER t BEFORE INSERT ON x FOR EACH ROW\nBEGIN\n  :NEW.id := :v;\nEND;\n/\nSELECT :w FROM dual",
+    "binds": [
+      "W"
+    ],
+    "statements": [
+      {
+        "kind": "plsql",
+        "start": 0,
+        "end": 87
+      },
+      {
+        "kind": "sql",
+        "start": 90,
+        "end": 109
+      }
+    ]
+  },
+  {
+    "name": "anonymous block: := is an operator",
+    "text": "BEGIN\n  :result := 1;\n  x := 2;\nEND;\n/",
+    "binds": [
+      "RESULT"
+    ],
+    "statements": [
+      {
+        "kind": "plsql",
+        "start": 0,
+        "end": 36
+      }
+    ]
+  },
+  {
+    "name": "numbered and quoted binds",
+    "text": "SELECT :1, :\"Mixed\" FROM dual",
+    "binds": [
+      "1",
+      "Mixed"
+    ],
+    "statements": [
+      {
+        "kind": "sql",
+        "start": 0,
+        "end": 29
+      }
+    ]
+  },
+  {
+    "name": "hints, strings and comments hold no binds",
+    "text": "SELECT /*+ :h */ 'a:b' -- :c\n, :d FROM dual",
+    "binds": [
+      "D"
+    ],
+    "statements": [
+      {
+        "kind": "sql",
+        "start": 0,
+        "end": 43
+      }
+    ]
+  },
+  {
+    "name": "SET SERVEROUTPUT is a client command",
+    "text": "SET SERVEROUTPUT ON\nBEGIN DBMS_OUTPUT.PUT_LINE(:msg); END;\n/",
+    "binds": [
+      "MSG"
+    ],
+    "statements": [
+      {
+        "kind": "client",
+        "start": 0,
+        "end": 19
+      },
+      {
+        "kind": "plsql",
+        "start": 20,
+        "end": 58
+      }
+    ]
+  },
+  {
+    "name": "nq'' and N'' strings",
+    "text": "SELECT nq'{x:y}', N'a:b', :z FROM dual",
+    "binds": [
+      "Z"
+    ],
+    "statements": [
+      {
+        "kind": "sql",
+        "start": 0,
+        "end": 38
+      }
+    ]
+  },
+  {
+    "name": "a / inside a string is no terminator",
+    "text": "SELECT '/\n' FROM dual\n/\nSELECT 1 FROM dual",
+    "binds": [],
+    "statements": [
+      {
+        "kind": "sql",
+        "start": 0,
+        "end": 21
+      },
+      {
+        "kind": "sql",
+        "start": 24,
+        "end": 42
+      }
+    ]
+  },
+  {
+    "name": "CREATE TYPE spec ends at its ;",
+    "text": "CREATE TYPE pt AS OBJECT (x NUMBER);\nSELECT :p FROM dual;",
+    "binds": [
+      "P"
+    ],
+    "statements": [
+      {
+        "kind": "sql",
+        "start": 0,
+        "end": 35
+      },
+      {
+        "kind": "sql",
+        "start": 37,
+        "end": 56
+      }
+    ]
+  },
+  {
+    "name": "WITH FUNCTION is PL/SQL up to /",
+    "text": "WITH FUNCTION f RETURN NUMBER IS BEGIN RETURN 1; END;\nSELECT f FROM dual\n/",
+    "binds": [],
+    "statements": [
+      {
+        "kind": "plsql",
+        "start": 0,
+        "end": 72
+      }
+    ]
+  },
+  {
+    "name": "package spec and body",
+    "text": "CREATE OR REPLACE PACKAGE pk AS\n  PROCEDURE p(a NUMBER);\nEND;\n/\nCREATE OR REPLACE PACKAGE BODY pk AS\n  PROCEDURE p(a NUMBER) IS BEGIN NULL; END;\nEND;\n/",
+    "binds": [],
+    "statements": [
+      {
+        "kind": "plsql",
+        "start": 0,
+        "end": 61
+      },
+      {
+        "kind": "plsql",
+        "start": 64,
+        "end": 149
+      }
+    ]
+  },
+  {
+    "name": "database link after a name",
+    "text": "SELECT * FROM t@remote WHERE a = :a",
+    "binds": [
+      "A"
+    ],
+    "statements": [
+      {
+        "kind": "sql",
+        "start": 0,
+        "end": 35
+      }
+    ]
+  },
+  {
+    "name": "q-quote with any delimiter, across lines",
+    "text": "SELECT q'!it's;\n/\n!' FROM dual WHERE k = :k",
+    "binds": [
+      "K"
+    ],
+    "statements": [
+      {
+        "kind": "sql",
+        "start": 0,
+        "end": 43
+      }
+    ]
+  },
+  {
+    "name": "unterminated block runs to the end",
+    "text": "DECLARE\n  n NUMBER;\nBEGIN\n  n := :n;",
+    "binds": [
+      "N"
+    ],
+    "statements": [
+      {
+        "kind": "plsql",
+        "start": 0,
+        "end": 36
+      }
+    ]
+  },
+  {
+    "name": "EXEC is a client command, refused",
+    "text": "EXEC proc(:a)\nSELECT :b FROM dual",
+    "binds": [
+      "B"
+    ],
+    "statements": [
+      {
+        "kind": "client",
+        "start": 0,
+        "end": 13
+      },
+      {
+        "kind": "sql",
+        "start": 14,
+        "end": 33
+      }
+    ]
+  },
+  {
+    "name": "SET TRANSACTION is SQL",
+    "text": "SET TRANSACTION READ ONLY;\nSELECT :c FROM dual",
+    "binds": [
+      "C"
+    ],
+    "statements": [
+      {
+        "kind": "sql",
+        "start": 0,
+        "end": 25
+      },
+      {
+        "kind": "sql",
+        "start": 27,
+        "end": 46
+      }
+    ]
+  },
+  {
+    "name": "labelled block",
+    "text": "<<outer>>\nBEGIN\n  NULL;\nEND;\n/",
+    "binds": [],
+    "statements": [
+      {
+        "kind": "plsql",
+        "start": 0,
+        "end": 28
+      }
+    ]
+  },
+  {
+    "name": "statements on one line, ; inside a quoted name",
+    "text": "SELECT \"a;b\" FROM t; DELETE FROM t WHERE id = :id;",
+    "binds": [
+      "ID"
+    ],
+    "statements": [
+      {
+        "kind": "sql",
+        "start": 0,
+        "end": 19
+      },
+      {
+        "kind": "sql",
+        "start": 21,
+        "end": 49
+      }
+    ]
+  }
+]

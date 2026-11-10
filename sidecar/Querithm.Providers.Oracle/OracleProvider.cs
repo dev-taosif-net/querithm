@@ -30,8 +30,13 @@ public sealed class OracleProvider : IDbProvider
 
     /// <param name="dataDir">&lt;appDataDir&gt;/querithm: the empty TNS_ADMIN directory and CA trust wallets live under it. Tests may omit it (a temp directory).</param>
     public OracleProvider(string? dataDir = null)
+        : this(dataDir, PlatformRefusal(OperatingSystem.IsMacOS(), System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture)) { }
+
+    /// <param name="unavailable">Tests: the platform refusal this computer would give (<see cref="PlatformRefusal"/>).</param>
+    internal OracleProvider(string? dataDir, string? unavailable)
     {
         _oracleDir = Path.Combine(dataDir ?? Path.Combine(Path.GetTempPath(), "querithm-tests"), "oracle");
+        Traits = BaseTraits with { Unavailable = unavailable };
     }
 
     public Engine Engine => Engine.Oracle;
@@ -54,7 +59,9 @@ public sealed class OracleProvider : IDbProvider
     public IActivityProvider? Activity { get; } = new OracleActivity();
     public ITransactionControl Transactions { get; } = new OracleTransactions();
 
-    public EngineTraits Traits { get; } = new()
+    public EngineTraits Traits { get; }
+
+    static readonly EngineTraits BaseTraits = new()
     {
         // The service is the connection target (Easy Connect host:port/service); FREEPDB1 is only the fixture's. TCPS is the
         // default, so the default port is the TCPS one (2484); a plain TCP profile defaults to 1521.
@@ -63,6 +70,15 @@ public sealed class OracleProvider : IDbProvider
         // Unquoted names fold to upper case and the dictionary holds the folded names: matching is exact (D0e).
         NameMatch = StringComparer.Ordinal,
     };
+
+    /// <summary>
+    /// O6: ODP.NET Core runs on Windows, Linux and Apple-silicon macOS only (Oracle's platform list for 23.26), so on an Intel
+    /// Mac the engine is listed disabled with this reason and its profiles refuse with it; null everywhere else.
+    /// </summary>
+    public static string? PlatformRefusal(bool macOs, System.Runtime.InteropServices.Architecture architecture) =>
+        macOs && architecture != System.Runtime.InteropServices.Architecture.Arm64
+            ? "Oracle's driver (ODP.NET) does not run on Intel Macs. Oracle connections work in Querithm on Apple-silicon Macs, Windows and Linux."
+            : null;
 
     /// <summary>Each feature still refusing names the reason; the sessions that implement them (D4 S04–S12) clear their entry.</summary>
     public string? FeatureRefusal(Feature feature) => feature switch
@@ -80,7 +96,7 @@ public sealed class OracleProvider : IDbProvider
 
     public const string ChangeDatabaseRefusal = "An Oracle connection reaches one service; open another service in a connection of its own.";
 
-    public string? ValidateProfile(Profile p) => OracleConnectionStrings.Validate(p);
+    public string? ValidateProfile(Profile p) => Traits.Unavailable ?? OracleConnectionStrings.Validate(p);
 
     static readonly ConditionalWeakTable<DbConnection, ProductInfo> Products = new();
 

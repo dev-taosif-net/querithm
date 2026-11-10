@@ -3,7 +3,7 @@ import type { Dialect } from "../ipc/contract";
 import type { SchemaIndex } from "./completion/types";
 import { getStream } from "./completion/lexer";
 import { lastStartingBefore, scan, W } from "./completion/scanner";
-import { DIALECTS } from "../engines";
+import { DIALECTS, foldIdentifier } from "../engines";
 
 export interface Tier1SignatureResult {
   label: string;
@@ -22,8 +22,8 @@ function tier1SignatureHelpInRegion(
   const stream = getStream(text, dialect);
   const T = stream.code;
   if (!T.length) return null;
-  // PostgreSQL: unquoted names fold to lower case and then match exactly; T-SQL names match case-insensitively.
-  const folds = DIALECTS[dialect].foldsIdentifiers;
+  // PostgreSQL / Oracle: unquoted names fold (lower / upper case) and then match exactly; T-SQL names match case-insensitively.
+  const folds = DIALECTS[dialect].identifierFold !== null;
 
   const curIdx = lastStartingBefore(T, offset);
   if (curIdx < 0) return null;
@@ -58,11 +58,11 @@ function tier1SignatureHelpInRegion(
   if (openParenIdx > 0) {
     const prev = T[openParenIdx - 1];
     if (prev.kind === "ident" || prev.kind === "qident" || prev.kind === "keyword") {
-      targetName = folds && prev.kind !== "qident" ? prev.value.toLowerCase() : prev.value;
+      targetName = folds ? foldIdentifier(prev.value, prev.kind === "qident", dialect) : prev.value;
       if (openParenIdx >= 3 && T[openParenIdx - 2].kind === "punct" && T[openParenIdx - 2].value === ".") {
         const schemaTok = T[openParenIdx - 3];
         if (schemaTok.kind === "ident" || schemaTok.kind === "qident") {
-          targetSchema = folds && schemaTok.kind !== "qident" ? schemaTok.value.toLowerCase() : schemaTok.value;
+          targetSchema = folds ? foldIdentifier(schemaTok.value, schemaTok.kind === "qident", dialect) : schemaTok.value;
           if (T[openParenIdx - 4]?.value === ".") return null;
         }
       }
@@ -91,7 +91,7 @@ function tier1SignatureHelpInRegion(
       }
       if (T[j] && (T[j].kind === "ident" || T[j].kind === "qident")) {
         let chainEnd = j;
-        const value = (index: number) => folds && T[index].kind !== "qident" ? T[index].value.toLowerCase() : T[index].value;
+        const value = (index: number) => folds ? foldIdentifier(T[index].value, T[index].kind === "qident", dialect) : T[index].value;
         const parts: string[] = [value(j)];
         while (T[chainEnd + 1]?.kind === "punct" && T[chainEnd + 1]?.value === "." && T[chainEnd + 2]) {
           parts.push(value(chainEnd + 2));

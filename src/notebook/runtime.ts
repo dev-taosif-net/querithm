@@ -1,7 +1,7 @@
 // Notebook runtime (Phase C3): cells and their Monaco models, running cells through the tab's one session (the same
 // guarded path as a query tab), the run-all queue with cancel and stop-on-error, and the .sqlbook document. Loaded at
 // start (it registers the shell's notebook hooks); the panel's React code loads with the first notebook shown.
-import { executeOnTab, disposeExecution, newQueryTabBinding, trackExecution, workspaceHooks } from "../app/actions";
+import { errorStartColumn, executeOnTab, disposeExecution, newQueryTabBinding, trackExecution, workspaceHooks } from "../app/actions";
 import { createModel, disposeModel, getModel, languageFor, setModelLanguage } from "../editor/editors";
 import { monaco } from "../editor/monaco";
 import { executionData } from "../results/model";
@@ -189,7 +189,8 @@ function markCell(model: monaco.editor.ITextModel | undefined, v: ExecutionView 
   const markers = (v?.messages ?? [])
     .filter((m) => m.severity === "error" && m.editorLine && m.editorLine <= model.getLineCount())
     .map((m) => ({
-      startLineNumber: m.editorLine!, endLineNumber: m.editorLine!, startColumn: 1, endColumn: model.getLineMaxColumn(m.editorLine!),
+      // From the server's column when it named one (Oracle), else the whole line.
+      startLineNumber: m.editorLine!, endLineNumber: m.editorLine!, startColumn: errorStartColumn(model, m), endColumn: model.getLineMaxColumn(m.editorLine!),
       message: m.message, severity: monaco.MarkerSeverity.Error, source: "server",
     }));
   monaco.editor.setModelMarkers(model, "execution", markers);

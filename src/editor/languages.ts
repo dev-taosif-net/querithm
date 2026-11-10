@@ -528,20 +528,58 @@ export function duckdbLanguage(): Monaco.languages.IMonarchLanguage {
   } as Monaco.languages.IMonarchLanguage;
 }
 
-/** Phase D4 placeholder (hidden engine): a small keyword list until D4 S06 writes Oracle's own word lists. */
-export const ORACLE_KEYWORDS = `ALL ALTER AND AS ASC BEGIN BETWEEN BY CASE COMMIT CONNECT CREATE DECLARE DEFAULT DELETE DESC DISTINCT DROP ELSE
-END EXCEPTION EXISTS FETCH FROM FUNCTION GRANT GROUP HAVING IN INDEX INSERT INTO IS JOIN LIKE MERGE MINUS NOT NULL OF ON
-OR ORDER PACKAGE PROCEDURE REPLACE REVOKE ROLLBACK SAVEPOINT SELECT SEQUENCE SET TABLE THEN TRIGGER TRUNCATE UNION
-UPDATE USING VALUES VIEW WHEN WHERE WITH`.split(/\s+/);
+/**
+ * Oracle (D4 S06): the SQL and PL/SQL reserved words (the sidecar's OracleKeywords, which completion quotes) plus the
+ * keywords of the statements and PL/SQL blocks people write.
+ */
+export const ORACLE_KEYWORDS = `ACCESS ADD ALL ALTER AND ANY AS ASC AUDIT BETWEEN BY CHAR CHECK CLUSTER COLUMN COMMENT COMPRESS CONNECT CREATE
+CURRENT DATE DECIMAL DEFAULT DELETE DESC DISTINCT DROP ELSE EXCLUSIVE EXISTS FILE FLOAT FOR FROM GRANT GROUP HAVING IDENTIFIED
+IMMEDIATE IN INCREMENT INDEX INITIAL INSERT INTEGER INTERSECT INTO IS LEVEL LIKE LOCK LONG MAXEXTENTS MINUS MLSLABEL MODE MODIFY
+NOAUDIT NOCOMPRESS NOT NOWAIT NULL NUMBER OF OFFLINE ON ONLINE OPTION OR ORDER PCTFREE PRIOR PUBLIC RAW RENAME RESOURCE REVOKE ROW
+ROWID ROWNUM ROWS SELECT SESSION SET SHARE SIZE SMALLINT START SUCCESSFUL SYNONYM SYSDATE TABLE THEN TO TRIGGER UID UNION UNIQUE
+UPDATE USER VALIDATE VALUES VARCHAR VARCHAR2 VIEW WHENEVER WHERE WITH
+BEGIN CASE CURSOR DECLARE END EXCEPTION FETCH FUNCTION GOTO LOOP OPEN PACKAGE PROCEDURE RAISE RETURN TYPE WHEN WHILE ELSIF EXIT
+IF OUT PRAGMA RECORD SUBTYPE
+BODY BULK COLLECT COMMIT CONSTANT CONSTRAINT CONTINUE CROSS DEFINER EXECUTE FIRST FOREIGN FORALL FULL INNER JOIN KEY LEFT LIMIT
+MERGE MATCHED NATURAL NEXT NOCOPY NULLS OFFSET ONLY OTHERS OUTER OVER PARTITION PIPELINED PIPE PRIMARY REFERENCES REPLACE RETURNING
+REVERSE RIGHT ROLLBACK ROWTYPE SAVEPOINT SEQUENCE TRUNCATE USING EDITIONABLE NONEDITIONABLE AUTHID AUTONOMOUS_TRANSACTION
+EXCEPTION_INIT SERIALLY_REUSABLE DETERMINISTIC RESULT_CACHE PARALLEL_ENABLE COMPOUND INSTEAD EACH BEFORE AFTER STATEMENT NEW OLD
+REFERENCING FOLLOWS ENABLE DISABLE PURGE CASCADE CONSTRAINTS FLASHBACK EXPLAIN PLAN MATERIALIZED YEAR MONTH DAY HOUR MINUTE SECOND
+ZONE LOCAL TIME SAMPLE PIVOT UNPIVOT LATERAL APPLY TIES PERCENT SIBLINGS NOCYCLE KEEP RANGE PRECEDING FOLLOWING UNBOUNDED`.split(/\s+/);
 
-export const ORACLE_TYPES = `binary_double binary_float blob char clob date float integer interval long nchar nclob number nvarchar2 raw rowid
-timestamp varchar2 xmltype`.split(/\s+/);
+export const ORACLE_TYPES = `binary_double binary_float binary_integer blob boolean char clob date dec decimal double float int integer interval
+long nchar nclob number numeric nvarchar2 pls_integer natural naturaln positive positiven signtype simple_integer raw real rowid
+smallint timestamp urowid varchar varchar2 xmltype json vector sys_refcursor bfile anydata`.split(/\s+/);
 
-export const ORACLE_FUNCTIONS = `coalesce count decode lower max min nvl nvl2 round substr sum sysdate systimestamp to_char to_date to_number trim
-trunc upper`.split(/\s+/);
+export const ORACLE_FUNCTIONS = `abs acos add_months ascii asin atan avg bitand cast ceil chr coalesce concat cos count cume_dist current_date
+current_timestamp dbtimezone decode dense_rank dump empty_blob empty_clob exp extract first_value floor from_tz greatest initcap instr
+json_arrayagg json_object json_objectagg json_query json_table json_value lag last_day last_value lead least length listagg ln
+localtimestamp log lower lpad ltrim max median min mod months_between nanvl new_time next_day nls_lower nls_upper ntile nullif
+numtodsinterval numtoyminterval nvl nvl2 percent_rank power rank ratio_to_report rawtohex regexp_count regexp_instr regexp_like
+regexp_replace regexp_substr remainder replace round row_number rpad rtrim sessiontimezone sign sin soundex sqrt stddev substr sum
+sys_context sys_extract_utc sys_guid systimestamp tan to_binary_double to_char to_clob to_date to_dsinterval to_number to_timestamp
+to_timestamp_tz to_yminterval translate treat trim trunc tz_offset upper userenv variance vsize width_bucket xmlagg xmlelement`.split(/\s+/);
 
-/** Phase D4 placeholder: generic SQL lexical forms (-- and non-nesting block comments, '' strings, "" names, :binds). */
+/** Oracle `q'X…X'` delimiters that close with their partner, and the state each opens. */
+const ORACLE_Q_PAIRS: [string, string, string][] = [["[", "]", "qBracket"], ["{", "}", "qBrace"], ["(", ")", "qParen"], ["<", ">", "qAngle"]];
+
+const escapeRegExp = (c: string) => c.replace(/[\\^$.*+?()[\]{}|/-]/g, "\\$&");
+
+/**
+ * Oracle (D4 S06), the lexical forms of the sidecar's OracleTokenizer: '' strings, N'' and alternative quoting
+ * q'X…X' / nq'X…X' (any delimiter; [ { ( < close with their partner; a ' alone may stand inside), "" names (no escape),
+ * -- and non-nesting block comments with /*+ hints *\/ and --+ hints, :name / :1 / :"name" binds (:= is an operator),
+ * name@link database links, <<labels>>, and a / alone on a line ending a PL/SQL unit.
+ */
 export function oracleLanguage(): Monaco.languages.IMonarchLanguage {
+  const qStates: Record<string, Monaco.languages.IMonarchLanguageRule[]> = {};
+  for (const [, close, state] of ORACLE_Q_PAIRS) {
+    qStates[state] = [
+      [new RegExp(`${escapeRegExp(close)}'`), { token: "string.quote", next: "@pop" }],
+      [new RegExp(`[^${escapeRegExp(close)}]+`), "string"],
+      [/./, "string"],
+    ];
+  }
   return {
     defaultToken: "",
     ignoreCase: true,
@@ -552,25 +590,42 @@ export function oracleLanguage(): Monaco.languages.IMonarchLanguage {
     operators: [],
     tokenizer: {
       root: [
+        [/^\s*\/\s*$/, "keyword.batch"],
         { include: "@comments" },
         [/\s+/, "white"],
-        [/:[A-Za-z_]\w*/, "variable"],
-        [/'/, { token: "string.quote", next: "@string" }],
+        ...ORACLE_Q_PAIRS.map(([open, , state]): Monaco.languages.IMonarchLanguageRule =>
+          [new RegExp(`n?q'${escapeRegExp(open)}`), { token: "string.quote", next: `@${state}` }]),
+        // Any other delimiter: the state carries it ('.' has a state of its own: a state name splits on dots).
+        [/n?q'\./, { token: "string.quote", next: "@qDot" }],
+        [/n?q'(\S)/, { token: "string.quote", next: "@qAny.$1" }],
+        [/n?'/, { token: "string.quote", next: "@string" }],
         [/"/, { token: "identifier.quote", next: "@quoted" }],
-        [/[0-9]+(\.[0-9]*)?([eE][+-]?[0-9]+)?/, "number"],
+        [/:"[^"]*"?/, "variable"],
+        [/:(?!=)[A-Za-z0-9_$#]+/, "variable"],
+        [/<<[A-Za-z][\w$#]*>>/, "identifier.label"],
+        [/[0-9]+(\.(?!\.)[0-9]*)?([eE][+-]?[0-9]+)?[fFdD]?/, "number"],
+        [/\.[0-9]+([eE][+-]?[0-9]+)?[fFdD]?/, "number"],
         [/[;,.]/, "delimiter"],
         [/[()]/, "@brackets"],
-        [/[A-Za-z_][\w$#]*/, wordCases],
-        [/\|\||:=|=>|<>|!=|<=|>=|[<>=+\-*/]/, "operator"],
+        [/@[A-Za-z][\w$#.]*/, "identifier.link"],
+        [/[A-Za-z][\w$#]*/, wordCases],
+        [/\|\||:=|=>|\.\.|\*\*|<>|!=|\^=|~=|<=|>=|[<>=+\-*/%@!^~&|]/, "operator"],
       ],
       comments: [
+        [/--\+.*/, "comment.hint"],
         [/--.*/, "comment"],
+        [/\/\*\+/, { token: "comment.hint", next: "@hint" }],
         [/\/\*/, { token: "comment.quote", next: "@comment" }],
       ],
       comment: [
         [/[^*]+/, "comment"],
         [/\*\//, { token: "comment.quote", next: "@pop" }],
         [/\*/, "comment"],
+      ],
+      hint: [
+        [/[^*]+/, "comment.hint"],
+        [/\*\//, { token: "comment.hint", next: "@pop" }],
+        [/\*/, "comment.hint"],
       ],
       string: [
         [/[^']+/, "string"],
@@ -579,12 +634,28 @@ export function oracleLanguage(): Monaco.languages.IMonarchLanguage {
       ],
       quoted: [
         [/[^"]+/, "identifier"],
-        [/""/, "identifier"],
         [/"/, { token: "identifier.quote", next: "@pop" }],
+      ],
+      ...qStates,
+      qDot: [
+        [/\.'/, { token: "string.quote", next: "@pop" }],
+        [/[^.]+/, "string"],
+        [/./, "string"],
+      ],
+      qAny: [
+        [/(\S)'/, { cases: { "$1==$S2": { token: "string.quote", next: "@pop" }, "@default": "string" } }],
+        [/./, "string"],
       ],
     },
   } as Monaco.languages.IMonarchLanguage;
 }
+
+/** Oracle: "" quote names (never nested, so not pairs); only ( ) pair. Folding is the sidecar splitter's, per statement and PL/SQL unit. */
+export const oracleLanguageConfiguration: Monaco.languages.LanguageConfiguration = {
+  ...sharedConfiguration,
+  brackets: [["(", ")"]],
+  colorizedBracketPairs: [["(", ")"]],
+};
 
 export interface EditorLanguage {
   /** Names Monaco shows for the language, and the file extensions it claims. */
@@ -618,9 +689,8 @@ export const LANGUAGES: Record<Dialect, EditorLanguage> = {
     aliases: ["DuckDB", "duckdb"], extensions: [], tokens: duckdbLanguage, configuration: duckdbLanguageConfiguration,
     words: [DUCKDB_KEYWORDS, DUCKDB_TYPES, DUCKDB_FUNCTIONS],
   },
-  // Phase D4 placeholder (hidden engine); the generic configuration until S06.
   oracle: {
-    aliases: ["Oracle", "oracle"], extensions: [], tokens: oracleLanguage, configuration: sqliteLanguageConfiguration,
+    aliases: ["Oracle", "oracle"], extensions: [], tokens: oracleLanguage, configuration: oracleLanguageConfiguration,
     words: [ORACLE_KEYWORDS, ORACLE_TYPES, ORACLE_FUNCTIONS],
   },
 };

@@ -43,17 +43,17 @@ describe("stepOutput", () => {
 describe("stepError", () => {
   it("F4 goes to the next error line after the cursor, wrapping; Shift+F4 to the previous; the ledger shows it", () => {
     stepError("t", 1);
-    expect(h.reveal).toHaveBeenLastCalledWith("t", 9);
+    expect(h.reveal).toHaveBeenLastCalledWith("t", 9, undefined);
     expect(useTabs.getState().tabs.t.ledgerError).toBe(1);
     h.pos = { lineNumber: 20 };
     stepError("t", 1);
-    expect(h.reveal).toHaveBeenLastCalledWith("t", 3);
+    expect(h.reveal).toHaveBeenLastCalledWith("t", 3, undefined);
     h.pos = { lineNumber: 5 };
     stepError("t", -1);
-    expect(h.reveal).toHaveBeenLastCalledWith("t", 3);
+    expect(h.reveal).toHaveBeenLastCalledWith("t", 3, undefined);
     h.pos = { lineNumber: 1 };
     stepError("t", -1);
-    expect(h.reveal).toHaveBeenLastCalledWith("t", 9);
+    expect(h.reveal).toHaveBeenLastCalledWith("t", 9, undefined);
   });
 
   it("a run without errors that have a line says so", () => {

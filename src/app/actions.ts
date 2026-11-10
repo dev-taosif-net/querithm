@@ -421,7 +421,7 @@ export interface RunOptions {
 async function collectParameters(sql: string, dialect: Dialect): Promise<QueryParameter[] | null | undefined> {
   const names = undeclaredParameters(sql, dialect);
   if (!names.length) return undefined;
-  const values = await ask<{ name: string; value: string; isNull: boolean; type?: string }[] | null>((resolve) => ({ kind: "params", names, resolve }));
+  const values = await ask<{ name: string; value: string; isNull: boolean; type?: string }[] | null>((resolve) => ({ kind: "params", names, dialect, resolve }));
   if (!values) return null;
   return values.map((v) => ({ name: v.name, value: v.isNull ? null : v.value, isNull: v.isNull, type: v.type ?? null }));
 }
@@ -541,6 +541,7 @@ export async function executeOnTab(
     statisticsIo: engine.statisticsIo && s.statisticsIo,
     statisticsTime: engine.statisticsTime && s.statisticsTime,
     actualPlan: actualPlanWithRun(profile.engine) && t.actualPlan,
+    serverOutput: tabServerOutput(t, profile.engine),
     confirmedDestructive: false,
     confirmedProd: false,
     noHistory: false,
@@ -585,6 +586,14 @@ export async function executeOnTab(
   const executionId = result?.executionId;
   if (!executionId) return;
   return { sessionId, executionId, options, notes };
+}
+
+/**
+ * What a run sends as ExecuteOptions.serverOutput: the tab's DBMS_OUTPUT toggle (unset is on) on an engine with server
+ * output; null elsewhere (the sidecar keeps the session's, and no other engine has one).
+ */
+export function tabServerOutput(t: Pick<TabState, "serverOutput"> | undefined, engine: Engine | null | undefined): boolean | null {
+  return engineTraits(engine).serverOutput ? (t?.serverOutput ?? true) : null;
 }
 
 let localViews = 0;
@@ -820,13 +829,21 @@ function receiveMessages(executionId: string, batch: readonly ServerMessage[]) {
   if (v) markErrors(v.tabId, v.messages);
 }
 
+/** Where an error's marker starts on its line: the server's column (Oracle names one), never past the line's end. */
+export function errorStartColumn(model: { getLineMaxColumn(line: number): number }, m: Pick<ServerMessage, "editorLine" | "editorColumn">): number {
+  const max = model.getLineMaxColumn(m.editorLine!);
+  const c = m.editorColumn ?? 0;
+  return c > 0 && c < max ? c : 1;
+}
+
 function markErrors(tabId: string, messages: ServerMessage[]) {
   const model = getModel(tabId);
   if (!model) return;
   const markers = messages
     .filter((m) => m.severity === "error" && m.editorLine && m.editorLine <= model.getLineCount())
     .map((m) => ({
-      startLineNumber: m.editorLine!, endLineNumber: m.editorLine!, startColumn: 1, endColumn: model.getLineMaxColumn(m.editorLine!),
+      // From the server's column when it named one (Oracle), else the whole line.
+      startLineNumber: m.editorLine!, endLineNumber: m.editorLine!, startColumn: errorStartColumn(model, m), endColumn: model.getLineMaxColumn(m.editorLine!),
       message: m.message, severity: monaco.MarkerSeverity.Error, source: "server",
     }));
   monaco.editor.setModelMarkers(model, "execution", markers);

@@ -61,6 +61,11 @@ export interface TabState {
   noticeDismissed?: string;
   maxRows?: number;
   actualPlan: boolean;
+  /**
+   * Phase D4: the tab's server-output toggle (Oracle DBMS_OUTPUT), sent with every run on an engine that has one
+   * (EngineTraits.serverOutput); unset is on. SET SERVEROUTPUT in a script changes it for the rest of that run only.
+   */
+  serverOutput?: boolean;
   traceId?: string;
   debugId?: string;
   sessionError?: string;

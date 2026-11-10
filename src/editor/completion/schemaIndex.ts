@@ -3,7 +3,11 @@ import type { Dialect, ObjectKind, SchemaSnapshot, SnapObject } from "../../ipc/
 import type { SchemaIndex, TableInScope } from "./types";
 import { DIALECTS, knownDialect } from "../../engines";
 
-export function buildSchemaIndex(snapshot: SchemaSnapshot, dialect: Dialect, databases: string[]): SchemaIndex {
+/**
+ * `loginSchema`: the signed-in user's schema, for a dialect where unqualified names resolve to it (Oracle,
+ * DialectTraits.loginSchema); ignored elsewhere.
+ */
+export function buildSchemaIndex(snapshot: SchemaSnapshot, dialect: Dialect, databases: string[], loginSchema?: string | null): SchemaIndex {
   // Triggers are never named in queries (and a PostgreSQL trigger may share its table's name), so completion skips them.
   const objects = (snapshot?.objects ?? []).filter((o): o is SnapObject => !!o && typeof o.name === "string" && o.kind !== "trigger");
   const byName = new Map<string, SnapObject[]>();
@@ -19,8 +23,10 @@ export function buildSchemaIndex(snapshot: SchemaSnapshot, dialect: Dialect, dat
     byId.set(o.id, o);
     if (!schemaSet.has(schema.toLowerCase())) schemaSet.set(schema.toLowerCase(), schema);
   }
-  // Where the database is the schema (MySQL), the snapshot's own database is what unqualified names resolve to.
-  const defaultSchema = DIALECTS[knownDialect(dialect)].defaultSchema ?? snapshot?.database ?? "";
+  // Where the database is the schema (MySQL), the snapshot's own database is what unqualified names resolve to; where the
+  // user is the schema (Oracle), the signed-in user's.
+  const traits = DIALECTS[knownDialect(dialect)];
+  const defaultSchema = traits.defaultSchema ?? (traits.loginSchema && loginSchema ? loginSchema : null) ?? snapshot?.database ?? "";
   const dbs: string[] = [];
   const seen = new Set<string>();
   for (const d of databases ?? []) {

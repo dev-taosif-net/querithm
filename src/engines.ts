@@ -24,11 +24,11 @@ export interface DialectTraits {
   /** A name that needs no delimiters (reserved words aside, see quoteIdentifier). */
   regularIdentifier: RegExp;
   /**
-   * Unquoted identifiers fold to lower case and names then compare exactly (PostgreSQL); otherwise names compare
-   * case-insensitively, quoted or not, and keep the case they were written in (SQL Server's default collation, SQLite,
-   * MySQL on its default settings).
+   * How the server spells an unquoted identifier: folded to lower case (PostgreSQL) or upper case (Oracle), after which
+   * names compare exactly and a quoted name is exact; null where names compare case-insensitively, quoted or not, and
+   * keep the case they were written in (SQL Server's default collation, SQLite, MySQL on its default settings, DuckDB).
    */
-  foldsIdentifiers: boolean;
+  identifierFold: "lower" | "upper" | null;
   /** A string literal holding `text` for SQL the user copies (values sent to the server travel as parameters). */
   stringLiteral(text: string): string;
   /** `USE db` changes the session's database, and the editor shows the database the script switches to. */
@@ -37,6 +37,21 @@ export interface DialectTraits {
   serverDiagnostics: boolean;
   /** Routine and DO bodies are dollar-quoted strings (`AS $$ … $$`) holding code the editor reads as SQL. */
   dollarQuotedBodies: boolean;
+  /**
+   * Unqualified names resolve to the signed-in user's own schema (Oracle: the user is the schema), so tier-1 completion
+   * takes the profile's user name, folded, as the default schema; `defaultSchema` is then null.
+   */
+  loginSchema: boolean;
+}
+
+/**
+ * The catalog spelling of a name as written: a quoted name is exact; an unquoted one is folded as the server folds it
+ * (`identifierFold`), or kept as written where the dialect compares names case-insensitively instead.
+ */
+export function foldIdentifier(name: string, quoted: boolean, dialect: Dialect): string {
+  if (quoted) return name;
+  const fold = DIALECTS[dialect].identifierFold;
+  return fold === "lower" ? name.toLowerCase() : fold === "upper" ? name.toUpperCase() : name;
 }
 
 const bracket = (name: string) => `[${name.replace(/]/g, "]]")}]`;
@@ -54,12 +69,13 @@ export const DIALECTS: Record<Dialect, DialectTraits> = {
     defaultSchema: "dbo",
     quote: bracket,
     regularIdentifier: /^[A-Za-z_#][A-Za-z0-9_@#$]*$/,
-    foldsIdentifiers: false,
+    identifierFold: null,
     // N'' keeps characters outside the code page of a varchar literal.
     stringLiteral: (text) => (/[^\x00-\x7f]/.test(text) ? `N${singleQuoted(text)}` : singleQuoted(text)),
     useStatement: true,
     serverDiagnostics: true,
     dollarQuotedBodies: false,
+    loginSchema: false,
   },
   pg: {
     label: "PostgreSQL",
@@ -67,12 +83,13 @@ export const DIALECTS: Record<Dialect, DialectTraits> = {
     defaultSchema: "public",
     quote: doubleQuote,
     regularIdentifier: /^[a-z_][a-z0-9_$]*$/,
-    foldsIdentifiers: true,
+    identifierFold: "lower",
     // E'' with doubled backslashes reads the same whatever standard_conforming_strings is.
     stringLiteral: (text) => (text.includes("\\") ? `E${singleQuoted(text).replace(/\\/g, "\\\\")}` : singleQuoted(text)),
     useStatement: false,
     serverDiagnostics: false,
     dollarQuotedBodies: true,
+    loginSchema: false,
   },
   sqlite: {
     label: "SQLite",
@@ -80,11 +97,12 @@ export const DIALECTS: Record<Dialect, DialectTraits> = {
     defaultSchema: "main",
     quote: doubleQuote,
     regularIdentifier: /^[A-Za-z_][A-Za-z0-9_]*$/,
-    foldsIdentifiers: false,
+    identifierFold: null,
     stringLiteral: singleQuoted,
     useStatement: false,
     serverDiagnostics: false,
     dollarQuotedBodies: false,
+    loginSchema: false,
   },
   mySql: {
     label: "MySQL",
@@ -92,12 +110,13 @@ export const DIALECTS: Record<Dialect, DialectTraits> = {
     defaultSchema: null,
     quote: backtick,
     regularIdentifier: /^[A-Za-z_$][A-Za-z0-9_$]*$/,
-    foldsIdentifiers: false,
+    identifierFold: null,
     // A backslash escapes in MySQL strings (unless NO_BACKSLASH_ESCAPES): doubled, it reads as itself either way.
     stringLiteral: (text) => singleQuoted(text).replace(/\\/g, "\\\\"),
     useStatement: true,
     serverDiagnostics: false,
     dollarQuotedBodies: false,
+    loginSchema: false,
   },
   duckDb: {
     label: "DuckDB",
@@ -106,28 +125,31 @@ export const DIALECTS: Record<Dialect, DialectTraits> = {
     quote: doubleQuote,
     regularIdentifier: /^[A-Za-z_][A-Za-z0-9_$]*$/,
     // DuckDB keeps the case of names and compares them case-insensitively, quoted or not.
-    foldsIdentifiers: false,
+    identifierFold: null,
     stringLiteral: singleQuoted,
     // USE changes the default catalog / schema of the session, never the connection's database.
     useStatement: false,
     serverDiagnostics: false,
     dollarQuotedBodies: false,
+    loginSchema: false,
   },
-  // Phase D4, hidden engine: a placeholder until D4 S06 (the sidecar refuses every Oracle statement until D4 S02). Oracle
-  // folds unquoted names to UPPER case, which no trait expresses yet; S06 adds it instead of borrowing PostgreSQL's folding.
+  // Phase D4 (hidden engine). Unquoted names fold to UPPER case; the schema is the signed-in user's (or the one ALTER
+  // SESSION SET CURRENT_SCHEMA names), which the sidecar reports, so none is assumed here. Oracle names cannot hold '"' at
+  // all (the sidecar's quoting refuses one), so the doubling below never reaches the server.
   oracle: {
     label: "Oracle SQL",
     language: "oracle",
     defaultSchema: null,
     quote: doubleQuote,
     regularIdentifier: /^[A-Z][A-Z0-9_$#]*$/,
-    foldsIdentifiers: false,
+    identifierFold: "upper",
     // No backslash escapes in Oracle strings: quotes doubled is the whole rule.
     stringLiteral: singleQuoted,
     // ALTER SESSION SET CURRENT_SCHEMA selects a schema; the service is the connection target, never switched.
     useStatement: false,
     serverDiagnostics: false,
     dollarQuotedBodies: false,
+    loginSchema: true,
   },
 };
 
@@ -177,6 +199,11 @@ export interface EngineTraits {
   /** The Activity monitor (sessions, waits, top queries). */
   monitor: boolean;
   /**
+   * Server output a run collects when asked (Oracle DBMS_OUTPUT): the Messages pane shows a per-tab toggle, sent as
+   * ExecuteOptions.serverOutput. Other engines' PRINT / NOTICE / warnings always arrive and have no toggle.
+   */
+  serverOutput: boolean;
+  /**
    * Where the engine's databases live: on a server, or on this computer (a granted file, or memory). The sidecar's
    * `system.engines` says the same; this is the fallback when it cannot be asked.
    */
@@ -205,6 +232,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     triggerFunctions: false,
     procedures: true,
     monitor: true,
+    serverOutput: false,
     locations: ["server"],
   },
   pg: {
@@ -229,6 +257,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     triggerFunctions: true,
     procedures: true,
     monitor: true,
+    serverOutput: false,
     locations: ["server"],
   },
   sqlite: {
@@ -252,6 +281,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     triggerFunctions: false,
     procedures: false,
     monitor: false,
+    serverOutput: false,
     locations: ["file", "memory"],
   },
   mySql: {
@@ -275,6 +305,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     triggerFunctions: false,
     procedures: true,
     monitor: false,
+    serverOutput: false,
     locations: ["server"],
   },
   duckDb: {
@@ -300,10 +331,11 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     triggerFunctions: false,
     procedures: false,
     monitor: false,
+    serverOutput: false,
     locations: ["file", "memory"],
   },
-  // Phase D4, hidden engine (the picker offers only what the sidecar exposes): every feature off until the session that
-  // implements it (D4 S06–S12) turns it on.
+  // Phase D4, hidden engine (the picker offers only what the sidecar exposes). Since S06 the editor, profile dialog and
+  // Messages know it; plans, procedures, synonyms, the monitor and the rest stay off until their session (D4 S08–S12).
   oracle: {
     label: "Oracle Database",
     shortLabel: "Oracle",
@@ -311,7 +343,9 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     dialect: "oracle",
     language: DIALECTS.oracle.language,
     defaultSchema: DIALECTS.oracle.defaultSchema,
-    defaultPort: 1521,
+    // TCPS is the default transport (§13.2), so the default port is the TCPS listener's; a profile that downgrades to
+    // plain TCP defaults to 1521 (the sidecar's OracleConnectionStrings, the profile dialog's placeholder).
+    defaultPort: 2484,
     defaultAuth: "password",
     defaultUser: "system",
     // The service name (Easy Connect host:port/service) is the connection target; the profile names it.
@@ -326,6 +360,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     triggerFunctions: false,
     procedures: false,
     monitor: false,
+    serverOutput: true,
     locations: ["server"],
   },
 };

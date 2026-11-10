@@ -241,6 +241,11 @@ public sealed record EngineTraits
     /// profile's command timeout.
     /// </summary>
     public int? FixedCommandTimeoutS { get; init; }
+    /// <summary>
+    /// Phase D4 (O6): why the engine cannot run on this computer at all (Oracle's driver has no Intel macOS build), or null.
+    /// The engine is listed with the reason (the picker shows it disabled), and every profile of it is refused with it.
+    /// </summary>
+    public string? Unavailable { get; init; }
 }
 
 /// <summary>See <see cref="IDbProvider.LifetimeFor"/>.</summary>
@@ -293,4 +298,5 @@ public sealed record ProviderMessage(
     string? Procedure = null,
     int? Number = null,
     int? State = null,
-    int? Class = null);
+    int? Class = null,
+    int? Column = null);

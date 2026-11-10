@@ -113,6 +113,8 @@ public sealed record EngineInfo
     public AuthKind DefaultAuth { get; init; }
     public required AuthKind[] AuthKinds { get; init; }
     public required LocationKind[] Locations { get; init; }
+    /// <summary>Phase D4 (O6): why the engine cannot run on this computer (the picker shows it disabled with this text); null when it can.</summary>
+    public string? Unavailable { get; init; }
 }
 
 public sealed record SettingsGetParams

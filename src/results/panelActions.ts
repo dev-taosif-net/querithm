@@ -41,7 +41,7 @@ export function stepError(tabId: string, delta: 1 | -1) {
   const sorted = [...errors].sort((a, b) => a.m.editorLine! - b.m.editorLine!);
   const next = delta > 0 ? (sorted.find((e) => e.m.editorLine! > at) ?? sorted[0]) : ([...sorted].reverse().find((e) => e.m.editorLine! < at) ?? sorted[sorted.length - 1]);
   useTabs.getState().update(tabId, { ledgerError: next.i, bottomOpen: true });
-  revealEditorLine(tabId, next.m.editorLine);
+  revealEditorLine(tabId, next.m.editorLine, next.m.editorColumn);
 }
 
 /**

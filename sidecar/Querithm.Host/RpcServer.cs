@@ -193,7 +193,7 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
     {
         Engine = p.Engine, Dialect = p.Dialect, Name = p.Traits.Name, Exposed = exposed, DefaultPort = p.Traits.DefaultPort,
         DefaultDatabase = p.Traits.DefaultDatabase, DefaultSchema = p.Traits.DefaultSchema, DefaultAuth = p.Traits.DefaultAuth,
-        AuthKinds = p.Traits.AuthKinds, Locations = p.Traits.Locations,
+        AuthKinds = p.Traits.AuthKinds, Locations = p.Traits.Locations, Unavailable = p.Traits.Unavailable,
     };
 
     public Task<SystemNotice[]> Notices() => Task.FromResult(s.Diagnostics.TakeNotices());

@@ -15,12 +15,13 @@ namespace Querithm.Intelligence.Oracle;
 /// <c>ALTER SESSION SET CURRENT_SCHEMA</c> changes the completion schema (<see cref="CurrentSchemaAt"/>), never the
 /// database. SQL*Plus commands are not sent: <c>SET SERVEROUTPUT ON|OFF</c> is reported in <see cref="Classification.ServerOutput"/>,
 /// every other command and any <c>&amp;substitution</c> variable is a refusal with the reason (O5).
-/// Completion, diagnostics, signature help and formatting are later sessions (S06); they answer empty or unchanged.
+/// Tier-2 completion, diagnostics and signature help are D4 S09; they answer empty. Formatting is the webview's (D4 S06,
+/// sql-formatter per SQL statement, ARCHITECTURE §16 "Oracle formatting"), so <c>lang.format</c> answers the text unchanged.
 /// </summary>
 public sealed class OracleLanguageService : IDialectService
 {
-    /// <summary>Formatting Oracle SQL arrives with the editor work (D4 S06).</summary>
-    public const string NoFormatter = "Formatting Oracle SQL is not available in this build of Querithm yet.";
+    /// <summary>The webview formats Oracle scripts itself (D4 S06); a <c>lang.format</c> call for Oracle says so.</summary>
+    public const string NoFormatter = "Oracle SQL is formatted in the editor, not by the sidecar.";
 
     /// <summary>Verbs whose statements are DDL (an implicit commit before and after).</summary>
     static readonly HashSet<string> DdlVerbs = new(StringComparer.OrdinalIgnoreCase)

@@ -510,12 +510,14 @@ export interface EngineInfo {
   defaultAuth: AuthKind;
   authKinds: AuthKind[];
   locations: LocationKind[];
+  unavailable?: string | null;
 }
 export interface ErrorInfo {
   message: string;
   number?: number | null;
   line?: number | null;
   editorLine?: number | null;
+  editorColumn?: number | null;
   procedure?: string | null;
   batchIndex?: number | null;
 }
@@ -1446,6 +1448,7 @@ export interface ServerMessage {
   message: string;
   line?: number | null;
   editorLine?: number | null;
+  editorColumn?: number | null;
   procedure?: string | null;
   number?: number | null;
   state?: number | null;

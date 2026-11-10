@@ -37,7 +37,7 @@ export type Dialog =
   /** Closing a tab whose query is still running: true = cancel the query and close, false = keep the tab. */
   | { kind: "busyClose"; tabId: string; quit?: boolean; resolve: (cancelAndClose: boolean) => void }
   | { kind: "txSwitch"; tabId: string; resolve: (ok: boolean) => void }
-  | { kind: "params"; names: string[]; resolve: (values: { name: string; value: string; isNull: boolean; type?: string }[] | null) => void }
+  | { kind: "params"; names: string[]; dialect?: Dialect; resolve: (values: { name: string; value: string; isNull: boolean; type?: string }[] | null) => void }
   | { kind: "confirm"; title: string; body: string; danger?: boolean; ok?: string; cancel?: string; resolve: (ok: boolean) => void }
   | { kind: "diff"; title: string; left: string; right: string; leftTitle: string; rightTitle: string; resolve?: (ok: boolean) => void; okLabel?: string; language: string }
   | { kind: "execProc"; tabId?: string; profileId: string; database: string; objectId: number }

@@ -31,7 +31,16 @@ export function MessagesPanel({ tab }: { tab: TabState }) {
   const prevView = useExecutions((s) => (prevId ? s.views[prevId] : undefined));
   const width = usePanelWidth();
   const [errorsOnly, setErrorsOnly] = useState(false);
-  if (!view) return <Empty text="Messages from the server (PRINT, RAISERROR, NOTICE, errors, row counts) appear here." />;
+  const engine = useProfiles((s) => s.profiles.find((p) => p.id === tab.profileId)?.engine);
+  if (!view) {
+    if (!engineTraits(engine).serverOutput) return <Empty text="Messages from the server (PRINT, RAISERROR, NOTICE, errors, row counts) appear here." />;
+    return (
+      <div className="flex-1 flex flex-col min-h-0" data-q-messages-view>
+        <PanelRow label="Message tools" tools={<ServerOutputToggle tab={tab} />} />
+        <Empty text="Messages from the server (DBMS_OUTPUT lines, errors with their line and column, row counts) appear here." />
+      </div>
+    );
+  }
   const items = ledgerItems(view, data, prevId ? { view: prevView, data: executionData.get(prevId) } : undefined);
   const item = selectedItem(items, tab);
   const errors = errorsIn(view.messages).list.length;
@@ -65,6 +74,7 @@ export function MessagesPanel({ tab }: { tab: TabState }) {
         ledger={<Chips label="Result sets and errors" chips={items.map(chipOf)} selected={item?.key} onSelect={select} />}
         tools={
           <>
+            <ServerOutputToggle tab={tab} />
             <Seg
               label="Show"
               value={errorsOnly ? "errors" : "all"}
@@ -87,6 +97,30 @@ export function MessagesPanel({ tab }: { tab: TabState }) {
         right={item ? `Marked: ${item.kind === "set" ? `result set ${item.resultIndex + 1}` : `error ${item.errorIndex + 1}`}` : undefined}
       />
     </div>
+  );
+}
+
+/**
+ * Oracle DBMS_OUTPUT for this tab (EngineTraits.serverOutput), sent with every run (ExecuteOptions.serverOutput); unset
+ * is on. Nothing on an engine without server output.
+ */
+export function ServerOutputToggle({ tab }: { tab: TabState }) {
+  const engine = useProfiles((s) => s.profiles.find((p) => p.id === tab.profileId)?.engine);
+  if (!engineTraits(engine).serverOutput) return null;
+  const on = tab.serverOutput ?? true;
+  return (
+    <button
+      type="button"
+      className={`q-btn h-[22px] px-2 shrink-0 ${on ? "" : "text-muted"}`}
+      aria-pressed={on}
+      data-q-server-output
+      title={on
+        ? "DBMS_OUTPUT lines are read after each statement and shown here. Click to stop reading them for this tab's runs."
+        : "DBMS_OUTPUT is off for this tab's runs (SET SERVEROUTPUT ON in a script turns it on for the rest of that run). Click to turn it on."}
+      onClick={() => useTabs.getState().update(tab.id, { serverOutput: !on })}
+    >
+      DBMS_OUTPUT {on ? "on" : "off"}
+    </button>
   );
 }
 
@@ -182,7 +216,7 @@ const EntryLine = memo(function EntryLine({ tabId, entry: e, rows = 0, marked }:
   return (
     <div
       data-q-entry={e.key}
-      onClick={() => revealEditorLine(tabId, m.editorLine)}
+      onClick={() => revealEditorLine(tabId, m.editorLine, m.editorColumn)}
       className={`${base} whitespace-pre-wrap ${m.editorLine ? "cursor-pointer hover:bg-raised" : ""}`}
     >
       <span className="text-muted mr-2">{time(m.ts)}</span>

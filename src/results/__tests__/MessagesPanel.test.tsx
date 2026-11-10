@@ -279,3 +279,51 @@ describe("MessagesPanel", () => {
     expect(useExecutions.getState().views.e1.messages).toHaveLength(0);
   });
 });
+
+// D4 S06: Oracle's Messages — the per-tab DBMS_OUTPUT toggle and compile errors that jump to their line and column.
+describe("MessagesPanel: Oracle", () => {
+  beforeEach(() => {
+    useProfiles.setState({ profiles: [{ id: "ora", engine: "oracle", environment: "dev" } as never, { id: "ms", engine: "mssql", environment: "dev" } as never] });
+    useTabs.setState({ tabs: { tab1: { id: "tab1", profileId: "ora", actualPlan: false } as never } });
+  });
+
+  it("shows a DBMS_OUTPUT toggle before the first run, on by default, that flips the tab's setting", () => {
+    useExecutions.setState({ views: {} });
+    const { rerender } = render(<MessagesPanel tab={tab({ activeExecutionId: undefined, profileId: "ora" })} />);
+    const toggle = document.querySelector("[data-q-server-output]") as HTMLButtonElement;
+    expect(toggle.textContent).toBe("DBMS_OUTPUT on");
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByText(/DBMS_OUTPUT lines, errors with their line and column/)).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(useTabs.getState().tabs.tab1.serverOutput).toBe(false);
+    rerender(<MessagesPanel tab={tab({ activeExecutionId: undefined, profileId: "ora", serverOutput: false })} />);
+    const off = document.querySelector("[data-q-server-output]") as HTMLButtonElement;
+    expect(off.textContent).toBe("DBMS_OUTPUT off");
+    expect(off.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(off);
+    expect(useTabs.getState().tabs.tab1.serverOutput).toBe(true);
+  });
+
+  it("keeps the toggle in the tool row once a run is shown; other engines have none", () => {
+    useExecutions.setState({ views: { e1: view("e1", { messages: [msg({ message: "line from put_line" })] }) } });
+    render(<MessagesPanel tab={tab({ profileId: "ora" })} />);
+    expect(document.querySelector("[data-q-server-output]")).toBeTruthy();
+    cleanup();
+    render(<MessagesPanel tab={tab({ profileId: "ms" })} />);
+    expect(document.querySelector("[data-q-server-output]")).toBeNull();
+    cleanup();
+    render(<MessagesPanel tab={tab({ activeExecutionId: undefined, profileId: "ms" })} />);
+    expect(document.querySelector("[data-q-server-output]")).toBeNull();
+  });
+
+  it("a compile error moves the editor to its line and column", () => {
+    useExecutions.setState({
+      views: { e1: view("e1", { state: "failed", messages: [msg({ severity: "error", message: "PLS-00201: identifier 'X' must be declared (line 5, column 3)", editorLine: 5, editorColumn: 3, number: 201 })] }) },
+    });
+    render(<MessagesPanel tab={tab({ profileId: "ora" })} />);
+    fireEvent.click(screen.getByText(/PLS-00201/));
+    expect(editor.revealLineInCenter).toHaveBeenCalledWith(5);
+    expect(editor.setPosition).toHaveBeenCalledWith({ lineNumber: 5, column: 3 });
+  });
+});
+

@@ -1,0 +1,87 @@
+{
+  "date": "2026-11-10T11:29:18.033Z",
+  "os": "Windows_NT 10.0.26200",
+  "cpu": "13th Gen Intel(R) Core(TM) i5-1335U",
+  "cores": 12,
+  "memGb": 16,
+  "results": {
+    "11b.oracle": {
+      "metric": "Oracle: execute → first batch on a cold pool connection (TCP, login, product + identity read, SELECT 1 FROM dual, median)",
+      "unit": "ms",
+      "target": 300,
+      "value": 80.52,
+      "pass": true,
+      "samples": [
+        1669.9,
+        114.5,
+        67.8,
+        108.4,
+        80.5,
+        69.5,
+        80.9,
+        69.5,
+        79.1,
+        98.7,
+        73.1,
+        75.7,
+        94.2,
+        80.2,
+        81.3
+      ]
+    },
+    "9.oracle": {
+      "metric": "Oracle: metadata snapshot load from SQLite (600 tables, 150 views, 200 triggers)",
+      "unit": "ms",
+      "target": 80,
+      "value": 41.41,
+      "pass": true,
+      "objects": 988,
+      "samples": [
+        187.03010000000359,
+        45.29579999999987,
+        41.4065000000046,
+        40.192800000004354,
+        34.130199999999604
+      ],
+      "statuses": [
+        "fresh",
+        "fresh",
+        "fresh",
+        "fresh",
+        "fresh"
+      ]
+    },
+    "10.oracle": {
+      "metric": "Oracle: incremental refresh with 10 changed objects (least-privileged user, ALL_* views)",
+      "unit": "ms",
+      "target": 2000,
+      "value": 1033.35,
+      "pass": true,
+      "samples": [
+        1022,
+        859,
+        1033,
+        1191,
+        1062
+      ]
+    },
+    "4.oracle": {
+      "metric": "Oracle: tier-1 completion latency in a 12k-line PL/SQL package body (p95)",
+      "unit": "ms",
+      "target": 5,
+      "value": 3.9,
+      "pass": true,
+      "samples": 300,
+      "schemaObjects": 34
+    },
+    "3.oracle": {
+      "metric": "Oracle: typing latency in a 12k-line PL/SQL package body (p95)",
+      "unit": "ms",
+      "target": 16,
+      "value": 9.4,
+      "pass": true,
+      "samples": 200,
+      "toPaintP95IncludingVsync": 18.6
+    }
+  }
+}

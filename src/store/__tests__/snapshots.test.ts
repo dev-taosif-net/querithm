@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { MetaUpdatedEvent, SchemaSnapshot, SnapObject } from "../../ipc/contract";
-import { installSnapshotListeners, RETRY_MS, snapKey, useSnapshots } from "../snapshots";
+import { installSnapshotListeners, loginSchemaOf, RETRY_MS, snapKey, useSnapshots } from "../snapshots";
+import { useProfiles } from "../profiles";
 import { useConnections } from "../connections";
 import { useTabs } from "../tabs";
 
@@ -330,5 +331,24 @@ describe("snapshots: disconnected servers", () => {
     await flush();
     expect(rpc).toHaveBeenCalledWith("meta.snapshot", { profileId: "p1", database: "Sales" });
     expect(s().get("p1", "Sales")?.snapshot?.objects[0].name).toBe("Orders");
+  });
+});
+
+// D4 S06: Oracle's unqualified names resolve to the signed-in user's schema (DialectTraits.loginSchema).
+describe("loginSchemaOf", () => {
+  it("is the Oracle user name as the server spells it; none for other engines or without a user", () => {
+    useProfiles.setState({
+      profiles: [
+        { id: "o1", engine: "oracle", username: "querithm_app" } as never,
+        { id: "o2", engine: "oracle", username: '"MixedUser"' } as never,
+        { id: "o3", engine: "oracle", username: null } as never,
+        { id: "p1", engine: "pg", username: "postgres" } as never,
+      ],
+    });
+    expect(loginSchemaOf("o1")).toBe("QUERITHM_APP");
+    expect(loginSchemaOf("o2")).toBe("MixedUser");
+    expect(loginSchemaOf("o3")).toBeNull();
+    expect(loginSchemaOf("p1")).toBeNull();
+    expect(loginSchemaOf("missing")).toBeNull();
   });
 });

@@ -170,7 +170,7 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
     if (it.kind === "error") {
       return [
         { label: "Show", run: () => select(k, { ctrl: false }) },
-        ...(it.message.editorLine ? [{ label: `Go to line ${it.message.editorLine}`, run: () => revealEditorLine(tab.id, it.message.editorLine) }] : []),
+        ...(it.message.editorLine ? [{ label: `Go to line ${it.message.editorLine}${it.message.editorColumn ? `, column ${it.message.editorColumn}` : ""}`, run: () => revealEditorLine(tab.id, it.message.editorLine, it.message.editorColumn) }] : []),
         { label: "Show in Messages", run: () => setBottomTab(tab.id, "messages") },
         { label: "Copy error", run: () => void navigator.clipboard.writeText(it.message.message).then(() => toast("success", "Copied the error.")) },
       ];

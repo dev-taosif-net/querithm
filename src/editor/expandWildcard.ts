@@ -5,7 +5,7 @@ import { getStream, type Token } from "./completion/lexer";
 import { resolveTable } from "./completion/schemaIndex";
 import { quoteIdentifier as q } from "./completion/quoteIdentifier";
 import { lastStartingBefore, scan, W } from "./completion/scanner";
-import { DIALECTS } from "../engines";
+import { DIALECTS, foldIdentifier } from "../engines";
 
 export interface WildcardExpansion {
   start: number;
@@ -52,8 +52,9 @@ function expandWildcardAtOffsetInRegion(
   const stream = getStream(text, dialect);
   const T = stream.code;
   if (!T.length) return null;
-  // PostgreSQL: unquoted names fold to lower case and then match exactly; T-SQL names match case-insensitively.
-  const folds = DIALECTS[dialect].foldsIdentifiers;
+  // PostgreSQL / Oracle: unquoted names fold (lower / upper case) and then match exactly; T-SQL names match case-insensitively.
+  const folds = DIALECTS[dialect].identifierFold !== null;
+  const fold = (t: Token) => foldIdentifier(t.value, t.kind === "qident", dialect);
 
   // Find token at or touching offset
   let idx = lastStartingBefore(T, offset + 1);
@@ -80,7 +81,7 @@ function expandWildcardAtOffsetInRegion(
   if (idx >= 2 && T[idx - 1].kind === "punct" && T[idx - 1].value === ".") {
     const qTok = T[idx - 2];
     if (qTok.kind === "ident" || qTok.kind === "qident") {
-      qualifier = folds && qTok.kind !== "qident" ? qTok.value.toLowerCase() : qTok.value;
+      qualifier = folds ? fold(qTok) : qTok.value;
       spanStart = qTok.start;
     }
   }
@@ -123,7 +124,7 @@ function expandWildcardAtOffsetInRegion(
   const tables = ctx.tablesInScope.filter((t) => t.offset != null && visibleOffsets.has(t.offset)).map((t) => {
     if (!folds) return t;
     let i = lastStartingBefore(T, t.offset! + 1);
-    const name = (index: number) => T[index].kind === "qident" ? T[index].value : T[index].value.toLowerCase();
+    const name = (index: number) => fold(T[index]);
     const parts: string[] = [];
     if (!t.isDerived) {
       parts.push(name(i++));
@@ -158,7 +159,7 @@ function expandWildcardAtOffsetInRegion(
     if (table.columns?.length) {
       colNames = table.columns;
       // The tolerant scanner does not retain quote provenance for projected names.
-      if (folds && colNames.some((name) => name !== name.toLowerCase())) return null;
+      if (folds && colNames.some((name) => name !== foldIdentifier(name, false, dialect))) return null;
     } else if (schema) {
       let match = resolveTable(schema, table);
       if (folds) {

@@ -347,7 +347,9 @@ public sealed class OracleExecuteIntegrationTests
         var pls = Assert.Single(errors, m => m.Message.Contains("PLS-00201"));
         Assert.Equal(5, pls.EditorLine); // "  x := 1;" is line 5 of the script
         Assert.Contains("column 3", pls.Message);
+        Assert.Equal(3, pls.EditorColumn); // S06: the Messages pane jumps to line 5, column 3
         Assert.Equal(5, run.Done.Error?.EditorLine);
+        Assert.Equal(3, run.Done.Error?.EditorColumn);
         Assert.Contains(run.Messages, m => m.Severity == Severity.Warning && m.Message.Contains("PROCEDURE Q_S04_BAD was created with compilation errors"));
         Assert.Equal(2, run.Batches.Count); // the script went on, as SQL*Plus does: the unit exists, invalid
 

@@ -1657,3 +1657,42 @@ describe("notebook tabs in the shell (Phase C3)", () => {
     expect(await run).toMatchObject({ sessionId: "s1", executionId: "e9", options: { confirmedProd: true } });
   });
 });
+
+// D4 S06: Oracle runs carry the tab's DBMS_OUTPUT toggle; errors mark the editor from the server's column.
+describe("Oracle runs", () => {
+  const ora: any = { id: "ora1", name: "Ora", engine: "oracle", environment: "dev", auth: "password", databaseDefault: "FREEPDB1" };
+  const executed = () => h.rpc.mock.calls.filter((c) => c[0] === "query.execute");
+
+  it("send the tab's DBMS_OUTPUT toggle (unset is on); other engines send none", async () => {
+    useProfiles.setState({ profiles: [ms, pg, ora], groups: [] });
+    h.rpc.mockResolvedValue({ executionId: "e1" });
+    const id = A.newQueryTab({ profileId: "ora1", text: "BEGIN NULL; END;" });
+    useTabs.getState().update(id, { sessionId: "s1" });
+    h.exec = { sql: "BEGIN NULL; END;", lineOffset: 1, isSelection: false };
+    await A.runQuery(id);
+    expect(executed()[0][1].options.serverOutput).toBe(true);
+    useTabs.getState().update(id, { busy: false, serverOutput: false });
+    await A.runQuery(id);
+    expect(executed()[1][1].options.serverOutput).toBe(false);
+    const msId = A.newQueryTab({ profileId: "ms1", text: "select 1" });
+    useTabs.getState().update(msId, { sessionId: "s2", serverOutput: true });
+    h.exec = { sql: "select 1", lineOffset: 1, isSelection: false };
+    await A.runQuery(msId);
+    expect(executed()[2][1].options.serverOutput).toBeNull();
+  });
+
+  it("tabServerOutput: on by default where the engine has server output, null where it has none", () => {
+    expect(A.tabServerOutput(undefined, "oracle")).toBe(true);
+    expect(A.tabServerOutput({ serverOutput: false }, "oracle")).toBe(false);
+    for (const e of ["mssql", "pg", "sqlite", "mySql", "duckDb"] as const) expect(A.tabServerOutput({ serverOutput: true }, e)).toBeNull();
+  });
+
+  it("an error's marker starts at the server's column, or the line's start without one or past the line's end", () => {
+    const model = { getLineMaxColumn: () => 20 };
+    expect(A.errorStartColumn(model, { editorLine: 2, editorColumn: 7 })).toBe(7);
+    expect(A.errorStartColumn(model, { editorLine: 2, editorColumn: null })).toBe(1);
+    expect(A.errorStartColumn(model, { editorLine: 2, editorColumn: 25 })).toBe(1);
+    expect(A.errorStartColumn(model, { editorLine: 2, editorColumn: 0 })).toBe(1);
+  });
+});
+

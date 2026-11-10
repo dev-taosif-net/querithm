@@ -27,3 +27,18 @@ export function offeredEngines(info: readonly EngineInfo[] | null | undefined, c
   const list = exposed.length ? ENGINE_LIST.filter((e) => exposed.includes(e)) : ALWAYS_OFFERED;
   return current && !list.includes(current) ? [...list, current] : list;
 }
+
+/**
+ * Engines the sidecar lists but cannot run on this computer (Phase D4, O6: Oracle's driver has no Intel macOS build), each
+ * with the sidecar's reason. The picker shows them disabled with it; the sidecar refuses their profiles all the same.
+ */
+export function unavailableEngines(info: readonly EngineInfo[] | null | undefined): Partial<Record<Engine, string>> {
+  const out: Partial<Record<Engine, string>> = {};
+  if (!Array.isArray(info)) return out;
+  for (const i of info) {
+    const engine: unknown = i?.engine;
+    const why: unknown = i?.unavailable;
+    if (isEngine(engine) && typeof why === "string" && why.trim()) out[engine] = why;
+  }
+  return out;
+}

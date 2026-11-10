@@ -378,6 +378,21 @@ describe("params", () => {
     fireEvent.keyDown(window, { key: "Enter" });
     expect(resolve).toHaveBeenLastCalledWith([{ name: "@a", value: "", isNull: false, type: undefined }]);
   });
+  it("Oracle (D4 S06): asks for :name values only, says they bind as text, and never sends a type", async () => {
+    const resolve = vi.fn();
+    render(<Dialogs />);
+    show({ kind: "params", names: [":dept", ":1"], dialect: "oracle", resolve });
+    expect(screen.getByText(/bound as text \(VARCHAR2\)/)).toBeTruthy();
+    expect(screen.queryByPlaceholderText("type (optional)")).toBeNull();
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Value of :dept"), "10");
+    await user.click(screen.getAllByLabelText("NULL")[1]);
+    await user.click(screen.getByText("Execute"));
+    expect(resolve).toHaveBeenCalledWith([
+      { name: ":dept", value: "10", isNull: false, type: undefined },
+      { name: ":1", value: "", isNull: true, type: undefined },
+    ]);
+  });
 });
 
 describe("diff", () => {

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // UI smoke test: built webview + dev bridge + real sidecar + docker fixture, driven by headless Chrome.
-// Captures console errors and screenshots of the main screens.  node scripts/bench/smoke-ui.mjs <out-dir>
+// Captures console errors and screenshots of the main screens.  node scripts/bench/smoke-ui.mjs <out-dir> [--oracle]
+// --oracle (Phase D4): only the Oracle workflow, with the hidden engine exposed, on the Oracle Free fixture alone.
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -15,8 +16,10 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".
 const MSSQL_PW = fixturePassword("mssql");
 const PG_PW = fixturePassword("pg");
 const MYSQL_PW = fixturePassword("mysql");
+const ORACLE_PW = fixturePassword("oracle");
+const oracleOnly = process.argv.includes("--oracle");
 const appVersion = JSON.parse(readFileSync(path.join(root, "src-tauri", "tauri.conf.json"), "utf8")).version;
-const out = path.resolve(process.argv[2] ?? path.join(os.tmpdir(), "querithm-smoke"));
+const out = path.resolve(process.argv.slice(2).find((a) => !a.startsWith("--")) ?? path.join(os.tmpdir(), "querithm-smoke"));
 mkdirSync(out, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // QUERITHM_UI_PORT / QUERITHM_BRIDGE_PORT move the smoke run off 1420/1421 while `pnpm dev:web` + `dev:bridge` run.
@@ -31,8 +34,9 @@ if (!process.argv.includes("--no-build") || !existsSync(path.join(root, "dist", 
 
 const bridge = spawn(process.execPath, [path.join(root, "scripts", "dev-bridge.mjs")], {
   // QUERITHM_FAKE_UPDATE: the bridge offers a fake release whose install fails (see dev-bridge.mjs). No QUERITHM_DEV_ENGINES:
-  // the engine picker must offer SQLite, MySQL and DuckDB in a default build (they left the hidden-engine flag in 0.2.0).
-  env: { ...process.env, QUERITHM_BENCH: "1", QUERITHM_FAKE_UPDATE: "9.9.9", QUERITHM_DEV_ENGINES: "", QUERITHM_DATA_DIR: mkdtempSync(path.join(os.tmpdir(), "qsmoke-")) }, stdio: ["ignore", "inherit", "inherit"],
+  // the engine picker must offer SQLite, MySQL and DuckDB in a default build (they left the hidden-engine flag in 0.2.0), and
+  // not Oracle (Phase D4, hidden); --oracle exposes it.
+  env: { ...process.env, QUERITHM_BENCH: "1", QUERITHM_FAKE_UPDATE: "9.9.9", QUERITHM_DEV_ENGINES: oracleOnly ? "oracle" : "", QUERITHM_DATA_DIR: mkdtempSync(path.join(os.tmpdir(), "qsmoke-")) }, stdio: ["ignore", "inherit", "inherit"],
 });
 const preview = spawn(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.resolve("vite/package.json"))), "bin", "vite.js"), "preview", "--port", String(uiPort), "--strictPort", "--host", "127.0.0.1"], { cwd: root, stdio: "ignore" });
 const errors = [];
@@ -214,6 +218,148 @@ try {
     }
   };
   const clickButton = (label) => page.evaluate((l) => [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === l || b.getAttribute("aria-label") === l)?.click(), label);
+  // Phase D4 (--oracle): the hidden engine behind the dev flag, on the Oracle Free fixture (docker compose --profile oracle
+  // up -d --wait oracle) and nothing else: flag on → the picker offers Oracle → a profile made in the dialog (plain TCP,
+  // the warned downgrade) → a PL/SQL block with DBMS_OUTPUT and an ad-hoc :bind → result + message → a compile error that
+  // jumps to its line and column → Cancel of a DBMS_SESSION.SLEEP → the session runs the next statement → the explorer.
+  if (oracleOnly) {
+    console.log("[step] Oracle profile, PL/SQL, DBMS_OUTPUT, cancel");
+    const editorText = (sql) => page.evaluate((s) => window.__bench.setEditorText?.(s), sql);
+    const typeSql = async (sql) => {
+      await page.click(".monaco-editor .view-lines");
+      if (!(await editorText(sql))) {
+        await page.keyboard.down("Control"); await page.keyboard.press("A"); await page.keyboard.up("Control");
+        await page.keyboard.type(sql);
+        await page.keyboard.press("Escape");
+      }
+    };
+    const messagesText = () => page.evaluate(() => document.querySelector("[data-q-messages]")?.textContent ?? "(no Messages pane)");
+    const showMessages = () => page.evaluate(() => document.querySelector('[data-q-panel-tab="messages"]')?.click());
+    /** F5, then waits until the run has ended (the Run button is back) and shows its Messages. */
+    const runAndShowMessages = async (timeout = 30_000) => {
+      await page.keyboard.press("F5");
+      await page.waitForFunction(() => !!document.querySelector('button[aria-label="Cancel the running query"]'), { timeout: 5_000 }).catch(() => {});
+      await page.waitForFunction(() => !document.querySelector('button[aria-label="Cancel the running query"]'), { timeout }).catch(() => errors.push("oracle: a run did not end"));
+      await showMessages();
+      await page.waitForSelector("[data-q-messages]", { timeout: 5_000 }).catch(() => {});
+    };
+    await closeDialogs();
+    await page.click(".monaco-editor .view-lines");
+    await page.keyboard.down("Control"); await page.keyboard.down("Shift"); await page.keyboard.press("P"); await page.keyboard.up("Shift"); await page.keyboard.up("Control");
+    await page.waitForFunction(() => document.activeElement?.tagName === "INPUT" && !document.activeElement.closest(".monaco-editor"), { timeout: 5_000 })
+      .catch(() => errors.push("oracle: command palette did not open"));
+    await page.keyboard.type("New connection profile");
+    await sleep(300);
+    await page.keyboard.press("Enter");
+    await page.waitForSelector('[role="dialog"] button[role="combobox"][aria-label="Server type"]', { timeout: 10_000 }).catch(() => errors.push("oracle: the profile editor did not open"));
+    await sleep(800); // system.engines answers: the picker then offers the exposed engines
+    await page.click('[role="dialog"] button[role="combobox"][aria-label="Server type"]');
+    const offered = await page.waitForFunction(() => [...document.querySelectorAll('[role="option"]')].some((o) => o.textContent?.trim().startsWith("Oracle Database")), { timeout: 5_000 }).then(() => true, () => false);
+    if (!offered) errors.push(`oracle: the picker does not offer Oracle with the dev flag on: ${await page.evaluate(() => [...document.querySelectorAll('[role="option"]')].map((o) => o.textContent?.trim()).join(", "))}`);
+    await page.evaluate(() => [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent?.trim().startsWith("Oracle Database"))?.click());
+    await page.waitForFunction(() => [...document.querySelectorAll('[role="dialog"] label')].some((l) => l.textContent?.trim() === "Service name"), { timeout: 5_000 })
+      .catch(() => errors.push("oracle: the Service name field did not appear"));
+    const fill = (label, value) => page.evaluate((l, v) => {
+      const el = [...document.querySelectorAll('[role="dialog"] label')].find((x) => x.textContent?.trim() === l);
+      const input = el?.htmlFor ? document.getElementById(el.htmlFor) : null;
+      if (!input) return false;
+      input.focus();
+      input.select?.();
+      return true;
+    }, label, value).then(async (ok) => { if (ok) await page.keyboard.type(value); else errors.push(`oracle: no "${label}" field`); });
+    await fill("Host", "127.0.0.1");
+    await fill("Port", "15210");
+    await fill("Service name", "FREEPDB1");
+    await fill("User name", "querithm_app");
+    await fill("Password", ORACLE_PW);
+    // TCPS is the default; the fixture's TCP listener needs the explicit, warned downgrade.
+    await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent?.startsWith("Encryption"))?.click());
+    await page.waitForSelector('[role="dialog"] select[aria-label="Encryption"]', { timeout: 5_000 }).catch(() => errors.push("oracle: the Encryption row did not open"));
+    await page.select('[role="dialog"] select[aria-label="Encryption"]', "disable");
+    await page.waitForFunction(() => document.querySelector('[role="dialog"]')?.textContent?.includes("cross the network as plain text"), { timeout: 5_000 })
+      .catch(() => errors.push("oracle: TCP did not warn that it is not encrypted"));
+    if (!(await page.evaluate(() => document.querySelector("[data-q-auth-unavailable]")?.textContent?.includes("Oracle wallet")))) errors.push("oracle: wallet sign-in is not shown as unavailable");
+    await page.evaluate(() => document.querySelector('[role="dialog"] input[type="radio"][aria-label="Dev"]')?.click());
+    await fill("Name", "Smoke Oracle");
+    await shot("27-oracle-profile");
+    await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent?.trim() === "Save")?.click());
+    await page.waitForFunction(() => !document.querySelector('[role="dialog"] button[role="combobox"][aria-label="Server type"]'), { timeout: 10_000 })
+      .catch(async () => errors.push(`oracle: the profile did not save: ${await openDialogText()}`));
+    const ora = await page.evaluate(() => window.__bench.rpc("profile.list").then((ps) => ps.find((p) => p.name === "Smoke Oracle")));
+    if (!ora) errors.push("oracle: the saved profile is not in profile.list");
+    else {
+      if (ora.engine !== "oracle" || ora.tlsMode !== "disable" || ora.databaseDefault !== "FREEPDB1" || ora.port !== 15210) errors.push(`oracle: the saved profile is not the one typed: ${JSON.stringify({ engine: ora.engine, tlsMode: ora.tlsMode, db: ora.databaseDefault, port: ora.port })}`);
+      if (JSON.stringify(ora).includes(ORACLE_PW)) errors.push("oracle: the password reached the stored profile");
+      await page.evaluate((id, pw) => window.__bench.useProd(id, pw), ora.id, ORACLE_PW);
+      await sleep(1500);
+
+      // A PL/SQL block with DBMS_OUTPUT and an ad-hoc bind, then a query: the parameter prompt, the grid and the message.
+      await typeSql("BEGIN\n  DBMS_OUTPUT.PUT_LINE('smoke says ' || :who);\nEND;\n/\nSELECT 'ok' AS status, 42 AS answer FROM dual\n");
+      await page.keyboard.press("F5");
+      await page.waitForFunction(() => document.querySelector('[role="dialog"]')?.textContent?.includes("Query parameters"), { timeout: 10_000 })
+        .catch(async () => errors.push(`oracle: :who did not prompt for a value: ${await openDialogText()}`));
+      if (!(await page.evaluate(() => document.querySelector('[role="dialog"]')?.textContent?.includes("bound as text (VARCHAR2)")))) errors.push("oracle: the parameter dialog does not say values bind as text");
+      await page.evaluate(() => document.querySelector('[role="dialog"] input[aria-label="Value of :who"]')?.focus());
+      await page.keyboard.type("oracle");
+      await shot("27a-oracle-params");
+      await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent === "Execute")?.click());
+      await page.waitForFunction(() => /\b1 row\b/.test(document.body.innerText), { timeout: 30_000 })
+        .catch(async () => errors.push(`oracle: the grid did not show the query's row: ${await messagesText()}`));
+      await sleep(500);
+      await shot("27b-oracle-results");
+      await showMessages();
+      await page.waitForFunction(() => document.querySelector("[data-q-messages]")?.textContent?.includes("smoke says oracle"), { timeout: 10_000 })
+        .catch(async () => errors.push(`oracle: the DBMS_OUTPUT line is not in Messages: ${(await messagesText()).slice(0, 300)}`));
+      if (!(await page.evaluate(() => document.querySelector("[data-q-server-output]")?.textContent === "DBMS_OUTPUT on"))) errors.push("oracle: the Messages pane has no DBMS_OUTPUT toggle (on)");
+      await shot("27c-oracle-messages");
+
+      // A compile error: listed with its line and column; clicking it moves the editor there.
+      await typeSql("CREATE OR REPLACE PROCEDURE q_smoke_bad AS\nBEGIN\n  x := 1;\nEND;\n/\n");
+      await runAndShowMessages();
+      await page.waitForFunction(() => document.querySelector("[data-q-messages]")?.textContent?.includes("PLS-00201"), { timeout: 30_000 })
+        .catch(async () => errors.push(`oracle: the compile error is not in Messages: ${(await messagesText()).slice(0, 300)}`));
+      await page.evaluate(() => [...document.querySelectorAll("[data-q-messages] [data-q-entry]")].find((e) => e.textContent?.includes("PLS-00201"))?.click());
+      await sleep(300);
+      const pos = await page.evaluate(() => window.__bench.editorPosition?.());
+      if (pos && (pos.lineNumber !== 3 || pos.column !== 3)) errors.push(`oracle: the compile error moved the editor to ${JSON.stringify(pos)}, not line 3, column 3`);
+      await shot("27d-oracle-compile-error");
+
+      // Cancel a sleeping block (ODP.NET's break: measured 4.5–5.9 s for DBMS_SESSION.SLEEP), then the session runs again.
+      await typeSql("BEGIN\n  DBMS_SESSION.SLEEP(30);\nEND;\n");
+      await page.keyboard.press("F5");
+      await page.waitForFunction(() => !!document.querySelector('button[aria-label="Cancel the running query"]'), { timeout: 10_000 })
+        .catch(() => errors.push("oracle: the sleep did not start running"));
+      await sleep(1500);
+      const t0 = Date.now();
+      await page.evaluate(() => document.querySelector('button[aria-label="Cancel the running query"]')?.click());
+      await showMessages();
+      const cancelled = await page.waitForFunction(() => document.querySelector("[data-q-messages]")?.textContent?.includes("Cancelled by user"), { timeout: 20_000 }).then(() => true, () => false);
+      if (!cancelled) errors.push(`oracle: Cancel did not end the sleep: ${(await messagesText()).slice(-300)}`);
+      else console.log(`  oracle cancel → cancelled in ${Date.now() - t0} ms`);
+      await shot("27e-oracle-cancelled");
+      // The same session runs the next statement (a table the explorer then lists; IF NOT EXISTS keeps reruns quiet).
+      await typeSql("CREATE TABLE IF NOT EXISTS smoke_ora_t (id NUMBER(10) PRIMARY KEY, name VARCHAR2(40))");
+      await runAndShowMessages();
+      if (!/Completed/.test(await messagesText())) errors.push(`oracle: the session did not run the next statement after Cancel: ${(await messagesText()).slice(-300)}`);
+
+      // The explorer: the service's database row opens to its categories, and Tables lists the new table.
+      const clickRow = (label) => page.evaluate((l) => {
+        const r = [...document.querySelectorAll('[data-q-explorer] [role="treeitem"]')].find((x) => x.getAttribute("aria-label")?.startsWith(l));
+        r?.click();
+        return !!r;
+      }, label);
+      const rows = () => page.evaluate(() => [...document.querySelectorAll('[data-q-explorer] [role="treeitem"]')].map((x) => x.getAttribute("aria-label")).join(" | ").slice(0, 400));
+      await sleep(2500); // the DDL's metadata refresh
+      if (!(await clickRow("Database FREEPDB1"))) errors.push(`oracle: the explorer has no FREEPDB1 row: ${await rows()}`);
+      await page.waitForFunction(() => [...document.querySelectorAll('[data-q-explorer] [role="treeitem"]')].some((x) => x.getAttribute("aria-label")?.startsWith("Tables,")), { timeout: 15_000 })
+        .catch(async () => errors.push(`oracle: FREEPDB1 did not list its categories: ${await rows()}`));
+      await clickRow("Tables,");
+      await page.waitForFunction(() => [...document.querySelectorAll('[data-q-explorer] [role="treeitem"]')].some((x) => x.getAttribute("aria-label")?.includes("SMOKE_ORA_T")), { timeout: 15_000 })
+        .catch(async () => errors.push(`oracle: Tables does not list SMOKE_ORA_T: ${await rows()}`));
+      await shot("27f-oracle-explorer");
+    }
+  } else {
+  // (Not re-indented: the full run below is unchanged.)
   // Settings (redesign 2026-10-30): every page is audited in both themes and at 960×560; About shows the version the
   // shell reports (the bridge reads it from tauri.conf.json) and the credit; search finds a setting.
   await clickButton("Settings");
@@ -928,6 +1074,7 @@ try {
     await page.click('[role="dialog"] button[role="combobox"][aria-label="Server type"]');
     const offered = await page.waitForFunction((label) => [...document.querySelectorAll('[role="option"]')].some((o) => o.textContent?.trim() === label), { timeout: 5_000 }, e.label).then(() => true, () => false);
     if (!offered) errors.push(`${e.key}: the engine picker does not offer ${e.label} in a default build: ${await page.evaluate(() => [...document.querySelectorAll('[role="option"]')].map((o) => o.textContent?.trim()).join(", "))}`);
+    if (await page.evaluate(() => [...document.querySelectorAll('[role="option"]')].some((o) => o.textContent?.includes("Oracle")))) errors.push(`${e.key}: the picker offers the hidden Oracle engine in a default build`);
     await page.evaluate((label) => [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent?.trim() === label)?.click(), e.label);
     await page.waitForFunction(() => [...document.querySelectorAll('[role="dialog"] button')].some((b) => b.textContent === "Pick file…"), { timeout: 5_000 })
       .catch(() => errors.push(`${e.key}: the file section did not appear`));
@@ -1209,6 +1356,7 @@ try {
     const orphans = pgNow("SELECT count(*) FROM pg_stat_activity WHERE application_name = 'Querithm Monitor'");
     if (orphans !== "0") errors.push(`orphan monitor connection after the sidecar died: ${orphans}`);
   }
+  } // the full run (not --oracle)
 } catch (e) {
   errors.push(`smoke failed: ${e.stack ?? e}`);
 } finally {

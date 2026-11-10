@@ -7,7 +7,7 @@ import {
   DEFAULT_SYNTAX_THEME, PREVIEW, roleColor, SUGGEST_COLORS, SYNTAX_THEMES, syntaxRules, syntaxThemeById, TOKEN_ROLES,
   type SyntaxThemeId,
 } from "../syntaxTheme";
-import { pgLanguage, pgLanguageConfiguration, tsqlLanguage, tsqlLanguageConfiguration } from "../languages";
+import { oracleLanguage, pgLanguage, pgLanguageConfiguration, tsqlLanguage, tsqlLanguageConfiguration } from "../languages";
 import { contrast, deltaE2000, oklch, over, parseHex, simulate, toHex, CVD } from "./colorScience";
 
 const css = readFileSync(new URL("../../theme/tokens.css", import.meta.url), "utf8");
@@ -89,12 +89,12 @@ const UNSTYLED = new Set(["", "white", "@brackets"]);
 const specificity = (rule: string, token: string) => (rule === "" ? 0 : token === rule || token.startsWith(`${rule}.`) ? rule.split(".").length : -1);
 
 describe("SQL syntax themes: token coverage", () => {
-  it.each([["tsql", tsqlLanguage()], ["pgsql", pgLanguage()]])("every %s token kind has a rule (identifiers are not left as plain text)", (_, lang) => {
+  it.each([["tsql", tsqlLanguage()], ["pgsql", pgLanguage()], ["oracle", oracleLanguage()]])("every %s token kind has a rule (identifiers are not left as plain text)", (_, lang) => {
     const missing = [...emittedTokens(lang)].filter((t) => !UNSTYLED.has(t) && !TOKEN_ROLES.some((r) => specificity(r.token, t) > 0));
     expect(missing).toEqual([]);
   });
 
-  it.each([["tsql", tsqlLanguage()], ["pgsql", pgLanguage()]])("on %s our rule out-ranks Monaco's base theme for every token, so hex numbers follow the theme", (_, lang) => {
+  it.each([["tsql", tsqlLanguage()], ["pgsql", pgLanguage()], ["oracle", oracleLanguage()]])("on %s our rule out-ranks Monaco's base theme for every token, so hex numbers follow the theme", (_, lang) => {
     // 0x1F took the base theme's number.hex color (5BB498 / 3030C0) before an explicit rule existed.
     const tokens = [...emittedTokens(lang)].filter((t) => !UNSTYLED.has(t)).map((t) => `${t}.${lang.tokenPostfix!.slice(1)}`);
     for (const base of BASE_THEMES) {

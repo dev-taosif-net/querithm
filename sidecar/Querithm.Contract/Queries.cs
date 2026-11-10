@@ -128,6 +128,11 @@ public sealed record ServerMessage
     public int? Line { get; init; }
     /// <summary>Line mapped to the editor (batch start + reported line).</summary>
     public int? EditorLine { get; init; }
+    /// <summary>
+    /// Phase D4: the 1-based column on <see cref="EditorLine"/> the server named (Oracle parse and compile errors), mapped to
+    /// the editor (a batch starting mid-line shifts its first line); null when the server named none.
+    /// </summary>
+    public int? EditorColumn { get; init; }
     public string? Procedure { get; init; }
     public int? Number { get; init; }
     public int? State { get; init; }
@@ -206,6 +211,8 @@ public sealed record ErrorInfo
     public int? Number { get; init; }
     public int? Line { get; init; }
     public int? EditorLine { get; init; }
+    /// <summary>See <see cref="ServerMessage.EditorColumn"/>.</summary>
+    public int? EditorColumn { get; init; }
     public string? Procedure { get; init; }
     public int? BatchIndex { get; init; }
 }

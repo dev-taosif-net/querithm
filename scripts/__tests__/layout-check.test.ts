@@ -73,6 +73,14 @@ describe("findLayoutIssues", () => {
     expect(kinds(snap({ controls: [control(0, rect(10, 10, 60, 24)), control(1, rect(70, 10, 60, 24))] }))).toEqual([]);
   });
 
+  it("a marked in-field button (data-layout-adornment) may sit inside its field, never outside it", () => {
+    // A password box's show / hide button in the box's right padding.
+    expect(kinds(snap({ controls: [control(0, rect(10, 10, 200, 32)), control(1, rect(178, 14, 28, 24), { adornment: true })] }))).toEqual([]);
+    // Unmarked, the same button is an overlap; marked but sticking out of the field, too.
+    expect(kinds(snap({ controls: [control(0, rect(10, 10, 200, 32)), control(1, rect(178, 14, 28, 24))] }))).toEqual(["overlap"]);
+    expect(kinds(snap({ controls: [control(0, rect(10, 10, 200, 32)), control(1, rect(196, 14, 28, 24), { adornment: true })] }))).toEqual(["overlap"]);
+  });
+
   it("flags text under a control, not text beside it or inside it", () => {
     const text = (r: Rect, over = {}) => run({ rects: [r], vis: [r], inControls: [], desc: "span.title", ...over });
     expect(kinds(snap({ controls: [control(0, rect(10, 10, 60, 24))], texts: [text(rect(40, 14, 80, 12))] }))).toEqual(["text-overlap"]);

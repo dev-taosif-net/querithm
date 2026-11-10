@@ -438,6 +438,45 @@ describe("complete: SQLite and MySQL", () => {
   });
 });
 
+// D4 S06: Oracle tier 1 — the signed-in user's schema is the default (the user is the schema), names fold to upper
+// case, so a mixed-case or reserved catalog name is inserted "quoted"; PL/SQL keywords; :binds are not columns.
+describe("complete: Oracle", () => {
+  const snap = (objects: SnapObject[]) => ({ profileId: "o", database: "FREEPDB1", status: "fresh" as const, objects, fks: [] });
+  const col = (name: string, ordinal: number) => ({ name, type: "NUMBER", nullable: true, pk: false, identity: false, computed: false, ordinal });
+  const oraIdx = buildSchemaIndex(snap([
+    { id: 1, schema: "QUERITHM_APP", name: "ORDERS", kind: "table", columns: [col("ORDER_ID", 1), col("TYPE", 2), col("Mixed", 3)] },
+    { id: 2, schema: "QUERITHM_APP", name: "Audit Log", kind: "table", columns: [col("ID", 1)] },
+    { id: 3, schema: "QUERITHM_OWN", name: "SHARED_T", kind: "table", columns: [col("ID", 1)] },
+  ]), "oracle", ["FREEPDB1"], "QUERITHM_APP");
+
+  it("the login's schema is the default: its tables come bare, another schema's qualified, case-sensitive names quoted", () => {
+    expect(oraIdx.defaultSchema).toBe("QUERITHM_APP");
+    const tables = itemsOf("SELECT * FROM |", "oracle", oraIdx);
+    expect(byLabel(tables, "ORDERS")?.insertText ?? "ORDERS").toMatch(/^ORDERS/);
+    expect(byLabel(tables, "Audit Log")?.insertText).toMatch(/^"Audit Log"/);
+    const shared = tables.find((i) => i.label === "SHARED_T" || i.label === "QUERITHM_OWN.SHARED_T");
+    expect(shared?.insertText ?? shared?.label).toMatch(/QUERITHM_OWN\.SHARED_T/);
+  });
+
+  it("columns that are reserved or not upper case are quoted; plain upper-case ones are not", () => {
+    const cols = itemsOf("SELECT o.| FROM orders o", "oracle", oraIdx);
+    expect(byLabel(cols, "ORDER_ID")?.insertText ?? "ORDER_ID").toBe("ORDER_ID");
+    expect(byLabel(cols, "TYPE")?.insertText).toBe('"TYPE"');
+    expect(byLabel(cols, "Mixed")?.insertText).toBe('"Mixed"');
+  });
+
+  it("offers PL/SQL statement starts and nothing inside a q'…' literal", () => {
+    expect(labels(itemsOf("|", "oracle", oraIdx))).toEqual(expect.arrayContaining(["DECLARE", "BEGIN"]));
+    expect(itemsOf("SELECT q'[FROM |]' FROM dual", "oracle", oraIdx)).toEqual([]);
+  });
+
+  it("without a login (no user name) the service is the fallback default, as for an engine whose database is the schema", () => {
+    expect(buildSchemaIndex(snap([]), "oracle", ["FREEPDB1"]).defaultSchema).toBe("FREEPDB1");
+    // Other dialects ignore a login schema.
+    expect(buildSchemaIndex({ ...snap([]), database: "SalesDB" }, "tsql", [], "QUERITHM_APP").defaultSchema).toBe("dbo");
+  });
+});
+
 // Regression: PostgreSQL and DuckDB do not reserve EXISTS, so `EXISTS (` lexed as a function call and the FROM inside
 // it was skipped — no table suggestions in `WHERE EXISTS (SELECT 1 FROM |`.
 describe("complete: tables in a subquery opened after a non-reserved word, every engine", () => {

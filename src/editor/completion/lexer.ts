@@ -54,15 +54,29 @@ function isAlpha(c: number): boolean { return (c >= 65 && c <= 90) || (c >= 97 &
 function isIdentStart(c: number, tsql: boolean, dollarStart = false): boolean {
   return isAlpha(c) || c === 95 || (tsql && c === 35) || (dollarStart && c === 36) || (c > 127 && !isSpace(c));
 }
-function isIdentPart(c: number, tsql: boolean): boolean {
-  return isAlpha(c) || isDigit(c) || c === 95 || c === 36 || (tsql && (c === 64 || c === 35)) || (c > 127 && !isSpace(c));
+function isIdentPart(c: number, tsql: boolean, hash = false): boolean {
+  return isAlpha(c) || isDigit(c) || c === 95 || c === 36 || (tsql && (c === 64 || c === 35)) || (hash && c === 35) || (c > 127 && !isSpace(c));
 }
+
+/** Oracle `q'X` / `nq'X`: the length of the prefix up to and including the delimiter X, else 0. */
+function alternativeQuote(text: string, pos: number): number {
+  let j = pos;
+  const c = text.charCodeAt(j);
+  if (c === 78 || c === 110) j++; // N / n
+  const q = text.charCodeAt(j);
+  if ((q !== 81 && q !== 113) || text.charCodeAt(j + 1) !== 39) return 0;
+  const d = text.charCodeAt(j + 2);
+  if (Number.isNaN(d) || d === C_SP || d === C_TAB || d === C_NL || d === C_CR) return 0;
+  return j + 3 - pos;
+}
+
+const ALT_CLOSE: Record<string, string> = { "[": "]", "{": "}", "(": ")", "<": ">" };
 
 const OPS_T = ["<=", ">=", "<>", "!=", "!<", "!>", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "||"];
 const OPS_P = ["->>", "#>>", "<=", ">=", "<>", "!=", "||", "::", "->", "#>", "@>", "<@", "=>", "~~", "!~", "~*", "&&", "<<", ">>", ":="];
 const OPS_S = ["->>", "->", "||", "==", "!=", "<>", "<=", ">=", "<<", ">>"];
 const OPS_M = ["<=>", "->>", "->", ":=", "||", "&&", "<=", ">=", "<>", "!=", "<<", ">>"];
-const OPS_O = ["||", ":=", "=>", "<>", "!=", "^=", "<=", ">=", "**", ".."];
+const OPS_O = ["||", ":=", "=>", "<>", "!=", "^=", "~=", "<=", ">=", "**", "..", "<<", ">>"];
 const OPS_D = ["->>", "->", "::", "//", "**", "||", "==", "!=", "<>", "<=", ">=", "<<", ">>", ":=", "=>"];
 
 /** The lexical rules of a dialect. Each flag is one rule; the T-SQL and PostgreSQL rows reproduce the older two modes. */
@@ -97,42 +111,48 @@ interface LexRules {
   go: boolean;
   /** Names may start with `$` (MySQL). */
   dollarStart: boolean;
+  /**
+   * Oracle: alternative quoting `q'X…X'` / `nq'X…X'` (X any character but space, tab and line breaks; `[ { ( <` close
+   * with their partner), `:1` / `:"name"` binds, `#` inside names, and no fraction in `1..10` (a PL/SQL range).
+   */
+  oracle: boolean;
 }
 
 const LEXING: Record<Dialect, LexRules> = {
   tsql: {
     tsql: true, ops: OPS_T, prefixes: "Nn", backslashPrefixes: "", backslashStrings: false, doubleQuoteStrings: false, brackets: true,
     backticks: false, dollar: null, at: "variable", colonParams: false, questionParams: false, hashComments: false,
-    dashNeedsSpace: false, nestedComments: true, hexLiterals: true, go: true, dollarStart: false,
+    dashNeedsSpace: false, nestedComments: true, hexLiterals: true, go: true, dollarStart: false, oracle: false,
   },
   pg: {
     tsql: false, ops: OPS_P, prefixes: "NnEeBbXx", backslashPrefixes: "Ee", backslashStrings: false, doubleQuoteStrings: false,
     brackets: false, backticks: false, dollar: "numberedAndBodies", at: null, colonParams: true, questionParams: false, hashComments: false,
-    dashNeedsSpace: false, nestedComments: true, hexLiterals: false, go: false, dollarStart: false,
+    dashNeedsSpace: false, nestedComments: true, hexLiterals: false, go: false, dollarStart: false, oracle: false,
   },
   sqlite: {
     tsql: false, ops: OPS_S, prefixes: "Xx", backslashPrefixes: "", backslashStrings: false, doubleQuoteStrings: false, brackets: true,
     backticks: true, dollar: "named", at: "param", colonParams: true, questionParams: true, hashComments: false,
-    dashNeedsSpace: false, nestedComments: false, hexLiterals: true, go: false, dollarStart: false,
+    dashNeedsSpace: false, nestedComments: false, hexLiterals: true, go: false, dollarStart: false, oracle: false,
   },
   mySql: {
     tsql: false, ops: OPS_M, prefixes: "NnXxBb", backslashPrefixes: "", backslashStrings: true, doubleQuoteStrings: true,
     brackets: false, backticks: true, dollar: null, at: "variable", colonParams: false, questionParams: false, hashComments: true,
-    dashNeedsSpace: true, nestedComments: false, hexLiterals: true, go: false, dollarStart: true,
+    dashNeedsSpace: true, nestedComments: false, hexLiterals: true, go: false, dollarStart: true, oracle: false,
   },
   // DuckDB's scanner is PostgreSQL's (nested comments, E'' strings, $tag$ bodies) plus $name parameters, ?, //, ** and ==;
   // [ ] are lists and { } structs, never names.
   duckDb: {
     tsql: false, ops: OPS_D, prefixes: "EeXx", backslashPrefixes: "Ee", backslashStrings: false, doubleQuoteStrings: false,
     brackets: false, backticks: false, dollar: "all", at: null, colonParams: false, questionParams: true, hashComments: false,
-    dashNeedsSpace: false, nestedComments: true, hexLiterals: true, go: false, dollarStart: false,
+    dashNeedsSpace: false, nestedComments: true, hexLiterals: true, go: false, dollarStart: false, oracle: false,
   },
-  // Phase D4 placeholder (hidden engine): N'' strings, "" names, :binds, non-nesting comments. Alternative quoting (q'[…]')
-  // and the / terminator arrive with the real scanner (D4 S02 in the sidecar, S06 here).
+  // Oracle (D4 S06), as the sidecar's OracleTokenizer reads it: N'' and q'…' / nq'…' strings, "" names (no escape inside),
+  // :name / :1 / :"name" binds (:= is an operator), non-nesting comments (/*+ hints */ are comments here). A / alone on a
+  // line is an operator token; oracleStatements.ts makes it the terminator.
   oracle: {
     tsql: false, ops: OPS_O, prefixes: "Nn", backslashPrefixes: "", backslashStrings: false, doubleQuoteStrings: false,
     brackets: false, backticks: false, dollar: null, at: null, colonParams: true, questionParams: false, hashComments: false,
-    dashNeedsSpace: false, nestedComments: false, hexLiterals: false, go: false, dollarStart: false,
+    dashNeedsSpace: false, nestedComments: false, hexLiterals: false, go: false, dollarStart: false, oracle: true,
   },
 };
 
@@ -195,6 +215,25 @@ function lexFrom(text: string, pos: number, dialect: Dialect, code: Token[], com
       if (depth > 0) tok.open = true;
       comments.push(tok);
       continue;
+    }
+    // Oracle alternative quoting: q'[ … ]', nq'! … !' — the only literal a lone ' may stand inside.
+    if (rules.oracle) {
+      const alt = alternativeQuote(text, pos);
+      if (alt > 0) {
+        const open = text[pos + alt - 1];
+        const close = ALT_CLOSE[open] ?? open;
+        let q = pos + alt;
+        let closed = false;
+        while (q < n) {
+          if (text[q] === close && text.charCodeAt(q + 1) === 39) { q += 2; closed = true; break; }
+          q++;
+        }
+        const tok: Token = { kind: "string", start, end: Math.min(q, n), upper: "", value: "" };
+        if (!closed) tok.open = true;
+        code.push(tok);
+        pos = tok.end;
+        continue;
+      }
     }
     // strings: '..', prefixed N'..' / E'..' (pg, backslash escapes) / B'..' / X'..', MySQL "..." and backslash escapes
     let strStart = -1;
@@ -310,11 +349,30 @@ function lexFrom(text: string, pos: number, dialect: Dialect, code: Token[], com
       code.push({ kind: "param", start, end: pos, upper: "", value: text.slice(start, pos) });
       continue;
     }
+    // Oracle :1 and :"name" binds
+    if (c === 58 && rules.oracle && (isDigit(c1) || c1 === 34)) {
+      if (c1 === 34) {
+        pos += 2;
+        while (pos < n && text.charCodeAt(pos) !== 34 && text.charCodeAt(pos) !== C_NL) pos++;
+        if (pos < n && text.charCodeAt(pos) === 34) pos++;
+      } else {
+        pos++;
+        while (pos < n && isIdentPart(text.charCodeAt(pos), false, true)) pos++;
+      }
+      code.push({ kind: "param", start, end: pos, upper: "", value: text.slice(start, pos) });
+      continue;
+    }
     // :name parameters (not :: casts)
     if (c === 58 && rules.colonParams && c1 !== 58 && isIdentStart(c1, false) && (start === 0 || text.charCodeAt(start - 1) !== 58)) {
       pos += 2;
-      while (pos < n && isIdentPart(text.charCodeAt(pos), false)) pos++;
+      while (pos < n && isIdentPart(text.charCodeAt(pos), false, rules.oracle)) pos++;
       code.push({ kind: "param", start, end: pos, upper: "", value: text.slice(start, pos) });
+      continue;
+    }
+    // Oracle: .. is the range operator (1..10), never the start of the number .10
+    if (rules.oracle && c === 46 && c1 === 46) {
+      pos += 2;
+      code.push({ kind: "operator", start, end: pos, upper: "", value: ".." });
       continue;
     }
     // numbers
@@ -324,7 +382,11 @@ function lexFrom(text: string, pos: number, dialect: Dialect, code: Token[], com
         while (pos < n && (isDigit(text.charCodeAt(pos)) || isAlpha(text.charCodeAt(pos)))) pos++;
       } else {
         while (pos < n && isDigit(text.charCodeAt(pos))) pos++;
-        if (pos < n && text.charCodeAt(pos) === 46) { pos++; while (pos < n && isDigit(text.charCodeAt(pos))) pos++; }
+        // Oracle: 1..10 is a range (number, .., number), never the number "1."
+        if (pos < n && text.charCodeAt(pos) === 46 && !(rules.oracle && text.charCodeAt(pos + 1) === 46)) {
+          pos++;
+          while (pos < n && isDigit(text.charCodeAt(pos))) pos++;
+        }
         const e = pos < n ? text.charCodeAt(pos) : -1;
         if (e === 101 || e === 69) {
           let q = pos + 1;
@@ -339,7 +401,7 @@ function lexFrom(text: string, pos: number, dialect: Dialect, code: Token[], com
     // words
     if (isIdentStart(c, tsql, rules.dollarStart)) {
       pos++;
-      while (pos < n && isIdentPart(text.charCodeAt(pos), tsql)) pos++;
+      while (pos < n && isIdentPart(text.charCodeAt(pos), tsql, rules.oracle)) pos++;
       const word = text.slice(start, pos);
       const upper = word.toUpperCase();
       if (rules.go && upper === "GO" && isGoLine(text, start, pos)) {

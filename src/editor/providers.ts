@@ -19,7 +19,8 @@ import { ensureTabSnapshot, tabScope, tabSnapshot } from "../store/snapshots";
 import { isDisconnected } from "../store/connections";
 import { useSettings } from "../store/settings";
 import { snippetsFor, useSnippets } from "../snippets/snippetStore";
-import { assertNever, DEFAULT_DIALECT, DIALECT_LIST, DIALECTS, dialectForLanguage, dialectOf, dialectOfLanguage } from "../engines";
+import { assertNever, DEFAULT_DIALECT, DIALECT_LIST, DIALECTS, dialectForLanguage, dialectOf, dialectOfLanguage, foldIdentifier } from "../engines";
+import { formatOracleScript } from "./oracleFormat";
 import { mdCell, mdCode, mdFence, mdText, oneLine } from "./hoverMarkdown";
 
 export interface DocContext {
@@ -366,18 +367,19 @@ async function formatLocally(text: string, language: "postgresql" | "sqlite" | "
   const s = useSettings.getState();
   try {
     const { format } = await import("sql-formatter");
-    return {
-      text: format(text, {
-        language, keywordCase: s.keywordCase === "preserve" ? "preserve" : s.keywordCase, tabWidth: s.indentSize,
-        logicalOperatorNewline: "before",
-      }),
-    };
+    const one = (sql: string) => format(sql, {
+      language, keywordCase: s.keywordCase === "preserve" ? "preserve" : s.keywordCase, tabWidth: s.indentSize,
+      logicalOperatorNewline: "before",
+    });
+    // Oracle: statement by statement, so / lines, PL/SQL units and SQL*Plus lines survive (oracleFormat.ts).
+    if (language === "plsql") return formatOracleScript(text, one);
+    return { text: one(text) };
   } catch (e) {
     return { text, error: e instanceof Error ? e.message : String(e) };
   }
 }
 
-/** Formats SQL: T-SQL in the sidecar (ScriptDom); PostgreSQL, SQLite and MySQL with the bundled sql-formatter. */
+/** Formats SQL: T-SQL in the sidecar (ScriptDom); PostgreSQL, SQLite, MySQL, DuckDB and Oracle with the bundled sql-formatter. */
 export async function formatText(text: string, dialect: Dialect): Promise<{ text: string; error?: string | null }> {
   const s = useSettings.getState();
   switch (dialect) {
@@ -385,7 +387,7 @@ export async function formatText(text: string, dialect: Dialect): Promise<{ text
     case "sqlite": return formatLocally(text, "sqlite");
     case "mySql": return formatLocally(text, "mysql");
     case "duckDb": return formatLocally(text, "duckdb");
-    // Phase D4 placeholder: sql-formatter's PL/SQL language, offline like the others (S06 decides the formatter).
+    // Oracle: sql-formatter's PL/SQL language on each SQL statement; PL/SQL units and / lines as written (D4 S06).
     case "oracle": return formatLocally(text, "plsql");
     case "tsql":
       return rpc("lang.format", {
@@ -460,8 +462,9 @@ export function installProviders() {
         if (cur.kind !== "ident" && cur.kind !== "qident" && cur.kind !== "variable" && cur.kind !== "param") {
           return [];
         }
-        const folds = DIALECTS[dialect].foldsIdentifiers;
-        const nameKey = (t: typeof cur) => folds && t.kind === "qident" ? t.value : t.value.toLowerCase();
+        // Folding dialects: a name's key is its catalog spelling (a quoted name exact); otherwise names match case-insensitively.
+        const folds = DIALECTS[dialect].identifierFold !== null;
+        const nameKey = (t: typeof cur) => folds && (t.kind === "ident" || t.kind === "qident") ? foldIdentifier(t.value, t.kind === "qident", dialect) : t.value.toLowerCase();
         const target = nameKey(cur);
         const highlights: monaco.languages.DocumentHighlight[] = [];
         for (const t of T) {

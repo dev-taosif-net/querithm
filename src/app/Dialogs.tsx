@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Dependency, HistoryEntry, HistoryRetention, SnapObject } from "../ipc/contract";
+import type { Dependency, Dialect, HistoryEntry, HistoryRetention, SnapObject } from "../ipc/contract";
 import { rpc, shell } from "../ipc/client";
 import { useUi, type Dialog, toast } from "../store/ui";
 import { useTabs } from "../store/tabs";
@@ -348,13 +348,23 @@ function TxSwitchDialog({ d }: { d: Extract<Dialog, { kind: "txSwitch" }> }) {
   );
 }
 
+/**
+ * Oracle (D4 S06) binds every value as text (VARCHAR2) and the server converts it where it is used, so no type is asked
+ * for there (the sidecar would not use it: S04).
+ */
+const UNTYPED_PARAMS: Record<Dialect, string | null> = {
+  tsql: null, pg: null, sqlite: null, mySql: null, duckDb: null,
+  oracle: "Each value is bound as text (VARCHAR2); Oracle converts it to the type of the column or expression it meets. A trigger's :NEW and :OLD are never asked for.",
+};
+
 function ParamsDialog({ d }: { d: Extract<Dialog, { kind: "params" }> }) {
   const [values, setValues] = useState(() => d.names.map((name) => ({ name, value: "", isNull: false, type: "" })));
-  const submit = () => d.resolve(values.map((v) => ({ ...v, type: v.type || undefined })));
+  const untyped = d.dialect ? UNTYPED_PARAMS[d.dialect] : null;
+  const submit = () => d.resolve(values.map((v) => ({ ...v, type: untyped ? undefined : v.type || undefined })));
   return (
     <Modal
       title="Query parameters"
-      subtitle="Values are sent as driver parameters, never substituted into the text (§7)."
+      subtitle={untyped ? `Values are sent as driver parameters, never substituted into the text (§7). ${untyped}` : "Values are sent as driver parameters, never substituted into the text (§7)."}
       onClose={() => d.resolve(null)}
       onEnter={submit}
       footer={
@@ -366,10 +376,10 @@ function ParamsDialog({ d }: { d: Extract<Dialog, { kind: "params" }> }) {
     >
       <div className="space-y-2">
         {values.map((v, i) => (
-          <div key={v.name} className="grid grid-cols-[140px_1fr_120px_60px] gap-2 items-center">
+          <div key={v.name} className={`grid ${untyped ? "grid-cols-[140px_1fr_60px]" : "grid-cols-[140px_1fr_120px_60px]"} gap-2 items-center`}>
             <span className="q-mono text-ident">{v.name}</span>
-            <input className="q-input" autoFocus={i === 0} disabled={v.isNull} value={v.value} onChange={(e) => setValues((s) => s.map((x, k) => (k === i ? { ...x, value: e.target.value } : x)))} />
-            <input className="q-input" placeholder="type (optional)" value={v.type} onChange={(e) => setValues((s) => s.map((x, k) => (k === i ? { ...x, type: e.target.value } : x)))} />
+            <input className="q-input" aria-label={`Value of ${v.name}`} autoFocus={i === 0} disabled={v.isNull} value={v.value} onChange={(e) => setValues((s) => s.map((x, k) => (k === i ? { ...x, value: e.target.value } : x)))} />
+            {!untyped && <input className="q-input" placeholder="type (optional)" value={v.type} onChange={(e) => setValues((s) => s.map((x, k) => (k === i ? { ...x, type: e.target.value } : x)))} />}
             <label className="flex items-center gap-1 text-muted">
               <input type="checkbox" checked={v.isNull} onChange={(e) => setValues((s) => s.map((x, k) => (k === i ? { ...x, isNull: e.target.checked } : x)))} /> NULL
             </label>

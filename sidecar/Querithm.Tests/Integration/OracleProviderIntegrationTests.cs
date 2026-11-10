@@ -208,6 +208,19 @@ public sealed class OracleProviderIntegrationTests
         Assert.Contains("ORA-00904", all);
         Assert.Contains("line 2, column 3", all);
         Assert.DoesNotContain("Help: http", all);
+        Assert.Equal((2, 3), (done.Error?.EditorLine, done.Error?.EditorColumn));
+    }
+
+    [IntegrationFact]
+    public async Task A_parse_error_in_a_statement_after_another_on_the_same_line_points_at_its_column_in_the_editor()
+    {
+        var (h, sid) = await OpenAsync();
+        await using var _ = h;
+        // "SELECT nope FROM dual" starts at column 21 of line 1; the server names column 8 of its own text.
+        var (done, _, id) = await Run(h, sid, "SELECT 1 FROM dual; SELECT nope FROM dual");
+        Assert.Equal(ExecState.Failed, done.State);
+        var error = Assert.Single(h.Notifier.Of<ServerMessage>(), m => m.ExecutionId == id && m.Severity == Severity.Error);
+        Assert.Equal((1, 28), (error.EditorLine, error.EditorColumn));
     }
 
     // ---- transactions (D0b) ----

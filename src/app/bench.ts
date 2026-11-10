@@ -39,8 +39,43 @@ export function bigProcedure(lines: number): string {
   return out.join("\n");
 }
 
-async function typing(samples = 200, lines = 12_000) {
-  const id = newQueryTab({ text: bigProcedure(lines), title: "bench-typing.sql" });
+/**
+ * Metrics 3 / 4 on Oracle (D4 S06): a PL/SQL package body of about `lines` lines — cursor loops over joins, SELECT INTO,
+ * MERGE, q'…' literals, DBMS_OUTPUT and exception handlers — ending with its / line.
+ */
+export function bigPlsqlPackage(lines: number): string {
+  const out: string[] = ["CREATE OR REPLACE PACKAGE BODY bench_big AS"];
+  let n = 0;
+  while (out.length < lines - 2) {
+    n++;
+    out.push(
+      `  PROCEDURE p${n}(p_customer IN NUMBER, p_from IN DATE DEFAULT SYSDATE - 30) IS`,
+      `    v_total NUMBER(12, 2) := 0;`,
+      `    v_name customers.full_name%TYPE;`,
+      `  BEGIN`,
+      `    SELECT c.full_name INTO v_name FROM customers c WHERE c.customer_id = p_customer;`,
+      `    FOR r IN (SELECT o.order_id, o.total_amount FROM orders o JOIN customers c ON c.customer_id = o.customer_id`,
+      `              WHERE o.customer_id = p_customer AND o.order_date >= p_from AND o.note <> q'[it's; done]') LOOP`,
+      `      v_total := v_total + r.total_amount;`,
+      `      DBMS_OUTPUT.PUT_LINE('order ' || r.order_id || ' for ' || v_name || ': ' || TO_CHAR(r.total_amount, 'FM999G990D00'));`,
+      `    END LOOP;`,
+      `    MERGE INTO order_totals t USING (SELECT p_customer AS customer_id, v_total AS total FROM dual) s ON (t.customer_id = s.customer_id)`,
+      `    WHEN MATCHED THEN UPDATE SET t.total = s.total WHEN NOT MATCHED THEN INSERT (customer_id, total) VALUES (s.customer_id, s.total);`,
+      `  EXCEPTION`,
+      `    WHEN NO_DATA_FOUND THEN NULL;`,
+      `  END p${n};`,
+    );
+  }
+  out.push("END bench_big;", "/");
+  return out.join("\n");
+}
+
+async function typing(samples = 200, lines = 12_000, dialect: "tsql" | "oracle" = "tsql") {
+  // Oracle: the tab is on the active tab's (Oracle) connection, so its model is the oracle language.
+  const profileId = dialect === "oracle" ? useTabs.getState().tabs[useTabs.getState().activeId ?? ""]?.profileId : undefined;
+  const id = dialect === "oracle"
+    ? newQueryTab({ text: bigPlsqlPackage(lines), title: "bench-typing-oracle.sql", profileId })
+    : newQueryTab({ text: bigProcedure(lines), title: "bench-typing.sql" });
   await sleep(500);
   const ed = editorForTab(id);
   const model = getModel(id)!;
@@ -62,8 +97,8 @@ async function typing(samples = 200, lines = 12_000) {
   return { work, toPaint };
 }
 
-async function tier1(samples = 300, lines = 12_000) {
-  const text = bigProcedure(lines);
+async function tier1(samples = 300, lines = 12_000, dialect: "tsql" | "oracle" = "tsql") {
+  const text = dialect === "oracle" ? bigPlsqlPackage(lines) : bigProcedure(lines);
   const tab = useTabs.getState().activeId ? useTabs.getState().tabs[useTabs.getState().activeId!] : undefined;
   const { tabSnapshot } = await import("../store/snapshots");
   const schema = tabSnapshot(tab)?.index ?? null;
@@ -73,7 +108,7 @@ async function tier1(samples = 300, lines = 12_000) {
   for (let i = 0; i < samples; i++) {
     const offset = Math.floor((text.length * (i + 1)) / (samples + 2));
     const t0 = performance.now();
-    complete({ text, offset, dialect: "tsql", schema });
+    complete({ text, offset, dialect, schema });
     times.push(performance.now() - t0);
   }
   return times;
@@ -310,6 +345,43 @@ async function setupFixture(m: { host: string; port: number; user: string; passw
   await changeConnection(tabId, p.id, m.db);
   for (let i = 0; i < 300 && !useSnapshots.getState().get(p.id, m.db)?.index?.objects.length; i++) await sleep(100);
   return { profileId: p.id, objects: useSnapshots.getState().get(p.id, m.db)?.index?.objects.length ?? 0 };
+}
+
+/**
+ * Metrics 3.oracle / 4.oracle (D4 S06): a profile on the Oracle fixture (plain TCP, the app user), connected, with the
+ * active tab on it once its snapshot has objects (tier 1 then completes against the user's schema).
+ */
+async function setupOracle(m: { host: string; port: number; user: string; password: string; service: string }) {
+  let p = useProfiles.getState().profiles.find((x) => x.name === "Bench Oracle UI");
+  if (!p) {
+    p = await useProfiles.getState().save({
+      id: "", name: "Bench Oracle UI", engine: "oracle", host: m.host, port: m.port, auth: "password", username: m.user, databaseDefault: m.service,
+      environment: "dev", color: null, groupName: null, tlsMode: "disable", trustCert: false, caPath: null, timeoutS: 15, commandTimeoutS: 0, options: null,
+      createdAt: 0, updatedAt: 0,
+    });
+  }
+  await shell.secretSet(p.id, m.password);
+  await useConnections.getState().connect(p.id);
+  const tabId = useTabs.getState().activeId ?? newQueryTab();
+  await changeConnection(tabId, p.id, m.service);
+  for (let i = 0; i < 600 && !useSnapshots.getState().get(p.id, m.service)?.index?.objects.length; i++) await sleep(100);
+  return { profileId: p.id, objects: useSnapshots.getState().get(p.id, m.service)?.index?.objects.length ?? 0 };
+}
+
+/** UI smoke (D4 S06): replaces the active tab's text in one edit (typing it would meet auto-close and auto-indent). */
+function setEditorText(text: string): boolean {
+  const id = useTabs.getState().activeId;
+  const model = id ? getModel(id) : undefined;
+  if (!model) return false;
+  model.setValue(text);
+  return true;
+}
+
+/** UI smoke: the active tab's cursor (line and column), or null without an editor. */
+function editorPosition(): { lineNumber: number; column: number } | null {
+  const id = useTabs.getState().activeId;
+  const p = id ? editorForTab(id)?.getPosition() : null;
+  return p ? { lineNumber: p.lineNumber, column: p.column } : null;
 }
 
 /** Connects a profile (secret into the dev keyring) and opens a new tab on it. */
@@ -600,6 +672,7 @@ export function installBench() {
     timeOrigin: performance.timeOrigin,
     marks: () => ({ navigationToNow: performance.now() }),
     setupFixture,
+    setupOracle,
     erd,
     monitorApply,
     deadlockRender,
@@ -608,6 +681,8 @@ export function installBench() {
     openMonitor,
     disconnect,
     useProd,
+    setEditorText,
+    editorPosition,
     startConcurrent,
     rpc,
     typing,

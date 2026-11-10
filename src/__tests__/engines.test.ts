@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { DialectValues, EngineValues, type Dialect, type Engine } from "../ipc/contract";
 import {
   actualPlanWithRun, assertNever, DEFAULT_DIALECT, DEFAULT_ENGINE, DELIMIT, DIALECT_LIST, DIALECTS, dialectForLanguage, dialectOf,
-  dialectOfLanguage, ENGINE_LIST, ENGINES, engineTraits, isDialect, isEngine, isLocalEngine, knownDialect, knownEngine, languageOf,
+  dialectOfLanguage, ENGINE_LIST, ENGINES, engineTraits, foldIdentifier, isDialect, isEngine, isLocalEngine, knownDialect, knownEngine, languageOf,
   type DialectTraits, type EngineTraits,
 } from "../engines";
 
@@ -13,12 +13,12 @@ const ENGINE_TRAITS = {
   label: "string", shortLabel: "string", badge: "string", dialect: "string", language: "string", defaultSchema: "string|null",
   defaultPort: "number|null", defaultAuth: "string", defaultUser: "string|null", defaultDatabase: "string|null", statisticsIo: "boolean",
   statisticsTime: "boolean", actualPlan: "string", actualPlanConfirm: "string|null", trace: "boolean", debugger: "boolean", synonyms: "boolean", triggerFunctions: "boolean",
-  procedures: "boolean", monitor: "boolean", locations: "object",
+  procedures: "boolean", monitor: "boolean", serverOutput: "boolean", locations: "object",
 } satisfies Record<keyof EngineTraits, string>;
 
 const DIALECT_TRAITS = {
-  label: "string", language: "string", defaultSchema: "string|null", quote: "function", regularIdentifier: "object", foldsIdentifiers: "boolean",
-  stringLiteral: "function", useStatement: "boolean", serverDiagnostics: "boolean", dollarQuotedBodies: "boolean",
+  label: "string", language: "string", defaultSchema: "string|null", quote: "function", regularIdentifier: "object", identifierFold: "string|null",
+  stringLiteral: "function", useStatement: "boolean", serverDiagnostics: "boolean", dollarQuotedBodies: "boolean", loginSchema: "boolean",
 } satisfies Record<keyof DialectTraits, string>;
 
 const typeOf = (v: unknown) => (v === null ? "null" : typeof v);
@@ -72,7 +72,7 @@ describe("engine table", () => {
     expect(ENGINES.sqlite).toEqual({
       label: "SQLite", shortLabel: "SQLite", badge: "SL", dialect: "sqlite", language: "sqlite", defaultSchema: "main", defaultPort: null,
       defaultAuth: "none", defaultUser: null, defaultDatabase: "main", statisticsIo: false, statisticsTime: false, actualPlan: "none",
-      actualPlanConfirm: null, trace: false, debugger: false, synonyms: false, triggerFunctions: false, procedures: false, monitor: false, locations: ["file", "memory"],
+      actualPlanConfirm: null, trace: false, debugger: false, synonyms: false, triggerFunctions: false, procedures: false, monitor: false, serverOutput: false, locations: ["file", "memory"],
     });
   });
 
@@ -80,25 +80,25 @@ describe("engine table", () => {
     expect(ENGINES.mySql).toEqual({
       label: "MySQL / MariaDB", shortLabel: "MySQL", badge: "MY", dialect: "mySql", language: "mysql", defaultSchema: null, defaultPort: 3306,
       defaultAuth: "password", defaultUser: "root", defaultDatabase: null, statisticsIo: false, statisticsTime: false, actualPlan: "none",
-      actualPlanConfirm: null, trace: false, debugger: false, synonyms: false, triggerFunctions: false, procedures: true, monitor: false, locations: ["server"],
+      actualPlanConfirm: null, trace: false, debugger: false, synonyms: false, triggerFunctions: false, procedures: true, monitor: false, serverOutput: false, locations: ["server"],
     });
   });
 });
 
-describe("Oracle (Phase D4, hidden engine placeholder)", () => {
-  it("is a server engine with every feature off until the session that implements it", () => {
+describe("Oracle (Phase D4, hidden engine)", () => {
+  it("is a server engine on the TCPS port with every not-yet-implemented feature off", () => {
     expect(ENGINES.oracle).toEqual({
       label: "Oracle Database", shortLabel: "Oracle", badge: "OR", dialect: "oracle", language: "oracle", defaultSchema: null,
-      defaultPort: 1521, defaultAuth: "password", defaultUser: "system", defaultDatabase: null, statisticsIo: false,
+      defaultPort: 2484, defaultAuth: "password", defaultUser: "system", defaultDatabase: null, statisticsIo: false,
       statisticsTime: false, actualPlan: "none", actualPlanConfirm: null, trace: false, debugger: false, synonyms: false,
-      triggerFunctions: false, procedures: false, monitor: false, locations: ["server"],
+      triggerFunctions: false, procedures: false, monitor: false, serverOutput: true, locations: ["server"],
     });
     expect(isLocalEngine("oracle")).toBe(false);
     expect(actualPlanWithRun("oracle")).toBe(false);
   });
 
   it("quotes with \"\", has no USE statement, and only an upper-case name is a regular identifier", () => {
-    expect(DIALECTS.oracle).toMatchObject({ label: "Oracle SQL", defaultSchema: null, useStatement: false, serverDiagnostics: false, dollarQuotedBodies: false });
+    expect(DIALECTS.oracle).toMatchObject({ label: "Oracle SQL", defaultSchema: null, identifierFold: "upper", useStatement: false, serverDiagnostics: false, dollarQuotedBodies: false, loginSchema: true });
     expect(DIALECTS.oracle.quote).toBe(DELIMIT.doubleQuote);
     expect(DIALECTS.oracle.regularIdentifier.test("ORDER_LINES$2")).toBe(true);
     expect(DIALECTS.oracle.regularIdentifier.test("T#1")).toBe(true);
@@ -108,6 +108,22 @@ describe("Oracle (Phase D4, hidden engine placeholder)", () => {
     expect(DIALECTS.oracle.stringLiteral("C:\\temp's")).toBe("'C:\\temp''s'");
     expect(languageOf("oracle")).toBe("oracle");
     expect(dialectOf("oracle")).toBe("oracle");
+  });
+
+  it("is the only dialect whose default schema is the signed-in user's", () => {
+    expect(DIALECT_LIST.filter((d) => DIALECTS[d].loginSchema)).toEqual(["oracle"]);
+  });
+
+  it("is the only engine with a server-output (DBMS_OUTPUT) toggle", () => {
+    expect(ENGINE_LIST.filter((e) => ENGINES[e].serverOutput)).toEqual(["oracle"]);
+  });
+
+  it("folds an unquoted name to upper case and keeps a quoted one exact, as the server spells them", () => {
+    expect(foldIdentifier("emp", false, "oracle")).toBe("EMP");
+    expect(foldIdentifier("Emp", true, "oracle")).toBe("Emp");
+    expect(foldIdentifier("Emp", false, "pg")).toBe("emp");
+    expect(foldIdentifier("Emp", true, "pg")).toBe("Emp");
+    for (const d of ["tsql", "sqlite", "mySql", "duckDb"] as const) expect(foldIdentifier("Emp", false, d)).toBe("Emp");
   });
 });
 
@@ -133,11 +149,11 @@ describe("dialect table", () => {
   });
 
   it("keeps today's per-dialect facts", () => {
-    expect(DIALECTS.tsql).toMatchObject({ label: "T-SQL", defaultSchema: "dbo", foldsIdentifiers: false, useStatement: true, serverDiagnostics: true, dollarQuotedBodies: false });
-    expect(DIALECTS.pg).toMatchObject({ label: "PostgreSQL", defaultSchema: "public", foldsIdentifiers: true, useStatement: false, serverDiagnostics: false, dollarQuotedBodies: true });
-    expect(DIALECTS.sqlite).toMatchObject({ label: "SQLite", defaultSchema: "main", foldsIdentifiers: false, useStatement: false, serverDiagnostics: false, dollarQuotedBodies: false });
-    expect(DIALECTS.mySql).toMatchObject({ label: "MySQL", defaultSchema: null, foldsIdentifiers: false, useStatement: true, serverDiagnostics: false, dollarQuotedBodies: false });
-    expect(DIALECTS.duckDb).toMatchObject({ label: "DuckDB", defaultSchema: "main", foldsIdentifiers: false, useStatement: false, serverDiagnostics: false, dollarQuotedBodies: false });
+    expect(DIALECTS.tsql).toMatchObject({ label: "T-SQL", defaultSchema: "dbo", identifierFold: null, useStatement: true, serverDiagnostics: true, dollarQuotedBodies: false });
+    expect(DIALECTS.pg).toMatchObject({ label: "PostgreSQL", defaultSchema: "public", identifierFold: "lower", useStatement: false, serverDiagnostics: false, dollarQuotedBodies: true });
+    expect(DIALECTS.sqlite).toMatchObject({ label: "SQLite", defaultSchema: "main", identifierFold: null, useStatement: false, serverDiagnostics: false, dollarQuotedBodies: false });
+    expect(DIALECTS.mySql).toMatchObject({ label: "MySQL", defaultSchema: null, identifierFold: null, useStatement: true, serverDiagnostics: false, dollarQuotedBodies: false });
+    expect(DIALECTS.duckDb).toMatchObject({ label: "DuckDB", defaultSchema: "main", identifierFold: null, useStatement: false, serverDiagnostics: false, dollarQuotedBodies: false });
   });
 });
 

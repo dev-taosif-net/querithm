@@ -113,7 +113,10 @@ export function collectLayout() {
         }
     }
     const disabled = el.matches(":disabled") || el.getAttribute("aria-disabled") === "true";
-    return { i, desc: desc(el), layer: layerOf(el), rect, vis, clippedBy: by, hits, disabled, inside: controlsAround(el), texts: textRuns(el, i) };
+    // `data-layout-adornment`: a button drawn inside the field beside it (a password box's show / hide), whose padding
+    // leaves it the room; it overlaps that field by design, and only while it stays inside it.
+    const adornment = el.hasAttribute("data-layout-adornment");
+    return { i, desc: desc(el), layer: layerOf(el), rect, vis, clippedBy: by, hits, disabled, adornment, inside: controlsAround(el), texts: textRuns(el, i) };
   });
   // Lines: visible border sides and hairline elements (separators), each with the controls it belongs to.
   const lines = [];
@@ -260,6 +263,8 @@ export function fieldBoundaryOk(field) {
 }
 
 const meet = (a, b) => ({ l: Math.max(a.l, b.l), t: Math.max(a.t, b.t), r: Math.min(a.r, b.r), b: Math.min(a.b, b.b) });
+/** `a` lies within `b` (1 px of rounding allowed). */
+const within = (a, b) => a.l >= b.l - 1 && a.t >= b.t - 1 && a.r <= b.r + 1 && a.b <= b.b + 1;
 const w = (a) => Math.max(0, a.r - a.l), h = (a) => Math.max(0, a.b - a.t);
 const area = (a) => w(a) * h(a);
 /** WCAG AA: 3:1 for large text (24 px, or 18.66 px bold) and for an icon glyph (no letter or digit: non-text contrast),
@@ -299,6 +304,7 @@ export function findLayoutIssues(snap) {
     for (let b = a + 1; b < shown.length; b++) {
       const x = shown[a], y = shown[b];
       if (x.layer !== y.layer || x.inside.includes(y.i) || y.inside.includes(x.i)) continue;
+      if ((x.adornment && within(x.rect, y.rect)) || (y.adornment && within(y.rect, x.rect))) continue;
       const m = meet(x.vis, y.vis);
       if (w(m) >= 2 && h(m) >= 2) add("overlap", x, y.desc, `${Math.round(w(m))}×${Math.round(h(m))} px`, m);
     }

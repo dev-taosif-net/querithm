@@ -180,7 +180,8 @@ internal static class OracleOutput
                 int? batchLine = line > 0 ? unit.SourceLine + line - 1 : null;
                 if (batchLine != null) text += string.Create(CultureInfo.InvariantCulture, $" (line {batchLine}, column {position})");
                 list.Add(new ProviderMessage(error ? Severity.Error : Severity.Warning, text, Line: batchLine, Procedure: unit.Name,
-                    Number: r.IsDBNull(4) ? null : Convert.ToInt32(r.GetValue(4), CultureInfo.InvariantCulture)));
+                    Number: r.IsDBNull(4) ? null : Convert.ToInt32(r.GetValue(4), CultureInfo.InvariantCulture),
+                    Column: batchLine != null && position > 0 ? position : null));
             }
         }
         if (errors > 0)
