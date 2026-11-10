@@ -3,14 +3,14 @@
 Update at the end of every session. Statuses: *not started* · *in progress* · *done* (code + tests passed in that
 session) · *partial* (what is left is in "Open").
 
-Last updated: 2026-11-10 — S01 partial (no Docker on the session's machine).
+Last updated: 2026-11-10 — S01 partial (no Docker on the session's machine); S02 partial (code + tests green; server-side checks wait for the fixture).
 
 ## Sessions
 
 | # | Status | Evidence (test names / commands run) | Open / stopping point |
 |---|---|---|---|
 | S01 | partial | Driver gate passed (license, vulnerable scan clean, transitive review, trimmed DLL byte-identical to the package, trimmed `--self-test` → `oracle ok`). `OracleSkeletonTests`, `EngineRegistryTests` (Oracle hidden, no paste detection), `engines.test.ts` / quoting / rename / profile-search Oracle rows, `fixture-secrets.test.ts`. `pnpm test`: sidecar 3584 passed / 269 skipped; `DuckDbSecurityTests.Spill_files_land_under_app_data` is flaky on `HEAD` too (fails at its 256 MB cap). Vitest: 50 `localStorage` failures in App / persistence / uiScale tests, identical on clean `HEAD` (Node 26). Trim baseline 29 → 30: ODP.NET's IL2104, unavoidable (rooted, unmodifiable) | Not run (no Docker): fixture start (`docker compose -p querithm-fixture -f scripts/bench/docker/compose.yml --profile oracle up -d --wait oracle`) and `QUERITHM_IT=1 dotnet test sidecar --filter Oracle`. Unverified until then: `ENABLE_TCPS` on 2484 and its client-wallet path (S03 needs the CA), setup script, healthcheck. Size measured on the sidecar only, not a full installer |
-| S02 | not started | — | — |
+| S02 | partial | `OracleIntelligenceTests` (tokenizer: every `q'` delimiter, `nq'`, hints, binds vs `:=` / `:NEW`, db links, `1..10`; splitter: mixed SQL + PL/SQL, package spec + body, compound trigger, `WITH FUNCTION`, type spec vs body, `/` in string/comment, missing final `/`, `END;` kept, `;` stripped, client commands, folding; classifier: each destructive form, MERGE, dynamic SQL in blocks, DDL, transactions, `CURRENT_SCHEMA`; keywords; quoting), `Security/OracleSecurityTests` (written first, 20 red on the stub, then green: Prod destructive block without `confirmedDestructive`, client-command refusals with every flag, `IDENTIFIED BY` redaction), `OracleSkeletonTests` updated. `dotnet test sidecar`: 3734 passed / 269 skipped / 1 failed (`DuckDbSecurityTests.Spill_files_land_under_app_data`, the known flaky test). Vitest: the same 50 `localStorage` failures in App / persistence / uiScale (Node 26 baseline) | (1) `OracleKeywords` not regenerated from `V$RESERVED_WORDS` on the fixture (no Docker) — list taken from the SQL reference. (2) Done-when "splitter output executes unchanged" is checked in S03/S04 on the server, notably `CREATE TYPE … AS OBJECT (…)` sent without its `;`. (3) Deviation from the plan: Oracle has no `""` escape in quoted names, so `OracleIdentifiers.Quote` refuses `"` / NUL instead of doubling. (4) `SET SERVEROUTPUT` toggles are reported (`ServerOutputToggles`); applying them is S04. `SIZE` / `FORMAT` options are accepted and ignored |
 | S03 | not started | — | — |
 | S04 | not started | — | — |
 | S05 | not started | — | — |
@@ -27,6 +27,7 @@ Last updated: 2026-11-10 — S01 partial (no Docker on the session's machine).
 
 | # | Answer | Date |
 |---|---|---|
+| O5 | Default taken: `SET SERVEROUTPUT ON/OFF` toggles DBMS_OUTPUT; every other SQL\*Plus command (and `&substitution`) refused with a reason | 2026-11-10 |
 | O2 | Default taken: TCPS with the image's self-signed certificate generated at first start (`ENABLE_TCPS`), TLS tests required | 2026-11-10 |
 
 ## Pinned versions

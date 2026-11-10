@@ -11,8 +11,8 @@ using Querithm.Providers.Oracle;
 namespace Querithm.Tests;
 
 /// <summary>
-/// D4 S01: Oracle is a hidden engine skeleton. Every feature refuses with a reason, no SQL is read (every statement is a
-/// hard refusal in the sidecar, whatever the UI sends), nothing connects, and secrets cannot leak from text it cannot read.
+/// D4 S01: Oracle is a hidden engine skeleton. Every feature refuses with a reason and nothing connects. Since D4 S02 the
+/// SQL is read (OracleIntelligenceTests): a run passes the guard, then fails to connect until D4 S03.
 /// </summary>
 public class OracleSkeletonTests
 {
@@ -38,21 +38,8 @@ public class OracleSkeletonTests
         Assert.False(FeatureGuard.Info(_oracle, feature).Available);
     }
 
-    [Theory]
-    [InlineData("SELECT 1 FROM DUAL")]
-    [InlineData("DROP TABLE t PURGE")]
-    [InlineData("BEGIN\n  DELETE FROM t;\nEND;\n/")]
-    [InlineData("")]
-    public void Every_statement_is_refused_before_anything_runs(string sql)
-    {
-        var c = _oracle.Language.Classify(sql);
-        Assert.Equal(OracleLanguageService.NotReadYet, c.Refusal);
-        var batch = Assert.Single(c.Batches);
-        Assert.Equal((0, sql.Length, 1, sql.Split('\n').Length), (batch.StartOffset, batch.Length, batch.StartLine, batch.EndLine));
-    }
-
     [Fact]
-    public void Secrets_cannot_leak_from_text_that_is_not_read_yet()
+    public void A_quoted_password_does_not_leak()
     {
         var r = _oracle.Language.RedactSecrets("CREATE USER app IDENTIFIED BY \"s3cret-Value\"");
         Assert.DoesNotContain("s3cret", r.Text);
@@ -65,7 +52,7 @@ public class OracleSkeletonTests
         Assert.Empty(_oracle.Language.Complete(new CompleteParams { DocId = "d", Text = "SEL", Offset = 3, Dialect = Dialect.Oracle }, new NoSchema()));
         Assert.Empty(_oracle.Language.Diagnostics(new DiagnosticsParams { DocId = "d", Text = "SELECT", Dialect = Dialect.Oracle }));
         var f = _oracle.Language.Format(new FormatParams { Text = "select 1 from dual", Dialect = Dialect.Oracle });
-        Assert.Equal(("select 1 from dual", OracleLanguageService.NotReadYet), (f.Text, f.Error));
+        Assert.Equal(("select 1 from dual", OracleLanguageService.NoFormatter), (f.Text, f.Error));
     }
 
     [Fact]
@@ -84,9 +71,9 @@ public class OracleSkeletonTests
         Assert.Equal("Oracle", ProfileRules.EngineName(Engine.Oracle));
     }
 
-    /// <summary>Exposed through the dev setting: a profile saves and a tab opens (it dials nothing), but a run is refused with the reason.</summary>
+    /// <summary>Exposed through the dev setting: a profile saves and a tab opens (it dials nothing); a run passes the guard, a SQL*Plus command is refused.</summary>
     [Fact]
-    public async Task Exposed_by_the_dev_setting_a_run_is_refused_with_the_reason()
+    public async Task Exposed_by_the_dev_setting_a_run_passes_the_guard_and_client_commands_are_refused()
     {
         var dir = Directory.CreateTempSubdirectory("qora-").FullName;
         var registry = new ProviderRegistry(EngineSetup.Providers(dir), ProviderRegistry.HiddenEngines(EngineSetup.BehindFlag, "oracle"));
@@ -96,8 +83,12 @@ public class OracleSkeletonTests
             Assert.True((await rpc.Engines()).Single(e => e.Engine == Engine.Oracle).Exposed);
             var saved = await rpc.ProfileSave(new Profile { Id = "", Name = "ora", Engine = Engine.Oracle, Host = "db.invalid", Port = 1521, Auth = AuthKind.Password, Username = "u" });
             var session = await rpc.SessionOpen(new SessionOpenParams { ProfileId = saved.Id, Secret = "pw" });
-            var refused = await Assert.ThrowsAsync<QuerithmException>(() => rpc.QueryExecute(new QueryExecuteParams { SessionId = session.SessionId, Sql = "SELECT 1 FROM DUAL" }));
-            Assert.Equal(("refused", OracleLanguageService.NotReadYet), (refused.Code, refused.Message));
+            var run = await rpc.QueryExecute(new QueryExecuteParams { SessionId = session.SessionId, Sql = "SELECT 1 FROM DUAL" });
+            Assert.Null(run.Blocked);
+            Assert.NotNull(run.ExecutionId);
+            var refused = await Assert.ThrowsAsync<QuerithmException>(() => rpc.QueryExecute(new QueryExecuteParams { SessionId = session.SessionId, Sql = "SPOOL x.txt" }));
+            Assert.Equal("refused", refused.Code);
+            Assert.Contains("SPOOL", refused.Message);
         }
         Directory.Delete(dir, true);
     }
