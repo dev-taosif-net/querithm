@@ -3,7 +3,7 @@ import type { DatabaseInfo, Engine, Profile, SnapObject } from "../../ipc/contra
 import type { ServerConn } from "../../store/connections";
 import type { SnapEntry } from "../../store/snapshots";
 import { snapKey } from "../../store/snapshots";
-import { buildTree, bucketsOf, catKey, dbKey, objKey, schemaKey, searchRows, searchScope, SEARCH_CAP, serverKey, shownServers, sysKey, ancestorsOf, type TreeInput, type TreeRow } from "../tree";
+import { buildTree, bucketsOf, catKey, dbKey, objKey, PACKAGE_BODY_HIDDEN, PACKAGE_MEMBERS_NOTE, PACKAGE_NO_BODY, schemaKey, searchRows, searchScope, SEARCH_CAP, serverKey, shownServers, sysKey, ancestorsOf, type TreeInput, type TreeRow } from "../tree";
 
 const profile = (id: string, engine: Engine, over: Partial<Profile> = {}): Profile => ({ id, name: `Srv-${id}`, engine, environment: "dev", databaseDefault: "AppDb", groupName: null, color: null, ...over }) as Profile;
 const conn = (id: string, over: Partial<ServerConn> = {}): ServerConn => ({ profileId: id, status: "connected", sessionId: "s", databases: [{ name: "AppDb", isSystem: false }], ...over });
@@ -300,5 +300,64 @@ describe("Oracle catalog notes (D4 S05)", () => {
   it("no notes, no rows for them", () => {
     expect(tree(null).some((r) => r.t === "note")).toBe(false);
     expect(tree([]).some((r) => r.t === "note")).toBe(false);
+  });
+});
+
+describe("Oracle packages (D4 S08)", () => {
+  const p = profile("o", "oracle", { databaseDefault: "FREEPDB1" });
+  const objects = [
+    obj(1, "APP", "PKG", "package", { members: ["P(A IN NUMBER)", "P(A IN VARCHAR2)", "F(X IN DATE) RETURN NUMBER"] }),
+    obj(2, "APP", "PKG", "packageBody", { specObjectId: 1 }),
+    obj(3, "APP", "LONE", "package", { note: "no body", members: [] }),
+    obj(4, "OWN", "SHARED_PKG", "package", { note: "body not visible", members: ["P(A IN NUMBER)"] }),
+    obj(5, "APP", "PKG", "proc"),
+  ];
+  const tree = (expanded: string[]) => buildTree(input({
+    profiles: [p], servers: { o: conn("o", { databases: [{ name: "FREEPDB1", isSystem: false }] }) }, order: ["o"],
+    entries: { [snapKey("o", "FREEPDB1")]: entry("o", "FREEPDB1", objects) },
+    expanded: new Set([serverKey("o"), dbKey("o", "FREEPDB1"), ...expanded]),
+  })).rows;
+  const pkgKey = objKey("o", "FREEPDB1", objects[0]);
+
+  it("a Packages category lists the specifications only: each body sits under its specification", () => {
+    const rows = tree([catKey("o", "FREEPDB1", "packages")]);
+    expect(rows.find((r) => r.t === "cat" && r.cat === "packages")).toMatchObject({ count: 3 });
+    expect(rows.filter((r) => r.t === "obj").map((r) => r.t === "obj" && `${r.obj.schema}.${r.obj.name}:${r.obj.kind}`)).toEqual(["APP.PKG:package", "APP.LONE:package", "OWN.SHARED_PKG:package"]);
+    // The procedure of the same name stays in Procedures: it is not part of the package.
+    expect(rows.find((r) => r.t === "cat" && r.cat === "procs")).toMatchObject({ count: 1 });
+  });
+
+  it("an open specification shows its body as an object of its own, then its members with what they cannot do yet", () => {
+    const rows = tree([catKey("o", "FREEPDB1", "packages"), pkgKey, `${pkgKey}:members`]);
+    const at = rows.findIndex((r) => r.t === "obj" && r.obj.id === 1);
+    expect(rows[at + 1]).toMatchObject({ t: "obj", obj: { id: 2, kind: "packageBody" }, leaf: true, parent: at });
+    expect(rows[at + 2]).toMatchObject({ t: "sub", sub: "members" });
+    expect(rows.slice(at + 3, at + 7).map((r) => (r.t === "leaf" ? `${r.icon}:${r.text}` : r.t === "note" ? r.text : r.t))).toEqual([
+      "proc:P(A IN NUMBER)", "proc:P(A IN VARCHAR2)", "func:F(X IN DATE) RETURN NUMBER", PACKAGE_MEMBERS_NOTE,
+    ]);
+    expect(new Set(rows.map((r) => r.key)).size).toBe(rows.length); // the body's key is not its specification's
+  });
+
+  it("a specification without a body says why: none, or not visible to this login", () => {
+    const lone = objKey("o", "FREEPDB1", objects[2]);
+    const shared = objKey("o", "FREEPDB1", objects[3]);
+    const rows = tree([catKey("o", "FREEPDB1", "packages"), lone, shared, `${lone}:members`]);
+    expect(rows.find((r) => r.key === `${lone}:nobody`)).toMatchObject({ t: "note", text: PACKAGE_NO_BODY, tone: "muted" });
+    expect(rows.find((r) => r.key === `${shared}:nobody`)).toMatchObject({ t: "note", text: PACKAGE_BODY_HIDDEN, tone: "warn" });
+    expect(rows.find((r) => r.key === `${lone}:members:note`)).toMatchObject({ text: "No members" });
+  });
+
+  it("search lists specifications and bodies under Packages", () => {
+    const r = searchRows("o", "FREEPDB1", "oracle", objects, "pkg", "all", new Set());
+    expect(r.rows.filter((x) => x.t === "header").map((x) => x.t === "header" && x.text)).toEqual(["PROCEDURES · 1", "PACKAGES · 3"]);
+    expect(r.rows.filter((x) => x.t === "obj").map((x) => x.t === "obj" && x.obj.kind)).toEqual(["proc", "package", "packageBody", "package"]);
+  });
+
+  it("no other engine's tree gains a Packages folder", () => {
+    const rows = buildTree(input({
+      profiles: [profile("g", "pg")], servers: { g: conn("g") }, order: ["g"], entries: { [snapKey("g", "AppDb")]: entry("g", "AppDb", [obj(1, "public", "t", "table")]) },
+      expanded: new Set([serverKey("g"), dbKey("g", "AppDb")]),
+    })).rows;
+    expect(rows.some((r) => r.t === "cat" && r.cat === "packages")).toBe(false);
   });
 });

@@ -20,11 +20,13 @@ CREATE TABLE IF NOT EXISTS schema_snapshot (
 
 CREATE TABLE IF NOT EXISTS obj (
   profile_id TEXT, database TEXT, object_id INTEGER,
-  schema_name TEXT, name TEXT, kind TEXT,                                 -- 'table','view','proc','func','tvf','type','sequence','synonym','trigger'
+  schema_name TEXT, name TEXT, kind TEXT,                                 -- 'table','view','proc','func','tvf','type','sequence','synonym','trigger','package','packageBody'
   modify_date INTEGER, definition_hash TEXT, return_type TEXT,
   parent_object_id INTEGER,                                               -- a trigger's table or view (v2)
   no_rollback_engine TEXT,                                                -- MySQL / MariaDB: a table engine without transactions (v6)
   note TEXT,                                                              -- shown beside the name: invalid, materialized view … (v7)
+  spec_object_id INTEGER,                                                 -- Oracle: a package body's specification (v8)
+  members TEXT,                                                           -- Oracle: a package specification's subprograms, JSON array of display text (v8)
   PRIMARY KEY (profile_id, database, object_id)
 );
 CREATE INDEX IF NOT EXISTS obj_name ON obj (profile_id, database, name COLLATE NOCASE);

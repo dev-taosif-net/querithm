@@ -405,7 +405,8 @@ public sealed class MetadataService
     {
         var ids = objects.Select(o => o.Id).ToHashSet();
         return new MetadataBundle(b.Columns.Where(c => ids.Contains(c.ObjectId)).ToList(), b.Params.Where(x => ids.Contains(x.ObjectId)).ToList(),
-            b.Indexes.Where(i => ids.Contains(i.ObjectId)).ToList(), b.Fks.Where(f => ids.Contains(f.Parent)).ToList());
+            b.Indexes.Where(i => ids.Contains(i.ObjectId)).ToList(), b.Fks.Where(f => ids.Contains(f.Parent)).ToList(),
+            b.Members?.Where(m => ids.Contains(m.ObjectId)).ToList());
     }
 
     // ---- scoped reads for meta.objects / meta.objectDetails / meta.search (Phase D0d) ----

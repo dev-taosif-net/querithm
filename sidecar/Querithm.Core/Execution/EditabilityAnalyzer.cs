@@ -124,6 +124,8 @@ public static class EditabilityAnalyzer
         ObjectKind.Tvf or ObjectKind.Func => "function",
         ObjectKind.Proc => "procedure",
         ObjectKind.Synonym => "synonym",
+        ObjectKind.Package => "package",
+        ObjectKind.PackageBody => "package body",
         _ => k.ToString().ToLowerInvariant(),
     };
 }

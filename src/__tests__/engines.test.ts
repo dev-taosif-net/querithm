@@ -12,7 +12,7 @@ import {
 const ENGINE_TRAITS = {
   label: "string", shortLabel: "string", badge: "string", dialect: "string", language: "string", defaultSchema: "string|null",
   defaultPort: "number|null", defaultAuth: "string", defaultUser: "string|null", defaultDatabase: "string|null", statisticsIo: "boolean",
-  statisticsTime: "boolean", actualPlan: "string", actualPlanConfirm: "string|null", trace: "boolean", debugger: "boolean", synonyms: "boolean", triggerFunctions: "boolean",
+  statisticsTime: "boolean", actualPlan: "string", actualPlanConfirm: "string|null", trace: "boolean", debugger: "boolean", synonyms: "boolean", packages: "boolean", triggerFunctions: "boolean",
   procedures: "boolean", monitor: "boolean", serverOutput: "boolean", locations: "object",
 } satisfies Record<keyof EngineTraits, string>;
 
@@ -72,7 +72,7 @@ describe("engine table", () => {
     expect(ENGINES.sqlite).toEqual({
       label: "SQLite", shortLabel: "SQLite", badge: "SL", dialect: "sqlite", language: "sqlite", defaultSchema: "main", defaultPort: null,
       defaultAuth: "none", defaultUser: null, defaultDatabase: "main", statisticsIo: false, statisticsTime: false, actualPlan: "none",
-      actualPlanConfirm: null, trace: false, debugger: false, synonyms: false, triggerFunctions: false, procedures: false, monitor: false, serverOutput: false, locations: ["file", "memory"],
+      actualPlanConfirm: null, trace: false, debugger: false, synonyms: false, packages: false, triggerFunctions: false, procedures: false, monitor: false, serverOutput: false, locations: ["file", "memory"],
     });
   });
 
@@ -80,7 +80,7 @@ describe("engine table", () => {
     expect(ENGINES.mySql).toEqual({
       label: "MySQL / MariaDB", shortLabel: "MySQL", badge: "MY", dialect: "mySql", language: "mysql", defaultSchema: null, defaultPort: 3306,
       defaultAuth: "password", defaultUser: "root", defaultDatabase: null, statisticsIo: false, statisticsTime: false, actualPlan: "none",
-      actualPlanConfirm: null, trace: false, debugger: false, synonyms: false, triggerFunctions: false, procedures: true, monitor: false, serverOutput: false, locations: ["server"],
+      actualPlanConfirm: null, trace: false, debugger: false, synonyms: false, packages: false, triggerFunctions: false, procedures: true, monitor: false, serverOutput: false, locations: ["server"],
     });
   });
 });
@@ -91,8 +91,10 @@ describe("Oracle (Phase D4, hidden engine)", () => {
       label: "Oracle Database", shortLabel: "Oracle", badge: "OR", dialect: "oracle", language: "oracle", defaultSchema: null,
       defaultPort: 2484, defaultAuth: "password", defaultUser: "system", defaultDatabase: null, statisticsIo: false,
       statisticsTime: false, actualPlan: "none", actualPlanConfirm: null, trace: false, debugger: false, synonyms: false,
-      triggerFunctions: false, procedures: false, monitor: false, serverOutput: true, locations: ["server"],
+      packages: true, triggerFunctions: false, procedures: false, monitor: false, serverOutput: true, locations: ["server"],
     });
+    // D4 S08: the one engine whose explorer lists packages.
+    expect(ENGINE_LIST.filter((e) => ENGINES[e].packages)).toEqual(["oracle"]);
     expect(isLocalEngine("oracle")).toBe(false);
     expect(actualPlanWithRun("oracle")).toBe(false);
   });

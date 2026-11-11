@@ -176,7 +176,7 @@ public sealed class LocalStore
     }
 
     /// <summary>The schema version Schema.sql describes (PRAGMA user_version).</summary>
-    public const int Version = 7;
+    public const int Version = 8;
 
     /// <summary>
     /// Steps from version N-1 to N for files written by older builds, run before Schema.sql so its CREATE … IF NOT
@@ -237,6 +237,19 @@ public sealed class LocalStore
             if (HasTable(c, tx, "obj") && !HasColumn(c, tx, "obj", "note")) c.Cmd("ALTER TABLE obj ADD COLUMN note TEXT;", tx).ExecuteNonQuery();
             if (HasTable(c, tx, "schema_snapshot") && !HasColumn(c, tx, "schema_snapshot", "notes"))
                 c.Cmd("ALTER TABLE schema_snapshot ADD COLUMN notes TEXT;", tx).ExecuteNonQuery();
+        }),
+        // Phase D4 S08: Oracle packages — a body's specification and a specification's members. Additive: an older build
+        // ignores both columns, and since S08 a row whose kind it does not know ('package', 'packageBody') is skipped, never
+        // read as a table (a build from D4 S05–S07 still would: those builds never left development). Oracle snapshots cached
+        // before S08 have no packages and an incremental refresh adds only what changed, so they are marked stale; the next
+        // refresh lists the packages. Other engines' snapshots stay as they are.
+        (8, (_, c, tx) =>
+        {
+            if (!HasTable(c, tx, "obj")) return;
+            if (!HasColumn(c, tx, "obj", "spec_object_id")) c.Cmd("ALTER TABLE obj ADD COLUMN spec_object_id INTEGER;", tx).ExecuteNonQuery();
+            if (!HasColumn(c, tx, "obj", "members")) c.Cmd("ALTER TABLE obj ADD COLUMN members TEXT;", tx).ExecuteNonQuery();
+            if (HasTable(c, tx, "schema_snapshot") && HasTable(c, tx, "profile"))
+                c.Cmd("UPDATE schema_snapshot SET status = 'stale' WHERE status = 'fresh' AND profile_id IN (SELECT id FROM profile WHERE engine = 'oracle');", tx).ExecuteNonQuery();
         }),
     ];
 

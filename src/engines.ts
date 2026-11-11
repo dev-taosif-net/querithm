@@ -192,6 +192,8 @@ export interface EngineTraits {
   debugger: boolean;
   /** Synonym objects in the Object Explorer. */
   synonyms: boolean;
+  /** Packages (a specification and its body) in the Object Explorer: Oracle (D4 S08). */
+  packages: boolean;
   /** A trigger's body is a separate trigger function, which Modify opens (PostgreSQL); else the trigger itself. */
   triggerFunctions: boolean;
   /** Stored procedures and functions that a statement calls (Execute…, Script as ▸ EXECUTE). */
@@ -229,6 +231,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     trace: true,
     debugger: false,
     synonyms: true,
+    packages: false,
     triggerFunctions: false,
     procedures: true,
     monitor: true,
@@ -254,6 +257,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     trace: false,
     debugger: true,
     synonyms: false,
+    packages: false,
     triggerFunctions: true,
     procedures: true,
     monitor: true,
@@ -278,6 +282,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     trace: false,
     debugger: false,
     synonyms: false,
+    packages: false,
     triggerFunctions: false,
     procedures: false,
     monitor: false,
@@ -302,6 +307,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     trace: false,
     debugger: false,
     synonyms: false,
+    packages: false,
     triggerFunctions: false,
     procedures: true,
     monitor: false,
@@ -328,6 +334,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     trace: false,
     debugger: false,
     synonyms: false,
+    packages: false,
     triggerFunctions: false,
     procedures: false,
     monitor: false,
@@ -357,6 +364,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     trace: false,
     debugger: false,
     synonyms: false,
+    packages: true,
     triggerFunctions: false,
     procedures: false,
     monitor: false,

@@ -25,7 +25,7 @@ import { menuFor, sessionReason } from "./menus";
 import { bindActiveTab, columnList, columnName, connectFromExplorer, copyText, insertName, insertText, openObject, qualified } from "./objectActions";
 import {
   ancestorsOf, buildTree, CATEGORIES, catKey, dbKey, objKey, schemaKey, searchRows, searchScope, serverKey, sysKey,
-  type DetailsCell, type Engine, type KindFilter, type RowOf, type TreeRow,
+  type CatId, type DetailsCell, type Engine, type KindFilter, type RowOf, type TreeRow,
 } from "./tree";
 
 export { generateDmlTemplate, modifyTrigger } from "./objectActions";
@@ -256,7 +256,9 @@ export function Explorer() {
     const p = useProfiles.getState().byId(r.profileId);
     const sysdb = useConnections.getState().servers[r.profileId]?.databases.find((d) => d.name === r.db)?.isSystem && p?.databaseDefault?.toLowerCase() !== r.db.toLowerCase();
     const grouped = useSettings.getState().explorerSchemaGroups.includes(schemaGroupKey(r.profileId, r.db));
-    const owner = r.obj.kind === "trigger" && r.obj.parentObjectId != null ? useSnapshots.getState().get(r.profileId, r.db)?.index?.byId.get(r.obj.parentObjectId) : undefined;
+    // A trigger is under its table's Triggers folder; an Oracle package body right under its specification.
+    const ownerId = r.obj.kind === "trigger" ? r.obj.parentObjectId : r.obj.kind === "packageBody" ? r.obj.specObjectId : undefined;
+    const owner = ownerId != null ? useSnapshots.getState().get(r.profileId, r.db)?.index?.byId.get(ownerId) : undefined;
     const target = owner ?? r.obj;
     const cat = CATEGORIES.find((c) => c.kinds.includes(target.kind))?.id;
     const keys = [serverKey(r.profileId), dbKey(r.profileId, r.db)];
@@ -264,7 +266,7 @@ export function Explorer() {
     if (grouped) keys.push(schemaKey(r.profileId, r.db, target.schema));
     const ck = cat ? catKey(r.profileId, r.db, cat, grouped ? target.schema : undefined) : undefined;
     if (ck) keys.push(ck);
-    if (owner) keys.push(objKey(r.profileId, r.db, owner), `${objKey(r.profileId, r.db, owner)}:triggers`);
+    if (owner) keys.push(objKey(r.profileId, r.db, owner), ...(r.obj.kind === "trigger" ? [`${objKey(r.profileId, r.db, owner)}:triggers`] : []));
     st.setExpanded((prev) => new Set([...prev, ...keys]));
     const key = owner ? objKey(r.profileId, r.db, r.obj, owner) : r.key.replace(/^r:/, "");
     const envs = new Set(st.collapsedEnvs);
@@ -600,12 +602,20 @@ function kindLabel(k: KindFilter) {
   return k === "all" ? "All kinds" : k === "triggers" ? "Triggers" : CATEGORIES.find((c) => c.id === k)!.label;
 }
 
+/** A category the active engine never lists, with the reason (synonyms, Oracle's packages). */
+function kindUnavailable(cat: CatId, engine: Engine | undefined): string | undefined {
+  if (!engine) return undefined;
+  if (cat === "synonyms" && !ENGINES[engine].synonyms) return `${ENGINES[engine].shortLabel} has no synonyms`;
+  if (cat === "packages" && !ENGINES[engine].packages) return `${ENGINES[engine].shortLabel} has no packages`;
+  return undefined;
+}
+
 function kindItems(current: KindFilter, engine: Engine | undefined): MenuEntry[] {
   const set = (k: KindFilter) => () => useExplorer.getState().set({ kind: k });
   return [
     { label: "All kinds", run: set("all"), checked: current === "all" },
     "sep",
-    ...CATEGORIES.map((c) => ({ label: c.label, run: set(c.id), checked: current === c.id, unavailable: c.id === "synonyms" && engine && !ENGINES[engine].synonyms ? `${ENGINES[engine].shortLabel} has no synonyms` : undefined })),
+    ...CATEGORIES.map((c) => ({ label: c.label, run: set(c.id), checked: current === c.id, unavailable: kindUnavailable(c.id, engine) })),
     { label: "Triggers", detail: "search only", run: set("triggers"), checked: current === "triggers" },
   ];
 }
@@ -955,9 +965,10 @@ function StickyPath({ rows, chain, view, onJump }: { rows: TreeRow[]; chain: num
   );
 }
 
-const ICON_OF: Partial<Record<string, IconName>> = { table: "table", view: "view", proc: "proc", func: "func", tvf: "func", type: "type", sequence: "sequence", synonym: "synonym", trigger: "trigger" };
+const ICON_OF: Partial<Record<string, IconName>> = { table: "table", view: "view", proc: "proc", func: "func", tvf: "func", type: "type", sequence: "sequence", synonym: "synonym", trigger: "trigger", package: "package", packageBody: "package" };
 const OBJ_COLOR: Record<string, string> = {
   table: "text-obj-table", view: "text-obj-view", proc: "text-obj-proc", func: "text-obj-func", tvf: "text-obj-func", type: "text-obj-type", sequence: "text-obj-sequence", synonym: "text-obj-synonym", trigger: "text-obj-proc",
+  package: "text-obj-proc", packageBody: "text-obj-proc",
 };
 const TONE: Record<string, string> = { warn: "text-warn", muted: "text-muted", ident: "text-ident", "obj.index": "text-obj-index", "obj.table": "text-obj-table" };
 
@@ -1109,6 +1120,7 @@ function RowBody({ r, view, handlers }: { r: TreeRow; view: RowView; handlers: H
             {!r.bare && <span className="text-muted">{r.obj.schema}.</span>}
             {r.obj.name}
           </span>
+          {r.obj.kind === "packageBody" && <span className="shrink-0 text-[10.5px] text-muted">body</span>}
           {r.obj.note && <span className={`shrink-0 text-[10.5px] ${/invalid/.test(r.obj.note) ? "text-warn" : "text-muted"}`}>{r.obj.note}</span>}
         </>
       );
@@ -1150,7 +1162,7 @@ function RowBody({ r, view, handlers }: { r: TreeRow; view: RowView; handlers: H
   }
 }
 
-const SUB_TEXT = { columns: "Columns", keys: "Keys", indexes: "Indexes", params: "Parameters", triggers: "Triggers" } as const;
+const SUB_TEXT = { columns: "Columns", keys: "Keys", indexes: "Indexes", params: "Parameters", triggers: "Triggers", members: "Members" } as const;
 
 function clock(ms: number) {
   const d = new Date(ms);
@@ -1168,7 +1180,7 @@ function ariaLabelOf(r: TreeRow, view: RowView): string {
     case "db":
       return `Database ${r.db}${r.active ? ", active in tab" : ""}${r.state === "stale" ? ", refresh failed, cached catalog" : r.state === "offline" ? `, ${(r.dbState ?? "offline").toLowerCase()}` : r.state === "loading" ? ", loading" : ""}`;
     case "cat": return `${CATEGORIES.find((c) => c.id === r.cat)!.label}, ${r.shown !== undefined ? `${r.shown} of ${r.count}` : r.count}${r.filter ? `, filtered by ${r.filter}` : ""}`;
-    case "obj": return `${r.obj.kind} ${r.obj.schema}.${r.obj.name}`;
+    case "obj": return `${r.obj.kind === "packageBody" ? "package body" : r.obj.kind} ${r.obj.schema}.${r.obj.name}`;
     case "leaf": return `${r.text}${r.detail ? `, ${r.detail}` : ""}`;
     case "filter": return `Filter ${r.text}, ${r.shown} of ${r.total}`;
     case "schema": return `Schema ${r.schema}, ${r.count} objects`;

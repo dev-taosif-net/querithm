@@ -56,6 +56,10 @@ export const NAMESPACE_GROUP: Record<NamespaceModel, { label: string; unavailabl
   attached: { label: "Group by attached database" },
   databases: { label: "Group by schema", unavailable: "The database is the schema here" },
 };
+/** Oracle packages (D4 S08) are browsed and scripted as whole objects; what needs member identity says why it is off. */
+export const PACKAGE_REFACTOR = "Packages are browsed and scripted as whole objects: find usages and rename are not available for them yet";
+const isPackage = (o: SnapObject) => o.kind === "package" || o.kind === "packageBody";
+
 /** "PostgreSQL only": the engines with a step debugger. */
 const DEBUGGER_ONLY = `${ENGINE_LIST.filter((e) => ENGINES[e].debugger).map((e) => ENGINES[e].shortLabel).join(", ")} only`;
 
@@ -83,7 +87,10 @@ function scriptItems(profileId: string, db: string, o: SnapObject, ctx: MenuCont
   const s = (label: string, kind: ScriptKind, unavailable?: string) => item(label, () => void scriptObject(profileId, db, r, kind), { unavailable });
   const engine = useProfiles.getState().byId(profileId)?.engine;
   const out: MenuEntry[] = [s("CREATE", "create")];
-  if (o.kind !== "table") out.push(s("ALTER", "alter"));
+  // A package specification alone, or with its body (one script, specification first).
+  if (o.kind === "package") out.push(item("CREATE with body", () => void scriptObject(profileId, db, r, "create", false, true), { detail: "specification and body" }));
+  if (isPackage(o)) out.push(s("ALTER … COMPILE", "alter"));
+  else if (o.kind !== "table") out.push(s("ALTER", "alter"));
   out.push(s("DROP and CREATE", "dropCreate"), s("DROP", "drop"));
   if (o.kind === "table") out.push("sep", item("INSERT", () => scriptDml(profileId, db, o, "insert")), item("UPDATE", () => scriptDml(profileId, db, o, "update")), item("DELETE", () => scriptDml(profileId, db, o, "delete")));
   const execute = EXECUTE_LABEL[knownEngine(engine)];
@@ -114,7 +121,7 @@ export function objectMenu(row: RowOf<"obj">, ctx: MenuContext = {}): MenuEntry[
   if (o.kind === "trigger") out.push(item(engineTraits(engine).triggerFunctions ? "Modify trigger function" : "Modify", () => void modifyTrigger(profileId, db, o), { bold: true, hint: "Double-click", unavailable: waiting }));
   else if (o.kind === "table" || o.kind === "view") out.push(item("Select top 1000", () => openObject(profileId, db, o), { bold: true, detail: "runs", hint: "Double-click", unavailable: waiting }));
   if (o.kind === "table") out.push(item("Count rows", () => void countRows(profileId, db, o), { unavailable: waiting }));
-  if (o.kind === "view" || routine) out.push(item("Modify", () => void openDefinition(profileId, db, ref(o), true), { bold: o.kind !== "view", hint: o.kind !== "view" ? "Double-click" : undefined, unavailable: waiting }));
+  if (o.kind === "view" || routine || isPackage(o)) out.push(item("Modify", () => void openDefinition(profileId, db, ref(o), true), { bold: o.kind !== "view", hint: o.kind !== "view" ? "Double-click" : undefined, unavailable: waiting }));
   if (routine) {
     const traits = engineTraits(engine);
     out.push(item("Execute…", () => useUi.getState().openDialog({ kind: "execProc", profileId, database: db, objectId: o.id }), { unavailable: traits.procedures ? waiting : `${traits.shortLabel} has no stored procedures` }));
@@ -128,7 +135,7 @@ export function objectMenu(row: RowOf<"obj">, ctx: MenuContext = {}): MenuEntry[
   out.push(item("Copy name", () => void copyText(qualified(o, engine)), { hint: "Ctrl+C" }));
   out.push("sep");
   if (o.kind !== "trigger") {
-    const noRefactor = o.kind === "synonym" ? "Not for synonyms" : waiting;
+    const noRefactor = o.kind === "synonym" ? "Not for synonyms" : isPackage(o) ? PACKAGE_REFACTOR : waiting;
     out.push(item("Find usages", () => findUsagesOf(profileId, db, { schema: o.schema, name: o.name, kind: o.kind }), { hint: "Shift+F12", unavailable: noRefactor }));
     out.push(item("Rename…", () => renameOf(profileId, db, { schema: o.schema, name: o.name, kind: o.kind }), { hint: "F2", unavailable: noRefactor }));
   }

@@ -424,6 +424,7 @@ public class OracleIntelligenceTests
     [InlineData("rownum", true)]
     [InlineData("VARCHAR2", true)]
     [InlineData("BEGIN", true)]
+    [InlineData("except", true)]
     [InlineData("EMP", false)]
     [InlineData("NAME", false)]
     public void Reserved_words(string word, bool reserved) => Assert.Equal(reserved, OracleKeywords.IsReserved(word));

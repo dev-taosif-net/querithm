@@ -44,4 +44,27 @@ public sealed class OracleIntegrationTests
         Assert.Equal(0m, Convert.ToDecimal(await ScalarAsync(AppUser, "SELECT COUNT(*) FROM SESSION_PRIVS WHERE PRIVILEGE LIKE '%ANY%'"), System.Globalization.CultureInfo.InvariantCulture));
         Assert.True(Convert.ToDecimal(await ScalarAsync(MonitorUser, "SELECT COUNT(*) FROM V$SESSION"), System.Globalization.CultureInfo.InvariantCulture) > 0);
     }
+
+    [IntegrationFact]
+    public async Task The_reserved_words_cover_the_servers_list()
+    {
+        // D4 S02 open item: OracleKeywords against the server's own list. Punctuation entries (!, <=>, [, …) are not words.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        await using var c = new OracleConnection(ConnectionString(MonitorUser));
+        await c.OpenAsync(cts.Token);
+        await using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT keyword FROM v$reserved_words WHERE (reserved = 'Y' OR res_semi = 'Y') AND REGEXP_LIKE(keyword, '^[A-Z][A-Z0-9_$#]*$')";
+        cmd.CommandTimeout = 30;
+        var missing = new List<string>();
+        var count = 0;
+        await using (var r = await cmd.ExecuteReaderAsync(cts.Token))
+            while (await r.ReadAsync(cts.Token))
+            {
+                count++;
+                var w = r.GetString(0);
+                if (!Querithm.Intelligence.Oracle.OracleKeywords.IsReserved(w)) missing.Add(w);
+            }
+        Assert.True(count > 50, $"only {count} reserved words read");
+        Assert.Empty(missing);
+    }
 }

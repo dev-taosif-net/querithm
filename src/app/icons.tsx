@@ -78,6 +78,7 @@ const paths = {
   sequence: <path d="M5 9h15M4 15h15M10 4L8 20M16 4l-2 16" />,
   synonym: <path d="M4 8h13l-3-3M20 16H7l3 3" />,
   trigger: <path d="M13 2L4.5 13.5H11L10 22l8.5-11.5H12z" />,
+  package: <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9zM4 7.5l8 4.5 8-4.5M12 12v9" />,
   column: <path d="M8.5 8.5h7v7h-7z" />,
   key: <path d="M4 12a3.5 3.5 0 1 0 7 0 3.5 3.5 0 1 0-7 0zM11 12h10M18 12v3M21 12v2" />,
   fk: <path d="M9.5 14.5l5-5M8 11l-2 2a3.5 3.5 0 0 0 5 5l2-2M16 13l2-2a3.5 3.5 0 0 0-5-5l-2 2" />,

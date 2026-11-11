@@ -1,0 +1,87 @@
+{
+  "date": "2026-11-11T05:28:47.070Z",
+  "os": "Windows_NT 10.0.26200",
+  "cpu": "13th Gen Intel(R) Core(TM) i5-1335U",
+  "cores": 12,
+  "memGb": 24,
+  "results": {
+    "11b.oracle": {
+      "metric": "Oracle: execute → first batch on a cold pool connection (TCP, login, product + identity read, SELECT 1 FROM dual, median)",
+      "unit": "ms",
+      "target": 300,
+      "value": 56.04,
+      "pass": true,
+      "samples": [
+        795.4,
+        74.4,
+        56.2,
+        59.1,
+        53,
+        65.1,
+        56,
+        46.6,
+        45.8,
+        58,
+        53.8,
+        44.4,
+        39.2,
+        48,
+        59.3
+      ]
+    },
+    "9.oracle": {
+      "metric": "Oracle: metadata snapshot load from SQLite (600 tables, 150 views, 200 triggers)",
+      "unit": "ms",
+      "target": 80,
+      "value": 12.28,
+      "pass": true,
+      "objects": 998,
+      "samples": [
+        52.20629999999983,
+        11.408800000001065,
+        12.280099999999948,
+        13.757599999999002,
+        11.774100000000544
+      ],
+      "statuses": [
+        "fresh",
+        "fresh",
+        "fresh",
+        "fresh",
+        "fresh"
+      ]
+    },
+    "10.oracle": {
+      "metric": "Oracle: incremental refresh with 10 changed objects (least-privileged user, ALL_* views)",
+      "unit": "ms",
+      "target": 2000,
+      "value": 1147.14,
+      "pass": true,
+      "samples": [
+        1271,
+        1147,
+        1223,
+        1129,
+        1118
+      ]
+    },
+    "4.oracle": {
+      "metric": "Oracle: tier-1 completion latency in a 12k-line PL/SQL package body (p95)",
+      "unit": "ms",
+      "target": 5,
+      "value": 1.4,
+      "pass": true,
+      "samples": 300,
+      "schemaObjects": 44
+    },
+    "3.oracle": {
+      "metric": "Oracle: typing latency in a 12k-line PL/SQL package body (p95)",
+      "unit": "ms",
+      "target": 16,
+      "value": 4.1,
+      "pass": true,
+      "samples": 200,
+      "toPaintP95IncludingVsync": 17.6
+    }
+  }
+}

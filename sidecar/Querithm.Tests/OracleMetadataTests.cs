@@ -26,7 +26,7 @@ public class OracleMetadataTests
             Row(5, "TABLE", "EXT", flag: "X"), Row(6, "PROCEDURE", rtype: "NUMBER"), Row(7, "FUNCTION", rtype: "VARCHAR2", status: "INVALID"),
             Row(8, "TRIGGER", parent: 1), Row(9, "TYPE", parent: 3), Row(10, "SEQUENCE"), Row(11, "SYNONYM"), Row(12, "PACKAGE"), Row(13, "INDEX"),
         ]);
-        Assert.Equal(11, stamps.Count); // packages (D4 S08) and anything else unknown are skipped
+        Assert.Equal(12, stamps.Count); // an index and anything else unknown is skipped; packages are listed since D4 S08 (OraclePackageTests)
         var by = stamps.ToDictionary(s => s.Id);
         Assert.Equal(("Sales", "SALES"), (by[1].Name, by[2].Name));
         Assert.Equal(ObjectKind.Table, by[1].Kind);
@@ -51,7 +51,8 @@ public class OracleMetadataTests
         var counts = Views(sql).GroupBy(v => v).ToDictionary(g => g.Key, g => g.Count());
         // ALL_OBJECTS twice: the schema list (does the schema own anything?) and the objects themselves.
         Assert.Equal(2, counts["ALL_OBJECTS"]);
-        foreach (var (_, (view, _)) in Pieces) Assert.Equal(1, counts[view]);
+        // ALL_PROCEDURES is read with the details (package members, D4 S08), never by the stamp query.
+        foreach (var (piece, (view, _)) in Pieces) Assert.Equal(piece == Piece.Procedures ? 0 : 1, counts.GetValueOrDefault(view));
         Assert.Equal(1, counts["ALL_USERS"]);
         Assert.DoesNotContain("DBA_", sql);
         Assert.Contains("STANDARD_HASH", sql);

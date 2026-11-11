@@ -51,6 +51,12 @@ BEGIN
   EXECUTE IMMEDIATE 'GRANT SELECT ON querithm_own.shared_t TO querithm_app, querithm_mon';
   EXECUTE IMMEDIATE 'GRANT SELECT ON querithm_own.shared_v TO querithm_app';
   EXECUTE IMMEDIATE 'GRANT EXECUTE ON querithm_own.shared_p TO querithm_app, querithm_mon';
+  -- D4 S08: a package with a body and an overloaded member. EXECUTE alone (querithm_app) shows the specification only;
+  -- DEBUG as well (querithm_mon) shows the body too.
+  EXECUTE IMMEDIATE 'CREATE OR REPLACE PACKAGE querithm_own.shared_pkg AS PROCEDURE p(a NUMBER); PROCEDURE p(a VARCHAR2); END;';
+  EXECUTE IMMEDIATE 'CREATE OR REPLACE PACKAGE BODY querithm_own.shared_pkg AS PROCEDURE p(a NUMBER) IS BEGIN NULL; END; PROCEDURE p(a VARCHAR2) IS BEGIN NULL; END; END;';
+  EXECUTE IMMEDIATE 'GRANT EXECUTE ON querithm_own.shared_pkg TO querithm_app, querithm_mon';
+  EXECUTE IMMEDIATE 'GRANT DEBUG ON querithm_own.shared_pkg TO querithm_mon';
 END;
 /
 -- D4 S05: the metadata tests create a materialized view and an external table (its directory is never read: no file).

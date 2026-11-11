@@ -16,8 +16,9 @@ namespace Querithm.Providers.Oracle;
 /// (§16 "Oracle namespaces"). Everything is read from <c>ALL_*</c> views, never <c>DBA_*</c>.
 /// <para>
 /// One dictionary query per refresh (<see cref="StampSql"/>) lists every table, view, materialized view (a view with a note),
-/// procedure, function, trigger (parent: its table or view), type, sequence and synonym (private, and the public ones that
-/// point into a listed schema), each with a marker the server computes with <c>STANDARD_HASH</c> over its columns,
+/// procedure, function, trigger (parent: its table or view), type, sequence, synonym (private, and the public ones that
+/// point into a listed schema), package specification and package body (D4 S08: two objects, the body naming its
+/// specification — <see cref="Assemble"/>), each with a marker the server computes with <c>STANDARD_HASH</c> over its columns,
 /// indexes, constraints, triggers, PL/SQL source or attributes — <c>LAST_DDL_TIME</c> alone is not trusted (GRANT moves it,
 /// and it says nothing about what changed). Each dictionary view appears once in that query: Oracle's hard parse of a
 /// query over the <c>ALL_*</c> views grows with every reference (measured, §14 metric 10).
@@ -36,7 +37,7 @@ public sealed class OracleMetadata : IMetadataProvider
     internal static bool IsDenied(Exception ex) => ex is OracleException { Number: 942 or 1031 };
 
     /// <summary>The optional dictionary views and what is lost without each. ALL_OBJECTS and ALL_USERS are the catalog itself: without them the refresh fails.</summary>
-    internal enum Piece { Tables, ExternalTables, MViews, Views, Columns, Indexes, IndexColumns, Constraints, ConstraintColumns, Triggers, Source, Sequences, Synonyms, Arguments }
+    internal enum Piece { Tables, ExternalTables, MViews, Views, Columns, Indexes, IndexColumns, Constraints, ConstraintColumns, Triggers, Source, Sequences, Synonyms, Arguments, Procedures }
 
     internal static readonly IReadOnlyDictionary<Piece, (string View, string Effect)> Pieces = new Dictionary<Piece, (string, string)>
     {
@@ -50,10 +51,11 @@ public sealed class OracleMetadata : IMetadataProvider
         [Piece.Constraints] = ("ALL_CONSTRAINTS", "Keys and constraints are not shown, and their changes are not detected"),
         [Piece.ConstraintColumns] = ("ALL_CONS_COLUMNS", "Key columns are not shown"),
         [Piece.Triggers] = ("ALL_TRIGGERS", "Triggers are not listed"),
-        [Piece.Source] = ("ALL_SOURCE", "Changes to procedures, functions, triggers and types are detected only by their DDL time"),
+        [Piece.Source] = ("ALL_SOURCE", "Changes to procedures, functions, triggers, types and packages are detected only by their DDL time"),
         [Piece.Sequences] = ("ALL_SEQUENCES", "Changes to sequences are detected only by their DDL time"),
         [Piece.Synonyms] = ("ALL_SYNONYMS", "Public synonyms are not listed"),
         [Piece.Arguments] = ("ALL_ARGUMENTS", "Parameters and return types are not shown"),
+        [Piece.Procedures] = ("ALL_PROCEDURES", "Package members are not shown"),
     };
 
     /// <summary>At most this many notes per refresh, each bounded: they are shown, stored and sent as they are.</summary>
@@ -99,7 +101,7 @@ public sealed class OracleMetadata : IMetadataProvider
 
     /// <summary>
     /// The one marker query (§8): a row per object — id, owner, name, ALL_OBJECTS type, marker, return type, parent id, status,
-    /// flag (X external table). Each view in <paramref name="missing"/> is left out, with what depends on it.
+    /// flag (X external table; U a package specification the login's own user owns, whose body it always sees). Each view in <paramref name="missing"/> is left out, with what depends on it.
     /// </summary>
     internal string StampSql(IReadOnlySet<Piece> missing)
     {
@@ -150,7 +152,7 @@ public sealed class OracleMetadata : IMetadataProvider
                 """);
         Join(Piece.Source, $"""
             LEFT JOIN (SELECT owner, name, CASE type WHEN 'TYPE BODY' THEN 'TYPE' ELSE type END AS type, SUM({H(J("type", "line", H("text")))}) AS h
-                FROM {V("ALL_SOURCE")} WHERE owner {InS} AND type IN ('PROCEDURE', 'FUNCTION', 'TRIGGER', 'TYPE', 'TYPE BODY')
+                FROM {V("ALL_SOURCE")} WHERE owner {InS} AND type IN ('PROCEDURE', 'FUNCTION', 'TRIGGER', 'TYPE', 'TYPE BODY', 'PACKAGE', 'PACKAGE BODY')
                 GROUP BY owner, name, CASE type WHEN 'TYPE BODY' THEN 'TYPE' ELSE type END) src
               ON src.owner = o.owner AND src.name = o.object_name AND src.type = o.object_type
             """);
@@ -205,11 +207,12 @@ public sealed class OracleMetadata : IMetadataProvider
                  OR u.oracle_maintained = 'N' AND EXISTS (SELECT 1 FROM {V("ALL_OBJECTS")} x WHERE x.owner = u.username)){synonyms},
             o AS (SELECT object_id, owner, object_name, object_type, status, generated, last_ddl_time FROM {V("ALL_OBJECTS")}
                   WHERE subobject_name IS NULL AND (owner {InS}
-                    AND object_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW', 'PROCEDURE', 'FUNCTION', 'TRIGGER', 'TYPE', 'SEQUENCE', 'SYNONYM'){publicSynonyms})){triggers}
+                    AND object_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW', 'PROCEDURE', 'FUNCTION', 'TRIGGER', 'TYPE', 'SEQUENCE', 'SYNONYM', 'PACKAGE', 'PACKAGE BODY'){publicSynonyms})){triggers}
             SELECT {NoFeedback} o.object_id, o.owner, o.object_name, o.object_type, {marker} AS marker,
               {Or(Piece.Arguments, "CASE WHEN a.type_name IS NOT NULL THEN a.type_owner || '.' || a.type_name ELSE a.data_type END")} AS rtype,
               {Or(Piece.Triggers, "p.object_id")} AS parent, o.status,
-              {Or(Piece.ExternalTables, "CASE WHEN x.table_name IS NOT NULL THEN 'X' END")} AS flag
+              CASE WHEN o.object_type = 'PACKAGE' AND o.owner = SYS_CONTEXT('USERENV', 'SESSION_USER') THEN 'U'
+                ELSE {Or(Piece.ExternalTables, "CASE WHEN x.table_name IS NOT NULL THEN 'X' END")} END AS flag
             FROM o{joins}
             WHERE CASE o.object_type
               WHEN 'TABLE' THEN {table}
@@ -234,8 +237,20 @@ public sealed class OracleMetadata : IMetadataProvider
         "TYPE" => ObjectKind.Type,
         "SEQUENCE" => ObjectKind.Sequence,
         "SYNONYM" => ObjectKind.Synonym,
+        "PACKAGE" => ObjectKind.Package,
+        "PACKAGE BODY" => ObjectKind.PackageBody,
         _ => null,
     };
+
+    /// <summary>A package specification of the login's own user without a body: it has none (the owner always sees its body).</summary>
+    internal const string NoBody = "no body";
+
+    /// <summary>
+    /// A package specification of another schema without a visible body: ALL_OBJECTS lists the body only to a login with
+    /// DEBUG on the package (or CREATE ANY PROCEDURE / DEBUG ANY PROCEDURE); EXECUTE shows the specification alone
+    /// (measured on the Free fixture). Whether there is a body at all cannot be told apart.
+    /// </summary>
+    internal const string BodyNotVisible = "body not visible";
 
     /// <summary>What the explorer shows beside the name: a materialized view, an external table, an invalid object.</summary>
     internal static string? NoteOf(string type, string? status, string? flag)
@@ -247,18 +262,51 @@ public sealed class OracleMetadata : IMetadataProvider
         return parts.Count == 0 ? null : string.Join(", ", parts);
     }
 
-    /// <summary>The snapshot's stamps from the query's rows (unit tests feed canned rows).</summary>
+    /// <summary>
+    /// The snapshot's stamps from the query's rows (unit tests feed canned rows). A package body names its specification
+    /// (same owner and name, exact); a specification without a listed body says why (<see cref="NoBody"/>,
+    /// <see cref="BodyNotVisible"/>). Each one's marker also covers the other's id, so a body created, dropped or seen for
+    /// the first time (a DEBUG grant) re-reads the specification and its note, which its own source does not change.
+    /// </summary>
     internal static List<ObjectStamp> Assemble(IEnumerable<StampRow> rows)
     {
+        var all = rows.ToList();
+        var specs = new Dictionary<(string, string), long>();
+        var bodies = new Dictionary<(string, string), long>();
+        foreach (var r in all)
+            if (r.Type == "PACKAGE") specs[(r.Owner, r.Name)] = r.Id;
+            else if (r.Type == "PACKAGE BODY") bodies[(r.Owner, r.Name)] = r.Id;
         var list = new List<ObjectStamp>();
-        foreach (var r in rows)
+        foreach (var r in all)
         {
             if (KindOf(r.Type) is not { } kind) continue;
-            list.Add(new ObjectStamp(r.Id, r.Owner, r.Name, kind, r.Marker, kind == ObjectKind.Func ? r.ReturnType : null,
-                kind == ObjectKind.Trigger ? r.Parent : null, Note: NoteOf(r.Type, r.Status, r.Flag)));
+            var note = NoteOf(r.Type, r.Status, r.Flag);
+            var marker = r.Marker;
+            long? spec = null;
+            if (kind == ObjectKind.Package)
+            {
+                var hasBody = bodies.TryGetValue((r.Owner, r.Name), out var body);
+                marker = Mix(marker, hasBody ? body : null);
+                if (!hasBody)
+                {
+                    var why = r.Flag == "U" ? NoBody : BodyNotVisible;
+                    note = note == null ? why : $"{note}, {why}";
+                }
+            }
+            else if (kind == ObjectKind.PackageBody)
+            {
+                spec = specs.TryGetValue((r.Owner, r.Name), out var sid) ? sid : null;
+                marker = Mix(marker, spec);
+            }
+            list.Add(new ObjectStamp(r.Id, r.Owner, r.Name, kind, marker, kind == ObjectKind.Func ? r.ReturnType : null,
+                kind == ObjectKind.Trigger ? r.Parent : null, Note: note, SpecObjectId: spec));
         }
         return list;
     }
+
+    /// <summary>A marker that also changes with <paramref name="other"/>, kept in the 60 bits the query's markers use.</summary>
+    static long Mix(long marker, long? other) =>
+        marker ^ (unchecked((other ?? -1L) * -7046029254386353131L) & 0x0FFF_FFFF_FFFF_FFFFL);
 
     static OracleCommand Command(DbConnection connection, string sql)
     {
@@ -365,6 +413,7 @@ public sealed class OracleMetadata : IMetadataProvider
         var keys = new List<KeyRow>();
         var indexes = new List<IndexColumnRow>();
         var fks = new List<FkColumnRow>();
+        var members = new List<MemberArg>();
         foreach (var chunk in objectIds.Distinct().Chunk(500))
         {
             var (ids, bind) = IdBinds(chunk);
@@ -416,9 +465,40 @@ public sealed class OracleMetadata : IMetadataProvider
                 WHERE o.object_id IN ({ids}) AND o.object_type = 'TABLE'
                 ORDER BY o.object_id, k.constraint_name, cc.position
                 """, bind, Piece.Constraints, "ALL_CONSTRAINTS or ALL_CONS_COLUMNS", r => fks.Add(new FkColumnRow(Long(r, 0), r.GetString(1), r.GetString(2), r.GetString(3), Long(r, 4))), ct).ConfigureAwait(false);
+            // Package members (D4 S08), display only: each subprogram of a specification with its arguments, overloads apart.
+            await ReadAsync(connection, $"""
+                SELECT {NoFeedback} p.object_id, p.subprogram_id, p.procedure_name, a.position, a.argument_name, a.data_type, a.type_owner, a.type_name, a.in_out
+                FROM {_view("ALL_PROCEDURES")} p
+                LEFT JOIN {_view("ALL_ARGUMENTS")} a ON a.object_id = p.object_id AND a.subprogram_id = p.subprogram_id AND a.data_level = 0
+                WHERE p.object_id IN ({ids}) AND p.object_type = 'PACKAGE' AND p.procedure_name IS NOT NULL
+                ORDER BY p.object_id, p.subprogram_id, a.position
+                """, bind, Piece.Procedures, "ALL_PROCEDURES or ALL_ARGUMENTS", r => members.Add(new MemberArg(Long(r, 0), (int)Long(r, 1), r.GetString(2), IntOrNull(r, 3),
+                    Str(r, 4), Str(r, 5), Str(r, 6), Str(r, 7), Str(r, 8))), ct).ConfigureAwait(false);
         }
-        return new MetadataBundle(columns, parms, AssembleIndexes(keys, indexes), AssembleFks(fks));
+        return new MetadataBundle(columns, parms, AssembleIndexes(keys, indexes), AssembleFks(fks), AssembleMembers(members));
     }
+
+    /// <summary>One row of the members read: a subprogram and one of its arguments (none: a subprogram without arguments).</summary>
+    internal sealed record MemberArg(long ObjectId, int Subprogram, string Name, int? Position, string? Argument, string? DataType, string? TypeOwner, string? TypeName, string? InOut);
+
+    /// <summary>
+    /// <c>P(A IN NUMBER, B OUT VARCHAR2)</c>, <c>F(X IN NUMBER) RETURN NUMBER</c>, <c>Q</c>: one line per subprogram id, so
+    /// overloads stay apart. Position 0 is a function's return value; a no-argument subprogram may still have one row with no
+    /// argument name (the dictionary's placeholder), which adds nothing.
+    /// </summary>
+    internal static List<MemberRow> AssembleMembers(IEnumerable<MemberArg> rows) =>
+        rows.GroupBy(m => (m.ObjectId, m.Subprogram))
+            .OrderBy(g => g.Key.ObjectId).ThenBy(g => g.Key.Subprogram)
+            .Select(g =>
+            {
+                var args = g.Where(a => a.Position > 0 && a.Argument != null).OrderBy(a => a.Position)
+                    .Select(a => $"{a.Argument} {a.InOut ?? "IN"} {TypeName(a.DataType, a.TypeOwner, a.TypeName, null, null, null, null, null)}").ToList();
+                var ret = g.FirstOrDefault(a => a.Position == 0);
+                var text = g.First().Name + (args.Count > 0 ? $"({string.Join(", ", args)})" : "")
+                           + (ret != null ? $" RETURN {TypeName(ret.DataType, ret.TypeOwner, ret.TypeName, null, null, null, null, null)}" : "");
+                return new MemberRow(g.Key.ObjectId, g.Key.Subprogram, text);
+            })
+            .ToList();
 
     internal sealed record CatalogColumn(long ObjectId, int? ColumnId, int InternalId, string Name, string DataType, string? TypeOwner, int? DataLength, int? CharLength,
         string? CharUsed, int? Precision, int? Scale, bool Nullable, bool Identity, bool Virtual, bool Hidden, string? Default);
@@ -509,6 +589,20 @@ public sealed class OracleMetadata : IMetadataProvider
         ObjectKind.Type => "TYPE",
         ObjectKind.Sequence => "SEQUENCE",
         ObjectKind.Synonym => "SYNONYM",
+        ObjectKind.Package => "PACKAGE_SPEC",
+        ObjectKind.PackageBody => "PACKAGE_BODY",
+        _ => null,
+    };
+
+    /// <summary>The ALL_SOURCE types a PL/SQL kind's text is kept under: a type with its body, a package specification alone.</summary>
+    internal static (string Unit, string Body)? SourceTypes(ObjectKind kind) => kind switch
+    {
+        ObjectKind.Proc => ("PROCEDURE", "PROCEDURE"),
+        ObjectKind.Func => ("FUNCTION", "FUNCTION"),
+        ObjectKind.Trigger => ("TRIGGER", "TRIGGER"),
+        ObjectKind.Type => ("TYPE", "TYPE BODY"),
+        ObjectKind.Package => ("PACKAGE", "PACKAGE"),
+        ObjectKind.PackageBody => ("PACKAGE BODY", "PACKAGE BODY"),
         _ => null,
     };
 
@@ -583,15 +677,14 @@ public sealed class OracleMetadata : IMetadataProvider
             }
             catch (Exception ex) when (IsDenied(ex)) { return null; }
         }
-        if (obj.Kind is not (ObjectKind.Proc or ObjectKind.Func or ObjectKind.Trigger or ObjectKind.Type)) return null;
+        if (SourceTypes(obj.Kind) is not var (unit, body)) return null;
         await using var cmd = Command(connection, $"""
             SELECT type, text FROM {_view("ALL_SOURCE")} WHERE owner = :owner AND name = :name AND type IN (:t1, :t2) ORDER BY CASE type WHEN 'TYPE BODY' THEN 1 ELSE 0 END, line
             """);
-        var type = MetadataType(obj.Kind)!;
         cmd.Parameters.Add(new OracleParameter("owner", obj.Schema));
         cmd.Parameters.Add(new OracleParameter("name", obj.Name));
-        cmd.Parameters.Add(new OracleParameter("t1", type));
-        cmd.Parameters.Add(new OracleParameter("t2", type == "TYPE" ? "TYPE BODY" : type));
+        cmd.Parameters.Add(new OracleParameter("t1", unit));
+        cmd.Parameters.Add(new OracleParameter("t2", body));
         var units = new List<(string Type, StringBuilder Text)>();
         try
         {
@@ -617,7 +710,7 @@ public sealed class OracleMetadata : IMetadataProvider
         var code = OracleTokenizer.Tokenize(unit).Where(t => !t.IsTrivia).ToList();
         var n = 0;
         while (n < code.Count && (code[n].Is("EDITIONABLE") || code[n].Is("NONEDITIONABLE"))) n++;
-        if (n >= code.Count || !(code[n].Is("PROCEDURE") || code[n].Is("FUNCTION") || code[n].Is("TRIGGER") || code[n].Is("TYPE"))) return unit;
+        if (n >= code.Count || !(code[n].Is("PROCEDURE") || code[n].Is("FUNCTION") || code[n].Is("TRIGGER") || code[n].Is("TYPE") || code[n].Is("PACKAGE"))) return unit;
         n++;
         if (n < code.Count && code[n].Is("BODY")) n++;
         if (n >= code.Count || code[n].Kind is not (OracleTokenKind.Word or OracleTokenKind.QuotedIdent)) return unit;
@@ -641,7 +734,9 @@ public sealed class OracleMetadata : IMetadataProvider
     /// GET_DDL already writes CREATE OR REPLACE for views and PL/SQL; a definition read another way gets it (on tokens) when its
     /// kind takes it. A table has no OR REPLACE: returned as it is.
     /// </summary>
-    public string ToEditableScript(string definition, Capabilities caps)
+    public string ToEditableScript(string definition, Capabilities caps) => Editable(definition);
+
+    internal static string Editable(string definition)
     {
         var code = OracleTokenizer.Tokenize(definition).Where(t => !t.IsTrivia).ToList();
         if (code.Count < 2 || !code[0].Is("CREATE") || code[1].Is("OR")) return definition;

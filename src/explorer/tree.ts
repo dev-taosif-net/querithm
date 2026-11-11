@@ -11,9 +11,9 @@ import { MEMORY_NOTE } from "../store/connections";
 import { engineTraits } from "../engines";
 
 export type { Engine };
-export type CatId = "tables" | "views" | "procs" | "funcs" | "types" | "sequences" | "synonyms";
+export type CatId = "tables" | "views" | "procs" | "funcs" | "types" | "sequences" | "synonyms" | "packages";
 export type KindFilter = "all" | CatId | "triggers";
-export type Sub = "columns" | "keys" | "indexes" | "params" | "triggers";
+export type Sub = "columns" | "keys" | "indexes" | "params" | "triggers" | "members";
 export type ServerStatus = "connected" | "connecting" | "error" | "off";
 export type DbState = "idle" | "ok" | "loading" | "refreshing" | "stale" | "error" | "offline";
 
@@ -25,7 +25,15 @@ export const CATEGORIES: { id: CatId; kinds: ObjectKind[]; label: string; icon: 
   { id: "types", kinds: ["type"], label: "Types", icon: "type" },
   { id: "sequences", kinds: ["sequence"], label: "Sequences", icon: "sequence" },
   { id: "synonyms", kinds: ["synonym"], label: "Synonyms", icon: "synonym" },
+  // Oracle (D4 S08): package specifications; each body sits under its specification, not beside it.
+  { id: "packages", kinds: ["package", "packageBody"], label: "Packages", icon: "package" },
 ];
+
+/** Under an Oracle package whose body is missing: the specification's note says which case it is (the sidecar knows the owner). */
+export const PACKAGE_NO_BODY = "No body";
+export const PACKAGE_BODY_HIDDEN = "The body is not visible to this login: it needs DEBUG on the package (or the package has no body).";
+/** Under a package's members: they are listed, not yet objects of their own (D4 S08). */
+export const PACKAGE_MEMBERS_NOTE = "Listed for display only: completion, go to definition, rename and compare of package members are not available yet.";
 /** The categories a flat (not schema-grouped) database always lists, empty or not. */
 const MAIN_CATS = new Set<CatId>(["tables", "views", "procs", "funcs"]);
 
@@ -108,9 +116,13 @@ export interface TreeResult {
 
 interface Buckets {
   byKind: Map<ObjectKind, SnapObject[]>;
+  /** Every object by kind, as search lists them (package bodies included; the tree shows them under their specification). */
+  searchKind: Map<ObjectKind, SnapObject[]>;
   bySchema: Map<string, Map<ObjectKind, SnapObject[]>>;
   schemaCount: Map<string, number>;
   triggers: Map<number, SnapObject[]>;
+  /** Oracle package bodies by their specification's id: shown under it, not as a category item. */
+  bodies: Map<number, SnapObject>;
   byId: Map<number, SnapObject>;
   lower: Map<SnapObject, string>;
 }
@@ -120,7 +132,7 @@ const bucketCache = new WeakMap<object, Buckets>();
 export function bucketsOf(objects: readonly SnapObject[]): Buckets {
   let b = bucketCache.get(objects);
   if (b) return b;
-  b = { byKind: new Map(), bySchema: new Map(), schemaCount: new Map(), triggers: new Map(), byId: new Map(), lower: new Map() };
+  b = { byKind: new Map(), searchKind: new Map(), bySchema: new Map(), schemaCount: new Map(), triggers: new Map(), bodies: new Map(), byId: new Map(), lower: new Map() };
   for (const o of objects) {
     if (!o) continue;
     b.byId.set(o.id, o);
@@ -133,9 +145,17 @@ export function bucketsOf(objects: readonly SnapObject[]): Buckets {
       }
       // Search still lists triggers; they are not a tree category.
       push(b.byKind, o.kind, o);
+      push(b.searchKind, o.kind, o);
+      continue;
+    }
+    if (o.kind === "packageBody" && o.specObjectId != null) {
+      // Under its specification, never a Packages item of its own; search still lists it.
+      b.bodies.set(o.specObjectId, o);
+      push(b.searchKind, o.kind, o);
       continue;
     }
     push(b.byKind, o.kind, o);
+    push(b.searchKind, o.kind, o);
     let s = b.bySchema.get(o.schema);
     if (!s) b.bySchema.set(o.schema, (s = new Map()));
     push(s, o.kind, o);
@@ -369,6 +389,7 @@ function subsOf(o: SnapObject, b: Buckets): Sub[] {
   if (o.kind === "view") return b.triggers.has(o.id) ? ["columns", "triggers"] : ["columns"];
   if (o.kind === "tvf") return ["params", "columns"];
   if (o.kind === "proc" || o.kind === "func") return ["params"];
+  if (o.kind === "package") return ["members"];
   return [];
 }
 
@@ -382,6 +403,15 @@ function addObj(c: DbCtx, o: SnapObject, level: number, parent: number, bare: bo
   const open = i.expanded.has(key) && subs.length > 0;
   const oIdx = add({ t: "obj", key, level, parent, expandable: subs.length > 0, expanded: open, profileId: p.id, db, obj: o, bare, leaf: subs.length === 0 });
   if (!open) return;
+  if (o.kind === "package") {
+    // The body first, as an object of its own (Modify, Script as), or why there is none.
+    const body = b.bodies.get(o.id);
+    if (body) addObj(c, body, level + 1, oIdx, true, true, o);
+    else {
+      const hidden = /body not visible/.test(o.note ?? "");
+      add({ t: "note", key: `${key}:nobody`, level: level + 1, parent: oIdx, expandable: false, expanded: false, text: hidden ? PACKAGE_BODY_HIDDEN : PACKAGE_NO_BODY, tone: hidden ? "warn" : "muted" });
+    }
+  }
   for (const sub of subs) {
     const sk = `${key}:${sub}`;
     const sOpen = i.expanded.has(sk);
@@ -396,7 +426,10 @@ function addSub(c: DbCtx, o: SnapObject, sub: Sub, oKey: string, sk: string, lev
   const leaf = (k: string, text: string, detail: string | undefined, icon: string, tone: string, extra: Partial<RowOf<"leaf">> = {}) =>
     add({ t: "leaf", key: `${sk}:${k}`, level, parent, expandable: false, expanded: false, text, detail, icon, tone, ...extra });
   const note = (text: string, tone: "muted" | "err" = "muted", busy = false) => add({ t: "note", key: `${sk}:note`, level, parent, expandable: false, expanded: false, text, tone, busy });
-  if (sub === "triggers") {
+  if (sub === "members") {
+    (o.members ?? []).forEach((m, n) => leaf(`m${n}`, m, undefined, / RETURN /.test(m) ? "func" : "proc", "muted"));
+    note(o.members?.length ? PACKAGE_MEMBERS_NOTE : "No members");
+  } else if (sub === "triggers") {
     const list = b.triggers.get(o.id) ?? [];
     for (const tr of list) addObj(c, tr, level, parent, true, true, o);
     if (!list.length) note("No triggers");
@@ -495,7 +528,7 @@ export function searchRows(profileId: string, db: string, engine: Engine, object
   const groups: { id: KindFilter; label: string; kinds: ObjectKind[] }[] = [...CATEGORIES.map((c) => ({ id: c.id as KindFilter, label: c.label, kinds: c.kinds })), { id: "triggers", label: "Triggers", kinds: ["trigger"] }];
   for (const g of groups) {
     if (kind !== "all" && kind !== g.id) continue;
-    const hits = ofKinds(b.byKind, g.kinds).filter((o) => b.lower.get(o)!.includes(needle));
+    const hits = ofKinds(b.searchKind, g.kinds).filter((o) => b.lower.get(o)!.includes(needle));
     if (!hits.length) continue;
     total += hits.length;
     hits.sort((a, c) => {

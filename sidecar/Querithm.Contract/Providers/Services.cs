@@ -40,7 +40,7 @@ public interface IDialectService
 /// <paramref name="Note"/> (Phase D4): what the explorer shows beside the name — "invalid", "materialized view", "external table".
 /// </summary>
 public sealed record ObjectStamp(long Id, string Schema, string Name, ObjectKind Kind, long Marker, string? ReturnType, long? ParentObjectId = null, bool SessionLocal = false,
-    string? NoRollbackEngine = null, string? Note = null);
+    string? NoRollbackEngine = null, string? Note = null, long? SpecObjectId = null);
 
 public sealed record ColumnRow(
     long ObjectId, int Ordinal, string Name, string TypeName, int? MaxLen, int? Precision, int? Scale,
@@ -57,7 +57,11 @@ public sealed record MetadataBundle(
     IReadOnlyList<ColumnRow> Columns,
     IReadOnlyList<ParamRow> Params,
     IReadOnlyList<IndexRow> Indexes,
-    IReadOnlyList<FkRow> Fks);
+    IReadOnlyList<FkRow> Fks,
+    IReadOnlyList<MemberRow>? Members = null);
+
+/// <summary>Phase D4 (Oracle): one subprogram of a package specification as declared, display text only (<see cref="SnapObject.Members"/>).</summary>
+public sealed record MemberRow(long ObjectId, int Ordinal, string Text);
 
 /// <summary>Catalog queries (§8). Implementations batch by object id (chunks of 500).</summary>
 public interface IMetadataProvider
@@ -104,6 +108,9 @@ public interface IPlanProvider
 public interface IObjectScripter
 {
     Task<string> ScriptAsync(DbConnection connection, ObjectRef obj, ScriptKind kind, CancellationToken ct);
+
+    /// <summary>Phase D4 (Oracle): <paramref name="withBody"/> — a package specification's script also carries its body. Other engines ignore it.</summary>
+    Task<string> ScriptAsync(DbConnection connection, ObjectRef obj, ScriptKind kind, bool withBody, CancellationToken ct) => ScriptAsync(connection, obj, kind, ct);
 }
 
 /// <summary>SQL Server Extended Events trace (§11). Not a debugger.</summary>

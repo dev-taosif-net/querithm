@@ -5,7 +5,7 @@ using Querithm.Contract.Providers;
 namespace Querithm.Providers.Oracle;
 
 /// <summary>
-/// The Oracle services a later D4 session implements — plans (S09), scripting (S11), grid edit and import (S10): each call
+/// The Oracle services a later D4 session implements — plans (S09), scripting (S11; packages are <see cref="OracleScripter"/> since S08), grid edit and import (S10): each call
 /// refuses with the reason (metadata is <see cref="OracleMetadata"/> since D4 S05). <see cref="OracleProvider.FeatureRefusal"/> refuses the features that use
 /// them; they exist so the engine compiles end to end and each session replaces one. Transactions are
 /// <see cref="OracleTransactions"/> since D4 S03.

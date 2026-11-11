@@ -219,13 +219,71 @@ public class StoreMigrationTests : IDisposable
             """);
         SqliteConnection.ClearAllPools();
         var store = new LocalStore(path);
-        Assert.Equal(7L, Scalar(path, "PRAGMA user_version"));
+        Assert.Equal((long)LocalStore.Version, Scalar(path, "PRAGMA user_version"));
         Assert.True(HasColumn(path, "obj", "note"));
         Assert.True(HasColumn(path, "schema_snapshot", "notes"));
         Assert.Equal("fresh", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'p'"));
         var snap = new MetadataStore(store).Load("p", "db");
         Assert.Null(snap.Notes);
         Assert.Null(Assert.Single(snap.Objects).Note);
+    }
+
+    [Fact]
+    public void A_v7_file_gains_the_package_columns_and_only_its_Oracle_snapshots_are_read_again()
+    {
+        // D4 S08: obj.spec_object_id and obj.members. An Oracle snapshot cached before S08 has no packages, and an
+        // incremental refresh adds only what changed, so it turns stale; every other engine's stays fresh.
+        var path = Path.Combine(_dir, "v7.db");
+        _ = new LocalStore(path);
+        Exec(path, """
+            ALTER TABLE obj DROP COLUMN spec_object_id;
+            ALTER TABLE obj DROP COLUMN members;
+            INSERT INTO profile (id, name, engine) VALUES ('ora', 'o', 'oracle'), ('pg', 'p', 'pg');
+            INSERT INTO schema_snapshot (profile_id, database, refreshed_at, server_version, status, error) VALUES
+              ('ora', 'FREEPDB1', 1000, '23.26', 'fresh', NULL), ('pg', 'db', 1000, '16', 'fresh', NULL), ('ora', 'OTHER', 1000, '23.26', 'error', 'x');
+            INSERT INTO obj (profile_id, database, object_id, schema_name, name, kind, modify_date) VALUES ('ora', 'FREEPDB1', 1, 'APP', 'T', 'table', 5),
+              ('pg', 'db', 1, 'public', 't', 'table', 5);
+            PRAGMA user_version = 7;
+            """);
+        SqliteConnection.ClearAllPools();
+        var store = new LocalStore(path);
+        Assert.Equal(8L, Scalar(path, "PRAGMA user_version"));
+        Assert.True(HasColumn(path, "obj", "spec_object_id"));
+        Assert.True(HasColumn(path, "obj", "members"));
+        Assert.Equal("stale", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'ora' AND database = 'FREEPDB1'"));
+        Assert.Equal("error", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'ora' AND database = 'OTHER'"));
+        Assert.Equal("fresh", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'pg'"));
+        var meta = new MetadataStore(store);
+        var pg = Assert.Single(meta.Load("pg", "db").Objects);
+        Assert.Equal((ObjectKind.Table, (long?)null, (string[]?)null), (pg.Kind, pg.SpecObjectId, pg.Members));
+        Assert.Single(meta.Load("ora", "FREEPDB1").Objects); // the cached rows stay shown until the refresh
+    }
+
+    [Fact]
+    public void Packages_round_trip_through_the_store_and_a_kind_this_build_does_not_know_is_skipped()
+    {
+        var path = Path.Combine(_dir, "pkg.db");
+        var store = new LocalStore(path);
+        var meta = new MetadataStore(store);
+        meta.ApplyRefresh("ora", "FREEPDB1", full: true,
+        [
+            new ObjectStamp(1, "APP", "PKG", ObjectKind.Package, 11, null, Note: "invalid"),
+            new ObjectStamp(2, "APP", "PKG", ObjectKind.PackageBody, 22, null, SpecObjectId: 1),
+            new ObjectStamp(3, "APP", "TRG", ObjectKind.Trigger, 33, null, ParentObjectId: 4),
+            new ObjectStamp(4, "APP", "T", ObjectKind.Table, 44, null),
+        ], [], new MetadataBundle([], [], [], [], [new MemberRow(1, 2, "P(A IN VARCHAR2)"), new MemberRow(1, 1, "P(A IN NUMBER)"), new MemberRow(9, 1, "not listed")]), "23.26");
+        Exec(path, "INSERT INTO obj (profile_id, database, object_id, schema_name, name, kind, modify_date) VALUES ('ora', 'FREEPDB1', 5, 'APP', 'Z', 'somethingNewer', 1);");
+        var objects = meta.Load("ora", "FREEPDB1").Objects.ToDictionary(o => o.Id);
+        Assert.Equal([1L, 2, 3, 4], objects.Keys.Order());
+        Assert.Equal((ObjectKind.Package, "invalid", (long?)null, (long?)null), (objects[1].Kind, objects[1].Note, objects[1].SpecObjectId, objects[1].ParentObjectId));
+        Assert.Equal(["P(A IN NUMBER)", "P(A IN VARCHAR2)"], objects[1].Members!); // in subprogram order
+        Assert.Equal((ObjectKind.PackageBody, (long?)1, (string[]?)null), (objects[2].Kind, objects[2].SpecObjectId, objects[2].Members));
+        Assert.Equal(((long?)4, (long?)null), (objects[3].ParentObjectId, objects[3].SpecObjectId)); // triggers unchanged
+        Assert.Equal(["PKG", "PKG"], meta.Search("ora", "FREEPDB1", "pkg", null, 50).Select(r => r.Name));
+        Assert.Empty(meta.Search("ora", "FREEPDB1", "z", null, 50));
+        // An incremental refresh that changes the body only keeps the specification's members.
+        meta.ApplyRefresh("ora", "FREEPDB1", full: false, [new ObjectStamp(2, "APP", "PKG", ObjectKind.PackageBody, 23, null, SpecObjectId: 1)], [], new MetadataBundle([], [], [], []), "23.26");
+        Assert.Equal(2, meta.Load("ora", "FREEPDB1").Objects.Single(o => o.Id == 1).Members!.Length);
     }
 
     [Fact]

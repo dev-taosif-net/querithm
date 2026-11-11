@@ -5,7 +5,9 @@ namespace Querithm.Intelligence.Oracle;
 /// <code>SELECT keyword FROM v$reserved_words WHERE reserved = 'Y' ORDER BY keyword</code>
 /// (Oracle 19c / 23ai), cross-checked with the SQL Language Reference appendix "Oracle SQL Reserved Words". A bare
 /// identifier must not be one of these, so <see cref="OracleIdentifiers.QuoteIfNeeded"/> quotes them.
-/// Not yet regenerated from the Free fixture (no Docker in the S02 session): STATUS.md lists the check as open.
+/// Checked against the Free 23ai fixture in D4 S08: every word it marks <c>RESERVED = 'Y'</c> or <c>RES_SEMI = 'Y'</c>
+/// is here (<c>EXCEPT</c> was added then); the semantic ones (USER, ROWNUM, SYSDATE, …) stay reserved because 19c
+/// servers and the SQL reference still treat them as reserved (<c>OracleIntegrationTests.The_reserved_words_cover_the_servers_list</c>).
 /// <see cref="PlSqlReserved"/> are the PL/SQL reserved words (PL/SQL Language Reference, appendix D) a PL/SQL unit may
 /// not use bare either.
 /// </summary>
@@ -15,7 +17,7 @@ public static class OracleKeywords
     {
         "ACCESS", "ADD", "ALL", "ALTER", "AND", "ANY", "AS", "ASC", "AUDIT", "BETWEEN", "BY", "CHAR", "CHECK", "CLUSTER", "COLUMN",
         "COMMENT", "COMPRESS", "CONNECT", "CREATE", "CURRENT", "DATE", "DECIMAL", "DEFAULT", "DELETE", "DESC", "DISTINCT", "DROP",
-        "ELSE", "EXCLUSIVE", "EXISTS", "FILE", "FLOAT", "FOR", "FROM", "GRANT", "GROUP", "HAVING", "IDENTIFIED", "IMMEDIATE", "IN",
+        "ELSE", "EXCEPT", "EXCLUSIVE", "EXISTS", "FILE", "FLOAT", "FOR", "FROM", "GRANT", "GROUP", "HAVING", "IDENTIFIED", "IMMEDIATE", "IN",
         "INCREMENT", "INDEX", "INITIAL", "INSERT", "INTEGER", "INTERSECT", "INTO", "IS", "LEVEL", "LIKE", "LOCK", "LONG",
         "MAXEXTENTS", "MINUS", "MLSLABEL", "MODE", "MODIFY", "NOAUDIT", "NOCOMPRESS", "NOT", "NOWAIT", "NULL", "NUMBER", "OF",
         "OFFLINE", "ON", "ONLINE", "OPTION", "OR", "ORDER", "PCTFREE", "PRIOR", "PUBLIC", "RAW", "RENAME", "RESOURCE", "REVOKE",

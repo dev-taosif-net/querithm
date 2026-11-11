@@ -119,7 +119,7 @@ public sealed class ObjectService(SessionManager sessions, MetadataService metad
     public async Task<SqlText> ScriptAsync(ScriptParams p, CancellationToken ct)
     {
         var s = sessions.Get(p.SessionId);
-        var sql = await WithConnectionAsync(s, c => s.Provider.Scripter.ScriptAsync(c.Db, p.Object, p.Kind, ct), ct, p.Object.Database).ConfigureAwait(false);
+        var sql = await WithConnectionAsync(s, c => s.Provider.Scripter.ScriptAsync(c.Db, p.Object, p.Kind, p.WithBody, ct), ct, p.Object.Database).ConfigureAwait(false);
         return new SqlText { Sql = sql };
     }
 

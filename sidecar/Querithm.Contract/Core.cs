@@ -40,8 +40,13 @@ public enum ExecState { Queued, Running, Streaming, Done, Failed, Cancelled }
 
 public enum Severity { Info, Warning, Error }
 
-/// <summary>Trigger: a DML trigger on a table or view (its parent is <see cref="SnapObject.ParentObjectId"/>).</summary>
-public enum ObjectKind { Table, View, Proc, Func, Tvf, Type, Sequence, Synonym, Trigger }
+/// <summary>
+/// Trigger: a DML trigger on a table or view (its parent is <see cref="SnapObject.ParentObjectId"/>). Package / PackageBody
+/// (Phase D4, Oracle only): a package specification and its body, two objects with their own ids, status and source; a body
+/// names its specification in <see cref="SnapObject.SpecObjectId"/>. No other engine lists either. Stored by name, so new
+/// kinds go at the end and an older build skips the rows it does not know.
+/// </summary>
+public enum ObjectKind { Table, View, Proc, Func, Tvf, Type, Sequence, Synonym, Trigger, Package, PackageBody }
 
 public enum SnapshotStatus { Empty, Fresh, Stale, Refreshing, Error }
 

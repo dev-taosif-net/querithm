@@ -43,7 +43,7 @@ import { useProfiles } from "../../store/profiles";
 import { useSettings } from "../../store/settings";
 import { useUi } from "../../store/ui";
 import { useTabs } from "../../store/tabs";
-import { catMenu, dbMenu, leafMenu, menuFor, objectMenu, serverMenu } from "../menus";
+import { catMenu, dbMenu, leafMenu, menuFor, objectMenu, PACKAGE_REFACTOR, serverMenu } from "../menus";
 import type { RowOf } from "../tree";
 
 type Item = Exclude<MenuEntry, "sep">;
@@ -170,6 +170,43 @@ describe.each<[Engine, string]>([["sqlite", "SQLite"], ["mySql", "MySQL"]])("obj
 
   it("the server has no Activity monitor, said with the reason", () => {
     expect(find(serverMenu(server("connected")), "Activity monitor").unavailable).toBe(`${name} has no activity monitor`);
+  });
+});
+
+describe("Oracle package menus (D4 S08)", () => {
+  beforeEach(() => useProfiles.setState({ profiles: [{ id: "p", name: "Srv", engine: "oracle", environment: "dev" } as never] }));
+  const spec = obj("package", { schema: "APP", name: "PKG", members: ["P(A IN NUMBER)"] });
+  const body = obj("packageBody", { id: 8, schema: "APP", name: "PKG", specObjectId: 7 });
+
+  it("a specification: Modify first; Script as the specification, with its body, ALTER … COMPILE and the drops", () => {
+    const menu = objectMenu(objRow(spec));
+    expect(items(menu)[0]).toMatchObject({ label: "Modify", bold: true, hint: "Double-click" });
+    expect(labels(menu)).not.toContain("Execute…");
+    expect(labels(menu)).not.toContain("Debug…");
+    expect(sub(menu, "Script as")).toEqual(["CREATE", "CREATE with body", "ALTER … COMPILE", "DROP and CREATE", "DROP"]);
+    const s = find(menu, "Script as").sub!;
+    find(s, "CREATE with body").run();
+    expect(m.scriptObject).toHaveBeenLastCalledWith("p", "AppDb", { schema: "APP", name: "PKG", kind: "package", objectId: 7 }, "create", false, true);
+    find(s, "CREATE").run();
+    expect(m.scriptObject).toHaveBeenLastCalledWith("p", "AppDb", { schema: "APP", name: "PKG", kind: "package", objectId: 7 }, "create");
+    find(menu, "Modify").run();
+    expect(m.openDefinition).toHaveBeenLastCalledWith("p", "AppDb", { schema: "APP", name: "PKG", kind: "package", objectId: 7 }, true);
+  });
+
+  it("a body: Modify opens the body itself, and there is no CREATE with body", () => {
+    const menu = objectMenu(objRow(body));
+    expect(items(menu)[0]).toMatchObject({ label: "Modify", bold: true });
+    expect(sub(menu, "Script as")).toEqual(["CREATE", "ALTER … COMPILE", "DROP and CREATE", "DROP"]);
+    find(menu, "Modify").run();
+    expect(m.openDefinition).toHaveBeenLastCalledWith("p", "AppDb", { schema: "APP", name: "PKG", kind: "packageBody", objectId: 8 }, true);
+  });
+
+  it("find usages and rename stay in the menu, unavailable with the reason, for both parts", () => {
+    for (const o of [spec, body]) {
+      const menu = objectMenu(objRow(o));
+      expect(find(menu, "Find usages").unavailable).toBe(PACKAGE_REFACTOR);
+      expect(find(menu, "Rename…").unavailable).toBe(PACKAGE_REFACTOR);
+    }
   });
 });
 

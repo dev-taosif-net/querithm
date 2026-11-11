@@ -76,6 +76,17 @@ public sealed record SnapObject
     internal string? NoRollbackEngine { get; init; }
     /// <summary>Phase D4: shown beside the name in the explorer — "invalid", "materialized view", "external table"; null for most objects.</summary>
     public string? Note { get; init; }
+    /// <summary>
+    /// Phase D4 (Oracle): a package body's specification (same owner and name); null for every other kind, and for a body
+    /// whose specification is not listed. Not <see cref="ParentObjectId"/>, which stays the trigger's table.
+    /// </summary>
+    public long? SpecObjectId { get; init; }
+    /// <summary>
+    /// Phase D4 (Oracle): a package specification's subprograms as declared, one line per overload
+    /// (<c>P(A IN NUMBER)</c>, <c>F(X IN NUMBER) RETURN NUMBER</c>), for display only: members have no identity yet, so
+    /// completion, navigation, rename and compare do not use them. Null for every other kind.
+    /// </summary>
+    public string[]? Members { get; init; }
 }
 
 public sealed record SchemaSnapshot
@@ -231,6 +242,8 @@ public sealed record ScriptParams
     public required string SessionId { get; init; }
     public required ObjectRef Object { get; init; }
     public ScriptKind Kind { get; init; }
+    /// <summary>Phase D4 (Oracle): a package specification's CREATE / ALTER script also carries its body. Ignored for every other kind.</summary>
+    public bool WithBody { get; init; }
 }
 
 public sealed record SqlText

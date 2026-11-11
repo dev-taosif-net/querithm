@@ -46,9 +46,12 @@ public sealed class OracleProvider : IDbProvider
     public bool DatabaseScopedConnections => false;
     public IDialectService Language { get; } = new OracleLanguageService();
     public bool StopOnBatchError => true;
-    public IMetadataProvider Metadata { get; } = new OracleMetadata();
+    public IMetadataProvider Metadata => _metadata;
+    readonly OracleMetadata _metadata = new();
     public IPlanProvider Plans { get; } = OracleUnavailable.Instance;
-    public IObjectScripter Scripter { get; } = OracleUnavailable.Instance;
+    /// <summary>Packages since D4 S08; every other kind refuses until D4 S11.</summary>
+    public IObjectScripter Scripter => _scripter ??= new OracleScripter(_metadata);
+    OracleScripter? _scripter;
     public ITraceProvider? Trace => null;
     public IDebugProvider? Debugger => null;
     public IDataEditDialect DataEdit { get; } = OracleUnavailable.Instance;

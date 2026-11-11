@@ -53,8 +53,8 @@ export type MonitorPane = "sessions" | "locks" | "waits" | "metrics" | "io" | "t
 export const MonitorPaneValues = ["sessions", "locks", "waits", "metrics", "io", "topQueries", "deadlocks", "queryStore", "health"] as const;
 export type NamespaceModel = "schemas" | "attached" | "databases";
 export const NamespaceModelValues = ["schemas", "attached", "databases"] as const;
-export type ObjectKind = "table" | "view" | "proc" | "func" | "tvf" | "type" | "sequence" | "synonym" | "trigger";
-export const ObjectKindValues = ["table", "view", "proc", "func", "tvf", "type", "sequence", "synonym", "trigger"] as const;
+export type ObjectKind = "table" | "view" | "proc" | "func" | "tvf" | "type" | "sequence" | "synonym" | "trigger" | "package" | "packageBody";
+export const ObjectKindValues = ["table", "view", "proc", "func", "tvf", "type", "sequence", "synonym", "trigger", "package", "packageBody"] as const;
 export type PaneState = "ok" | "collecting" | "truncated" | "degraded" | "error" | "resetDetected";
 export const PaneStateValues = ["ok", "collecting", "truncated", "degraded", "error", "resetDetected"] as const;
 export type PlanMode = "estimated" | "actual";
@@ -1433,6 +1433,7 @@ export interface ScriptParams {
   sessionId: string;
   object: ObjectRef;
   kind: ScriptKind;
+  withBody: boolean;
 }
 export interface SearchParams {
   profileId: string;
@@ -1557,6 +1558,8 @@ export interface SnapObject {
   modifyDate?: number | null;
   parentObjectId?: number | null;
   note?: string | null;
+  specObjectId?: number | null;
+  members?: string[] | null;
 }
 export interface SnapParam {
   name: string;

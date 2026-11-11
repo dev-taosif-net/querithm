@@ -993,7 +993,7 @@ export async function openDefinition(profileId: string, database: string, obj: O
       await openReadOnlyDefinition(profileId, database, obj, def.sql);
       return;
     }
-    const title = `${obj.name}.sql`;
+    const title = `${obj.name}${obj.kind === "packageBody" ? " BODY" : ""}.sql`;
     newQueryTab({
       profileId, database, text: def.sql, title, readOnly: !editable,
       boundObject: editable
@@ -1008,16 +1008,21 @@ export async function openDefinition(profileId: string, database: string, obj: O
 /** Script tabs are titled by what the script does, so a DROP tab never looks like a CREATE one (§10). */
 const SCRIPT_VERB: Partial<Record<ScriptKind, string>> = { create: "CREATE", alter: "ALTER", dropCreate: "DROP and CREATE", drop: "DROP", execute: "EXEC", enable: "ENABLE", disable: "DISABLE" };
 
-/** "DROP Orders.sql", "CREATE sales.Orders.sql": the default schema (dbo, public) is left out of the title. */
-export function scriptTitle(obj: Pick<ObjectRef, "schema" | "name">, kind: ScriptKind, engine?: Engine): string {
+/**
+ * "DROP Orders.sql", "CREATE sales.Orders.sql": the default schema (dbo, public) is left out of the title. An Oracle package
+ * body says so ("CREATE APP.PKG BODY.sql"), since it shares its specification's name.
+ */
+export function scriptTitle(obj: Pick<ObjectRef, "schema" | "name"> & { kind?: ObjectRef["kind"] }, kind: ScriptKind, engine?: Engine): string {
   const verb = SCRIPT_VERB[kind];
-  return verb ? `${verb} ${objectLabel(obj.schema, obj.name, engine)}.sql` : `${obj.name}.sql`;
+  const body = obj.kind === "packageBody" ? " BODY" : "";
+  return verb ? `${verb} ${objectLabel(obj.schema, obj.name, engine)}${body}.sql` : `${obj.name}${body}.sql`;
 }
 
-export async function scriptObject(profileId: string, database: string, obj: ObjectRef, kind: ScriptKind, run = false) {
+/** `withBody`: an Oracle package specification's script also carries its body (D4 S08); ignored for every other kind. */
+export async function scriptObject(profileId: string, database: string, obj: ObjectRef, kind: ScriptKind, run = false, withBody = false) {
   try {
     const sessionId = await useConnections.getState().sessionFor(profileId);
-    const r = await rpc("meta.script", { sessionId, object: { ...obj, profileId, database }, kind });
+    const r = await rpc("meta.script", { sessionId, object: { ...obj, profileId, database }, kind, withBody });
     const id = newQueryTab({ profileId, database, text: r.sql, title: scriptTitle(obj, kind, useProfiles.getState().byId(profileId)?.engine) });
     if (run) setTimeout(() => void runQuery(id), 50);
   } catch (e) {
