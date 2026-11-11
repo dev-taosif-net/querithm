@@ -134,7 +134,7 @@ public static class PgTier2Completion
             }
             if (r.Schema is { } s && s.Schemas.Contains(q))
                 foreach (var o in s.Snapshot.Objects.Where(o => names.Equals(o.Schema, q) && o.Kind is not ObjectKind.Trigger))
-                    items.Add(o.Name, Kind(o), o.ReturnType ?? KindText(o), PgSchema.IsRelation(o) ? "1" : "3", PgIdent.Quote(o.Name));
+                    items.Add(o.Name, Kind(o), o.ReturnType ?? KindText(o), s.IsRowset(o) ? "1" : "3", PgIdent.Quote(o.Name));
             return;
         }
         if (chain.Count == 2)
@@ -144,7 +144,7 @@ public static class PgTier2Completion
 
     static CompletionKind Kind(SnapObject o) => o.Kind switch
     {
-        ObjectKind.Table => CompletionKind.Table, ObjectKind.View => CompletionKind.View, ObjectKind.Proc => CompletionKind.Proc,
+        ObjectKind.Table or ObjectKind.Synonym => CompletionKind.Table, ObjectKind.View => CompletionKind.View, ObjectKind.Proc => CompletionKind.Proc,
         ObjectKind.Type => CompletionKind.Type, _ => CompletionKind.Func,
     };
 
@@ -171,13 +171,15 @@ public static class PgTier2Completion
             items.Add(cte.Name, CompletionKind.Cte, "CTE", "0", PgIdent.Quote(cte.Name));
         foreach (var t in r.Temps) items.Add(t.Name, CompletionKind.TempTable, "temp table", "1", PgIdent.Quote(t.Name));
         if (schema == null) return;
-        foreach (var o in schema.Snapshot.Objects.Where(o => PgSchema.IsRelation(o) || o.Kind == ObjectKind.Tvf))
+        var rules = PgCompletionRules.Current;
+        foreach (var o in schema.Snapshot.Objects.Where(o => schema.IsRowset(o) || o.Kind == ObjectKind.Tvf))
         {
-            var label = o.Schema == PgCompletionRules.Current.DefaultSchema ? o.Name : $"{o.Schema}.{o.Name}";
-            var insert = o.Schema == PgCompletionRules.Current.DefaultSchema ? PgIdent.Quote(o.Name) : $"{PgIdent.Quote(o.Schema)}.{PgIdent.Quote(o.Name)}";
-            items.Add(label, Kind(o), KindText(o), o.Schema == PgCompletionRules.Current.DefaultSchema ? "2" : "3", insert);
+            var bare = rules.Unqualified(o.Schema);
+            var label = bare ? o.Name : $"{o.Schema}.{o.Name}";
+            var insert = bare ? PgIdent.Quote(o.Name) : $"{PgIdent.Quote(o.Schema)}.{PgIdent.Quote(o.Name)}";
+            items.Add(label, Kind(o), KindText(o), o.Schema == rules.DefaultSchema ? "2" : "3", insert);
         }
-        foreach (var s in schema.Schemas.Where(s => s != PgCompletionRules.Current.DefaultSchema).Order()) items.Add(s, CompletionKind.Schema, "schema", "4", PgIdent.Quote(s));
+        foreach (var s in schema.Schemas.Where(s => !rules.Unqualified(s)).Order()) items.Add(s, CompletionKind.Schema, "schema", "4", PgIdent.Quote(s));
     }
 
     static void Types(PgSchema? schema, Items items)
@@ -232,13 +234,20 @@ public static class PgTier2Completion
         return (first < k ? b[k - 2].Name : null, b[k].Name);
     }
 
-    /// <summary>The routines a call at <paramref name="open"/> may be (CALL name( / name( in an expression).</summary>
+    /// <summary>
+    /// The routines a call at <paramref name="open"/> may be (CALL name( / name( in an expression), and the dialect's member
+    /// routines (<see cref="PgCompletionRules.MemberRoutines"/>: pkg.member( / schema.pkg.member() when the catalog has none.
+    /// </summary>
     static List<SnapObject> Call(List<Tok> b, int open, PgSchema? schema)
     {
         if (schema == null || !b[open - 1].IsIdent) return [];
         var k = open - 1;
-        var sch = k >= 2 && b[k - 1].IsP(".") && b[k - 2].IsIdent ? b[k - 2].Name : null;
-        return schema.Routines(sch, b[k].Name).ToList();
+        var chain = new List<string> { b[k].Name };
+        for (var j = k - 1; j >= 1 && chain.Count < 3 && b[j].IsP(".") && b[j - 1].IsIdent; j -= 2) chain.Insert(0, b[j - 1].Name);
+        var sch = chain.Count >= 2 ? chain[^2] : null;
+        var found = chain.Count <= 2 ? schema.Routines(sch, b[k].Name).ToList() : [];
+        if (found.Count == 0 && chain.Count >= 2 && PgCompletionRules.Current.MemberRoutines is { } members) found = members(schema.Snapshot, chain).ToList();
+        return found;
     }
 
     static readonly HashSet<string> ObjectWords = new(["FROM", "JOIN", "INTO", "UPDATE", "TABLE", "ONLY", "LATERAL", "USING"], StringComparer.OrdinalIgnoreCase);
@@ -295,7 +304,8 @@ public static class PgTier2Completion
                 var labels = ps.Select(x => builtin ? x.Name : $"{(x.Name.Length > 0 ? PgIdent.Quote(x.Name) + " " : "")}{x.Type}{(x.HasDefault ? " DEFAULT …" : "")}".TrimEnd()).ToArray();
                 return (Info: new SignatureInfo
                 {
-                    Label = builtin ? $"{o.Name}({string.Join(", ", labels)})" : $"{PgIdent.Quote(o.Schema)}.{PgIdent.Quote(o.Name)}({string.Join(", ", labels)})",
+                    Label = builtin ? $"{o.Name}({string.Join(", ", labels)})"
+                        : $"{PgCompletionRules.Current.RoutineLabel?.Invoke(o) ?? $"{PgIdent.Quote(o.Schema)}.{PgIdent.Quote(o.Name)}"}({string.Join(", ", labels)})",
                     Documentation = builtin ? o.ReturnType : o.Kind == ObjectKind.Proc ? "procedure" : o.ReturnType is { } rt ? "returns " + rt : null,
                     Parameters = labels.Select(l => new ParameterInfo { Label = l }).ToArray(),
                 }, Params: ps);

@@ -251,6 +251,7 @@ export interface CompleteParams {
   profileId?: string | null;
   database?: string | null;
   sessionId?: string | null;
+  schema?: string | null;
 }
 export interface CompletionItem {
   label: string;
@@ -1530,6 +1531,7 @@ export interface SignatureParams {
   profileId?: string | null;
   database?: string | null;
   sessionId?: string | null;
+  schema?: string | null;
 }
 export interface SnapColumn {
   name: string;
@@ -1560,6 +1562,7 @@ export interface SnapObject {
   note?: string | null;
   specObjectId?: number | null;
   members?: string[] | null;
+  targetObjectId?: number | null;
 }
 export interface SnapParam {
   name: string;

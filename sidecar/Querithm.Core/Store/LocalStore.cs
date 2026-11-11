@@ -176,7 +176,7 @@ public sealed class LocalStore
     }
 
     /// <summary>The schema version Schema.sql describes (PRAGMA user_version).</summary>
-    public const int Version = 8;
+    public const int Version = 9;
 
     /// <summary>
     /// Steps from version N-1 to N for files written by older builds, run before Schema.sql so its CREATE … IF NOT
@@ -250,6 +250,18 @@ public sealed class LocalStore
             if (!HasColumn(c, tx, "obj", "members")) c.Cmd("ALTER TABLE obj ADD COLUMN members TEXT;", tx).ExecuteNonQuery();
             if (HasTable(c, tx, "schema_snapshot") && HasTable(c, tx, "profile"))
                 c.Cmd("UPDATE schema_snapshot SET status = 'stale' WHERE status = 'fresh' AND profile_id IN (SELECT id FROM profile WHERE engine = 'oracle');", tx).ExecuteNonQuery();
+        }),
+        // Phase D4 S09: an Oracle synonym names the listed object it stands for, so tier-2 completion reads its columns and
+        // routines. Additive: an older build ignores the column. A synonym's marker does not change when this column first
+        // appears, so an incremental refresh would never fill it: Oracle snapshots are marked empty (one that failed keeps its
+        // error), and their next refresh is a full one (§8). The cached rows stay shown. Other engines list no synonym
+        // targets and stay as they are.
+        (9, (_, c, tx) =>
+        {
+            if (!HasTable(c, tx, "obj")) return;
+            if (!HasColumn(c, tx, "obj", "target_object_id")) c.Cmd("ALTER TABLE obj ADD COLUMN target_object_id INTEGER;", tx).ExecuteNonQuery();
+            if (HasTable(c, tx, "schema_snapshot") && HasTable(c, tx, "profile"))
+                c.Cmd("UPDATE schema_snapshot SET status = 'empty' WHERE status <> 'error' AND profile_id IN (SELECT id FROM profile WHERE engine = 'oracle');", tx).ExecuteNonQuery();
         }),
     ];
 

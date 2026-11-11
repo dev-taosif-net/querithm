@@ -15,7 +15,7 @@ import { monaco } from "./monaco";
 import { modelOwner, onEditorCreated, onModelContent, onModelDisposed, tabIdOfModel } from "./editors";
 import { useTabs } from "../store/tabs";
 import { useProfiles } from "../store/profiles";
-import { ensureTabSnapshot, tabScope, tabSnapshot } from "../store/snapshots";
+import { ensureTabSnapshot, loginSchemaOf, tabScope, tabSnapshot } from "../store/snapshots";
 import { isDisconnected } from "../store/connections";
 import { useSettings } from "../store/settings";
 import { snippetsFor, useSnippets } from "../snippets/snippetStore";
@@ -80,6 +80,15 @@ export function noteUsage(label: string) {
   usage.set(k, (usage.get(k) ?? 0) + 1);
 }
 
+/**
+ * D4 S09: the schema tier 2 resolves unqualified names in before any ALTER SESSION SET CURRENT_SCHEMA (Oracle: the login's),
+ * sent only when the dialect has one, so the other engines' requests stay as they were.
+ */
+export function schemaParam(profileId: string | null | undefined): { schema?: string } {
+  const schema = profileId ? loginSchemaOf(profileId) : null;
+  return schema ? { schema } : {};
+}
+
 // ---- tier 2 cache: (model version, offset) → items ----
 const tier2Cache = new Map<string, CompletionItem[]>();
 let tier2Timer: ReturnType<typeof setTimeout> | undefined;
@@ -107,7 +116,7 @@ function scheduleTier2(model: monaco.editor.ITextModel, ctx: DocContext, offset:
     try {
       const items = await rpc("lang.complete", {
         docId: ctx.docId ?? ctx.tabId, text: model.getValue(), offset, dialect: ctx.dialect, profileId: ctx.profileId ?? null, database: ctx.database ?? null,
-        ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
+        ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}), ...schemaParam(ctx.profileId),
       });
       pushStat(completionStats.tier2, performance.now() - t0);
       tier2Cache.clear();
@@ -550,6 +559,7 @@ export function installProviders() {
           const help = await rpc("lang.signature", {
             docId: ctx.docId ?? ctx.tabId, text, offset, dialect: ctx.dialect,
             profileId: ctx.profileId ?? null, database: ctx.database ?? null, ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
+            ...schemaParam(ctx.profileId),
           });
           if (token?.isCancellationRequested || model.getVersionId() !== version) return null;
           if (help.signatures?.length) {

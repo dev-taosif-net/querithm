@@ -186,6 +186,8 @@ export interface EngineTraits {
    * engine has savepoints; refused there where it has none). Null for the other modes.
    */
   actualPlanConfirm: string | null;
+  /** `explainAnalyze` engines: the confirm's button (D4 S09: Oracle runs no EXPLAIN ANALYZE). Null for the other modes. */
+  actualPlanRun: string | null;
   /** Extended Events trace (Trace tab). */
   trace: boolean;
   /** Step debugger for routines (Debug tab). */
@@ -228,6 +230,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     statisticsTime: true,
     actualPlan: "withRun",
     actualPlanConfirm: null,
+    actualPlanRun: null,
     trace: true,
     debugger: false,
     synonyms: true,
@@ -254,6 +257,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     actualPlan: "explainAnalyze",
     actualPlanConfirm:
       "EXPLAIN ANALYZE executes the statement. Querithm runs it inside a transaction and rolls it back; inside your open transaction it goes back to a savepoint, so your own changes stay. Sequence values it draws and anything it does outside this database (dblink, extensions that call out) are not undone.",
+    actualPlanRun: "Run EXPLAIN ANALYZE",
     trace: false,
     debugger: true,
     synonyms: false,
@@ -279,6 +283,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     statisticsTime: false,
     actualPlan: "none",
     actualPlanConfirm: null,
+    actualPlanRun: null,
     trace: false,
     debugger: false,
     synonyms: false,
@@ -304,6 +309,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     statisticsTime: false,
     actualPlan: "none",
     actualPlanConfirm: null,
+    actualPlanRun: null,
     trace: false,
     debugger: false,
     synonyms: false,
@@ -331,6 +337,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     actualPlan: "explainAnalyze",
     actualPlanConfirm:
       "EXPLAIN ANALYZE executes the statement. Querithm runs it inside a transaction and rolls it back, so its changes to data and tables are undone. DuckDB has no savepoints: while a transaction of yours is open, the actual plan is refused instead.",
+    actualPlanRun: "Run EXPLAIN ANALYZE",
     trace: false,
     debugger: false,
     synonyms: false,
@@ -342,7 +349,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     locations: ["file", "memory"],
   },
   // Phase D4, hidden engine (the picker offers only what the sidecar exposes). Since S06 the editor, profile dialog and
-  // Messages know it; plans, procedures, synonyms, the monitor and the rest stay off until their session (D4 S08–S12).
+  // Messages know it, since S09 plans; procedures, synonyms, the monitor and the rest stay off until their session (D4 S10–S12).
   oracle: {
     label: "Oracle Database",
     shortLabel: "Oracle",
@@ -359,8 +366,12 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     defaultDatabase: null,
     statisticsIo: false,
     statisticsTime: false,
-    actualPlan: "none",
-    actualPlanConfirm: null,
+    // D4 S09: the statement runs with GATHER_PLAN_STATISTICS inside a transaction Core rolls back (a savepoint inside the
+    // user's), and its statistics come from V$SQL_PLAN_STATISTICS_ALL.
+    actualPlan: "explainAnalyze",
+    actualPlanConfirm:
+      "An actual plan executes the statement and reads every row it returns. Querithm runs it inside a transaction and rolls it back; inside your open transaction it goes back to a savepoint, so your own changes stay. DDL is refused (Oracle commits it), and sequence values it draws are not undone.",
+    actualPlanRun: "Run for the actual plan",
     trace: false,
     debugger: false,
     synonyms: false,

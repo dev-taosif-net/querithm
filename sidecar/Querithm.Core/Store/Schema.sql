@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS obj (
   note TEXT,                                                              -- shown beside the name: invalid, materialized view … (v7)
   spec_object_id INTEGER,                                                 -- Oracle: a package body's specification (v8)
   members TEXT,                                                           -- Oracle: a package specification's subprograms, JSON array of display text (v8)
+  target_object_id INTEGER,                                               -- Oracle: the listed object a synonym names (v9)
   PRIMARY KEY (profile_id, database, object_id)
 );
 CREATE INDEX IF NOT EXISTS obj_name ON obj (profile_id, database, name COLLATE NOCASE);

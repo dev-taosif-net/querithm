@@ -198,6 +198,16 @@ public sealed class OracleMetadata : IMetadataProvider
               + " AND NOT EXISTS (SELECT 1 FROM o m WHERE m.owner = o.owner AND m.object_name = o.object_name AND m.object_type = 'MATERIALIZED VIEW') THEN 1 END"
             : "NULL";
         var trigger = Has(Piece.Triggers) ? "CASE WHEN p.object_id IS NOT NULL THEN 1 END" : "NULL";
+        // D4 S09: the listed object a synonym names (not across a database link), for tier-2 completion. Tables, views,
+        // routines, packages, types, sequences and synonyms share one namespace per schema; a materialized view outranks the
+        // container table of the same name, which is not listed.
+        var target = Has(Piece.Synonyms)
+            ? """
+              CASE WHEN o.object_type = 'SYNONYM' AND y.db_link IS NULL THEN
+                (SELECT MIN(t.object_id) KEEP (DENSE_RANK FIRST ORDER BY CASE t.object_type WHEN 'MATERIALIZED VIEW' THEN 0 ELSE 1 END) FROM o t
+                 WHERE t.owner = y.table_owner AND t.object_name = y.table_name AND t.object_type NOT IN ('PACKAGE BODY', 'TRIGGER')) END
+              """
+            : "NULL";
         var synonym = Has(Piece.Synonyms) ? "CASE WHEN o.owner <> 'PUBLIC' OR y.synonym_name IS NOT NULL THEN 1 END" : "CASE WHEN o.owner <> 'PUBLIC' THEN 1 END";
 
         return $"""
@@ -212,7 +222,8 @@ public sealed class OracleMetadata : IMetadataProvider
               {Or(Piece.Arguments, "CASE WHEN a.type_name IS NOT NULL THEN a.type_owner || '.' || a.type_name ELSE a.data_type END")} AS rtype,
               {Or(Piece.Triggers, "p.object_id")} AS parent, o.status,
               CASE WHEN o.object_type = 'PACKAGE' AND o.owner = SYS_CONTEXT('USERENV', 'SESSION_USER') THEN 'U'
-                ELSE {Or(Piece.ExternalTables, "CASE WHEN x.table_name IS NOT NULL THEN 'X' END")} END AS flag
+                ELSE {Or(Piece.ExternalTables, "CASE WHEN x.table_name IS NOT NULL THEN 'X' END")} END AS flag,
+              {target} AS target
             FROM o{joins}
             WHERE CASE o.object_type
               WHEN 'TABLE' THEN {table}
@@ -225,7 +236,7 @@ public sealed class OracleMetadata : IMetadataProvider
     }
 
     /// <summary>One row of <see cref="StampSql"/>, as the unit tests feed it.</summary>
-    internal sealed record StampRow(long Id, string Owner, string Name, string Type, long Marker, string? ReturnType, long? Parent, string? Status, string? Flag);
+    internal sealed record StampRow(long Id, string Owner, string Name, string Type, long Marker, string? ReturnType, long? Parent, string? Status, string? Flag, long? Target = null);
 
     internal static ObjectKind? KindOf(string type) => type switch
     {
@@ -298,8 +309,11 @@ public sealed class OracleMetadata : IMetadataProvider
                 spec = specs.TryGetValue((r.Owner, r.Name), out var sid) ? sid : null;
                 marker = Mix(marker, spec);
             }
+            // A synonym's target id is in its marker: a target listed for the first time (created later, a new grant) re-reads it.
+            long? target = kind == ObjectKind.Synonym ? r.Target : null;
+            if (kind == ObjectKind.Synonym) marker = Mix(marker, target);
             list.Add(new ObjectStamp(r.Id, r.Owner, r.Name, kind, marker, kind == ObjectKind.Func ? r.ReturnType : null,
-                kind == ObjectKind.Trigger ? r.Parent : null, Note: note, SpecObjectId: spec));
+                kind == ObjectKind.Trigger ? r.Parent : null, Note: note, SpecObjectId: spec, TargetObjectId: target));
         }
         return list;
     }
@@ -329,7 +343,7 @@ public sealed class OracleMetadata : IMetadataProvider
         await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         var rows = new List<StampRow>();
         while (await r.ReadAsync(ct).ConfigureAwait(false))
-            rows.Add(new StampRow(Long(r, 0), r.GetString(1), r.GetString(2), r.GetString(3), r.IsDBNull(4) ? 0 : Long(r, 4), Str(r, 5), LongOrNull(r, 6), Str(r, 7), Str(r, 8)));
+            rows.Add(new StampRow(Long(r, 0), r.GetString(1), r.GetString(2), r.GetString(3), r.IsDBNull(4) ? 0 : Long(r, 4), Str(r, 5), LongOrNull(r, 6), Str(r, 7), Str(r, 8), LongOrNull(r, 9)));
         return rows;
     }
 

@@ -7,7 +7,7 @@ namespace Querithm.Tests;
 /// D4 S02: Oracle tokenizer, SQL*Plus-style splitter, classifier, keywords and identifier quoting, with no server.
 /// Everything works on tokens (CLAUDE.md §2).
 /// </summary>
-public class OracleIntelligenceTests
+public partial class OracleIntelligenceTests
 {
     readonly OracleLanguageService _lang = new();
 

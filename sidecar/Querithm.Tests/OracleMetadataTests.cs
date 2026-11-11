@@ -41,6 +41,25 @@ public class OracleMetadataTests
         Assert.All(stamps, s => Assert.Equal("APP", s.Schema));
     }
 
+    [Fact]
+    public void A_synonym_names_its_listed_target_and_the_target_is_part_of_its_marker()
+    {
+        // D4 S09: tier-2 completion reads a synonym's columns through its target.
+        StampRow Syn(long? target) => new(1, "APP", "S", "SYNONYM", 10, null, null, "VALID", null, target);
+        var with = Assemble([Syn(7), new StampRow(7, "OWN", "T", "TABLE", 70, null, null, "VALID", null, 99)]).ToDictionary(s => s.Id);
+        Assert.Equal((long?)7, with[1].TargetObjectId);
+        Assert.Null(with[7].TargetObjectId); // only a synonym has a target, whatever the row says
+        var without = Assert.Single(Assemble([Syn(null)]));
+        Assert.Null(without.TargetObjectId);
+        // A target listed for the first time (created later, a new grant) re-reads the synonym.
+        Assert.NotEqual(without.Marker, with[1].Marker);
+        // The stamp query asks for it, never across a database link.
+        var sql = new OracleMetadata().StampSql(new HashSet<Piece>());
+        Assert.Contains("y.db_link IS NULL", sql);
+        Assert.Contains("AS target", sql);
+        Assert.DoesNotContain("AS target", new OracleMetadata().StampSql(new HashSet<Piece> { Piece.Synonyms }).Replace("NULL AS target", ""));
+    }
+
     static IEnumerable<string> Views(string sql) =>
         Regex.Matches(sql, @"\bALL_[A-Z_]+\b").Select(m => m.Value);
 

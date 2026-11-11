@@ -1,0 +1,108 @@
+{
+  "date": "2026-11-11T06:13:24.459Z",
+  "os": "Windows_NT 10.0.26200",
+  "cpu": "13th Gen Intel(R) Core(TM) i5-1335U",
+  "cores": 12,
+  "memGb": 24,
+  "results": {
+    "11b.oracle": {
+      "metric": "Oracle: execute → first batch on a cold pool connection (TCP, login, product + identity read, SELECT 1 FROM dual, median)",
+      "unit": "ms",
+      "target": 300,
+      "value": 41.09,
+      "pass": true,
+      "samples": [
+        524.1,
+        47.2,
+        37.5,
+        37.4,
+        43,
+        38.9,
+        40.3,
+        51.1,
+        36.3,
+        41.1,
+        38.3,
+        36.7,
+        41.8,
+        41.6,
+        44.5
+      ]
+    },
+    "9.oracle": {
+      "metric": "Oracle: metadata snapshot load from SQLite (600 tables, 150 views, 200 triggers)",
+      "unit": "ms",
+      "target": 80,
+      "value": 11.16,
+      "pass": true,
+      "objects": 1003,
+      "samples": [
+        45.143199999998615,
+        12.227499999993597,
+        10.9007000000056,
+        11.16320000000269,
+        9.749800000005052
+      ],
+      "statuses": [
+        "fresh",
+        "fresh",
+        "fresh",
+        "fresh",
+        "fresh"
+      ]
+    },
+    "10.oracle": {
+      "metric": "Oracle: incremental refresh with 10 changed objects (least-privileged user, ALL_* views)",
+      "unit": "ms",
+      "target": 2000,
+      "value": 1061.9,
+      "pass": true,
+      "samples": [
+        1089,
+        1019,
+        1039,
+        1168,
+        1062
+      ]
+    },
+    "5.oracle": {
+      "metric": "Oracle: tier-2 completion latency, 10k-line script on the 600-table fixture (p95)",
+      "unit": "ms",
+      "target": 150,
+      "value": 26.15,
+      "pass": true,
+      "p95": 26.151899999997113,
+      "lines": 10000,
+      "itemsPerCall": 15,
+      "samples": 60
+    },
+    "27.oracle": {
+      "metric": "Oracle: tier-2 completion latency in a 10k-line PL/SQL package body (cursor queries, SELECT INTO, UPDATE; p95)",
+      "unit": "ms",
+      "target": 150,
+      "value": 10.29,
+      "pass": true,
+      "lines": 10003,
+      "samples": 60,
+      "itemsPerCall": 15
+    },
+    "4.oracle": {
+      "metric": "Oracle: tier-1 completion latency in a 12k-line PL/SQL package body (p95)",
+      "unit": "ms",
+      "target": 5,
+      "value": 1.5,
+      "pass": true,
+      "samples": 300,
+      "schemaObjects": 49
+    },
+    "3.oracle": {
+      "metric": "Oracle: typing latency in a 12k-line PL/SQL package body (p95)",
+      "unit": "ms",
+      "target": 16,
+      "value": 8.5,
+      "pass": true,
+      "samples": 200,
+      "toPaintP95IncludingVsync": 18.3
+    }
+  }
+}

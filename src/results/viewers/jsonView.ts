@@ -179,9 +179,10 @@ function lineAndColumn(s: string, at: number): { line: number; column: number } 
  * The JSON plan forms Querithm opens as a plan: PostgreSQL's EXPLAIN (FORMAT JSON) `[{"Plan": …}]`; the sidecar's
  * SQLite query plan `[{"text", "rows": [[id, parent, detail], …]}]` (format "sqlite-eqp"); and its MySQL plan
  * `[{"text", "plan": "<EXPLAIN FORMAT=JSON text>"}]` (format "mysql-json"); and its DuckDB plan
- * `[{"text", "actual", "plan": <EXPLAIN (FORMAT JSON) value>}]` (format "duckdb-json").
+ * `[{"text", "actual", "plan": <EXPLAIN (FORMAT JSON) value>}]` (format "duckdb-json"); and its Oracle plan
+ * `[{"text", "actual", "operations": [{id, parentId, operation, …}]}]` (format "oracle-json", D4 S09).
  */
-export type JsonPlanFormat = "explainJson" | "sqliteEqp" | "mysqlJson" | "duckdbJson";
+export type JsonPlanFormat = "explainJson" | "sqliteEqp" | "mysqlJson" | "duckdbJson" | "oracleJson";
 
 export function jsonPlanOf(text: string): JsonPlanFormat | null {
   if (!text.trimStart().startsWith("[")) return null;
@@ -194,6 +195,7 @@ export function jsonPlanOf(text: string): JsonPlanFormat | null {
     if (Array.isArray(first.rows) && first.rows.every((r) => Array.isArray(r) && r.length === 3)) return "sqliteEqp";
     if (typeof first.plan === "string") return "mysqlJson";
     if (typeof first.actual === "boolean" && first.plan !== null && typeof first.plan === "object") return "duckdbJson";
+    if (typeof first.actual === "boolean" && Array.isArray(first.operations)) return "oracleJson";
     return null;
   } catch {
     return null;

@@ -48,7 +48,8 @@ public sealed class OracleProvider : IDbProvider
     public bool StopOnBatchError => true;
     public IMetadataProvider Metadata => _metadata;
     readonly OracleMetadata _metadata = new();
-    public IPlanProvider Plans { get; } = OracleUnavailable.Instance;
+    /// <summary>EXPLAIN PLAN / PLAN_TABLE and GATHER_PLAN_STATISTICS / V$SQL_PLAN_STATISTICS_ALL since D4 S09.</summary>
+    public IPlanProvider Plans { get; } = new OraclePlans();
     /// <summary>Packages since D4 S08; every other kind refuses until D4 S11.</summary>
     public IObjectScripter Scripter => _scripter ??= new OracleScripter(_metadata);
     OracleScripter? _scripter;
@@ -369,13 +370,14 @@ public sealed class OracleProvider : IDbProvider
     {
         Trace = CapabilityInfo.No("Querithm does not implement tracing for Oracle."),
         Debugger = CapabilityInfo.No("Querithm does not implement a PL/SQL debugger."),
-        EstimatedPlan = CapabilityInfo.No("Plans for Oracle are not available in this build of Querithm yet."),
-        ActualPlan = CapabilityInfo.No("Plans for Oracle are not available in this build of Querithm yet."),
+        // Grants are checked when a plan is asked for (PLAN_TABLE, V$SESSION + V$SQL_PLAN_STATISTICS_ALL): the refusal names them.
+        EstimatedPlan = CapabilityInfo.Yes,
+        ActualPlan = CapabilityInfo.Yes,
         CreateOrAlter = false,
         EncryptStrict = false,
         MajorVersion = MajorOf(connection.ServerVersion),
         EngineEdition = Product(connection).Name,
-        CompletionTier = "none",
+        CompletionTier = "tier1+tier2",
         Namespaces = NamespaceModel.Schemas,
         Product = Product(connection),
     });

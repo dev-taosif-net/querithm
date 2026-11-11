@@ -87,6 +87,12 @@ public sealed record SnapObject
     /// completion, navigation, rename and compare do not use them. Null for every other kind.
     /// </summary>
     public string[]? Members { get; init; }
+    /// <summary>
+    /// Phase D4 S09 (Oracle): the object a synonym names, when that object is in this snapshot (a table, view, routine or
+    /// another synonym of a listed schema; not one across a database link). Tier-2 completion reads a synonym's columns and
+    /// routines through it. Null for every other kind and engine.
+    /// </summary>
+    public long? TargetObjectId { get; init; }
 }
 
 public sealed record SchemaSnapshot

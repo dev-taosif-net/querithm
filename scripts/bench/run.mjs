@@ -19,7 +19,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-import { bigPlpgsql, bigProc, bigResultQuery } from "./gen-schema.mjs";
+import { bigPlpgsql, bigPlsqlTier2, bigProc, bigResultQuery } from "./gen-schema.mjs";
 import { fixturePassword } from "../fixture/fixture-secrets.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -101,6 +101,9 @@ const TARGETS = {
   // D4 S06: the editor on an Oracle tab (oracle language, Oracle lexer rules, the app user's snapshot).
   "3.oracle": ["Oracle: typing latency in a 12k-line PL/SQL package body (p95)", "ms", 16],
   "4.oracle": ["Oracle: tier-1 completion latency in a 12k-line PL/SQL package body (p95)", "ms", 5],
+  // D4 S09: tier 2 on the app user's snapshot of the bench schema (600 tables × 15 columns).
+  "5.oracle": ["Oracle: tier-2 completion latency, 10k-line script on the 600-table fixture (p95)", "ms", 150],
+  "27.oracle": ["Oracle: tier-2 completion latency in a 10k-line PL/SQL package body (cursor queries, SELECT INTO, UPDATE; p95)", "ms", 150],
   "11cold.mysql": ["MySQL: execute → first batch on a cold pool connection (TCP, TLS, login, identity read, SELECT 1, median)", "ms", 300],
   "8.mysql": ["MySQL: database switch on an existing connection (COM_INIT_DB, median)", "ms", 20],
   "15.mysql": ["MySQL: cancel latency (KILL QUERY on a side connection)", "ms", 500],
@@ -673,15 +676,15 @@ async function previewPatchMetric({ call, until }, run, sessionId, { engine, set
  * #5 per engine: tier-2 completion in a 10,000-line script of joins over the 600-table fixture — `lang.complete` roundtrip
  * after `a.` at 60 places spread over the script (first 5 dropped), against the session's snapshot.
  */
-async function tier2Metric({ call }, { dialect, profileId, database, sessionId }) {
-  const lines = Array.from({ length: 10_000 }, (_, i) => `SELECT a.id, a.c0, b.c1 FROM t${(i % 599) + 1} a JOIN t${(i % 599) + 2} b ON b.id = a.id WHERE a.c2 = 'x${i}';`);
+async function tier2Metric({ call }, { dialect, profileId, database, sessionId, table = "t", schema }) {
+  const lines = Array.from({ length: 10_000 }, (_, i) => `SELECT a.id, a.c0, b.c1 FROM ${table}${(i % 599) + 1} a JOIN ${table}${(i % 599) + 2} b ON b.id = a.id WHERE a.c2 = 'x${i}';`);
   const text = lines.join("\n");
   const at = Array.from({ length: 60 }, (_, i) => text.indexOf("SELECT a.", Math.floor((text.length * i) / 60)) + "SELECT a.".length);
   const samples = [];
   let items = 0;
   for (const offset of at) {
     const t0 = performance.now();
-    const r = await call("lang.complete", { docId: `bench-tier2-${dialect}`, text, offset, dialect, profileId, database, sessionId });
+    const r = await call("lang.complete", { docId: `bench-tier2-${dialect}`, text, offset, dialect, profileId, database, sessionId, ...(schema ? { schema } : {}) });
     samples.push(performance.now() - t0);
     items += r.length;
   }
@@ -989,6 +992,29 @@ END;
         if (e.changed < 10) throw new Error(`#10.oracle: the refresh saw ${e.changed} changed objects, not 10`);
       }
       record("10.oracle", median(incr), { samples: incr.map((x) => Math.round(x)) });
+
+      // #5.oracle / #27.oracle (D4 S09): tier 2 on that snapshot, in the login's schema (unqualified names resolve there).
+      const schema = ORACLE.user.toUpperCase();
+      const t2 = await tier2Metric(sc, { dialect: "oracle", profileId: profile.id, database: ORACLE.service, sessionId, table: "qb_t", schema });
+      record("5.oracle", t2.p95, t2);
+      const pl = bigPlsqlTier2();
+      const marks = ["(SELECT a.", "WHERE x.", "SET u."];
+      const at = [];
+      for (let i = 0; i < 60; i++) {
+        let o = -1;
+        for (let k = 0, n = 20 + i * 15; k <= n; k++) o = pl.indexOf(marks[i % 3], o + 1);
+        at.push(o + marks[i % 3].length);
+      }
+      const plComp = [];
+      let items = 0;
+      for (const offset of at) {
+        const t0 = performance.now();
+        const r = await call("lang.complete", { docId: "bench-complete-oracle", text: pl, offset, dialect: "oracle", profileId: profile.id, database: ORACLE.service, schema });
+        plComp.push(performance.now() - t0);
+        items += r.length;
+      }
+      if (items === 0) throw new Error("#27.oracle: tier 2 offered no columns inside the package body");
+      record("27.oracle", p95(plComp.slice(5)), { lines: pl.split("\n").length, samples: plComp.length, itemsPerCall: Math.round(items / at.length) });
     } finally {
       await run(dropAll);
     }

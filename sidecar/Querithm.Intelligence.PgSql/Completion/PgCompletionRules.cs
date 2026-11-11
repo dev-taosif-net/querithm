@@ -41,6 +41,30 @@ public sealed class PgCompletionRules
     /// </summary>
     public IReadOnlyList<SnapObject> BuiltinRoutines { get; init; } = [];
 
+    /// <summary>The spelling an unquoted name folds to when <see cref="FoldsUnquoted"/> (PostgreSQL: lower case; Oracle: upper case).</summary>
+    public Func<string, string> Fold { get; init; } = s => s.ToLowerInvariant();
+
+    /// <summary>
+    /// Schemas whose objects an unqualified name also reaches after <see cref="DefaultSchema"/>, in order, and which are
+    /// never written as a qualifier (Oracle: PUBLIC, the public synonyms). Their objects are labelled without a schema.
+    /// </summary>
+    public IReadOnlyList<string> SearchPath { get; init; } = [];
+
+    /// <summary>An unterminated string literal by the dialect's own quoting (Oracle's q'[…]'), when the default check cannot tell.</summary>
+    public Func<PgToken, bool>? StringOpen { get; init; }
+
+    /// <summary>
+    /// Routines a dotted call names that the snapshot holds only as display text (Oracle package subprograms): the folded
+    /// name chain before the parenthesis (pkg.member, schema.pkg.member) → routines for signature help and named arguments.
+    /// </summary>
+    public Func<SchemaSnapshot, IReadOnlyList<string>, IReadOnlyList<SnapObject>>? MemberRoutines { get; init; }
+
+    /// <summary>How signature help names a routine (default: schema.name, each part quoted when it needs it).</summary>
+    public Func<SnapObject, string>? RoutineLabel { get; init; }
+
+    /// <summary>A schema whose objects are written without a qualifier: the default one and <see cref="SearchPath"/>.</summary>
+    public bool Unqualified(string schema) => schema == DefaultSchema || SearchPath.Contains(schema);
+
     internal readonly ConditionalWeakTable<SchemaSnapshot, PgSchema> Schemas = new();
 
     public string Quote(string name) => IsPlain(name) ? name : Delimit(name);

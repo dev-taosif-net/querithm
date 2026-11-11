@@ -34,6 +34,7 @@ public static class PlanParsing
             Engine.Sqlite => ParseOrInvalid(provider.Plans, p.Raw, "sqlite-eqp"),
             Engine.MySql => ParseOrInvalid(provider.Plans, p.Raw, "mysql-json"),
             Engine.DuckDb => ParseOrInvalid(provider.Plans, p.Raw, "duckdb-json"),
+            Engine.Oracle => ParseOrInvalid(provider.Plans, p.Raw, "oracle-json"),
             _ => throw QuerithmException.Invalid($"Plans of {ProfileRules.EngineName(p.Engine)} cannot be opened from text."),
         };
     }

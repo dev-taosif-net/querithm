@@ -18,7 +18,8 @@ export type PlanFormat = "showplan" | JsonPlanFormat;
 
 /**
  * Which engine's parser reads a plan value, and how the button names it: showplan XML is SQL Server's, EXPLAIN JSON
- * PostgreSQL's; the SQLite, MySQL and DuckDB forms are what the sidecar returns as "sqlite-eqp", "mysql-json" and "duckdb-json".
+ * PostgreSQL's; the SQLite, MySQL, DuckDB and Oracle forms are what the sidecar returns as "sqlite-eqp", "mysql-json",
+ * "duckdb-json" and "oracle-json".
  */
 export const PLAN_FORMATS: Record<PlanFormat, { engine: Engine; title: string }> = {
   showplan: { engine: "mssql", title: "Show this SQL Server showplan in the Plan panel" },
@@ -26,6 +27,7 @@ export const PLAN_FORMATS: Record<PlanFormat, { engine: Engine; title: string }>
   sqliteEqp: { engine: "sqlite", title: "Show this SQLite query plan in the Plan panel" },
   mysqlJson: { engine: "mySql", title: "Show this MySQL EXPLAIN plan in the Plan panel" },
   duckdbJson: { engine: "duckDb", title: "Show this DuckDB plan in the Plan panel" },
+  oracleJson: { engine: "oracle", title: "Show this Oracle plan in the Plan panel" },
 };
 
 export function planEngine(format: PlanFormat): Engine {

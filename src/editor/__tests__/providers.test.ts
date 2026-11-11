@@ -91,6 +91,26 @@ describe("session-owned engines (SQLite, Phase D0d)", () => {
   });
 });
 
+describe("Oracle tier 2 (D4 S09)", () => {
+  it("names the login's schema, so the sidecar resolves unqualified names there; other engines send none", async () => {
+    vi.useFakeTimers();
+    useProfiles.setState({ profiles: [{ id: "ora", name: "Ora", engine: "oracle", username: "querithm_app", environment: "dev" } as never, { id: "p2", engine: "pg", username: "postgres" } as never] });
+    expect(P.schemaParam("ora")).toEqual({ schema: "QUERITHM_APP" });
+    expect(P.schemaParam("p2")).toEqual({});
+    expect(P.schemaParam(null)).toEqual({});
+    const text = "select * from emp";
+    const model = new FakeModel(text, "oracle", { toString: () => "u://ora1" }) as FakeModel & { tabId: string };
+    model.tabId = "ora1";
+    useTabs.setState({ tabs: { ...useTabs.getState().tabs, ora1: { id: "ora1", title: "q", profileId: "ora", database: "FREEPDB1", sessionId: "s9" } as never } });
+    useSnapshots.setState({ entries: { ...useSnapshots.getState().entries, [snapKey("ora", "FREEPDB1")]: { key: snapKey("ora", "FREEPDB1"), profileId: "ora", database: "FREEPDB1", status: "fresh", index: IDX, version: 1 } } });
+    rpc.mockResolvedValue([]);
+    completion("oracle").provideCompletionItems(model, pos(model, text.length));
+    await vi.advanceTimersByTimeAsync(130);
+    expect(rpc).toHaveBeenCalledWith("lang.complete", expect.objectContaining({ dialect: "oracle", profileId: "ora", schema: "QUERITHM_APP" }));
+    useProfiles.setState({ profiles: [] });
+  });
+});
+
 describe("document lifetime (M12)", () => {
   it("a disposed model (a closed tab, a deleted notebook cell) is forgotten by the sidecar under its docId", async () => {
     rpc.mockResolvedValue(undefined);

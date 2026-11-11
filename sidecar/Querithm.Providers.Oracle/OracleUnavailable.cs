@@ -5,23 +5,17 @@ using Querithm.Contract.Providers;
 namespace Querithm.Providers.Oracle;
 
 /// <summary>
-/// The Oracle services a later D4 session implements — plans (S09), scripting (S11; packages are <see cref="OracleScripter"/> since S08), grid edit and import (S10): each call
+/// The Oracle services a later D4 session implements — scripting (S11; packages are <see cref="OracleScripter"/> since S08), grid edit and import (S10): each call
 /// refuses with the reason (metadata is <see cref="OracleMetadata"/> since D4 S05). <see cref="OracleProvider.FeatureRefusal"/> refuses the features that use
 /// them; they exist so the engine compiles end to end and each session replaces one. Transactions are
 /// <see cref="OracleTransactions"/> since D4 S03.
 /// </summary>
-internal sealed class OracleUnavailable : IPlanProvider, IObjectScripter, IDataEditDialect, IImportDialect
+internal sealed class OracleUnavailable : IObjectScripter, IDataEditDialect, IImportDialect
 {
     public static readonly OracleUnavailable Instance = new();
     internal const string Reason = "This is not available for Oracle in this build of Querithm yet.";
     static NotSupportedException Refused() => new(Reason);
     static Task<T> RefusedTask<T>() => Task.FromException<T>(Refused());
-
-    // ---- plans ----
-    public Task<PlanResult> GetPlanAsync(DbConnection connection, string sql, PlanMode mode, CancellationToken ct) => RefusedTask<PlanResult>();
-    /// <summary>InvalidOperationException: plan.parse reports it as "not a plan Querithm can read".</summary>
-    public PlanTree Parse(string raw) => throw new InvalidOperationException("Plans for Oracle are not available in this build of Querithm yet.");
-    public string? Refusal(string sql, PlanMode mode) => "Plans for Oracle are not available in this build of Querithm yet.";
 
     // ---- scripting ----
     public Task<string> ScriptAsync(DbConnection connection, ObjectRef obj, ScriptKind kind, CancellationToken ct) => RefusedTask<string>();

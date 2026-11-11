@@ -123,6 +123,31 @@ export function bigPlpgsql() {
   return L.join("\n");
 }
 
+/**
+ * #27.oracle (D4 S09): a 10,000-line PL/SQL package body over the bench schema (QB_T1 … QB_T600, columns ID, C0 … C13): each
+ * procedure loops over a cursor query, selects INTO a variable and updates, so tier 2 completes the SQL inside the block.
+ */
+export function bigPlsqlTier2() {
+  const L = ["CREATE OR REPLACE PACKAGE BODY qb_bench_pkg AS"];
+  for (let k = 0; L.length < 9996; k++) {
+    const t = `qb_t${(k % TABLES) + 1}`;
+    L.push(
+      `  PROCEDURE p${k}(p_id IN NUMBER) IS`,
+      `    v_count NUMBER := 0;`,
+      `    v_label VARCHAR2(40);`,
+      `  BEGIN`,
+      `    FOR r IN (SELECT a.id, a.c0 FROM ${t} a WHERE a.c1 > p_id) LOOP`,
+      `      v_count := v_count + 1;`,
+      `    END LOOP;`,
+      `    SELECT MAX(x.c2) INTO v_label FROM ${t} x WHERE x.id = p_id;`,
+      `    UPDATE ${t} u SET u.c3 = v_label WHERE u.id = p_id;`,
+      `  END p${k};`,
+    );
+  }
+  L.push("END qb_bench_pkg;", "/");
+  return L.join("\n");
+}
+
 function mssql() {
   const out = [];
   out.push("IF DB_ID('SalesDB') IS NULL CREATE DATABASE SalesDB;", "GO", "USE SalesDB;", "GO");

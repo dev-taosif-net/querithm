@@ -77,14 +77,15 @@ public sealed class MetadataStore(LocalStore store)
 
         var members = (details.Members ?? []).GroupBy(x => x.ObjectId)
             .ToDictionary(g => g.Key, g => JsonSerializer.Serialize(g.OrderBy(x => x.Ordinal).Select(x => x.Text).ToArray(), StoreJsonContext.Default.StringArray));
-        using (var cmd = c.Cmd("INSERT OR REPLACE INTO obj (profile_id, database, object_id, schema_name, name, kind, modify_date, return_type, parent_object_id, no_rollback_engine, note, spec_object_id, members) VALUES ($p,$d,$id,$s,$n,$k,$m,$rt,$par,$nr,$note,$spec,$mem)", tx))
+        using (var cmd = c.Cmd("INSERT OR REPLACE INTO obj (profile_id, database, object_id, schema_name, name, kind, modify_date, return_type, parent_object_id, no_rollback_engine, note, spec_object_id, members, target_object_id) VALUES ($p,$d,$id,$s,$n,$k,$m,$rt,$par,$nr,$note,$spec,$mem,$tgt)", tx))
         {
             var pId = Param(cmd, "$p", profileId); var pDb = Param(cmd, "$d", database);
             var id = Param(cmd, "$id"); var s = Param(cmd, "$s"); var n = Param(cmd, "$n"); var k = Param(cmd, "$k"); var m = Param(cmd, "$m"); var rt = Param(cmd, "$rt"); var par = Param(cmd, "$par"); var nr = Param(cmd, "$nr"); var note = Param(cmd, "$note");
-            var spec = Param(cmd, "$spec"); var mem = Param(cmd, "$mem");
+            var spec = Param(cmd, "$spec"); var mem = Param(cmd, "$mem"); var tgt = Param(cmd, "$tgt");
             foreach (var o in changed)
             {
                 spec.Value = (object?)o.SpecObjectId ?? DBNull.Value;
+                tgt.Value = (object?)o.TargetObjectId ?? DBNull.Value;
                 mem.Value = members.TryGetValue(o.Id, out var json) ? json : DBNull.Value;
                 id.Value = o.Id; s.Value = o.Schema; n.Value = o.Name; k.Value = EnumText.Of(o.Kind); m.Value = o.Marker; rt.Value = (object?)o.ReturnType ?? DBNull.Value;
                 par.Value = (object?)o.ParentObjectId ?? DBNull.Value;
@@ -198,7 +199,7 @@ public sealed class MetadataStore(LocalStore store)
             }
 
         var objects = new List<SnapObject>();
-        using (var cmd = c.Cmd($"SELECT object_id, schema_name, name, kind, return_type, modify_date, parent_object_id, no_rollback_engine, note, spec_object_id, members FROM obj WHERE profile_id=$p AND database=$d{filter} ORDER BY schema_name, name", null, key))
+        using (var cmd = c.Cmd($"SELECT object_id, schema_name, name, kind, return_type, modify_date, parent_object_id, no_rollback_engine, note, spec_object_id, members, target_object_id FROM obj WHERE profile_id=$p AND database=$d{filter} ORDER BY schema_name, name", null, key))
         using (var r = cmd.ExecuteReader())
             while (r.Read())
             {
@@ -209,7 +210,7 @@ public sealed class MetadataStore(LocalStore store)
                 {
                     Id = oid, Schema = r.Str(1) ?? "", Name = r.Str(2) ?? "", Kind = kind, ReturnType = r.Str(4),
                     ModifyDate = r.Long(5), ParentObjectId = r.Long(6),
-                    NoRollbackEngine = r.Str(7), Note = r.Str(8), SpecObjectId = r.Long(9), Members = NotesOf(r.Str(10)),
+                    NoRollbackEngine = r.Str(7), Note = r.Str(8), SpecObjectId = r.Long(9), Members = NotesOf(r.Str(10)), TargetObjectId = r.Long(11),
                     Columns = columns.TryGetValue(oid, out var cl) ? cl.ToArray() : null,
                     Params = parms.TryGetValue(oid, out var pl) ? pl.ToArray() : null,
                 });

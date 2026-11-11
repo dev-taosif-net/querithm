@@ -57,6 +57,15 @@ BEGIN
   EXECUTE IMMEDIATE 'CREATE OR REPLACE PACKAGE BODY querithm_own.shared_pkg AS PROCEDURE p(a NUMBER) IS BEGIN NULL; END; PROCEDURE p(a VARCHAR2) IS BEGIN NULL; END; END;';
   EXECUTE IMMEDIATE 'GRANT EXECUTE ON querithm_own.shared_pkg TO querithm_app, querithm_mon';
   EXECUTE IMMEDIATE 'GRANT DEBUG ON querithm_own.shared_pkg TO querithm_mon';
+  -- D4 S09: the table the catalog-role user's actual plans run against (50 rows; the plans are always rolled back). The
+  -- tests grant nothing themselves: a grant left behind would change what the metadata tests see.
+  SELECT COUNT(*) INTO n FROM dba_objects WHERE owner = 'QUERITHM_OWN' AND object_name = 'PLAN_T';
+  IF n = 0 THEN
+    EXECUTE IMMEDIATE 'CREATE TABLE querithm_own.plan_t (id NUMBER(10) PRIMARY KEY, v VARCHAR2(20))';
+    EXECUTE IMMEDIATE 'INSERT INTO querithm_own.plan_t SELECT level, ''v'' || level FROM dual CONNECT BY level <= 50';
+    COMMIT;
+  END IF;
+  EXECUTE IMMEDIATE 'GRANT SELECT, DELETE ON querithm_own.plan_t TO querithm_mon';
 END;
 /
 -- D4 S05: the metadata tests create a materialized view and an external table (its directory is never read: no file).

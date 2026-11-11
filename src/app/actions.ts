@@ -1119,7 +1119,7 @@ export async function showPlan(tabId: string, mode: "estimated" | "actual") {
         return;
       case "explainAnalyze": {
         const ok = await ask<boolean>((resolve) => ({
-          kind: "confirm", title: "Run the query for an actual plan?", danger: true, ok: "Run EXPLAIN ANALYZE",
+          kind: "confirm", title: "Run the query for an actual plan?", danger: true, ok: traits.actualPlanRun ?? "Run EXPLAIN ANALYZE",
           body: traits.actualPlanConfirm ?? "EXPLAIN ANALYZE executes the statement.",
           resolve,
         }));

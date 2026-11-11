@@ -97,6 +97,11 @@ describe("buildJsonView", () => {
     expect(ok('[{"text": "SELECT 1", "plan": "{\\"query_block\\": {}}"}]').jsonPlan).toBe("mysqlJson");
     expect(ok('[{"text": "SELECT 1", "actual": false, "plan": [{"name": "PROJECTION", "children": []}]}]').jsonPlan).toBe("duckdbJson");
     expect(ok('[{"text": "SELECT 1", "actual": true, "plan": {"latency": 0.1, "children": []}}]').jsonPlan).toBe("duckdbJson");
+    // D4 S09: the sidecar's Oracle plan (format "oracle-json"), estimated or actual.
+    expect(ok('[{"text": "SELECT 1 FROM dual", "actual": false, "operations": [{"id": 0, "operation": "SELECT STATEMENT", "cost": 2}]}]').jsonPlan).toBe("oracleJson");
+    expect(ok('[{"text": "SELECT 1 FROM dual", "actual": true, "operations": []}]').jsonPlan).toBe("oracleJson");
+    expect(ok('[{"text": "x", "operations": []}]').jsonPlan).toBeNull();
+    expect(ok('[{"text": "x", "actual": true, "operations": {}}]').jsonPlan).toBeNull();
     expect(ok('[{"text": "x", "rows": [[1, 2]]}]').jsonPlan).toBeNull();
     expect(ok('[{"text": "x", "plan": {}}]').jsonPlan).toBeNull();
     expect(ok('[{"plan": "x"}]').jsonPlan).toBeNull();

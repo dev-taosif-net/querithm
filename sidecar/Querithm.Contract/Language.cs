@@ -17,6 +17,11 @@ public sealed record CompleteParams
     public string? Database { get; init; }
     /// <summary>Phase D0d: the tab's session, so completion sees its in-memory database or temporary tables.</summary>
     public string? SessionId { get; init; }
+    /// <summary>
+    /// Phase D4 S09: the schema unqualified names resolve to before any <c>ALTER SESSION SET CURRENT_SCHEMA</c> in the text
+    /// (Oracle: the signed-in user's schema, in dictionary spelling); null for the other engines. Only compared with names.
+    /// </summary>
+    public string? Schema { get; init; }
 }
 
 public sealed record CompletionItem
@@ -90,6 +95,8 @@ public sealed record SignatureParams
     public string? Database { get; init; }
     /// <summary>Phase D0d: the tab's session (see <see cref="CompleteParams.SessionId"/>).</summary>
     public string? SessionId { get; init; }
+    /// <summary>Phase D4 S09: see <see cref="CompleteParams.Schema"/>.</summary>
+    public string? Schema { get; init; }
 }
 
 public sealed record ParameterInfo

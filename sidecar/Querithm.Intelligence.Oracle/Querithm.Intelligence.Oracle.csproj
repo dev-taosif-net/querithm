@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="..\Querithm.Contract\Querithm.Contract.csproj" />
+    <!-- Tier 2 completion (D4 S09): PostgreSQL's token-scoped engine under Oracle's rules (OracleCompletion). -->
+    <ProjectReference Include="..\Querithm.Intelligence.PgSql\Querithm.Intelligence.PgSql.csproj" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Querithm.Tests" />

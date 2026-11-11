@@ -247,10 +247,11 @@ public class StoreMigrationTests : IDisposable
             """);
         SqliteConnection.ClearAllPools();
         var store = new LocalStore(path);
-        Assert.Equal(8L, Scalar(path, "PRAGMA user_version"));
+        Assert.Equal((long)LocalStore.Version, Scalar(path, "PRAGMA user_version"));
         Assert.True(HasColumn(path, "obj", "spec_object_id"));
         Assert.True(HasColumn(path, "obj", "members"));
-        Assert.Equal("stale", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'ora' AND database = 'FREEPDB1'"));
+        // Stale after step 8; step 9 (D4 S09, synonym targets) then empties it for a full refresh.
+        Assert.Equal("empty", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'ora' AND database = 'FREEPDB1'"));
         Assert.Equal("error", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'ora' AND database = 'OTHER'"));
         Assert.Equal("fresh", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'pg'"));
         var meta = new MetadataStore(store);
@@ -284,6 +285,55 @@ public class StoreMigrationTests : IDisposable
         // An incremental refresh that changes the body only keeps the specification's members.
         meta.ApplyRefresh("ora", "FREEPDB1", full: false, [new ObjectStamp(2, "APP", "PKG", ObjectKind.PackageBody, 23, null, SpecObjectId: 1)], [], new MetadataBundle([], [], [], []), "23.26");
         Assert.Equal(2, meta.Load("ora", "FREEPDB1").Objects.Single(o => o.Id == 1).Members!.Length);
+    }
+
+    [Fact]
+    public void A_v8_file_gains_the_synonym_target_column_and_its_Oracle_snapshots_are_read_again_in_full()
+    {
+        // D4 S09: obj.target_object_id. A synonym's marker does not change when the column appears, so an incremental refresh
+        // would never fill it in: an Oracle snapshot turns empty (its next refresh is full); one that failed keeps its error;
+        // every other engine's stays as it was.
+        var path = Path.Combine(_dir, "v8.db");
+        _ = new LocalStore(path);
+        Exec(path, """
+            ALTER TABLE obj DROP COLUMN target_object_id;
+            INSERT INTO profile (id, name, engine) VALUES ('ora', 'o', 'oracle'), ('pg', 'p', 'pg');
+            INSERT INTO schema_snapshot (profile_id, database, refreshed_at, server_version, status, error) VALUES
+              ('ora', 'FREEPDB1', 1000, '23.26', 'fresh', NULL), ('ora', 'STALE', 1000, '23.26', 'stale', NULL), ('pg', 'db', 1000, '16', 'fresh', NULL),
+              ('ora', 'OTHER', 1000, '23.26', 'error', 'x');
+            INSERT INTO obj (profile_id, database, object_id, schema_name, name, kind, modify_date) VALUES ('ora', 'FREEPDB1', 1, 'APP', 'S', 'synonym', 5),
+              ('pg', 'db', 1, 'public', 't', 'table', 5);
+            PRAGMA user_version = 8;
+            """);
+        SqliteConnection.ClearAllPools();
+        var store = new LocalStore(path);
+        Assert.Equal(9L, Scalar(path, "PRAGMA user_version"));
+        Assert.True(HasColumn(path, "obj", "target_object_id"));
+        Assert.Equal("empty", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'ora' AND database = 'FREEPDB1'"));
+        Assert.Equal("empty", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'ora' AND database = 'STALE'"));
+        Assert.Equal("error", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'ora' AND database = 'OTHER'"));
+        Assert.Equal("fresh", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'pg'"));
+        var meta = new MetadataStore(store);
+        var syn = Assert.Single(meta.Load("ora", "FREEPDB1").Objects); // the cached rows stay shown until the refresh
+        Assert.Equal((ObjectKind.Synonym, (long?)null), (syn.Kind, syn.TargetObjectId));
+        Assert.Null(Assert.Single(meta.Load("pg", "db").Objects).TargetObjectId);
+    }
+
+    [Fact]
+    public void A_synonyms_target_round_trips_through_the_store()
+    {
+        var path = Path.Combine(_dir, "syn.db");
+        var meta = new MetadataStore(new LocalStore(path));
+        meta.ApplyRefresh("ora", "FREEPDB1", full: true,
+        [
+            new ObjectStamp(1, "APP", "S", ObjectKind.Synonym, 11, null, TargetObjectId: 2),
+            new ObjectStamp(2, "OWN", "T", ObjectKind.Table, 22, null),
+            new ObjectStamp(3, "APP", "REMOTE", ObjectKind.Synonym, 33, null),
+        ], [], new MetadataBundle([], [], [], []), "23.26");
+        var objects = meta.Load("ora", "FREEPDB1").Objects.ToDictionary(o => o.Id);
+        Assert.Equal((long?)2, objects[1].TargetObjectId);
+        Assert.Null(objects[2].TargetObjectId);
+        Assert.Null(objects[3].TargetObjectId);
     }
 
     [Fact]

@@ -63,7 +63,7 @@ sealed class PgCompletionContext
     static bool Open(PgToken t) => t.Kind switch
     {
         PgTokenKind.Comment => t.Text.StartsWith("--", StringComparison.Ordinal) || !t.Text.EndsWith("*/", StringComparison.Ordinal),
-        PgTokenKind.String => t.Text.Length < 2 || !t.Text.EndsWith('\'') || t.Text.Length == 2 && t.Text[0] != '\'',
+        PgTokenKind.String => PgCompletionRules.Current.StringOpen?.Invoke(t) ?? (t.Text.Length < 2 || !t.Text.EndsWith('\'') || t.Text.Length == 2 && t.Text[0] != '\''),
         PgTokenKind.DollarString => !PgDocument.Terminated(t),
         _ => false,
     };

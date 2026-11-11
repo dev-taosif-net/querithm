@@ -69,7 +69,9 @@ public class OracleSkeletonTests
         Assert.NotNull(_oracle.ValidateProfile(p with { Location = LocationKind.File }));
         Assert.NotNull(_oracle.ValidateProfile(p with { Auth = AuthKind.Windows }));
         Assert.Equal(("db.invalid", 1521, (string?)null), _oracle.TunnelTarget(p));
-        Assert.NotNull(_oracle.Plans.Refusal("SELECT 1 FROM DUAL", PlanMode.Estimated));
+        // Plans since D4 S09 (OraclePlanTests): a query plans, a PL/SQL block has no plan.
+        Assert.Null(_oracle.Plans.Refusal("SELECT 1 FROM DUAL", PlanMode.Estimated));
+        Assert.NotNull(_oracle.Plans.Refusal("BEGIN NULL; END;", PlanMode.Estimated));
         Assert.Equal((2484, AuthKind.Password, "Oracle"), (_oracle.Traits.DefaultPort, _oracle.Traits.DefaultAuth, _oracle.Traits.Name));
         Assert.Equal("Oracle", ProfileRules.EngineName(Engine.Oracle));
     }

@@ -12,7 +12,7 @@ import {
 const ENGINE_TRAITS = {
   label: "string", shortLabel: "string", badge: "string", dialect: "string", language: "string", defaultSchema: "string|null",
   defaultPort: "number|null", defaultAuth: "string", defaultUser: "string|null", defaultDatabase: "string|null", statisticsIo: "boolean",
-  statisticsTime: "boolean", actualPlan: "string", actualPlanConfirm: "string|null", trace: "boolean", debugger: "boolean", synonyms: "boolean", packages: "boolean", triggerFunctions: "boolean",
+  statisticsTime: "boolean", actualPlan: "string", actualPlanConfirm: "string|null", actualPlanRun: "string|null", trace: "boolean", debugger: "boolean", synonyms: "boolean", packages: "boolean", triggerFunctions: "boolean",
   procedures: "boolean", monitor: "boolean", serverOutput: "boolean", locations: "object",
 } satisfies Record<keyof EngineTraits, string>;
 
@@ -37,6 +37,7 @@ describe("engine table", () => {
     expect(["withRun", "explainAnalyze", "none"]).toContain(t.actualPlan);
     // Only an engine that asks before EXPLAIN ANALYZE has the confirm's text, and it says the run is rolled back.
     expect(t.actualPlanConfirm !== null).toBe(t.actualPlan === "explainAnalyze");
+    expect(t.actualPlanRun !== null).toBe(t.actualPlan === "explainAnalyze");
     if (t.actualPlanConfirm) expect(t.actualPlanConfirm).toContain("rolls it back");
     expect(t.locations.length).toBeGreaterThan(0);
     // A server engine has a port and a default user; a database on this computer has neither.
@@ -72,7 +73,7 @@ describe("engine table", () => {
     expect(ENGINES.sqlite).toEqual({
       label: "SQLite", shortLabel: "SQLite", badge: "SL", dialect: "sqlite", language: "sqlite", defaultSchema: "main", defaultPort: null,
       defaultAuth: "none", defaultUser: null, defaultDatabase: "main", statisticsIo: false, statisticsTime: false, actualPlan: "none",
-      actualPlanConfirm: null, trace: false, debugger: false, synonyms: false, packages: false, triggerFunctions: false, procedures: false, monitor: false, serverOutput: false, locations: ["file", "memory"],
+      actualPlanConfirm: null, actualPlanRun: null, trace: false, debugger: false, synonyms: false, packages: false, triggerFunctions: false, procedures: false, monitor: false, serverOutput: false, locations: ["file", "memory"],
     });
   });
 
@@ -80,7 +81,7 @@ describe("engine table", () => {
     expect(ENGINES.mySql).toEqual({
       label: "MySQL / MariaDB", shortLabel: "MySQL", badge: "MY", dialect: "mySql", language: "mysql", defaultSchema: null, defaultPort: 3306,
       defaultAuth: "password", defaultUser: "root", defaultDatabase: null, statisticsIo: false, statisticsTime: false, actualPlan: "none",
-      actualPlanConfirm: null, trace: false, debugger: false, synonyms: false, packages: false, triggerFunctions: false, procedures: true, monitor: false, serverOutput: false, locations: ["server"],
+      actualPlanConfirm: null, actualPlanRun: null, trace: false, debugger: false, synonyms: false, packages: false, triggerFunctions: false, procedures: true, monitor: false, serverOutput: false, locations: ["server"],
     });
   });
 });
@@ -90,9 +91,12 @@ describe("Oracle (Phase D4, hidden engine)", () => {
     expect(ENGINES.oracle).toEqual({
       label: "Oracle Database", shortLabel: "Oracle", badge: "OR", dialect: "oracle", language: "oracle", defaultSchema: null,
       defaultPort: 2484, defaultAuth: "password", defaultUser: "system", defaultDatabase: null, statisticsIo: false,
-      statisticsTime: false, actualPlan: "none", actualPlanConfirm: null, trace: false, debugger: false, synonyms: false,
-      packages: true, triggerFunctions: false, procedures: false, monitor: false, serverOutput: true, locations: ["server"],
+      statisticsTime: false, actualPlan: "explainAnalyze", actualPlanConfirm: ENGINES.oracle.actualPlanConfirm, actualPlanRun: "Run for the actual plan",
+      trace: false, debugger: false, synonyms: false, packages: true, triggerFunctions: false, procedures: false, monitor: false, serverOutput: true,
+      locations: ["server"],
     });
+    // D4 S09: actual plans run the statement (GATHER_PLAN_STATISTICS) and are rolled back; DDL is refused, since Oracle commits it.
+    expect(ENGINES.oracle.actualPlanConfirm).toContain("DDL is refused");
     // D4 S08: the one engine whose explorer lists packages.
     expect(ENGINE_LIST.filter((e) => ENGINES[e].packages)).toEqual(["oracle"]);
     expect(isLocalEngine("oracle")).toBe(false);

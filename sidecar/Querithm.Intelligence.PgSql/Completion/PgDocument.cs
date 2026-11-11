@@ -10,7 +10,7 @@ readonly record struct Tok(PgTokenKind Kind, int Offset, int Length, string Text
     public int End => Offset + Length;
     public bool IsIdent => Kind is PgTokenKind.Word or PgTokenKind.QuotedIdent;
     /// <summary>The identifier as the dialect resolves it: quoted is exact; unquoted folds to lower case on PostgreSQL.</summary>
-    public string Name => Kind == PgTokenKind.QuotedIdent ? PgIdent.Unquote(Text) : PgCompletionRules.Current.FoldsUnquoted ? Text.ToLowerInvariant() : Text;
+    public string Name => Kind == PgTokenKind.QuotedIdent ? PgIdent.Unquote(Text) : PgCompletionRules.Current.FoldsUnquoted ? PgCompletionRules.Current.Fold(Text) : Text;
     public bool Is(string word) => Kind == PgTokenKind.Word && string.Equals(Text, word, StringComparison.OrdinalIgnoreCase);
     public bool IsP(string p) => Kind is PgTokenKind.Punct or PgTokenKind.Operator && Text == p;
 }
@@ -169,6 +169,9 @@ sealed class PgSchema
 {
     public required SchemaSnapshot Snapshot { get; init; }
     public required Dictionary<string, List<SnapObject>> ByName { get; init; }
+    /// <summary>Objects by id, for a synonym's target (<see cref="SnapObject.TargetObjectId"/>).</summary>
+    public required Dictionary<long, SnapObject> ById { get; init; }
+    public required IReadOnlyList<string> SearchPath { get; init; }
     public required HashSet<string> Schemas { get; init; }
     public required StringComparer Names { get; init; }
     public required string DefaultSchema { get; init; }
@@ -183,8 +186,24 @@ sealed class PgSchema
             if (!byName.TryGetValue(o.Name, out var list)) byName[o.Name] = list = [];
             list.Add(o);
         }
-        return new PgSchema { Snapshot = s, ByName = byName, Schemas = s.Objects.Select(o => o.Schema).ToHashSet(names), Names = names, DefaultSchema = PgCompletionRules.Current.DefaultSchema };
+        var byId = new Dictionary<long, SnapObject>();
+        foreach (var o in s.Objects) byId.TryAdd(o.Id, o);
+        return new PgSchema
+        {
+            Snapshot = s, ByName = byName, ById = byId, Schemas = s.Objects.Select(o => o.Schema).ToHashSet(names), Names = names,
+            DefaultSchema = PgCompletionRules.Current.DefaultSchema, SearchPath = PgCompletionRules.Current.SearchPath,
+        };
     });
+
+    /// <summary>The object a synonym stands for, through synonym chains (at most 8 hops); the object itself when it is none or its target is not listed.</summary>
+    public SnapObject Resolve(SnapObject o)
+    {
+        for (var hops = 0; hops < 8 && o.Kind == ObjectKind.Synonym && o.TargetObjectId is { } t && ById.TryGetValue(t, out var next); hops++) o = next;
+        return o;
+    }
+
+    /// <summary>A table or view, or a synonym of one (or of an object not listed, which may be one).</summary>
+    public bool IsRowset(SnapObject o) => IsRelation(o) || o.Kind == ObjectKind.Synonym && Resolve(o) is var t && (t.Kind == ObjectKind.Synonym || IsRelation(t));
 
     /// <summary>schema.name, or name resolved on the default search path (public first, else the only schema that has it).</summary>
     public SnapObject? Find(string? schema, string name, Func<SnapObject, bool> kind)
@@ -192,11 +211,17 @@ sealed class PgSchema
         if (!ByName.TryGetValue(name, out var list)) return null;
         var hits = list.Where(kind).ToList();
         if (schema != null) return hits.FirstOrDefault(o => Names.Equals(o.Schema, schema));
-        return hits.FirstOrDefault(o => Names.Equals(o.Schema, DefaultSchema)) ?? (hits.Count == 1 ? hits[0] : hits.FirstOrDefault(o => o.Schema != "pg_catalog"));
+        return hits.FirstOrDefault(o => Names.Equals(o.Schema, DefaultSchema))
+               ?? SearchPath.Select(p => hits.FirstOrDefault(o => Names.Equals(o.Schema, p))).FirstOrDefault(o => o != null)
+               ?? (hits.Count == 1 ? hits[0] : hits.FirstOrDefault(o => o.Schema != "pg_catalog"));
     }
 
+    /// <summary>Routines by name (a synonym of one included: the routine it stands for), in <paramref name="schema"/> when given.</summary>
     public IEnumerable<SnapObject> Routines(string? schema, string name) =>
-        ByName.TryGetValue(name, out var list) ? list.Where(o => o.Kind is ObjectKind.Func or ObjectKind.Tvf or ObjectKind.Proc && (schema == null || Names.Equals(o.Schema, schema))) : [];
+        ByName.TryGetValue(name, out var list)
+            ? list.Where(o => schema == null || Names.Equals(o.Schema, schema)).Select(o => o.Kind == ObjectKind.Synonym ? Resolve(o) : o)
+                .Where(o => o.Kind is ObjectKind.Func or ObjectKind.Tvf or ObjectKind.Proc).Distinct()
+            : [];
 
     public static bool IsRelation(SnapObject o) => o.Kind is ObjectKind.Table or ObjectKind.View;
 }

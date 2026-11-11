@@ -1480,6 +1480,20 @@ describe("showPlan", () => {
     await p;
     expect(h.rpc).toHaveBeenCalledWith("plan.get", planParams("actual"));
   });
+  it("Oracle (D4 S09): the actual plan asks first, naming the rollback and the DDL refusal, then sends plan.get", async () => {
+    useProfiles.setState({ profiles: [ms, pg, { id: "or1", name: "Ora", engine: "oracle", environment: "dev", auth: "password", username: "app" } as never], groups: [] });
+    h.rpc.mockResolvedValue({ executionId: "p5" });
+    const id = A.newQueryTab({ profileId: "or1" });
+    useTabs.getState().update(id, { sessionId: "s1" });
+    const p = A.showPlan(id, "actual");
+    await tick();
+    expect(dialogOf("confirm").ok).toBe("Run for the actual plan");
+    expect(dialogOf("confirm").body).toContain("rolls it back");
+    expect(dialogOf("confirm").body).toContain("DDL is refused");
+    answer("confirm", true);
+    await p;
+    expect(h.rpc).toHaveBeenCalledWith("plan.get", planParams("actual"));
+  });
   it.each([["sqlite", "SQLite"], ["mySql", "MySQL"]] as const)("%s: no actual plans; says so and sends nothing, the estimated plan still works", async (engine, name) => {
     useProfiles.setState({ profiles: [ms, pg, { id: "x1", name: "X", engine, environment: "dev", auth: "none" } as never], groups: [] });
     h.rpc.mockResolvedValue({ executionId: "p4" });

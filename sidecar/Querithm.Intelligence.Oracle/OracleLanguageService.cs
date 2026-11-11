@@ -1,5 +1,6 @@
 using Querithm.Contract;
 using Querithm.Contract.Providers;
+using Querithm.Intelligence.PgSql.Completion;
 
 namespace Querithm.Intelligence.Oracle;
 
@@ -305,10 +306,26 @@ public sealed class OracleLanguageService : IDialectService
         return names;
     }
 
-    public CompletionItem[] Complete(CompleteParams p, ISchemaSource schema) => [];
+    /// <summary>Tier 2 (D4 S09): <see cref="OracleCompletion"/> in the schema the cursor's statement runs in.</summary>
+    public CompletionItem[] Complete(CompleteParams p, ISchemaSource schema)
+    {
+        var text = p.Text ?? "";
+        using var _ = OracleCompletion.Use(OracleCompletion.SchemaAt(p.DocId, text, Math.Clamp(p.Offset, 0, text.Length), LoginSchema(p.Schema)));
+        return PgTier2Completion.Complete(p, schema);
+    }
+
+    /// <summary>Standalone routines from the snapshot (ALL_ARGUMENTS) and package subprograms from their member lines (D4 S09).</summary>
+    public SignatureHelp Signature(SignatureParams p, ISchemaSource schema)
+    {
+        var text = p.Text ?? "";
+        using var _ = OracleCompletion.Use(OracleCompletion.SchemaAt(p.DocId, text, Math.Clamp(p.Offset, 0, text.Length), LoginSchema(p.Schema)));
+        return PgTier2Completion.Signature(p, schema);
+    }
+
+    /// <summary>The webview's login schema (untrusted): a possible Oracle name, else none.</summary>
+    static string? LoginSchema(string? schema) => schema != null && OracleIdentifiers.Invalid(schema) == null ? schema : null;
     public Diagnostic[] Diagnostics(DiagnosticsParams p) => [];
     public FormatResult Format(FormatParams p) => new() { Text = p.Text, Error = NoFormatter };
-    public SignatureHelp Signature(SignatureParams p, ISchemaSource schema) => new() { Signatures = [] };
 
     /// <summary>One range per statement or PL/SQL unit that spans more than one line.</summary>
     public FoldingRange[] Folding(FoldingParams p) =>
@@ -367,5 +384,6 @@ public sealed class OracleLanguageService : IDialectService
         Extra = (tokens, i) => i >= 1 && tokens[i].Is("VALUES") && tokens[i - 1].Is("BY") && i + 1 < tokens.Count && tokens[i + 1].Kind == RedactTokenKind.String ? i + 1 : -1,
     };
 
-    public void Forget(string docId) { }
+    /// <summary>M12: the shared engine's document and scan caches (PostgreSQL's <see cref="DocumentCaches"/> holds both).</summary>
+    public void Forget(string docId) => DocumentCaches.Forget(docId);
 }

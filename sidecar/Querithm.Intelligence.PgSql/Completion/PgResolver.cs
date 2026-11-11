@@ -55,13 +55,13 @@ sealed class PgResolver(PgSchema? schema, PgDocument doc, int cursor)
     {
         if (schemaName == null && scope?.CteAt(name, at) is { } cte) return CteColumns(cte, scope);
         if (schemaName is null or "pg_temp" && Temp(name) is { } temp) return TempColumns(temp);
-        if (schema?.Find(schemaName, name, PgSchema.IsRelation) is { Columns: { } cols }) return cols.Select(c => new Col(c.Name, c.Type)).ToList();
+        if (schema?.Find(schemaName, name, schema.IsRowset) is { } o && schema.Resolve(o) is { Columns: { } cols }) return cols.Select(c => new Col(c.Name, c.Type)).ToList();
         return null;
     }
 
     public bool IsRelation(string? schemaName, string name, Scope? scope, int at) =>
         (schemaName == null && scope?.CteAt(name, at) != null) || (schemaName is null or "pg_temp" && Temp(name) != null) ||
-        schema?.Find(schemaName, name, PgSchema.IsRelation) != null;
+        schema?.Find(schemaName, name, schema.IsRowset) != null;
 
     /// <summary>A CTE's columns; its body also sees the CTEs of <paramref name="scope"/> (a later CTE reading an earlier one).</summary>
     public List<Col> CteColumns(Cte cte, Scope? scope = null) => Guard(cte, () =>
