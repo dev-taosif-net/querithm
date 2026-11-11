@@ -19,8 +19,9 @@ namespace Querithm.Providers.Oracle;
 /// with their position work. Since D4 S04 every Oracle type reaches the grid typed or as exact text (<see cref="OracleTypes"/>),
 /// DBMS_OUTPUT and compile errors are read after each batch (<see cref="OracleOutput"/>) and <c>:name</c> binds by name.
 /// Since D4 S05 the catalog is read (<see cref="OracleMetadata"/>). Since D4 S07 a profile goes through an SSH tunnel, Verify
-/// full still checking the real server name, and a lost connection says so; plans, scripting, grid edit and import still refuse with
-/// a reason until their session (D4 S08–S12).
+/// full still checking the real server name, and a lost connection says so. Since D4 S10 results of one plain table are
+/// edited in the grid (<see cref="OracleDataEdit"/>) and files are imported with array binding (<see cref="OracleImport"/>);
+/// the features still refusing say so until their session (D4 S11–S12).
 /// </summary>
 public sealed class OracleProvider : IDbProvider
 {
@@ -55,8 +56,10 @@ public sealed class OracleProvider : IDbProvider
     OracleScripter? _scripter;
     public ITraceProvider? Trace => null;
     public IDebugProvider? Debugger => null;
-    public IDataEditDialect DataEdit { get; } = OracleUnavailable.Instance;
-    public IImportDialect Import { get; } = OracleUnavailable.Instance;
+    /// <summary>Grid edits since D4 S10.</summary>
+    public IDataEditDialect DataEdit { get; } = new OracleDataEdit();
+    /// <summary>Imports since D4 S10 (array-bound INSERT, never OracleBulkCopy).</summary>
+    public IImportDialect Import { get; } = new OracleImport();
     public ISchemaCompareDialect? SchemaCompare => null;
     public IDataCompareDialect? DataCompare => null;
     public IReferenceFinder? References => null;
@@ -90,8 +93,7 @@ public sealed class OracleProvider : IDbProvider
     {
         Feature.Transactions => null,
         Feature.ChangeDatabase => ChangeDatabaseRefusal,
-        Feature.DataEdit => "Editing Oracle data in the grid is not available in this build of Querithm yet.",
-        Feature.Import => "Importing into Oracle is not available in this build of Querithm yet.",
+        Feature.DataEdit or Feature.Import => null,
         Feature.SchemaCompare or Feature.SchemaCompareApply => "Schema compare is not available for Oracle yet.",
         Feature.DataCompare or Feature.DataCompareApply => "Data compare is not available for Oracle yet.",
         Feature.References => "Find usages and rename are not available for Oracle yet.",
@@ -202,7 +204,21 @@ public sealed class OracleProvider : IDbProvider
 
     public ParseConnectionStringResult ParseConnectionString(string connectionString, Profile basis) => OracleConnectionStrings.Parse(connectionString, basis);
 
+    /// <summary>Without the connection the current schema is unknown: nothing is predicted (Core calls the overload below).</summary>
     public ColumnOrigin?[]? ResultOrigins(DbDataReader reader, IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot) => null;
+
+    /// <summary>
+    /// D4 S10: predicted from the statement's tokens and the snapshot (<see cref="OracleResultSources"/>): ODP.NET's schema
+    /// table names a base table without its schema, and the same table for both sides of a self-join. Only the first data
+    /// result of a plain SQL batch; an unqualified name resolves in the connection's current schema as last read
+    /// (<see cref="OracleSessionSchema"/>).
+    /// </summary>
+    public ColumnOrigin?[]? ResultOrigins(DbConnection connection, DbDataReader reader, IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot) =>
+        snapshot == null || resultInBatch != 0 ? null
+            : OracleResultSources.Predict(batchText, snapshot, OracleSessionSchema.Of(connection), columns.Select(c => c.ColumnName).ToList());
+
+    /// <summary>A set operator (MINUS too), the same table twice, a database link, a synonym for a remote object.</summary>
+    public string? ResultEditRefusal(string batchText, int resultInBatch, SchemaSnapshot? snapshot) => OracleResultSources.EditRefusal(batchText, snapshot);
 
     public async Task<DbConnection> OpenAsync(Profile profile, string? secret, string? database, FileGrant? file, CancellationToken ct)
     {
@@ -242,18 +258,21 @@ public sealed class OracleProvider : IDbProvider
     static async Task<ProductInfo> ReadProductAsync(OracleConnection c, CancellationToken ct)
     {
         await using var cmd = c.CreateCommand();
-        cmd.CommandText = "SELECT PRODUCT, VERSION_FULL FROM PRODUCT_COMPONENT_VERSION WHERE PRODUCT LIKE 'Oracle%' FETCH FIRST 1 ROWS ONLY";
+        // D4 S10: the session's current schema rides along (the grid resolves unqualified table names there).
+        cmd.CommandText = "SELECT PRODUCT, VERSION_FULL, SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') FROM PRODUCT_COMPONENT_VERSION WHERE PRODUCT LIKE 'Oracle%' FETCH FIRST 1 ROWS ONLY";
         try
         {
             await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             if (await r.ReadAsync(ct).ConfigureAwait(false))
             {
+                OracleSessionSchema.Set(c, r.IsDBNull(2) ? null : r.GetString(2));
                 var name = Printable(r.IsDBNull(0) ? null : r.GetString(0));
                 var version = CleanVersion(r.IsDBNull(1) ? c.ServerVersion : r.GetString(1));
                 return new ProductInfo { Name = string.IsNullOrEmpty(name) ? "Oracle" : name, Version = version };
             }
         }
         catch (OracleException) { /* a locked-down dictionary: the handshake version stays */ }
+        await OracleSessionSchema.RefreshAsync(c, ct).ConfigureAwait(false);
         return new ProductInfo { Name = "Oracle", Version = CleanVersion(c.ServerVersion) };
     }
 
@@ -303,15 +322,35 @@ public sealed class OracleProvider : IDbProvider
     /// <summary>The driver raises no info messages of its own for SQL: DBMS_OUTPUT and compile errors are read after each batch.</summary>
     public IDisposable SubscribeMessages(DbConnection connection, Action<ProviderMessage> onMessage) => Nop.Instance;
 
-    /// <summary>DBMS_OUTPUT lines (while server output is on) and the compile errors of a PL/SQL unit the batch created (<see cref="OracleOutput"/>).</summary>
-    public Task<IReadOnlyList<ProviderMessage>> AfterBatchMessagesAsync(DbConnection connection, string batchText, CancellationToken ct) =>
-        OracleOutput.AfterBatchAsync(connection, batchText, ct);
+    /// <summary>
+    /// DBMS_OUTPUT lines (while server output is on) and the compile errors of a PL/SQL unit the batch created (<see cref="OracleOutput"/>).
+    /// Also reads the current schema again after a batch that may have changed it (<see cref="OracleSessionSchema"/>).
+    /// </summary>
+    public async Task<IReadOnlyList<ProviderMessage>> AfterBatchMessagesAsync(DbConnection connection, string batchText, CancellationToken ct)
+    {
+        var messages = await OracleOutput.AfterBatchAsync(connection, batchText, ct).ConfigureAwait(false);
+        await OracleSessionSchema.RefreshAsync(connection, ct).ConfigureAwait(false);
+        return messages;
+    }
 
-    /// <summary>The DBMS_OUTPUT lines a failed block printed before it raised.</summary>
-    public Task<IReadOnlyList<ProviderMessage>> FailedBatchMessagesAsync(DbConnection connection, CancellationToken ct) => OracleOutput.AfterFailureAsync(connection, ct);
+    /// <summary>The DBMS_OUTPUT lines a failed block printed before it raised (and the current schema, read again when the block may have changed it).</summary>
+    public async Task<IReadOnlyList<ProviderMessage>> FailedBatchMessagesAsync(DbConnection connection, CancellationToken ct)
+    {
+        var messages = await OracleOutput.AfterFailureAsync(connection, ct).ConfigureAwait(false);
+        await OracleSessionSchema.RefreshAsync(connection, ct).ConfigureAwait(false);
+        return messages;
+    }
 
-    /// <summary>DBMS_OUTPUT.ENABLE(NULL) / DISABLE, only when the connection's state changes (one round trip).</summary>
-    public Task SetServerOutputAsync(DbConnection connection, bool on, CancellationToken ct) => OracleOutput.SetAsync(connection, on, ct);
+    /// <summary>
+    /// DBMS_OUTPUT.ENABLE(NULL) / DISABLE, only when the connection's state changes (one round trip). Core calls it before
+    /// every run on the connection it borrowed, so the current schema is read here too when a batch left it unknown and
+    /// nothing read it after (a cancelled PL/SQL block): the run's results then resolve their table names (D4 S10).
+    /// </summary>
+    public async Task SetServerOutputAsync(DbConnection connection, bool on, CancellationToken ct)
+    {
+        await OracleSessionSchema.RefreshAsync(connection, ct).ConfigureAwait(false);
+        await OracleOutput.SetAsync(connection, on, ct).ConfigureAwait(false);
+    }
 
     public IReadOnlyList<ProviderMessage> TranslateException(Exception ex, string? commandText = null) =>
         ex is OracleException o ? OracleErrors.Translate(o, commandText) : [new ProviderMessage(Severity.Error, ex.Message)];
@@ -346,6 +385,7 @@ public sealed class OracleProvider : IDbProvider
     public void PrepareCommand(DbCommand command)
     {
         if (command is not OracleCommand c) return;
+        if (c.Connection != null) OracleSessionSchema.BeforeBatch(c.Connection, c.CommandText ?? "");
         c.BindByName = true;
         c.FetchSize = FetchSizeBytes;
         c.InitialLOBFetchSize = InitialLobFetchSize;

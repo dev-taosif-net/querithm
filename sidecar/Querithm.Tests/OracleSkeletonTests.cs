@@ -33,7 +33,8 @@ public class OracleSkeletonTests
     [MemberData(nameof(Features))]
     public void Every_feature_not_implemented_yet_refuses_with_a_reason(Feature feature)
     {
-        if (feature == Feature.Transactions)
+        // Transactions since D4 S03; grid edit and import since D4 S10.
+        if (feature is Feature.Transactions or Feature.DataEdit or Feature.Import)
         {
             Assert.Null(_oracle.FeatureRefusal(feature));
             return;

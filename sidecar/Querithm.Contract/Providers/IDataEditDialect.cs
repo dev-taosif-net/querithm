@@ -86,6 +86,20 @@ public interface IDataEditDialect
     /// </summary>
     int MaxRelationRows => 1000;
 
+    /// <summary>
+    /// Phase D4 S10: the pseudo-column that addresses a row (Oracle's ROWID), used as the row key when the table has no
+    /// proven key in the result but the result reads this column from the same table. Null (the default): no fallback.
+    /// Its edit column is always locked (<see cref="LockReason"/> names it) and never required for an insert.
+    /// </summary>
+    string? RowAddress => null;
+
+    /// <summary>
+    /// Why <see cref="RowAddress"/> cannot identify the rows of <paramref name="table"/> (an index-organized table, row
+    /// movement enabled, metadata cached before the engine reported it), or null when it can. <paramref name="rowAddress"/>
+    /// is the catalog's <see cref="SnapObject.RowAddress"/>. Only asked when <see cref="RowAddress"/> is set.
+    /// </summary>
+    string? RowAddressRefusal(SnapObject table, string? rowAddress) => "the engine has no row address";
+
     /// <summary>The same rows as SELECT … UNION ALL SELECT …: SQLite and MariaDB have no column list on a derived table.</summary>
     static string UnionAllRelation(IReadOnlyList<IReadOnlyList<string>> rows, IReadOnlyList<string> names, string alias) =>
         "(" + string.Join(" UNION ALL ", rows.Select((r, i) => "SELECT " + string.Join(", ", r.Select((e, k) => i == 0 ? $"{e} AS {names[k]}" : e)))) + $") AS {alias}";

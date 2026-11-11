@@ -176,7 +176,7 @@ public sealed class LocalStore
     }
 
     /// <summary>The schema version Schema.sql describes (PRAGMA user_version).</summary>
-    public const int Version = 9;
+    public const int Version = 10;
 
     /// <summary>
     /// Steps from version N-1 to N for files written by older builds, run before Schema.sql so its CREATE … IF NOT
@@ -260,6 +260,18 @@ public sealed class LocalStore
         {
             if (!HasTable(c, tx, "obj")) return;
             if (!HasColumn(c, tx, "obj", "target_object_id")) c.Cmd("ALTER TABLE obj ADD COLUMN target_object_id INTEGER;", tx).ExecuteNonQuery();
+            if (HasTable(c, tx, "schema_snapshot") && HasTable(c, tx, "profile"))
+                c.Cmd("UPDATE schema_snapshot SET status = 'empty' WHERE status <> 'error' AND profile_id IN (SELECT id FROM profile WHERE engine = 'oracle');", tx).ExecuteNonQuery();
+        }),
+        // Phase D4 S10: whether an Oracle table's ROWID keeps naming the same row (heap / index-organized / row movement), for
+        // the grid's ROWID fallback key. Additive: an older build ignores the column. Rows cached before it say nothing, which
+        // the grid reads as "unknown" (no ROWID key, "refresh the explorer"); the marker now covers the table's row movement,
+        // so every table would be re-read anyway — Oracle snapshots are marked empty (one that failed keeps its error) and
+        // their next refresh is a full one (§8). Other engines have no row address and stay as they are.
+        (10, (_, c, tx) =>
+        {
+            if (!HasTable(c, tx, "obj")) return;
+            if (!HasColumn(c, tx, "obj", "row_address")) c.Cmd("ALTER TABLE obj ADD COLUMN row_address TEXT;", tx).ExecuteNonQuery();
             if (HasTable(c, tx, "schema_snapshot") && HasTable(c, tx, "profile"))
                 c.Cmd("UPDATE schema_snapshot SET status = 'empty' WHERE status <> 'error' AND profile_id IN (SELECT id FROM profile WHERE engine = 'oracle');", tx).ExecuteNonQuery();
         }),

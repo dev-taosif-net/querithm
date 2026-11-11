@@ -103,6 +103,9 @@ const TARGETS = {
   "4.oracle": ["Oracle: tier-1 completion latency in a 12k-line PL/SQL package body (p95)", "ms", 5],
   // D4 S09: tier 2 on the app user's snapshot of the bench schema (600 tables × 15 columns).
   "5.oracle": ["Oracle: tier-2 completion latency, 10k-line script on the 600-table fixture (p95)", "ms", 150],
+  // D4 S10: grid edit preview and import on Oracle (the #20 / #23 shapes, the app user's own schema).
+  "20.oracle": ["Oracle: grid edits, DML preview for 100 staged cells", "ms", 15],
+  "23.oracle": ["Oracle: import 100k × 10 CSV into a new table (array binding, median of 3)", "ms", 2000],
   "27.oracle": ["Oracle: tier-2 completion latency in a 10k-line PL/SQL package body (cursor queries, SELECT INTO, UPDATE; p95)", "ms", 150],
   "11cold.mysql": ["MySQL: execute → first batch on a cold pool connection (TCP, TLS, login, identity read, SELECT 1, median)", "ms", 300],
   "8.mysql": ["MySQL: database switch on an existing connection (COM_INIT_DB, median)", "ms", 20],
@@ -621,17 +624,19 @@ function writeImportCsv(dir) {
 
 /**
  * #23 per engine: the CSV into a new table q_bench_import (median of 3; the table is dropped before each run). `dropped`
- * waits until the DROP reached the snapshot import.checkTarget reads (untimed), for engines whose DDL refresh can land late.
+ * waits until the DROP reached the snapshot import.checkTarget reads (untimed), for engines whose DDL refresh can land late;
+ * `created` waits (untimed) for the CREATE's refresh, for an engine whose catalog read competes with the load (Oracle Free: 2 CPUs).
  */
-async function importMetric({ call, until }, run, sessionId, { engine, schema, csv, dropped }) {
+async function importMetric({ call, until }, run, sessionId, { engine, schema, csv, dropped, created, dropSql = `DROP TABLE IF EXISTS ${schema}.q_bench_import` }) {
   const samples = [];
   let rows = 0;
   for (let r = 0; r < 3; r++) {
-    await run(sessionId, `DROP TABLE IF EXISTS ${schema}.q_bench_import`);
+    await run(sessionId, dropSql);
     await dropped?.("q_bench_import");
     const ins = await call("import.inspect", { fileToken: `bench-${engine}-${r}`, filePath: csv });
     const target = await call("import.checkTarget", { sessionId, inspectionId: ins.inspectionId, schema, table: "q_bench_import", newTable: true, primaryKey: ["id"] });
     await run(sessionId, target.createTableSql);
+    await created?.("q_bench_import"); // untimed: the DDL's catalog refresh, which would otherwise share the server with the load
     const t0 = performance.now();
     const job = await call("import.run", { sessionId, inspectionId: ins.inspectionId, fileToken: `bench-${engine}-${r}`, filePath: csv, schema, table: "q_bench_import" });
     const done = await until((m, p) => m === "import.progress" && p.jobId === job.jobId && p.done, 300_000, `${engine} import`, true);
@@ -639,7 +644,7 @@ async function importMetric({ call, until }, run, sessionId, { engine, schema, c
     samples.push(performance.now() - t0);
     rows = done.rowsLoaded;
   }
-  await run(sessionId, `DROP TABLE IF EXISTS ${schema}.q_bench_import`);
+  await run(sessionId, dropSql);
   return { ms: median(samples), rows, samples: samples.map((x) => Math.round(x)) };
 }
 
@@ -1015,6 +1020,34 @@ END;
       }
       if (items === 0) throw new Error("#27.oracle: tier 2 offered no columns inside the package body");
       record("27.oracle", p95(plComp.slice(5)), { lines: pl.split("\n").length, samples: plComp.length, itemsPerCall: Math.round(items / at.length) });
+
+      // #20.oracle / #23.oracle (D4 S10). Quoted lower-case names: the metrics' patch and CSV use them as written.
+      const refresh = async () => {
+        const done = until((m, p) => m === "meta.updated" && p.profileId === profile.id && p.status !== "refreshing", 300_000, "oracle refresh");
+        await call("meta.refresh", { profileId: profile.id, database: ORACLE.service });
+        await done;
+      };
+      const snapshotHas = async (table, present) => {
+        for (let i = 0; i < 100; i++) {
+          await refresh();
+          const snap = await call("meta.snapshot", { profileId: profile.id, database: ORACLE.service });
+          if (snap.objects.some((o) => o.name === table && (!present || o.columns?.length)) === present) return;
+          await sleep(100);
+        }
+        throw new Error(`${table} never ${present ? "reached" : "left"} the Oracle snapshot`);
+      };
+      const edit = await previewPatchMetric(sc, (_, sql) => run(sql), sessionId, {
+        engine: "oracle", refresh: () => snapshotHas("q_bench_edit", true), select: 'SELECT "id", "v", "n" FROM "q_bench_edit" ORDER BY "id"',
+        setup: ['DROP TABLE IF EXISTS "q_bench_edit" PURGE', 'CREATE TABLE "q_bench_edit" ("id" NUMBER(10) PRIMARY KEY, "v" VARCHAR2(20), "n" NUMBER)',
+          `INSERT INTO "q_bench_edit" SELECT level, 'x', 1 FROM dual CONNECT BY level <= 100`],
+      });
+      record("20.oracle", edit.ms, { samples: edit.samples });
+      await run('DROP TABLE "q_bench_edit" PURGE');
+      const imp = await importMetric(sc, (_, sql) => run(sql), sessionId, {
+        engine: "oracle", schema, csv: writeImportCsv(mkdtempSync(path.join(os.tmpdir(), "qbench-oracle-"))),
+        dropSql: `DROP TABLE IF EXISTS ${schema}."q_bench_import" PURGE`, dropped: (t) => snapshotHas(t, false), created: (t) => snapshotHas(t, true),
+      });
+      record("23.oracle", imp.ms, { rows: imp.rows, samples: imp.samples });
     } finally {
       await run(dropAll);
     }

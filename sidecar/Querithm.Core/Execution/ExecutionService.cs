@@ -702,7 +702,7 @@ public sealed class ExecutionService : IAsyncDisposable
                 Func<IReadOnlyList<DbColumn>, Contract.Providers.ColumnOrigin?[]?> origins = cols =>
                 {
                     if (refusal != null) return null;
-                    try { return session.Provider.ResultOrigins(reader, cols, text, inBatch, snap); }
+                    try { return session.Provider.ResultOrigins(db, reader, cols, text, inBatch, snap); }
                     catch (Exception ex) { _log.LogDebug("Result origins skipped: {Message}", ex.Message); return null; }
                 };
                 bool truncated;

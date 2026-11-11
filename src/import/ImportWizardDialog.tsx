@@ -12,7 +12,7 @@ import { ServerChip } from "../app/EnvTag";
 import { ask, toast, useUi, type Dialog } from "../store/ui";
 import { useProfiles } from "../store/profiles";
 import { engineTraits, knownEngine } from "../engines";
-import { heldSession, useSnapshots, useToolSnapshot } from "../store/snapshots";
+import { heldSession, loginSchemaOf, useSnapshots, useToolSnapshot } from "../store/snapshots";
 import { closeImportSession, executeGuarded, openImportSession, pickImportFile, type PickedFile } from "./importActions";
 import { forgetUncertainImport, markUncertainImport, uncertainImport } from "./uncertainImports";
 
@@ -50,8 +50,9 @@ export function ImportWizardDialog({ d }: { d: Extract<Dialog, { kind: "import" 
   const [busy, setBusy] = useState(false);
   const [sessionId, setSessionId] = useState<string>();
   const [newTable, setNewTable] = useState(!d.table);
-  // Where the database is the schema (MySQL), the target schema is the database itself.
-  const [schema, setSchema] = useState(d.schema ?? engineTraits(engine).defaultSchema ?? d.database);
+  // Where the sign-in owns a schema (Oracle, D4 S10) it is the default target; where the database is the schema (MySQL),
+  // the database itself.
+  const [schema, setSchema] = useState(d.schema ?? engineTraits(engine).defaultSchema ?? loginSchemaOf(d.profileId) ?? d.database);
   const [table, setTable] = useState(d.table ?? "");
   const [mapping, setMapping] = useState<ImportMapping[] | null>(null);
   const [types, setTypes] = useState<Record<string, string>>({});

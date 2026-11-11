@@ -174,7 +174,8 @@ public sealed class OracleMetadata : IMetadataProvider
             Or(Piece.Triggers, "tr.status"), Or(Piece.Triggers, "tr.table_owner"), Or(Piece.Triggers, "tr.table_name"),
             Or(Piece.Sequences, "q.min_value"), Or(Piece.Sequences, "q.max_value"), Or(Piece.Sequences, "q.increment_by"),
             Or(Piece.Sequences, "q.cycle_flag"), Or(Piece.Sequences, "q.order_flag"), Or(Piece.Sequences, "q.cache_size"),
-            Or(Piece.Synonyms, "y.table_owner"), Or(Piece.Synonyms, "y.table_name"), Or(Piece.Synonyms, "y.db_link"), weak));
+            Or(Piece.Synonyms, "y.table_owner"), Or(Piece.Synonyms, "y.table_name"), Or(Piece.Synonyms, "y.db_link"),
+            Or(Piece.Tables, "t.iot_type"), Or(Piece.Tables, "t.row_movement"), weak));
 
         var synonyms = Has(Piece.Synonyms)
             ? $"""
@@ -222,8 +223,10 @@ public sealed class OracleMetadata : IMetadataProvider
               {Or(Piece.Arguments, "CASE WHEN a.type_name IS NOT NULL THEN a.type_owner || '.' || a.type_name ELSE a.data_type END")} AS rtype,
               {Or(Piece.Triggers, "p.object_id")} AS parent, o.status,
               CASE WHEN o.object_type = 'PACKAGE' AND o.owner = SYS_CONTEXT('USERENV', 'SESSION_USER') THEN 'U'
+                {(Has(Piece.Synonyms) ? "WHEN o.object_type = 'SYNONYM' AND y.db_link IS NOT NULL THEN 'R'" : "")}
                 ELSE {Or(Piece.ExternalTables, "CASE WHEN x.table_name IS NOT NULL THEN 'X' END")} END AS flag,
-              {target} AS target
+              {target} AS target,
+              {Or(Piece.Tables, "CASE WHEN o.object_type = 'TABLE' THEN CASE WHEN t.iot_type IS NOT NULL THEN 'iot' WHEN t.row_movement = 'ENABLED' THEN 'moves' WHEN t.row_movement = 'DISABLED' THEN 'heap' END END")} AS rowaddr
             FROM o{joins}
             WHERE CASE o.object_type
               WHEN 'TABLE' THEN {table}
@@ -236,7 +239,9 @@ public sealed class OracleMetadata : IMetadataProvider
     }
 
     /// <summary>One row of <see cref="StampSql"/>, as the unit tests feed it.</summary>
-    internal sealed record StampRow(long Id, string Owner, string Name, string Type, long Marker, string? ReturnType, long? Parent, string? Status, string? Flag, long? Target = null);
+    /// <param name="RowAddress">Tables (D4 S10): "heap", "iot" or "moves" (<see cref="SnapObject.RowAddress"/>).</param>
+    internal sealed record StampRow(long Id, string Owner, string Name, string Type, long Marker, string? ReturnType, long? Parent, string? Status, string? Flag, long? Target = null,
+        string? RowAddress = null);
 
     internal static ObjectKind? KindOf(string type) => type switch
     {
@@ -269,6 +274,7 @@ public sealed class OracleMetadata : IMetadataProvider
         var parts = new List<string>(2);
         if (type == "MATERIALIZED VIEW") parts.Add("materialized view");
         if (flag == "X") parts.Add("external table");
+        if (flag == "R" && type == "SYNONYM") parts.Add(OracleResultSources.RemoteNote);
         if (status == "INVALID") parts.Add("invalid");
         return parts.Count == 0 ? null : string.Join(", ", parts);
     }
@@ -313,7 +319,8 @@ public sealed class OracleMetadata : IMetadataProvider
             long? target = kind == ObjectKind.Synonym ? r.Target : null;
             if (kind == ObjectKind.Synonym) marker = Mix(marker, target);
             list.Add(new ObjectStamp(r.Id, r.Owner, r.Name, kind, marker, kind == ObjectKind.Func ? r.ReturnType : null,
-                kind == ObjectKind.Trigger ? r.Parent : null, Note: note, SpecObjectId: spec, TargetObjectId: target));
+                kind == ObjectKind.Trigger ? r.Parent : null, Note: note, SpecObjectId: spec, TargetObjectId: target,
+                RowAddress: kind == ObjectKind.Table ? r.RowAddress : null));
         }
         return list;
     }
@@ -343,7 +350,7 @@ public sealed class OracleMetadata : IMetadataProvider
         await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         var rows = new List<StampRow>();
         while (await r.ReadAsync(ct).ConfigureAwait(false))
-            rows.Add(new StampRow(Long(r, 0), r.GetString(1), r.GetString(2), r.GetString(3), r.IsDBNull(4) ? 0 : Long(r, 4), Str(r, 5), LongOrNull(r, 6), Str(r, 7), Str(r, 8), LongOrNull(r, 9)));
+            rows.Add(new StampRow(Long(r, 0), r.GetString(1), r.GetString(2), r.GetString(3), r.IsDBNull(4) ? 0 : Long(r, 4), Str(r, 5), LongOrNull(r, 6), Str(r, 7), Str(r, 8), LongOrNull(r, 9), Str(r, 10)));
         return rows;
     }
 

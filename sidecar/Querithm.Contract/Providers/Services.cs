@@ -39,9 +39,10 @@ public interface IDialectService
 /// <paramref name="NoRollbackEngine"/> (MySQL / MariaDB): the storage engine of a table whose changes cannot be rolled back.
 /// <paramref name="Note"/> (Phase D4): what the explorer shows beside the name — "invalid", "materialized view", "external table".
 /// <paramref name="TargetObjectId"/> (Phase D4 S09, Oracle): the listed object a synonym names (<see cref="SnapObject.TargetObjectId"/>).
+/// <paramref name="RowAddress"/> (Phase D4 S10, Oracle): whether a table's ROWID keeps naming the same row (<see cref="SnapObject.RowAddress"/>).
 /// </summary>
 public sealed record ObjectStamp(long Id, string Schema, string Name, ObjectKind Kind, long Marker, string? ReturnType, long? ParentObjectId = null, bool SessionLocal = false,
-    string? NoRollbackEngine = null, string? Note = null, long? SpecObjectId = null, long? TargetObjectId = null);
+    string? NoRollbackEngine = null, string? Note = null, long? SpecObjectId = null, long? TargetObjectId = null, string? RowAddress = null);
 
 public sealed record ColumnRow(
     long ObjectId, int Ordinal, string Name, string TypeName, int? MaxLen, int? Precision, int? Scale,

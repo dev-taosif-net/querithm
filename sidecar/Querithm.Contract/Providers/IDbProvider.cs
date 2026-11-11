@@ -126,6 +126,15 @@ public interface IDbProvider
     ColumnOrigin?[]? ResultOrigins(DbDataReader reader, IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot);
 
     /// <summary>
+    /// Phase D4 S10: <see cref="ResultOrigins(DbDataReader, IReadOnlyList{DbColumn}, string, int, SchemaSnapshot?)"/> with
+    /// the connection the batch ran on, for an engine whose name resolution depends on the connection's state (Oracle: an
+    /// unqualified table name is looked up in the session's current schema). Must not touch the connection's network: it
+    /// reads what the provider already knows of it. Default: the overload without it.
+    /// </summary>
+    ColumnOrigin?[]? ResultOrigins(DbConnection connection, DbDataReader reader, IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot) =>
+        ResultOrigins(reader, columns, batchText, resultInBatch, snapshot);
+
+    /// <summary>
     /// Why data result set <paramref name="resultInBatch"/> of <paramref name="batchText"/> cannot be edited in the grid
     /// whatever <see cref="ResultOrigins"/> reports (without the "Read-only: " prefix), or null. Grid-edit audit: a
     /// self-join gives both aliases one table id and SQLite names the leftmost table for a UNION's columns, so a row key

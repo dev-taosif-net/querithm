@@ -30,6 +30,10 @@ public static class EditabilityAnalyzer
         // Apply is all or nothing through a transaction; a MyISAM / MEMORY / ARCHIVE / Aria table keeps what a failed Apply wrote.
         if (table.NoRollbackEngine is { } engine) return ReadOnly($"Read-only: {qualified} is a {engine} table — its changes can't be rolled back");
         if (table.Columns is not { Length: > 0 } tableColumns) return ReadOnly($"Read-only: column metadata for {qualified} is not loaded yet");
+        // Phase D4 S10: the engine's row address (Oracle ROWID) is a column of the result like any other, always locked.
+        var address = dialect.RowAddress;
+        if (address != null && !tableColumns.Any(c => c.Name == address))
+            tableColumns = [.. tableColumns, new SnapColumn { Name = address, Type = address, Nullable = false, Ordinal = int.MaxValue }];
 
         SnapColumn? ColumnOf(int ordinal) =>
             At(origins, ordinal) is { } o && o.ObjectId == table.Id
@@ -42,26 +46,36 @@ public static class EditabilityAnalyzer
             if (ColumnOf(c.Ordinal) is { } sc) firstOrdinal.TryAdd(sc.Name, c.Ordinal);
 
         var tableIndexes = indexes(table.Id);
-        string[] key;
+        string[]? key = null;
+        string? noKey;
         var primary = tableIndexes.FirstOrDefault(i => i.IsPrimary)?.Columns ?? tableColumns.Where(c => c.Pk).Select(c => c.Name).ToArray();
         if (primary.Length > 0)
         {
             var missing = primary.Where(k => !firstOrdinal.ContainsKey(k)).ToArray();
-            if (missing.Length > 0)
-                return ReadOnly($"Read-only: primary key column{(missing.Length > 1 ? "s" : "")} {string.Join(", ", missing)} {(missing.Length > 1 ? "are" : "is")} not in the SELECT list");
-            key = primary;
+            noKey = missing.Length > 0
+                ? $"Read-only: primary key column{(missing.Length > 1 ? "s" : "")} {string.Join(", ", missing)} {(missing.Length > 1 ? "are" : "is")} not in the SELECT list"
+                : null;
+            if (noKey == null) key = primary;
         }
         else
         {
-            var notNull = tableColumns.Where(c => !c.Nullable).Select(c => c.Name).ToHashSet(StringComparer.Ordinal);
+            var notNull = tableColumns.Where(c => !c.Nullable && c.Name != address).Select(c => c.Name).ToHashSet(StringComparer.Ordinal);
             // A partial / filtered, expression, disabled or invalid unique index does not prove a row unique.
             var uniques = tableIndexes.Where(i => i.IsUnique && !i.NotAKey && i.Columns.Length > 0 && i.Columns.All(notNull.Contains)).ToArray();
             var usable = uniques.FirstOrDefault(i => i.Columns.All(firstOrdinal.ContainsKey));
-            if (usable == null)
-                return ReadOnly(uniques.Length > 0
+            noKey = usable != null ? null
+                : uniques.Length > 0
                     ? $"Read-only: {qualified} has no primary key, and the columns of unique index {uniques[0].Name} ({string.Join(", ", uniques[0].Columns)}) are not all in the SELECT list"
-                    : $"Read-only: {qualified} has no primary key or NOT NULL unique index");
-            key = usable.Columns;
+                    : $"Read-only: {qualified} has no primary key or NOT NULL unique index";
+            key = usable?.Columns;
+        }
+        if (key == null)
+        {
+            // Phase D4 S10: no proven key in the result — the row address stands in when the result reads it from this table
+            // and the catalog says it keeps naming the same row.
+            if (address == null || !firstOrdinal.ContainsKey(address)) return ReadOnly(noKey!);
+            if (dialect.RowAddressRefusal(table, table.RowAddress) is { } why) return ReadOnly($"{noKey}, and its {address} cannot stand in: {why}");
+            key = [address];
         }
         foreach (var k in key)
         {

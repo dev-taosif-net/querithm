@@ -74,6 +74,14 @@ public sealed record SnapObject
     /// contract (ContractGen and the JSON context read public properties only).
     /// </summary>
     internal string? NoRollbackEngine { get; init; }
+    /// <summary>
+    /// Phase D4 S10 (Oracle): whether a table's ROWID keeps naming the same row, for the grid's ROWID fallback key
+    /// (<see cref="Providers.IDataEditDialect.RowAddress"/>): "heap" (an ordinary table, row movement disabled), "iot" (an
+    /// index-organized table: its ROWIDs are logical) or "moves" (row movement enabled: an update of the partition key, a
+    /// shrink or a flashback gives the row a new ROWID). Null for other engines and kinds, and for a table cached before
+    /// D4 S10. Internal like <see cref="NoRollbackEngine"/>: sidecar-only.
+    /// </summary>
+    internal string? RowAddress { get; init; }
     /// <summary>Phase D4: shown beside the name in the explorer — "invalid", "materialized view", "external table"; null for most objects.</summary>
     public string? Note { get; init; }
     /// <summary>

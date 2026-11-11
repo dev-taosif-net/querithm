@@ -17,6 +17,9 @@ namespace Querithm.Tests.Security;
 /// D4 S03, §13 rules 1 and 2: TCPS with the certificate and server name checked is the default and every weaker mode is
 /// explicit; the driver's secret-bearing keywords (Password, Proxy Password, Wallet_Password) are masked in logs; a
 /// pasted string's wallet, proxy, token and TNS settings never reach a connection.
+/// D4 S10, §13 rule 9 (untrusted input, generated SQL): grid patches name only the recorded table's columns, quoted by the
+/// Oracle quoting service (a name holding <c>"</c> is refused: Oracle has no escape for it); every value is a bound
+/// parameter, and the preview's literals double the quote and take no backslash escapes.
 /// </summary>
 public sealed class OracleSecurityTests
 {
@@ -161,5 +164,54 @@ public sealed class OracleSecurityTests
         Assert.DoesNotContain("fake-proxy", rest);
         Assert.DoesNotContain("fake-wallet", rest);
         Assert.DoesNotContain("fake-main", rest);
+    }
+
+    // ---------------------------------------------------------------------------------------------------- D4 S10
+
+    static readonly OracleDataEdit Edit = new();
+
+    static ResultEditInfo Recorded() => new()
+    {
+        Editable = true, Schema = "APP", Table = "T", KeyColumns = ["ID"], KeyOrdinals = [0],
+        Columns =
+        [
+            new EditColumn { Ordinal = 0, Column = "ID", Type = "NUMBER(10)", Key = true, Comparable = true },
+            new EditColumn { Ordinal = 1, Column = "NAME", Type = "VARCHAR2(40)", Nullable = true, Comparable = true },
+        ],
+    };
+
+    [Theory]
+    [InlineData("PASSWORD")]
+    [InlineData("NAME\" = 1; DROP TABLE x; --")]
+    [InlineData("name")] // the folded spelling is another name
+    public void Grid_patches_cannot_name_columns_outside_the_recorded_table(string column)
+    {
+        var patch = new GridPatchParams
+        {
+            SessionId = "s", ExecutionId = "e",
+            Updates = [new GridRowUpdate { Key = [new GridValue { Text = "1" }], Changes = new() { [column] = new GridValue { Text = "x" } }, Original = new() { [column] = new GridValue { Text = "y" } } }],
+        };
+        Assert.StartsWith("Unknown column", Assert.Throws<QuerithmException>(() => Querithm.Core.Execution.PatchBuilder.Build(Edit, Recorded(), patch, false)).Message);
+    }
+
+    [Fact]
+    public void Values_never_reach_the_sql_text_and_preview_literals_cannot_end_their_string()
+    {
+        const string hostile = @"x'); DELETE FROM t; --\'";
+        var patch = new GridPatchParams
+        {
+            SessionId = "s", ExecutionId = "e",
+            Updates = [new GridRowUpdate { Key = [new GridValue { Text = "1" }], Changes = new() { ["NAME"] = new GridValue { Text = hostile } }, Original = new() { ["NAME"] = new GridValue { Text = hostile } } }],
+            Inserts = [new GridRowInsert { TempIndex = 0, Values = new() { ["NAME"] = new GridValue { Text = hostile } } }],
+        };
+        foreach (var st in Querithm.Core.Execution.PatchBuilder.Build(Edit, Recorded(), patch, false))
+        {
+            Assert.DoesNotContain("DELETE", st.Sql);
+            Assert.Contains(":p0", st.Sql);
+        }
+        Assert.Equal(@"'x''); DELETE FROM t; --\'''", Edit.PreviewLiteral("VARCHAR2(40)", new GridValue { Text = hostile }));
+        Assert.Equal("'NaN'", Edit.PreviewLiteral("NUMBER", new GridValue { Text = "NaN" }));
+        Assert.Throws<ArgumentException>(() => Edit.Quote("a\"b"));
+        Assert.Throws<ArgumentException>(() => new OracleImport().CreateTable("APP", "t\" (x", [("c", "NUMBER", false)], []));
     }
 }

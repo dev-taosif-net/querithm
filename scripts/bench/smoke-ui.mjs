@@ -71,6 +71,12 @@ function pgNow(sql) {
   const r = spawnSync("docker", ["exec", "querithm-fixture-postgres-1", "psql", "-U", "postgres", "-Atc", sql], { encoding: "utf8", timeout: 30_000, env: { ...process.env, MSYS_NO_PATHCONV: "1" } });
   return (r.stdout ?? "").trim();
 }
+/** One value from the Oracle Free fixture as its app user, read outside Querithm (sqlplus in the container; the password is the container's own env). */
+function oracleNow(sql) {
+  const r = spawnSync("docker", ["exec", "-i", "querithm-fixture-oracle-1", "bash", "-c", 'sqlplus -s querithm_app/"$QUERITHM_APP_PASSWORD"@//localhost:1521/FREEPDB1'],
+    { input: `SET HEADING OFF FEEDBACK OFF PAGESIZE 0\n${sql};\nEXIT\n`, encoding: "utf8", timeout: 60_000, env: { ...process.env, MSYS_NO_PATHCONV: "1" } });
+  return (r.stdout ?? "").trim();
+}
 const background = [];
 let browser;
 try {
@@ -357,6 +363,75 @@ try {
       await page.waitForFunction(() => [...document.querySelectorAll('[data-q-explorer] [role="treeitem"]')].some((x) => x.getAttribute("aria-label")?.includes("SMOKE_ORA_T")), { timeout: 15_000 })
         .catch(async () => errors.push(`oracle: Tables does not list SMOKE_ORA_T: ${await rows()}`));
       await shot("27f-oracle-explorer");
+
+      // D4 S10: grid edit — a PL/SQL block fills the table (the current schema is read again after it), the SELECT's
+      // result is editable by its primary key, one cell is changed and applied, and the server holds the new value.
+      console.log("[step] Oracle grid edit and import");
+      await typeSql("BEGIN DELETE FROM smoke_ora_t; INSERT INTO smoke_ora_t VALUES (1, 'one'); INSERT INTO smoke_ora_t VALUES (2, 'two'); COMMIT; END;");
+      await runAndShowMessages();
+      await typeSql("SELECT id, name FROM smoke_ora_t ORDER BY id");
+      await page.keyboard.press("F5");
+      await page.waitForFunction(() => /\b2 rows\b/.test(document.body.innerText), { timeout: 20_000 })
+        .catch(async () => errors.push(`oracle: the grid did not show 2 rows: ${(await messagesText()).slice(0, 300)}`));
+      await page.waitForFunction(() => !!document.querySelector("[data-q-edit-toggle]:not([aria-disabled])"), { timeout: 15_000 })
+        .catch(async () => errors.push(`oracle: the grid Edit button did not appear (the result should be editable): ${await page.evaluate(() => document.querySelector("[data-q-edit-toggle]")?.getAttribute("title") ?? "no toggle")}`));
+      await page.evaluate(() => document.querySelector("[data-q-edit-toggle]:not([aria-disabled])")?.click());
+      await page.waitForFunction(() => document.body.innerText.includes("Type or double-click to edit"), { timeout: 5_000 }).catch(() => errors.push("oracle: grid edit bar did not appear"));
+      await sleep(500);
+      const oraGrid = await page.evaluate(() => {
+        const c = document.querySelector("[data-q-grid-edit] canvas")?.getBoundingClientRect();
+        return c ? { x: c.left, y: c.top } : null;
+      });
+      if (oraGrid) {
+        await page.mouse.click(oraGrid.x + 180, oraGrid.y + 28 + 12); // NAME of the first row
+        await sleep(200);
+        await page.keyboard.press("Enter");
+        await page.waitForFunction(() => document.activeElement?.tagName === "TEXTAREA" && !document.activeElement.closest(".monaco-editor"), { timeout: 5_000 })
+          .catch(() => errors.push("oracle: grid cell editor did not open"));
+        await page.keyboard.down("Control"); await page.keyboard.press("A"); await page.keyboard.up("Control");
+        await page.keyboard.type("uno");
+        await sleep(200);
+        await page.keyboard.press("Enter");
+        await page.waitForFunction(() => document.body.innerText.includes("1 changed"), { timeout: 5_000 }).catch(() => errors.push("oracle: grid edit was not staged"));
+        await shot("27g-oracle-staged");
+        await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "Apply")?.click());
+        await sleep(500);
+        await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "Apply changes")?.click());
+        let applied = "";
+        for (let i = 0; i < 50 && (applied = oracleNow("SELECT name FROM smoke_ora_t WHERE id = 1")) !== "uno"; i++) await sleep(200);
+        if (applied !== "uno") errors.push(`oracle: the applied edit did not reach the server (NAME = ${applied}): ${await openDialogText()}`);
+        await shot("27h-oracle-applied");
+      } else errors.push("oracle: editable grid canvas not found");
+      await closeDialogs();
+
+      // D4 S10: import — the wizard profiles the file, creates its table (named after the file, in the login's schema) and loads it.
+      mkdirSync(path.join(out, "oracle"), { recursive: true });
+      const oraCsv = path.join(out, "oracle", "smoke_import_ora.csv");
+      writeFileSync(oraCsv, "id,name,amount,born\n1,Alpha,1.50,2026-10-21\n2,Beta,2.25,2026-10-22\n3,Gamma,,\n");
+      await typeSql('DROP TABLE IF EXISTS "smoke_import_ora" PURGE');
+      await runAndShowMessages();
+      await sleep(1500); // the DDL's metadata refresh, which the wizard's new-table check reads
+      await page.keyboard.down("Control"); await page.keyboard.down("Alt"); await page.keyboard.press("I"); await page.keyboard.up("Alt"); await page.keyboard.up("Control");
+      await page.waitForFunction(() => [...document.querySelectorAll("button")].some((b) => b.textContent === "Choose file…"), { timeout: 10_000 }).catch(() => errors.push("oracle: import wizard did not open"));
+      const [oraChooser] = await Promise.all([
+        page.waitForFileChooser({ timeout: 10_000 }),
+        page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "Choose file…")?.click()),
+      ]).catch((e) => { errors.push(`oracle: import file chooser: ${e.message}`); return []; });
+      if (oraChooser) {
+        await oraChooser.accept([oraCsv]);
+        await page.waitForFunction(() => document.body.innerText.includes("3 rows · 4 columns"), { timeout: 15_000 }).catch(() => errors.push("oracle: import inspect did not finish"));
+        await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Next: target"))?.click());
+        await page.waitForFunction(() => [...document.querySelectorAll("textarea")].some((t) => t.value.includes("CREATE TABLE")), { timeout: 10_000 })
+          .catch(async () => errors.push(`oracle: import target step did not open: ${await openDialogText()}`));
+        await shot("27i-oracle-import-target");
+        await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Create table and import"))?.click());
+        const imported = await page.waitForFunction(() => document.body.innerText.includes("Imported 3 rows"), { timeout: 30_000 }).then(() => true, () => false);
+        await shot("27j-oracle-import-done");
+        const count = oracleNow('SELECT COUNT(*) FROM "smoke_import_ora"');
+        if (!imported) errors.push(`oracle: import did not complete: ${await openDialogText()}`);
+        else if (count !== "3") errors.push(`oracle: the imported table holds ${count} rows, not 3`);
+      }
+      await closeDialogs();
     }
   } else {
   // (Not re-indented: the full run below is unchanged.)

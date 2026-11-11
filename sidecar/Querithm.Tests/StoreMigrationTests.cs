@@ -307,7 +307,7 @@ public class StoreMigrationTests : IDisposable
             """);
         SqliteConnection.ClearAllPools();
         var store = new LocalStore(path);
-        Assert.Equal(9L, Scalar(path, "PRAGMA user_version"));
+        Assert.Equal((long)LocalStore.Version, Scalar(path, "PRAGMA user_version"));
         Assert.True(HasColumn(path, "obj", "target_object_id"));
         Assert.Equal("empty", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'ora' AND database = 'FREEPDB1'"));
         Assert.Equal("empty", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'ora' AND database = 'STALE'"));
@@ -317,6 +317,49 @@ public class StoreMigrationTests : IDisposable
         var syn = Assert.Single(meta.Load("ora", "FREEPDB1").Objects); // the cached rows stay shown until the refresh
         Assert.Equal((ObjectKind.Synonym, (long?)null), (syn.Kind, syn.TargetObjectId));
         Assert.Null(Assert.Single(meta.Load("pg", "db").Objects).TargetObjectId);
+    }
+
+    [Fact]
+    public void A_v9_file_gains_the_row_address_column_and_its_Oracle_snapshots_are_read_again_in_full()
+    {
+        // D4 S10: obj.row_address (heap / iot / moves) for the grid's ROWID fallback key. The table markers now cover row
+        // movement, so an Oracle snapshot turns empty (its next refresh is full); one that failed keeps its error; every other
+        // engine's stays as it was. A cached table without the column reads as "unknown" (no ROWID key) until then.
+        var path = Path.Combine(_dir, "v9.db");
+        _ = new LocalStore(path);
+        Exec(path, """
+            ALTER TABLE obj DROP COLUMN row_address;
+            INSERT INTO profile (id, name, engine) VALUES ('ora', 'o', 'oracle'), ('pg', 'p', 'pg');
+            INSERT INTO schema_snapshot (profile_id, database, refreshed_at, server_version, status, error) VALUES
+              ('ora', 'FREEPDB1', 1000, '23.26', 'fresh', NULL), ('pg', 'db', 1000, '16', 'fresh', NULL), ('ora', 'OTHER', 1000, '23.26', 'error', 'x');
+            INSERT INTO obj (profile_id, database, object_id, schema_name, name, kind, modify_date) VALUES ('ora', 'FREEPDB1', 1, 'APP', 'T', 'table', 5),
+              ('pg', 'db', 1, 'public', 't', 'table', 5);
+            PRAGMA user_version = 9;
+            """);
+        SqliteConnection.ClearAllPools();
+        var store = new LocalStore(path);
+        Assert.Equal(10L, Scalar(path, "PRAGMA user_version"));
+        Assert.True(HasColumn(path, "obj", "row_address"));
+        Assert.Equal("empty", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'ora' AND database = 'FREEPDB1'"));
+        Assert.Equal("error", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'ora' AND database = 'OTHER'"));
+        Assert.Equal("fresh", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'pg'"));
+        var t = Assert.Single(new MetadataStore(store).Load("ora", "FREEPDB1").Objects);
+        Assert.Null(t.RowAddress);
+        Assert.Contains("refresh the explorer", new Querithm.Providers.Oracle.OracleDataEdit().RowAddressRefusal(t, t.RowAddress));
+    }
+
+    [Fact]
+    public void A_tables_row_address_round_trips_through_the_store()
+    {
+        var meta = new MetadataStore(new LocalStore(Path.Combine(_dir, "rowaddr.db")));
+        meta.ApplyRefresh("ora", "FREEPDB1", full: true,
+        [
+            new ObjectStamp(1, "APP", "HEAP_T", ObjectKind.Table, 11, null, RowAddress: "heap"),
+            new ObjectStamp(2, "APP", "IOT_T", ObjectKind.Table, 22, null, RowAddress: "iot"),
+            new ObjectStamp(3, "APP", "PG_LIKE", ObjectKind.Table, 33, null),
+        ], [], new MetadataBundle([], [], [], []), "23.26");
+        var objects = meta.Load("ora", "FREEPDB1").Objects.ToDictionary(o => o.Id);
+        Assert.Equal(("heap", "iot", (string?)null), (objects[1].RowAddress, objects[2].RowAddress, objects[3].RowAddress));
     }
 
     [Fact]

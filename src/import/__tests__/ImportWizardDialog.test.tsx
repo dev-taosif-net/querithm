@@ -205,6 +205,20 @@ describe("file step", () => {
     open({ table: "t" }, "pg");
     expect(screen.queryByText("Choose file…")).not.toBeNull();
   });
+
+  it("Oracle (D4 S10): a new table goes to the sign-in's own schema, never a schema named after the service", async () => {
+    useProfiles.setState({ profiles: [{ id: "p", name: "Ora", engine: "oracle", environment: "dev", username: "app_user" } as never] });
+    m.pick.mockResolvedValue(FILE);
+    m.rpc.mockImplementation(async (method: string) => (method === "import.inspect" ? INS() : method === "import.checkTarget" ? TARGET() : undefined));
+    m.openSession.mockResolvedValue("sid");
+    const dialog = { kind: "import", profileId: "p", database: "FREEPDB1" } as never;
+    useUi.getState().openDialog(dialog);
+    render(<ImportWizardDialog d={dialog} />);
+    fireEvent.click(screen.getByText("Choose file…"));
+    await screen.findByText(/1,234 rows/);
+    fireEvent.click(screen.getByText("Next: target →"));
+    await waitFor(() => expect(m.rpc).toHaveBeenCalledWith("import.checkTarget", expect.objectContaining({ schema: "APP_USER" })));
+  });
 });
 
 describe("target step", () => {
