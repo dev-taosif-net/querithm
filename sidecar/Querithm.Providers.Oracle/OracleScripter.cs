@@ -219,6 +219,9 @@ public sealed class OracleScripter : IObjectScripter
     {
         "PL/SQL BOOLEAN" => "BOOLEAN",
         "BINARY_INTEGER" or "PLS_INTEGER" or "NATURAL" or "POSITIVE" => "NUMBER",
+        // A parameter has no length (ALL_ARGUMENTS gives none): PL/SQL's own limit, not a bare column's CHAR(1).
+        "CHAR" => "CHAR(32767 BYTE)",
+        "NCHAR" => "NCHAR(32767)",
         var t => t,
     };
 

@@ -151,8 +151,19 @@ public sealed class OracleSecurityTests
     [Theory]
     [InlineData("BEGIN wallet_password := 'fake-ora-w1'; END;", "fake-ora-w1")]
     [InlineData("BEGIN v_pwd := 'fake-ora-w2'; END;", "fake-ora-w2")]
+    // Named notation (=>): DBMS_CREDENTIAL and any routine with a secret-named parameter.
+    [InlineData("BEGIN DBMS_CREDENTIAL.CREATE_CREDENTIAL(credential_name => 'C', username => 'u', password => 'fake-ora-w3'); END;", "fake-ora-w3")]
+    [InlineData("BEGIN app.set_secret(p_secret => q'[fake-ora-w4]'); END;", "fake-ora-w4")]
+    // Positional: CREATE_CREDENTIAL(name, username, password), UPDATE_CREDENTIAL(name, attribute, value).
+    [InlineData("BEGIN DBMS_CREDENTIAL.CREATE_CREDENTIAL('C', 'u', 'fake-ora-w5'); END;", "fake-ora-w5")]
+    [InlineData("BEGIN DBMS_CREDENTIAL.UPDATE_CREDENTIAL('C', 'password', 'fake-ora-w7'); END;", "fake-ora-w7")]
     public void Oracle_secret_names_and_credential_literals_are_redacted_in_sql(string sql, string secret) =>
         Assert.DoesNotContain(secret, new OracleLanguageService().RedactSecrets(sql).Text);
+
+    [Fact]
+    public void A_named_password_argument_is_masked_and_the_other_arguments_are_kept() =>
+        Assert.Equal("BEGIN DBMS_CREDENTIAL.CREATE_CREDENTIAL(credential_name => 'C', username => 'u', password => <redacted>); END;",
+            new OracleLanguageService().RedactSecrets("BEGIN DBMS_CREDENTIAL.CREATE_CREDENTIAL(credential_name => 'C', username => 'u', password => 'fake-ora-w6'); END;").Text);
 
     [Fact]
     public void A_pasted_proxy_or_wallet_password_is_dropped_not_kept_anywhere()

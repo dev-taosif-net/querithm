@@ -197,11 +197,14 @@ public static class SecretRedaction
         return j < tokens.Count && tokens[j].Kind == RedactTokenKind.String ? j : -1;
     }
 
-    /// <summary>The string after a secret's name: <c>name 'x'</c>, <c>name = 'x'</c>, <c>name := 'x'</c>, or (a declared variable) <c>@v type(n) = 'x'</c>.</summary>
+    /// <summary>
+    /// The string after a secret's name: <c>name 'x'</c>, <c>name = 'x'</c>, <c>name := 'x'</c>, a named argument
+    /// <c>name =&gt; 'x'</c> (PL/SQL, PostgreSQL), or (a declared variable) <c>@v type(n) = 'x'</c>.
+    /// </summary>
     static int ValueAfterName(IReadOnlyList<RedactToken> tokens, int i)
     {
         var j = i + 1;
-        if (j < tokens.Count && (tokens[j].IsP("=") || tokens[j].IsP(":="))) j++;
+        if (j < tokens.Count && (tokens[j].IsP("=") || tokens[j].IsP(":=") || tokens[j].IsP("=>"))) j++;
         else if (tokens[i].Kind == RedactTokenKind.Variable)
         {
             // DECLARE @pwd [AS] nvarchar(100) = N'…': skip the type (words and one parenthesized size) up to "=".

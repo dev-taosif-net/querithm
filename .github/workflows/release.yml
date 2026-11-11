@@ -119,7 +119,7 @@ jobs:
           status=0; "$exe" --self-test 2> self-test.txt || status=$?
           cat self-test.txt
           test "$status" -eq 0
-          for m in "monitorJson ok" "monitorHistory ok" "sqlite ok" "arrow ok" "mysql ok" "duckdb ok"; do grep -q "$m" self-test.txt || { echo "::error::missing '$m'"; exit 1; }; done
+          for m in "monitorJson ok" "monitorHistory ok" "sqlite ok" "arrow ok" "mysql ok" "duckdb ok" "oracle ok"; do grep -q "$m" self-test.txt || { echo "::error::missing '$m'"; exit 1; }; done
       - run: node scripts/gen-notices.mjs
       # No signing key here: the packages are signed in the sign job (createUpdaterArtifacts would need the key).
       - name: Build the installers (unsigned)

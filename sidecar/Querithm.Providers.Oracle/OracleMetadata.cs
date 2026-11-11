@@ -28,7 +28,7 @@ namespace Querithm.Providers.Oracle;
 /// query and said in <see cref="Notes"/> — what is missing and why — instead of failing the refresh. Object ids are
 /// <c>ALL_OBJECTS.OBJECT_ID</c>; names are kept exactly (<c>"Sales"</c> and <c>SALES</c> are two tables).
 /// Definitions come from <c>DBMS_METADATA.GET_DDL</c> on demand, with <c>ALL_SOURCE</c> / <c>ALL_VIEWS</c> when the login may
-/// not call it for the object. Row counts are <c>ALL_TABLES.NUM_ROWS</c> (statistics), never <c>COUNT(*)</c>.
+/// not call it for the object. Row counts are <c>ALL_ALL_TABLES.NUM_ROWS</c> (statistics), never <c>COUNT(*)</c>.
 /// </para>
 /// </summary>
 public sealed class OracleMetadata : IMetadataProvider
@@ -41,7 +41,7 @@ public sealed class OracleMetadata : IMetadataProvider
 
     internal static readonly IReadOnlyDictionary<Piece, (string View, string Effect)> Pieces = new Dictionary<Piece, (string, string)>
     {
-        [Piece.Tables] = ("ALL_TABLES", "Tables are not listed"),
+        [Piece.Tables] = ("ALL_ALL_TABLES", "Tables are not listed"),
         [Piece.ExternalTables] = ("ALL_EXTERNAL_TABLES", "External tables are not marked as such"),
         [Piece.MViews] = ("ALL_MVIEWS", "Changes to materialized views are detected only by their DDL time"),
         [Piece.Views] = ("ALL_VIEWS", "Changes to views are detected only by their DDL time"),
@@ -101,7 +101,8 @@ public sealed class OracleMetadata : IMetadataProvider
 
     /// <summary>
     /// The one marker query (§8): a row per object — id, owner, name, ALL_OBJECTS type, marker, return type, parent id, status,
-    /// flag (X external table; U a package specification the login's own user owns, whose body it always sees). Each view in <paramref name="missing"/> is left out, with what depends on it.
+    /// flag (X external table; O an object table, M an XMLType table; R a synonym across a database link; U a package
+    /// specification the login's own user owns, whose body it always sees). Each view in <paramref name="missing"/> is left out, with what depends on it.
     /// </summary>
     internal string StampSql(IReadOnlySet<Piece> missing)
     {
@@ -111,7 +112,7 @@ public sealed class OracleMetadata : IMetadataProvider
         var joins = new StringBuilder();
         void Join(Piece p, string sql) { if (Has(p)) joins.Append('\n').Append(sql); }
 
-        Join(Piece.Tables, $"LEFT JOIN {V("ALL_TABLES")} t ON o.object_type = 'TABLE' AND t.owner = o.owner AND t.table_name = o.object_name");
+        Join(Piece.Tables, $"LEFT JOIN {V("ALL_ALL_TABLES")} t ON o.object_type = 'TABLE' AND t.owner = o.owner AND t.table_name = o.object_name");
         Join(Piece.ExternalTables, $"LEFT JOIN {V("ALL_EXTERNAL_TABLES")} x ON o.object_type = 'TABLE' AND x.owner = o.owner AND x.table_name = o.object_name");
         Join(Piece.MViews, $"LEFT JOIN {V("ALL_MVIEWS")} mv ON o.object_type = 'MATERIALIZED VIEW' AND mv.owner = o.owner AND mv.mview_name = o.object_name");
         Join(Piece.Views, $"LEFT JOIN {V("ALL_VIEWS")} v ON o.object_type = 'VIEW' AND v.owner = o.owner AND v.view_name = o.object_name");
@@ -192,8 +193,9 @@ public sealed class OracleMetadata : IMetadataProvider
                      WHERE owner {InS} OR table_owner {InS})
               """
             : "";
-        // A table is listed when ALL_TABLES says it is a real one (not in the recycle bin, not a domain index's secondary
+        // A table is listed when ALL_ALL_TABLES says it is a real one (not in the recycle bin, not a domain index's secondary
         // table, an IOT overflow or a nested table's storage) and it is not a materialized view's container table.
+        // ALL_ALL_TABLES, not ALL_TABLES: object tables (CREATE TABLE … OF type / OF XMLTYPE) are only in the former.
         var table = Has(Piece.Tables)
             ? "CASE WHEN t.dropped = 'NO' AND t.secondary = 'N' AND t.nested = 'NO' AND (t.iot_type IS NULL OR t.iot_type = 'IOT')"
               + " AND NOT EXISTS (SELECT 1 FROM o m WHERE m.owner = o.owner AND m.object_name = o.object_name AND m.object_type = 'MATERIALIZED VIEW') THEN 1 END"
@@ -224,7 +226,8 @@ public sealed class OracleMetadata : IMetadataProvider
               {Or(Piece.Triggers, "p.object_id")} AS parent, o.status,
               CASE WHEN o.object_type = 'PACKAGE' AND o.owner = SYS_CONTEXT('USERENV', 'SESSION_USER') THEN 'U'
                 {(Has(Piece.Synonyms) ? "WHEN o.object_type = 'SYNONYM' AND y.db_link IS NOT NULL THEN 'R'" : "")}
-                ELSE {Or(Piece.ExternalTables, "CASE WHEN x.table_name IS NOT NULL THEN 'X' END")} END AS flag,
+                {(Has(Piece.ExternalTables) ? "WHEN x.table_name IS NOT NULL THEN 'X'" : "")}
+                {(Has(Piece.Tables) ? "WHEN o.object_type = 'TABLE' AND t.table_type = 'XMLTYPE' THEN 'M' WHEN o.object_type = 'TABLE' AND t.table_type IS NOT NULL THEN 'O'" : "")} END AS flag,
               {target} AS target,
               {Or(Piece.Tables, "CASE WHEN o.object_type = 'TABLE' THEN CASE WHEN t.iot_type IS NOT NULL THEN 'iot' WHEN t.row_movement = 'ENABLED' THEN 'moves' WHEN t.row_movement = 'DISABLED' THEN 'heap' END END")} AS rowaddr
             FROM o{joins}
@@ -274,6 +277,8 @@ public sealed class OracleMetadata : IMetadataProvider
         var parts = new List<string>(2);
         if (type == "MATERIALIZED VIEW") parts.Add("materialized view");
         if (flag == "X") parts.Add("external table");
+        if (flag == "O" && type == "TABLE") parts.Add("object table");
+        if (flag == "M" && type == "TABLE") parts.Add("XMLType table");
         if (flag == "R" && type == "SYNONYM") parts.Add(OracleResultSources.RemoteNote);
         if (status == "INVALID") parts.Add("invalid");
         return parts.Count == 0 ? null : string.Join(", ", parts);
@@ -935,7 +940,7 @@ public sealed class OracleMetadata : IMetadataProvider
     // ------------------------------------------------------------------------------------------ row counts
 
     /// <summary>
-    /// ALL_TABLES.NUM_ROWS: the optimizer statistics' estimate (null until statistics were gathered), never COUNT(*). The
+    /// ALL_ALL_TABLES.NUM_ROWS (object tables included): the optimizer statistics' estimate (null until statistics were gathered), never COUNT(*). The
     /// time they were gathered is computed against the server's own clock (the dictionary keeps a DATE without a time zone),
     /// so it is right whatever the server's or this computer's zone.
     /// </summary>
@@ -948,7 +953,7 @@ public sealed class OracleMetadata : IMetadataProvider
             var (ids, bind) = IdBinds(chunk);
             await using var cmd = Command(connection, $"""
                 SELECT {NoFeedback} o.object_id, t.num_rows, ROUND((SYSDATE - t.last_analyzed) * 86400000)
-                FROM {_view("ALL_OBJECTS")} o JOIN {_view("ALL_TABLES")} t ON t.owner = o.owner AND t.table_name = o.object_name
+                FROM {_view("ALL_OBJECTS")} o JOIN {_view("ALL_ALL_TABLES")} t ON t.owner = o.owner AND t.table_name = o.object_name
                 WHERE o.object_id IN ({ids}) AND o.object_type IN ('TABLE', 'MATERIALIZED VIEW')
                 """);
             bind(cmd);

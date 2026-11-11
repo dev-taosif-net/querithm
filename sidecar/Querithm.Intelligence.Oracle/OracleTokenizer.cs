@@ -119,8 +119,9 @@ public static class OracleTokenizer
                 kind = OracleTokenKind.Operator;
             }
             var tok = new OracleToken(kind, start, i - start, startLine, s.Substring(start, i - start));
-            if (!tok.IsTrivia) { prevSignificant = kind; }
-            prevEnd = i;
+            // The end of the last significant token: a database link's @ must touch its name (emp@remote), so an @ after
+            // whitespace or a comment (an @file line after "SET SERVEROUTPUT ON") is not one.
+            if (!tok.IsTrivia) { prevSignificant = kind; prevEnd = i; }
             yield return tok;
         }
     }

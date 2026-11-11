@@ -60,6 +60,22 @@ public class OracleMetadataTests
         Assert.DoesNotContain("AS target", new OracleMetadata().StampSql(new HashSet<Piece> { Piece.Synonyms }).Replace("NULL AS target", ""));
     }
 
+    [Fact]
+    public void Object_and_XMLType_tables_are_tables_with_a_note_and_the_stamp_query_reads_ALL_ALL_TABLES()
+    {
+        var by = Assemble([Row(1, "TABLE", "OT", flag: "O"), Row(2, "TABLE", "XT", flag: "M", status: "INVALID")]).ToDictionary(s => s.Id);
+        Assert.Equal((ObjectKind.Table, "object table"), (by[1].Kind, by[1].Note));
+        Assert.Equal((ObjectKind.Table, "XMLType table, invalid"), (by[2].Kind, by[2].Note));
+        // ALL_TABLES leaves object tables out (regression: they were not listed at all).
+        var sql = new OracleMetadata().StampSql(new HashSet<Piece>());
+        Assert.Contains("ALL_ALL_TABLES", Views(sql));
+        Assert.DoesNotContain("ALL_TABLES", Views(sql));
+        Assert.Contains("t.table_type = 'XMLTYPE' THEN 'M'", sql);
+        Assert.DoesNotContain("table_type", new OracleMetadata().StampSql(new HashSet<Piece> { Piece.Tables }));
+        Assert.Contains("WHEN x.table_name IS NOT NULL THEN 'X'", sql);
+        Assert.DoesNotContain("x.table_name", new OracleMetadata().StampSql(new HashSet<Piece> { Piece.ExternalTables }));
+    }
+
     static IEnumerable<string> Views(string sql) =>
         Regex.Matches(sql, @"\bALL_[A-Z_]+\b").Select(m => m.Value);
 

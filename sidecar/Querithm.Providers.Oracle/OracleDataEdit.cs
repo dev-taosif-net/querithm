@@ -363,19 +363,27 @@ public sealed class OracleDataEdit : IDataEditDialect
     public string TokenMatch(string alias, string column, string valueExpr) => throw new NotSupportedException("Querithm keeps no row version for Oracle tables (ORA_ROWSCN is per block).");
     public string? TokenType => null;
 
+    /// <summary>The date part of every text form and literal: a signed year (SYYYY), so BC dates keep their era.</summary>
+    const string DateFormat = "SYYYY-MM-DD HH24:MI:SS";
+
     /// <summary>DECODE matches NULL to NULL (and so <c>''</c> to NULL, which Oracle stores the same).</summary>
     public string NullSafeEquals(string left, string right) => $"DECODE({left}, {right}, 1, 0) = 1";
 
-    /// <summary>The grid's text forms: NUMBER exact with a point, DATE / TIMESTAMP as YYYY-MM-DD HH24:MI:SS[.FF], RAW as 0x + hex; what the grid cannot show as text is named.</summary>
+    /// <summary>
+    /// The grid's text forms: NUMBER exact with a point, DATE / TIMESTAMP as [-]YYYY-MM-DD HH24:MI:SS[.FF], RAW as 0x + hex;
+    /// what the grid cannot show as text is named. The year is signed (SYYYY, Oracle's numbering: -0100 is 100 BC), so a
+    /// BC value never reads as the same AD one; LTRIM drops the blank SYYYY puts before an AD year.
+    /// </summary>
     public string ValueText(string expr, string? columnType)
     {
         var t = OracleColumnType.Parse(columnType);
+        string Text(string format) => $"LTRIM(TO_CHAR({expr}, '{format}'))";
         return t.Kind switch
         {
             OracleValueKind.Number or OracleValueKind.BinaryFloat or OracleValueKind.BinaryDouble => $"TO_CHAR({expr}, 'TM9', 'NLS_NUMERIC_CHARACTERS=''.,''')",
-            OracleValueKind.Date => $"TO_CHAR({expr}, 'YYYY-MM-DD HH24:MI:SS')",
-            OracleValueKind.Timestamp or OracleValueKind.TimestampLtz => t.Scale is 0 ? $"TO_CHAR({expr}, 'YYYY-MM-DD HH24:MI:SS')" : $"TO_CHAR({expr}, 'YYYY-MM-DD HH24:MI:SS.FF{t.Scale ?? 6}')",
-            OracleValueKind.TimestampTz => t.Scale is 0 ? $"TO_CHAR({expr}, 'YYYY-MM-DD HH24:MI:SS TZR')" : $"TO_CHAR({expr}, 'YYYY-MM-DD HH24:MI:SS.FF{t.Scale ?? 6} TZR')",
+            OracleValueKind.Date => Text(DateFormat),
+            OracleValueKind.Timestamp or OracleValueKind.TimestampLtz => Text(t.Scale is 0 ? DateFormat : $"{DateFormat}.FF{t.Scale ?? 6}"),
+            OracleValueKind.TimestampTz => Text(t.Scale is 0 ? $"{DateFormat} TZR" : $"{DateFormat}.FF{t.Scale ?? 6} TZR"),
             OracleValueKind.Raw => $"'0x' || RAWTOHEX({expr})",
             OracleValueKind.Boolean => $"CASE WHEN {expr} THEN 'true' WHEN NOT {expr} THEN 'false' END",
             OracleValueKind.RowId => $"ROWIDTOCHAR({expr})",
@@ -456,7 +464,7 @@ public sealed class OracleDataEdit : IDataEditDialect
             {
                 (OracleValueKind.Number, OracleDecimal d) => d.ToString(),
                 (OracleValueKind.BinaryFloat or OracleValueKind.BinaryDouble, _) => PlainNumber(value.Text.Trim()) ?? Literal(value.Text),
-                (OracleValueKind.Date, _) => $"TO_DATE({Literal(value.Text.Trim().Replace('T', ' '))}, 'YYYY-MM-DD HH24:MI:SS')",
+                (OracleValueKind.Date, _) => $"TO_DATE({Literal(value.Text.Trim().Replace('T', ' '))}, '{DateFormat}')",
                 (OracleValueKind.Timestamp, _) => $"TIMESTAMP {Literal(value.Text.Trim().Replace('T', ' '))}",
                 (OracleValueKind.TimestampTz, _) => $"TIMESTAMP {Literal(value.Text.Trim().Replace('T', ' '))}",
                 (OracleValueKind.TimestampLtz, _) => $"CAST(TIMESTAMP {Literal(value.Text.Trim().Replace('T', ' '))} AS TIMESTAMP WITH LOCAL TIME ZONE)",

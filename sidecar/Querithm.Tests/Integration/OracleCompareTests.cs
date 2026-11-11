@@ -73,7 +73,7 @@ public sealed class OracleCompareTests
         Assert.Contains("\nBEGIN\n", sync.Sql);
         Assert.EndsWith("END;\n/\n", sync.Sql);
         Assert.Contains("12345678901234567890123456789012345672", sync.Sql);
-        Assert.Contains("TO_DATE('2026-01-02 00:00:00', 'YYYY-MM-DD HH24:MI:SS')", sync.Sql);
+        Assert.Contains("TO_DATE('2026-01-02 00:00:00', 'SYYYY-MM-DD HH24:MI:SS')", sync.Sql);
         var ran = await h.RunAsync(sync.Sql);
         Assert.Equal(ExecState.Done, ran.State);
 
@@ -91,6 +91,46 @@ public sealed class OracleCompareTests
         Assert.Equal(1, k.TargetOnly);
         Assert.Equal(1, k.Different);
         Assert.Equal(6, k.Identical);
+    }
+
+    /// <summary>
+    /// A DATE / TIMESTAMP before year 1 keeps its era: 100 BC and AD 100 differ, and the sync writes the BC value back as BC
+    /// (regression: 'YYYY' printed both as 0100, so they compared identical and the sync wrote AD).
+    /// </summary>
+    [IntegrationFact]
+    public async Task A_BC_date_differs_from_the_same_AD_date_and_syncs_back_as_BC()
+    {
+        await using (var c = await OpenAsync())
+        {
+            foreach (var t in new[] { "q_fix_bc_src", "q_fix_bc_tgt" }) await DropAsync(c, "TABLE", t);
+            await RunScriptAsync(c, """
+                CREATE TABLE q_fix_bc_src (id NUMBER PRIMARY KEY, d DATE, t TIMESTAMP(3));
+                CREATE TABLE q_fix_bc_tgt (id NUMBER PRIMARY KEY, d DATE, t TIMESTAMP(3));
+                INSERT INTO q_fix_bc_src VALUES (1, TO_DATE('-0100-03-04 05:06:07', 'SYYYY-MM-DD HH24:MI:SS'), TO_TIMESTAMP('-0100-03-04 05:06:07.250', 'SYYYY-MM-DD HH24:MI:SS.FF3'));
+                INSERT INTO q_fix_bc_tgt VALUES (1, TO_DATE('0100-03-04 05:06:07', 'SYYYY-MM-DD HH24:MI:SS'), TO_TIMESTAMP('0100-03-04 05:06:07.250', 'SYYYY-MM-DD HH24:MI:SS.FF3'));
+                INSERT INTO q_fix_bc_src VALUES (2, TO_DATE('-4712-01-01', 'SYYYY-MM-DD'), NULL);
+                INSERT INTO q_fix_bc_tgt VALUES (2, TO_DATE('-4712-01-01', 'SYYYY-MM-DD'), NULL);
+                COMMIT;
+                """);
+        }
+        await using var h = await OracleS11Host.OpenAsync();
+        var start = await h.Rpc.DataCompareStart(new DataCompareParams { Source = Table(h, "q_fix_bc_src"), Target = Table(h, "q_fix_bc_tgt") });
+        var done = await WaitAsync(h, start.CompareId);
+        Assert.Null(done.Error);
+        Assert.Equal((1, 1), (done.Different, done.Identical));
+
+        var sync = await h.Rpc.DataCompareSyncSql(new DataSyncSqlParams { CompareId = start.CompareId, Insert = true, Update = true, Delete = true });
+        Assert.Contains("TO_DATE('-0100-03-04 05:06:07', 'SYYYY-MM-DD HH24:MI:SS')", sync.Sql);
+        Assert.Equal(ExecState.Done, (await h.RunAsync(sync.Sql)).State);
+
+        var again = await WaitAsync(h, (await h.Rpc.DataCompareStart(new DataCompareParams { Source = Table(h, "q_fix_bc_src"), Target = Table(h, "q_fix_bc_tgt") })).CompareId);
+        Assert.Equal((0, 2), (again.Different, again.Identical));
+        await using (var c = await OpenAsync())
+        {
+            Assert.Equal("-0100-03-04 05:06:07.250", await ScalarAsync(c, "SELECT LTRIM(TO_CHAR(t, 'SYYYY-MM-DD HH24:MI:SS.FF3')) FROM q_fix_bc_tgt WHERE id = 1"));
+            Assert.Equal("-0100-03-04", await ScalarAsync(c, "SELECT LTRIM(TO_CHAR(d, 'SYYYY-MM-DD')) FROM q_fix_bc_tgt WHERE id = 1"));
+            foreach (var t in new[] { "q_fix_bc_src", "q_fix_bc_tgt" }) await DropAsync(c, "TABLE", t);
+        }
     }
 
     [IntegrationFact]

@@ -139,15 +139,18 @@ if (args is ["--self-test"])
     catch (Exception ex) { Console.Error.WriteLine($"duckdb self-test error: {ex.GetType().Name}: {ex.Message}"); }
     Console.Error.WriteLine($"duckdb {(duckdbOk ? "ok" : "FAILED")}");
     // Phase D4 (hidden): the trimmed build loads ODP.NET whole (rooted untrimmed: its license allows unmodified copies
-    // only) — its connection-string table and a connection object, without dialing — and the skeleton still refuses SQL.
+    // only) — its connection-string table and a connection object, without dialing — and its classifier.
     var oracleOk = false;
     try
     {
         var ob = new Oracle.ManagedDataAccess.Client.OracleConnectionStringBuilder { DataSource = "//db.invalid:1521/FREEPDB1", UserID = "u", Pooling = false };
         await using var oc = new Oracle.ManagedDataAccess.Client.OracleConnection(ob.ConnectionString);
         var read = new Oracle.ManagedDataAccess.Client.OracleConnectionStringBuilder(oc.ConnectionString);
-        var refused = new Querithm.Providers.Oracle.OracleProvider().Language.Classify("SELECT 1 FROM DUAL").Refusal != null;
-        oracleOk = read.DataSource == "//db.invalid:1521/FREEPDB1" && !read.Pooling && oc.State == System.Data.ConnectionState.Closed && refused
+        // The classifier (S02) as trimmed: a plain query is not refused, a DROP is destructive, a SQL*Plus command refused.
+        var language = new Querithm.Providers.Oracle.OracleProvider().Language;
+        var classified = language.Classify("SELECT 1 FROM DUAL;\nDROP TABLE t PURGE;") is { Refusal: null, Destructive.Length: > 0 }
+                         && language.Classify("SPOOL out.txt").Refusal != null;
+        oracleOk = read.DataSource == "//db.invalid:1521/FREEPDB1" && !read.Pooling && oc.State == System.Data.ConnectionState.Closed && classified
                    && Querithm.Providers.Oracle.OracleProvider.DriverVersion.StartsWith("23.", StringComparison.Ordinal);
         Console.Error.WriteLine($"oracle driver {Querithm.Providers.Oracle.OracleProvider.DriverVersion}");
     }

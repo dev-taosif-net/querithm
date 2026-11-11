@@ -382,7 +382,10 @@ public sealed class OracleLanguageService : IDialectService
     static readonly SecretRules SecretSyntax = new()
     {
         IdentifiedBy = true,
-        Triggers = ["CONN"],
+        Triggers = ["CONN", "CREDENTIAL"],
+        // DBMS_CREDENTIAL.CREATE_CREDENTIAL(name, username, password …) and UPDATE_CREDENTIAL(name, attribute, value): the
+        // value may be the password whatever the attribute literal says, so it is masked always.
+        SecretArguments = new Dictionary<string, int[]> { ["CREATE_CREDENTIAL"] = [2], ["UPDATE_CREDENTIAL"] = [2] },
         // IDENTIFIED BY VALUES 'hash': the hash after VALUES.
         Extra = (tokens, i) => i >= 1 && tokens[i].Is("VALUES") && tokens[i - 1].Is("BY") && i + 1 < tokens.Count && tokens[i + 1].Kind == RedactTokenKind.String ? i + 1 : -1,
     };

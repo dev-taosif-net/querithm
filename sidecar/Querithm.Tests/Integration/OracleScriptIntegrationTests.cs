@@ -74,7 +74,7 @@ public sealed class OracleScriptIntegrationTests
             if (_made) return;
             await using var c = await OpenAsync();
             foreach (var (k, n) in new[] { ("MATERIALIZED VIEW", "q_s11_mv"), ("TRIGGER", "q_s11_trg"), ("VIEW", "q_s11_v"), ("PROCEDURE", "q_s11_p"), ("FUNCTION", "q_s11_f"),
-                         ("FUNCTION", "q_s11_fb"), ("SYNONYM", "q_s11_syn"), ("SEQUENCE", "q_s11_seq"), ("TABLE", "q_s11_emp"), ("TABLE", "q_s11_dept"), ("TYPE", "q_s11_t"),
+                         ("FUNCTION", "q_s11_fb"), ("FUNCTION", "q_s11_fc"), ("SYNONYM", "q_s11_syn"), ("SEQUENCE", "q_s11_seq"), ("TABLE", "q_s11_emp"), ("TABLE", "q_s11_dept"), ("TYPE", "q_s11_t"),
                          ("PROCEDURE", "q_s11_wrapped") })
                 await DropAsync(c, k, n);
             await RunScriptAsync(c, """
@@ -104,6 +104,8 @@ public sealed class OracleScriptIntegrationTests
                 CREATE FUNCTION q_s11_f (x NUMBER) RETURN NUMBER AS BEGIN RETURN x + 1; END;
                 /
                 CREATE FUNCTION q_s11_fb RETURN BOOLEAN AS BEGIN RETURN TRUE; END;
+                /
+                CREATE FUNCTION q_s11_fc (c IN CHAR, n IN NCHAR) RETURN VARCHAR2 AS BEGIN RETURN c || '|' || n; END;
                 /
                 CREATE TRIGGER q_s11_trg BEFORE INSERT ON q_s11_emp FOR EACH ROW BEGIN :NEW.name := TRIM(:NEW.name); END;
                 /
@@ -259,7 +261,7 @@ public sealed class OracleScriptIntegrationTests
             SessionId = sid, Object = obj, Kind = ScriptKind.Execute, Arguments = [Arg("A", "41.5"), Arg("C", "21"), Arg("E", "2026-03-04 00:00:00")],
         })).Sql;
         Assert.Contains("A => 41.5", sql);
-        Assert.Contains("E => TO_DATE('2026-03-04 00:00:00', 'YYYY-MM-DD HH24:MI:SS')", sql);
+        Assert.Contains("E => TO_DATE('2026-03-04 00:00:00', 'SYYYY-MM-DD HH24:MI:SS')", sql);
         var (done, batches, _) = await RunAsync(h, sid, sql);
         Assert.Equal(ExecState.Done, done.State);
         var outRow = batches.Single(b => b.Batch.Schema.GetFieldIndex("B") >= 0).Batch;
@@ -288,6 +290,9 @@ public sealed class OracleScriptIntegrationTests
         Assert.Equal("1001", Text(Assert.Single(ran.Batches).Batch, "RESULT"));
         var fb = (await h.Rpc.MetaScript(new ScriptParams { SessionId = sid, Object = F("Q_S11_FB"), Kind = ScriptKind.Execute, Arguments = [] })).Sql;
         Assert.Equal("TRUE", Text(Assert.Single((await RunAsync(h, sid, fb)).Batches).Batch, "RESULT"));
+        // CHAR / NCHAR parameters have no length in ALL_ARGUMENTS: more than one character is taken (regression: CHAR(1)).
+        var fc = (await h.Rpc.MetaScript(new ScriptParams { SessionId = sid, Object = F("Q_S11_FC"), Kind = ScriptKind.Execute, Arguments = [Arg("C", "AB"), Arg("N", "αβγ")] })).Sql;
+        Assert.Equal("AB|αβγ", Text(Assert.Single((await RunAsync(h, sid, fc)).Batches).Batch, "RESULT"));
     }
 
     [IntegrationFact]

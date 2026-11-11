@@ -144,7 +144,7 @@ public sealed class OracleScriptTests
         var sql = OracleScripter.ExecuteBlock("APP.P", false, args,
             [Arg("N", "1e3"), Arg("D", "2026-01-02 03:04:05"), Arg("T", "2026-01-02 03:04:05.5"), Arg("S", "it's"), Arg("RW", "0xA0FF"), Arg("IO", "start"), Arg("OPT", null, useDefault: true), Arg("B", "true")]);
         Assert.Contains("N => 1000, -- NUMBER, required", sql);
-        Assert.Contains("D => TO_DATE('2026-01-02 03:04:05', 'YYYY-MM-DD HH24:MI:SS'),", sql);
+        Assert.Contains("D => TO_DATE('2026-01-02 03:04:05', 'SYYYY-MM-DD HH24:MI:SS'),", sql);
         Assert.Contains("T => TIMESTAMP '2026-01-02 03:04:05.5',", sql);
         Assert.Contains("S => N'it''s',", sql);
         Assert.Contains("RW => HEXTORAW('A0FF'),", sql);
@@ -152,6 +152,21 @@ public sealed class OracleScriptTests
         Assert.Contains("-- OPT => …", sql);
         Assert.Contains("B => TRUE", sql);
         Assert.Contains("N => NULL", OracleScripter.ExecuteBlock("APP.P", false, args, [Arg("N", null)]));
+    }
+
+    /// <summary>
+    /// ALL_ARGUMENTS gives a CHAR / NCHAR parameter no length (PL/SQL parameters are unconstrained): it is not CHAR(1), the
+    /// column default (regression: "The value is 2 bytes; CHAR(1 BYTE) holds 1").
+    /// </summary>
+    [Fact]
+    public void A_CHAR_or_NCHAR_parameter_takes_more_than_one_character()
+    {
+        var args = new OracleArgument[] { new(1, "C", "CHAR", "IN", false), new(2, "NC", "NCHAR", "IN", false), new(3, "IOC", "CHAR", "IN/OUT", false) };
+        var sql = OracleScripter.ExecuteBlock("APP.P", false, args, [Arg("C", "AB"), Arg("NC", "αβγ"), Arg("IOC", "it's")]);
+        Assert.Contains("C => 'AB',", sql);
+        Assert.Contains("NC => N'αβγ',", sql);
+        Assert.Contains("Q$IOC VARCHAR2(32767) := 'it''s';", sql);
+        Assert.Contains("32,767", Assert.Throws<ArgumentException>(() => OracleScripter.ExecuteBlock("APP.P", false, args, [Arg("C", new string('x', 32_768))])).Message);
     }
 
     [Theory]

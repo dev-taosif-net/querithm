@@ -300,6 +300,56 @@ public sealed class OracleMetadataIntegrationTests
         await DropAsync(c, "TABLE", "Q_S05_ROWS");
     }
 
+    /// <summary>
+    /// Object tables (<c>CREATE TABLE … OF type</c>, <c>OF XMLTYPE</c>) are in ALL_ALL_TABLES / ALL_OBJECT_TABLES, never in
+    /// ALL_TABLES: they were left out of the explorer, the row counts and schema compare without a word (regression).
+    /// </summary>
+    [IntegrationFact]
+    public async Task Object_and_XMLType_tables_are_listed_counted_and_named_as_not_compared()
+    {
+        await using var c = await OpenAsync();
+        await DropAsync(c, "TABLE", "Q_FIX_OT");
+        await DropAsync(c, "TABLE", "Q_FIX_XT");
+        await DropAsync(c, "TYPE", "Q_FIX_OT_T");
+        try
+        {
+            await ExecAsync(c, "CREATE TYPE q_fix_ot_t AS OBJECT (x NUMBER, label VARCHAR2(20))");
+            await ExecAsync(c, "CREATE TABLE q_fix_ot OF q_fix_ot_t (CONSTRAINT q_fix_ot_pk PRIMARY KEY (x))");
+            await ExecAsync(c, "CREATE TABLE q_fix_xt OF XMLTYPE");
+            await ExecAsync(c, "INSERT INTO q_fix_ot VALUES (q_fix_ot_t(1, 'a'))");
+            await ExecAsync(c, "INSERT INTO q_fix_ot VALUES (q_fix_ot_t(2, 'b'))");
+            await ExecAsync(c, "COMMIT");
+            await ExecAsync(c, "BEGIN DBMS_STATS.GATHER_TABLE_STATS(USER, 'Q_FIX_OT'); END;");
+
+            var meta = new OracleMetadata();
+            var stamps = await meta.GetStampsAsync(c, Timeout());
+            var ot = One(stamps, AppSchema, "Q_FIX_OT");
+            Assert.Equal((ObjectKind.Table, "object table"), (ot.Kind, ot.Note));
+            var xt = One(stamps, AppSchema, "Q_FIX_XT");
+            Assert.Equal((ObjectKind.Table, "XMLType table"), (xt.Kind, xt.Note));
+
+            // The type's attributes are the columns; the system-generated OID / row columns are not shown.
+            var details = await meta.GetDetailsAsync(c, [ot.Id], Timeout());
+            Assert.Equal(["LABEL", "X"], details.Columns.Where(x => x.ObjectId == ot.Id).Select(x => x.Name).Order());
+            Assert.Contains(details.Indexes, i => i.ObjectId == ot.Id && i.Primary && i.Columns.SequenceEqual(["X"]));
+
+            var count = Assert.Single(await meta.GetRowCountsAsync(c, [ot.Id], Timeout()));
+            Assert.Equal(2L, count.Rows);
+
+            // Schema compare does not model them (a plain CREATE TABLE would lose the type): listed with the reason.
+            var model = await new OracleSchemaCompare().ReadModelAsync(c, Timeout(300));
+            Assert.Contains(model.NotCompared, n => n.Contains($"{AppSchema}.Q_FIX_OT: an object table", StringComparison.Ordinal));
+            Assert.Contains(model.NotCompared, n => n.Contains($"{AppSchema}.Q_FIX_XT: an XMLType table", StringComparison.Ordinal));
+            Assert.DoesNotContain(model.Tables, t => t.Name is "Q_FIX_OT" or "Q_FIX_XT");
+        }
+        finally
+        {
+            await DropAsync(c, "TABLE", "Q_FIX_OT");
+            await DropAsync(c, "TABLE", "Q_FIX_XT");
+            await DropAsync(c, "TYPE", "Q_FIX_OT_T");
+        }
+    }
+
     /// <summary>The view name a hardened database would refuse: unknown to the server, so it answers a real ORA-00942.</summary>
     static Func<string, string> Refuse(params string[] views) => v => views.Contains(v) ? v + "_QX" : v;
 

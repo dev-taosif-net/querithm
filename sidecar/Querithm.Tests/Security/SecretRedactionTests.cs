@@ -54,6 +54,7 @@ public class SecretRedactionTests
         { "CREATE USER MAPPING FOR u SERVER s OPTIONS (user 'remote', password 'fdw1')", "CREATE USER MAPPING FOR u SERVER s OPTIONS (user 'remote', password <redacted>)" },
         { "CREATE SUBSCRIPTION s CONNECTION 'host=h dbname=d password=sub1' PUBLICATION p", "CREATE SUBSCRIPTION s CONNECTION <redacted> PUBLICATION p" },
         { "SELECT crypt('pw1', gen_salt('bf')), pgp_sym_encrypt('data', 'k3y')", "SELECT crypt(<redacted>, gen_salt('bf')), pgp_sym_encrypt('data', <redacted>)" },
+        { "SELECT app.set_login(name => 'u', password => 'pw2')", "SELECT app.set_login(name => 'u', password => <redacted>)" },
         { "ALTER ROLE app PASSWORD NULL", "ALTER ROLE app PASSWORD NULL" },
         { "SELECT 'PASSWORD' AS label", "SELECT 'PASSWORD' AS label" },
     };

@@ -140,9 +140,9 @@ public sealed class OracleDialectTests
     public void Text_forms_read_on_the_server_never_depend_on_nls_settings()
     {
         Assert.Equal("TO_CHAR(\"A\", 'TM9', 'NLS_NUMERIC_CHARACTERS=''.,''')", D.ValueText("\"A\"", "NUMBER(12,2)"));
-        Assert.Equal("TO_CHAR(\"D\", 'YYYY-MM-DD HH24:MI:SS')", D.ValueText("\"D\"", "DATE"));
-        Assert.Equal("TO_CHAR(\"T\", 'YYYY-MM-DD HH24:MI:SS.FF3')", D.ValueText("\"T\"", "TIMESTAMP(3)"));
-        Assert.Equal("TO_CHAR(\"T\", 'YYYY-MM-DD HH24:MI:SS.FF6 TZR')", D.ValueText("\"T\"", "TIMESTAMP(6) WITH TIME ZONE"));
+        Assert.Equal("LTRIM(TO_CHAR(\"D\", 'SYYYY-MM-DD HH24:MI:SS'))", D.ValueText("\"D\"", "DATE")); // signed year: BC keeps its era
+        Assert.Equal("LTRIM(TO_CHAR(\"T\", 'SYYYY-MM-DD HH24:MI:SS.FF3'))", D.ValueText("\"T\"", "TIMESTAMP(3)"));
+        Assert.Equal("LTRIM(TO_CHAR(\"T\", 'SYYYY-MM-DD HH24:MI:SS.FF6 TZR'))", D.ValueText("\"T\"", "TIMESTAMP(6) WITH TIME ZONE"));
         Assert.Equal("'0x' || RAWTOHEX(\"R\")", D.ValueText("\"R\"", "RAW(16)"));
         Assert.Equal("ROWIDTOCHAR(\"ROWID\")", D.ValueText("\"ROWID\"", "ROWID"));
         Assert.Equal("'(LONG value not shown)'", D.ValueText("\"L\"", "LONG"));
@@ -173,7 +173,8 @@ public sealed class OracleDialectTests
     public void Preview_literals_are_typed_and_quote_only_the_quote()
     {
         Assert.Equal("1.5", D.PreviewLiteral("NUMBER(12,2)", V("1.50")));
-        Assert.Equal("TO_DATE('2026-01-02 03:04:05', 'YYYY-MM-DD HH24:MI:SS')", D.PreviewLiteral("DATE", V("2026-01-02T03:04:05")));
+        Assert.Equal("TO_DATE('2026-01-02 03:04:05', 'SYYYY-MM-DD HH24:MI:SS')", D.PreviewLiteral("DATE", V("2026-01-02T03:04:05")));
+        Assert.Equal("TO_DATE('-0100-03-04 05:06:07', 'SYYYY-MM-DD HH24:MI:SS')", D.PreviewLiteral("DATE", V("-0100-03-04 05:06:07"))); // 100 BC stays BC
         Assert.Equal("TIMESTAMP '2026-01-02 03:04:05.5'", D.PreviewLiteral("TIMESTAMP(6)", V("2026-01-02 03:04:05.5")));
         Assert.Equal("HEXTORAW('0A0B')", D.PreviewLiteral("RAW(4)", V("0x0a0b")));
         Assert.Equal("'it''s \\n'", D.PreviewLiteral("VARCHAR2(20)", V("it's \\n")));

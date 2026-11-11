@@ -146,16 +146,25 @@ public sealed class OracleSchemaCompare : ISchemaCompareDialect
         var skipped = new HashSet<(string, string)>();
 
         // Tables: ordinary heap and index-organized tables; partitioned ones are compared without their partitioning.
+        // ALL_ALL_TABLES, not ALL_TABLES: object tables are only in the former, and are named as not compared (a plain
+        // CREATE TABLE would lose the type and the object identifiers).
         await EachAsync(c, $"""
             SELECT {OracleMetadata.NoFeedback} t.owner, t.table_name, t.temporary, t.partitioned, t.iot_type,
                    CASE WHEN EXISTS (SELECT 1 FROM ALL_EXTERNAL_TABLES x WHERE x.owner = t.owner AND x.table_name = t.table_name) THEN 1 ELSE 0 END,
-                   CASE WHEN EXISTS (SELECT 1 FROM ALL_MVIEWS m WHERE m.owner = t.owner AND m.container_name = t.table_name) THEN 1 ELSE 0 END
-            FROM ALL_TABLES t WHERE t.owner {inS} AND t.nested = 'NO' AND t.secondary = 'N' AND (t.iot_type IS NULL OR t.iot_type = 'IOT') AND t.dropped = 'NO'
+                   CASE WHEN EXISTS (SELECT 1 FROM ALL_MVIEWS m WHERE m.owner = t.owner AND m.container_name = t.table_name) THEN 1 ELSE 0 END,
+                   t.table_type
+            FROM ALL_ALL_TABLES t WHERE t.owner {inS} AND t.nested = 'NO' AND t.secondary = 'N' AND (t.iot_type IS NULL OR t.iot_type = 'IOT') AND t.dropped = 'NO'
             ORDER BY t.owner, t.table_name
             """, r =>
             {
                 var key = (r.GetString(0), r.GetString(1));
                 if (S(r, 6) == "1") { skipped.Add(key); return; } // a materialized view's container: counted with the materialized views
+                if (S(r, 7) is { } type)
+                {
+                    notCompared.Add(type == "XMLTYPE" ? $"{key.Item1}.{key.Item2}: an XMLType table is not compared" : $"{key.Item1}.{key.Item2}: an object table (OF {type}) is not compared");
+                    skipped.Add(key);
+                    return;
+                }
                 if (S(r, 2) == "Y") { notCompared.Add($"{key.Item1}.{key.Item2}: a global temporary table is not compared"); skipped.Add(key); return; }
                 if (S(r, 5) == "1") { notCompared.Add($"{key.Item1}.{key.Item2}: an external table is not compared"); skipped.Add(key); return; }
                 if (S(r, 3) == "YES") notCompared.Add($"{key.Item1}.{key.Item2}: partitioning is not compared (the table is compared without it)");

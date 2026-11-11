@@ -71,7 +71,7 @@ jobs:
           status=0; "$exe" --self-test 2> self-test.txt || status=$?
           cat self-test.txt
           test "$status" -eq 0
-          for m in "monitorJson ok" "monitorHistory ok" "sqlite ok" "arrow ok" "mysql ok" "duckdb ok"; do grep -q "$m" self-test.txt || { echo "::error::missing '$m'"; exit 1; }; done
+          for m in "monitorJson ok" "monitorHistory ok" "sqlite ok" "arrow ok" "mysql ok" "duckdb ok" "oracle ok"; do grep -q "$m" self-test.txt || { echo "::error::missing '$m'"; exit 1; }; done
           echo "${{ matrix.rid }}: trimmed sidecar $(wc -c < "$exe" | tr -d ' ') bytes, self-test ok" | tee -a "$GITHUB_STEP_SUMMARY"
       # L23: the Host suppresses trim warnings (SMO, SqlClient and StreamJsonRpc warn and are rooted instead); this publish
       # shows them and fails when there are more than scripts/trim-warnings-baseline.json lists.

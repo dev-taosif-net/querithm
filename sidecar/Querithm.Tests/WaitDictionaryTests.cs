@@ -84,6 +84,8 @@ public class WaitDictionaryTests
         using var p = Process.Start(psi)!;
         var err = p.StandardError.ReadToEnd();
         Assert.True(p.WaitForExit(30_000));
+        // Each module's line first, so a failure names the module (D4: "oracle FAILED" once broke only the exit code).
+        foreach (var module in new[] { "sqlite ok", "arrow ok", "mysql ok", "duckdb ok", "oracle ok" }) Assert.Contains(module, err);
         Assert.Equal(0, p.ExitCode);
         Assert.Contains($"waitDictionary sqlserver={D.SqlServer.Count} postgres={D.Postgres.Count}", err);
         Assert.Contains("monitorJson ok", err);    // the export's snapshot serialization survives trimming

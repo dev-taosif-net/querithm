@@ -115,6 +115,23 @@
     ]
   },
   {
+    "name": "@file on the line after a word is a client command, not a database link",
+    "text": "SET SERVEROUTPUT ON\n@install.sql",
+    "binds": [],
+    "statements": [
+      {
+        "kind": "client",
+        "start": 0,
+        "end": 19
+      },
+      {
+        "kind": "client",
+        "start": 20,
+        "end": 32
+      }
+    ]
+  },
+  {
     "name": "nq'' and N'' strings",
     "text": "SELECT nq'{x:y}', N'a:b', :z FROM dual",
     "binds": [

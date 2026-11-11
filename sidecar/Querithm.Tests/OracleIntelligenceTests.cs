@@ -91,6 +91,9 @@ public partial class OracleIntelligenceTests
     {
         var toks = Code("SELECT * FROM emp@remote.example, \"T\"@\"L\" WHERE 1 = 1");
         Assert.Equal(["@remote.example", "@\"L\""], toks.Where(t => t.Kind == OracleTokenKind.DbLink).Select(t => t.Text));
+        // A link follows its name directly: after whitespace or a comment the @ is something else (an @file line).
+        Assert.DoesNotContain(Code("SELECT * FROM emp\n@remote"), t => t.Kind == OracleTokenKind.DbLink);
+        Assert.DoesNotContain(Code("SELECT * FROM emp /* c */@remote"), t => t.Kind == OracleTokenKind.DbLink);
         var range = Code("FOR i IN 1..10 LOOP");
         Assert.Equal(["1", "..", "10"], range.Skip(3).Take(3).Select(t => t.Text));
         Assert.Equal(OracleTokenKind.Number, Code("1.5e-3f")[0].Kind);
@@ -231,6 +234,10 @@ public partial class OracleIntelligenceTests
     [InlineData("SPOOL out.txt", "SPOOL")]
     [InlineData("@install.sql", "@file")]
     [InlineData("@@child.sql", "@file")]
+    // After a line that ends in a name: the @ starts a new line, it is not a database link (regression).
+    [InlineData("SET SERVEROUTPUT ON\n@install.sql", "@file")]
+    [InlineData("SELECT 1 FROM dual;\n@install.sql", "@file")]
+    [InlineData("SET SERVEROUTPUT OFF\n@@child.sql", "@file")]
     [InlineData("EXEC dbms_stats.gather_table_stats(user, 'T')", "BEGIN")]
     [InlineData("execute p", "BEGIN")]
     [InlineData("DEFINE x = 1", "DEFINE")]
