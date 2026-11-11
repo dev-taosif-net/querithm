@@ -432,6 +432,90 @@ try {
         else if (count !== "3") errors.push(`oracle: the imported table holds ${count} rows, not 3`);
       }
       await closeDialogs();
+
+      // D4 S11: find usages and the rename preview on an Oracle column (OracleReferenceFinder), schema compare of the
+      // login's schema with itself and its migration script, and a data compare of a query against the table it reads.
+      console.log("[step] Oracle find usages, rename, schema and data compare");
+      await typeSql("CREATE OR REPLACE VIEW smoke_ora_v AS SELECT id, name FROM smoke_ora_t");
+      await runAndShowMessages();
+      await sleep(2000); // the DDL's metadata refresh
+      await typeSql("SELECT t.name FROM smoke_ora_t t");
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("Home");
+      for (let i = 0; i < 10; i++) await page.keyboard.press("ArrowRight");
+      await page.keyboard.down("Shift"); await page.keyboard.press("F12"); await page.keyboard.up("Shift");
+      await page.waitForFunction(() => (document.querySelector("[data-q-usages]")?.textContent ?? "").includes("Usages of column") && document.querySelectorAll("[data-q-usage-hit]").length > 0, { timeout: 30_000 })
+        .catch(async () => errors.push(`oracle: find usages did not list the column's usages: ${(await page.evaluate(() => document.querySelector("[data-q-usages]")?.textContent ?? "no panel")).slice(0, 300)}`));
+      if (!(await page.evaluate(() => (document.querySelector("[data-q-usages]")?.textContent ?? "").includes("SMOKE_ORA_V")))) errors.push("oracle: find usages did not find the view reading the column");
+      await sleep(400);
+      await shot("27k-oracle-usages");
+      await page.click(".monaco-editor .view-lines");
+      await page.keyboard.press("Home");
+      for (let i = 0; i < 10; i++) await page.keyboard.press("ArrowRight");
+      await page.keyboard.press("F2");
+      await page.waitForSelector('input[aria-label="New name"]', { timeout: 10_000 }).catch(() => errors.push("oracle: rename dialog did not open"));
+      if (await page.$('input[aria-label="New name"]')) {
+        await page.keyboard.type("label");
+        await page.waitForFunction(() => (document.querySelector("[data-q-rename-objects]")?.textContent ?? "").length > 0, { timeout: 30_000 })
+          .catch(async () => errors.push(`oracle: rename preview did not appear: ${await openDialogText()}`));
+        await sleep(500);
+        // The preview lists the view that reads the column, rewritten (the script itself opens in a query tab).
+        if (!(await page.evaluate(() => document.querySelector("[data-q-rename-objects]")?.textContent?.includes("SMOKE_ORA_V")))) errors.push("oracle: the rename preview does not list the view reading the column");
+        if (!(await page.evaluate(() => document.querySelector('[role="dialog"]')?.textContent?.includes("commits DDL as it goes")))) errors.push("oracle: the rename dialog does not say Oracle commits DDL as it goes");
+        await shot("27l-oracle-rename");
+        await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent === "Cancel")?.click());
+        await sleep(300);
+      }
+
+      await page.click(".monaco-editor .view-lines");
+      await page.keyboard.down("Control"); await page.keyboard.down("Shift"); await page.keyboard.press("D"); await page.keyboard.up("Shift"); await page.keyboard.up("Control");
+      await page.waitForSelector('select[aria-label="Target connection"]', { timeout: 10_000 }).catch(() => errors.push("oracle: schema compare tab did not open"));
+      const oraSource = await page.evaluate(() => document.querySelector('select[aria-label="Source connection"]')?.value);
+      if (oraSource) {
+        await page.select('select[aria-label="Target connection"]', oraSource);
+        await page.waitForFunction(() => [...(document.querySelector('select[aria-label="Target database"]')?.options ?? [])].some((o) => o.value === "FREEPDB1"), { timeout: 10_000 })
+          .catch(() => errors.push("oracle: schema compare target databases did not load"));
+        await page.select('select[aria-label="Target database"]', "FREEPDB1");
+        await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "Compare")?.click());
+        // The login's schema compared with itself: every object identical (hidden by default), nothing different, and
+        // what Oracle compare leaves out named in the notes. Migration scripts are covered by the integration round trip.
+        await page.waitForFunction(() => /Hide identical \(([1-9]\d*)\)/.test(document.body.innerText), { timeout: 120_000 })
+          .catch(async () => errors.push(`oracle: schema compare found no identical objects: ${(await page.evaluate(() => document.body.innerText)).slice(0, 300)}`));
+        if (!(await page.evaluate(() => /Different 0\b/.test(document.body.innerText)))) errors.push("oracle: the schema differs from itself");
+        if (!(await page.evaluate(() => document.body.innerText.includes("Not compared:")))) errors.push("oracle: schema compare does not list what it leaves out");
+        await page.evaluate(() => [...document.querySelectorAll("label")].find((l) => l.textContent?.trim().startsWith("Hide identical"))?.querySelector("input")?.click());
+        await page.waitForFunction(() => document.querySelectorAll("[data-q-compare-item]").length > 0, { timeout: 10_000 })
+          .catch(() => errors.push("oracle: schema compare listed no items with identical ones shown"));
+        await sleep(600);
+        await shot("27m-oracle-schema-compare");
+      } else errors.push("oracle: schema compare source was not prefilled from the tab");
+      await page.keyboard.down("Control"); await page.keyboard.press("W"); await page.keyboard.up("Control");
+      await sleep(400);
+
+      await page.click(".monaco-editor .view-lines");
+      await page.keyboard.down("Control"); await page.keyboard.down("Shift"); await page.keyboard.press("P"); await page.keyboard.up("Shift"); await page.keyboard.up("Control");
+      await sleep(300);
+      await page.keyboard.type("Data compare");
+      await sleep(300);
+      await page.keyboard.press("Enter");
+      await page.waitForSelector('select[aria-label="Source kind"]', { timeout: 10_000 }).catch(() => errors.push("oracle: data compare tab did not open"));
+      if (await page.$('select[aria-label="Source kind"]')) {
+        await page.select('select[aria-label="Source kind"]', "query");
+        await page.waitForSelector('textarea[aria-label="Source query"]', { timeout: 5_000 });
+        await page.type('textarea[aria-label="Source query"]', "SELECT id, CASE WHEN MOD(id, 2) = 0 THEN name || '!' ELSE name END AS name FROM smoke_ora_t");
+        await page.type('input[aria-label="Key columns"]', "ID");
+        await page.type('input[aria-label="Target table"]', "QUERITHM_APP.SMOKE_ORA_T");
+        await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "Compare")?.click());
+        await page.waitForFunction(() => /\d+ ms\b/.test(document.querySelector("[data-q-data-progress]")?.textContent ?? ""), { timeout: 60_000 })
+          .catch(async () => errors.push(`oracle: data compare did not finish: ${(await page.evaluate(() => document.body.innerText)).slice(0, 400)}`));
+        await sleep(600);
+        const oraDifferent = await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Different"))?.textContent ?? "");
+        if (!/Different [1-9]/.test(oraDifferent)) errors.push(`oracle: data compare found no difference: ${oraDifferent}`);
+        await shot("27n-oracle-data-compare");
+      }
+      await page.keyboard.down("Control"); await page.keyboard.press("W"); await page.keyboard.up("Control");
+      await sleep(400);
+      await closeDialogs();
     }
   } else {
   // (Not re-indented: the full run below is unchanged.)

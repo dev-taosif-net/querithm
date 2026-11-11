@@ -113,6 +113,14 @@ public interface IObjectScripter
 
     /// <summary>Phase D4 (Oracle): <paramref name="withBody"/> — a package specification's script also carries its body. Other engines ignore it.</summary>
     Task<string> ScriptAsync(DbConnection connection, ObjectRef obj, ScriptKind kind, bool withBody, CancellationToken ct) => ScriptAsync(connection, obj, kind, ct);
+
+    /// <summary>
+    /// Phase D4 S11 (Oracle): EXECUTE with the Execute dialog's values, typed against the routine's own parameters. Engines
+    /// whose dialog builds the call in the webview refuse values sent here.
+    /// </summary>
+    Task<string> ScriptExecuteAsync(DbConnection connection, ObjectRef obj, IReadOnlyList<ScriptArgument> values, CancellationToken ct) =>
+        values.Count == 0 ? ScriptAsync(connection, obj, ScriptKind.Execute, ct)
+            : Task.FromException<string>(new NotSupportedException("This engine's Execute dialog builds the call itself: no values are taken here."));
 }
 
 /// <summary>SQL Server Extended Events trace (§11). Not a debugger.</summary>

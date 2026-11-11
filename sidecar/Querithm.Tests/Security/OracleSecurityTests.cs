@@ -214,4 +214,32 @@ public sealed class OracleSecurityTests
         Assert.Throws<ArgumentException>(() => Edit.Quote("a\"b"));
         Assert.Throws<ArgumentException>(() => new OracleImport().CreateTable("APP", "t\" (x", [("c", "NUMBER", false)], []));
     }
+    // ------------------------------------------------------------------------------------------ D4 S11
+
+    [Fact]
+    public void Execute_dialog_values_stay_one_typed_literal_and_only_the_dictionarys_parameters_are_named()
+    {
+        const string hostile = "x'); DROP TABLE t; --";
+        var args = new OracleArgument[] { new(1, "S", "VARCHAR2", "IN", false), new(2, "N", "NUMBER", "IN", false), new(3, "IO", "VARCHAR2", "IN/OUT", false) };
+        ScriptArgument A(string n, string t) => new() { Name = n, Value = new GridValue { Text = t } };
+        var block = OracleScripter.ExecuteBlock("APP.P", false, args, [A("S", hostile), A("IO", hostile)]);
+        Assert.Contains("S => 'x''); DROP TABLE t; --',", block);
+        Assert.Contains(":= 'x''); DROP TABLE t; --';", block);
+        // The classifier (which guards Prod and destructive runs) sees no DROP: the text never left its literal.
+        var flagged = new OracleLanguageService().Classify(block).Destructive;
+        Assert.True(flagged.Length == 0, string.Join(" / ", flagged.Select(f => f.ToString())));
+        // A number value is parsed, never pasted; a name the routine does not have is refused, never written.
+        Assert.Throws<ArgumentException>(() => OracleScripter.ExecuteBlock("APP.P", false, args, [A("N", "1); DROP TABLE t; --")]));
+        Assert.Contains("no parameter", Assert.Throws<ArgumentException>(() => OracleScripter.ExecuteBlock("APP.P", false, args, [A("X => 1); DROP TABLE t; --", "1")])).Message);
+    }
+
+    [Fact]
+    public void Compare_and_rename_DDL_quote_every_name_and_refuse_ones_that_cannot_be_quoted()
+    {
+        var d = new OracleSchemaCompare();
+        var t = new Querithm.Contract.Providers.ModelTable { Schema = "APP", Name = "T\"; DROP TABLE x; --", Columns = [] };
+        Assert.Throws<ArgumentException>(() => d.DropTable(t));
+        Assert.Equal("ALTER TABLE \"APP\".\"T\" RENAME COLUMN \"a b\" TO \"DROP\";", d.RenameColumn(t with { Name = "T" }, "a b", "DROP"));
+        Assert.Throws<ArgumentException>(() => new OracleReferenceFinder().Rename("x", "y\" --"));
+    }
 }

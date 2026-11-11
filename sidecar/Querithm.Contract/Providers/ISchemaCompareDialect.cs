@@ -87,7 +87,8 @@ public sealed record ModelTable
     public ModelFk[] Fks { get; init; } = [];
 }
 
-public enum ModuleKind { View, MaterializedView, Function, Procedure, Trigger }
+/// <summary>Package and PackageBody (Phase D4 S11, Oracle): a rename rewrites a package that uses the target; schema compare does not model them.</summary>
+public enum ModuleKind { View, MaterializedView, Function, Procedure, Trigger, Package, PackageBody }
 
 public sealed record ModelRef(string Schema, string Name);
 

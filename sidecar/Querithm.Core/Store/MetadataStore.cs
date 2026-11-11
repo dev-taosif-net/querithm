@@ -316,7 +316,7 @@ public sealed class MetadataStore(LocalStore store)
         using var cmd = c.Cmd("""
             SELECT o.object_id FROM obj o
             LEFT JOIN definition_cache d ON d.profile_id = o.profile_id AND d.database = o.database AND d.object_id = o.object_id
-            WHERE o.profile_id=$p AND o.database=$d AND o.kind IN ('view','proc','func','tvf','trigger') AND d.object_id IS NULL
+            WHERE o.profile_id=$p AND o.database=$d AND o.kind IN ('view','proc','func','tvf','trigger','package','packageBody') AND d.object_id IS NULL
             """, null, ("$p", profileId), ("$d", database));
         using var r = cmd.ExecuteReader();
         var list = new List<long>();

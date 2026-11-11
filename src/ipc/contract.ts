@@ -1430,11 +1430,16 @@ export interface SchemaSnapshot {
   sessionId?: string | null;
   notes?: string[] | null;
 }
+export interface ScriptArgument {
+  name: string;
+  value: GridValue;
+}
 export interface ScriptParams {
   sessionId: string;
   object: ObjectRef;
   kind: ScriptKind;
   withBody: boolean;
+  arguments?: ScriptArgument[] | null;
 }
 export interface SearchParams {
   profileId: string;

@@ -130,7 +130,8 @@ function ObjectRename({ d }: { d: RenameDialogProps }) {
                   <div className="p-3 text-muted">No database object references it: only the {kindLabel(target.kind)} itself is renamed{tabEdits > 0 ? `, plus ${tabEdits} reference(s) in open tabs` : ""}.</div>
                 )}
                 {preview.objects.map((o) => (
-                  <div key={o.key} className={`${focus === o.key ? "bg-active" : ""}`}>
+                  // q-hl: muted text in the selected group keeps 4.5:1 on its highlight (found by smoke-ui on an Oracle rename).
+                  <div key={o.key} className={`${focus === o.key ? "bg-active q-hl" : ""}`}>
                     <button className="w-full text-left px-2 py-1 font-semibold flex items-center gap-2 hover:bg-hover" onClick={() => setFocus(o.key)}>
                       {o.object.schema}.{o.object.name}
                       {o.serverUpdated && <span className="text-muted text-[10px] font-normal">updated by the server</span>}

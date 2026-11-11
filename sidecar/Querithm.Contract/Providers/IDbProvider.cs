@@ -135,6 +135,12 @@ public interface IDbProvider
         ResultOrigins(reader, columns, batchText, resultInBatch, snapshot);
 
     /// <summary>
+    /// Phase D4 S11: the schema a tab's unqualified names resolve to when the engine has no fixed default schema but the
+    /// login is one (Oracle: the user is the schema), in the catalog's spelling; null elsewhere (<see cref="EngineTraits.DefaultSchema"/>).
+    /// </summary>
+    string? LoginSchema(Profile profile) => null;
+
+    /// <summary>
     /// Why data result set <paramref name="resultInBatch"/> of <paramref name="batchText"/> cannot be edited in the grid
     /// whatever <see cref="ResultOrigins"/> reports (without the "Read-only: " prefix), or null. Grid-edit audit: a
     /// self-join gives both aliases one table id and SQLite names the leftmost table for a UNION's columns, so a row key

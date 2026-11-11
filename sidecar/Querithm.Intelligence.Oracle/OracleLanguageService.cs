@@ -195,7 +195,10 @@ public sealed class OracleLanguageService : IDialectService
                 i++;
                 continue;
             }
-            if (t.Is("DBMS_SQL") && next.IsP(".") || t.Is("DBMS_UTILITY") && next.IsP(".") && i + 2 < code.Count && code[i + 2].Is("EXEC_DDL_STATEMENT"))
+            // D4 S11: DBMS_SQL.RETURN_RESULT / GET_NEXT_RESULT hand back a cursor already open (an Execute block's OUT values
+            // and ref cursors); they run no SQL of their own. Every other DBMS_SQL call can.
+            var returnsCursor = t.Is("DBMS_SQL") && next.IsP(".") && i + 2 < code.Count && (code[i + 2].Is("RETURN_RESULT") || code[i + 2].Is("GET_NEXT_RESULT"));
+            if (!returnsCursor && (t.Is("DBMS_SQL") && next.IsP(".") || t.Is("DBMS_UTILITY") && next.IsP(".") && i + 2 < code.Count && code[i + 2].Is("EXEC_DDL_STATEMENT")))
             {
                 s.Ddl = true;
                 s.Add("dynamicSql", stmtText, t, $"{t.Text.ToUpperInvariant()} runs SQL text built at run time, which cannot be checked for destructive statements.");

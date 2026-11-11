@@ -349,7 +349,8 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     locations: ["file", "memory"],
   },
   // Phase D4, hidden engine (the picker offers only what the sidecar exposes). Since S06 the editor, profile dialog and
-  // Messages know it, since S09 plans; procedures, synonyms, the monitor and the rest stay off until their session (D4 S10–S12).
+  // Messages know it, since S09 plans, since S11 procedures (Execute), compare and rename; synonyms, the monitor and the rest
+  // stay off until their session (D4 S12).
   oracle: {
     label: "Oracle Database",
     shortLabel: "Oracle",
@@ -377,7 +378,8 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     synonyms: false,
     packages: true,
     triggerFunctions: false,
-    procedures: false,
+    // D4 S11: Execute… and Script as ▸ EXECUTE build an anonymous block in the sidecar from the live ALL_ARGUMENTS.
+    procedures: true,
     monitor: false,
     serverOutput: true,
     locations: ["server"],

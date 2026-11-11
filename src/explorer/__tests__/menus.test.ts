@@ -210,6 +210,36 @@ describe("Oracle package menus (D4 S08)", () => {
   });
 });
 
+describe("Oracle routine, trigger and table menus (D4 S11)", () => {
+  beforeEach(() => useProfiles.setState({ profiles: [{ id: "p", name: "Srv", engine: "oracle", environment: "dev" } as never] }));
+
+  it("a procedure or function: Execute… opens the dialog, Script as ends in EXECUTE", () => {
+    for (const kind of ["proc", "func"] as const) {
+      const menu = objectMenu(objRow(obj(kind, { schema: "APP", name: "P" })));
+      expect(find(menu, "Execute…").unavailable).toBeUndefined();
+      expect(sub(menu, "Script as")).toEqual(["CREATE", "ALTER", "DROP and CREATE", "DROP", "EXECUTE"]);
+      find(find(menu, "Script as").sub!, "EXECUTE").run();
+      expect(m.scriptObject).toHaveBeenLastCalledWith("p", "AppDb", { schema: "APP", name: "P", kind, objectId: 7 }, "execute");
+    }
+  });
+
+  it("a trigger enables and disables on a table's trigger and a view's alike", () => {
+    for (const parent of [obj("table"), obj("view")]) {
+      const menu = objectMenu(objRow(obj("trigger", { schema: "APP", name: "TRG" })), { parent });
+      expect(find(find(menu, "Script as").sub!, "ENABLE").unavailable).toBeUndefined();
+      expect(find(find(menu, "Script as").sub!, "DISABLE").unavailable).toBeUndefined();
+    }
+  });
+
+  it("find usages and rename are offered for tables, views and routines", () => {
+    for (const kind of ["table", "view", "proc", "func", "sequence"] as const) {
+      const menu = objectMenu(objRow(obj(kind, { schema: "APP", name: "X" })));
+      expect(find(menu, "Find usages").unavailable).toBeUndefined();
+      expect(find(menu, "Rename…").unavailable).toBeUndefined();
+    }
+  });
+});
+
 describe("server, database, folder and saved menus", () => {
   beforeEach(() => useProfiles.setState({ profiles: [{ id: "p", name: "Srv", engine: "pg", environment: "staging" } as never] }));
 

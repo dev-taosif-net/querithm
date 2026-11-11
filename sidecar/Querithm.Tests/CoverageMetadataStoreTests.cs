@@ -77,6 +77,17 @@ public class MetadataStoreSearchAndDetailsTests
     }
 
     [Fact]
+    public void Package_specifications_and_bodies_are_fetched_for_find_usages_too()
+    {
+        // D4 S11: a package body that reads a table breaks with it like any routine, so its text is scanned too.
+        var store = new MetadataStore(LocalStore.InMemory());
+        ObjectStamp S(long id, string name, ObjectKind kind) => new(id, "APP", name, kind, id, null);
+        store.ApplyRefresh("p", "db", true, [S(1, "T", ObjectKind.Table), S(2, "PKG", ObjectKind.Package), S(3, "PKG", ObjectKind.PackageBody), S(4, "SYN", ObjectKind.Synonym)], [],
+            new MetadataBundle([], [], [], []), "23.0");
+        Assert.Equal([2L, 3L], store.MissingDefinitionIds("p", "db").Order());
+    }
+
+    [Fact]
     public void Definitions_are_cached_per_object_and_unavailable_ones_are_remembered()
     {
         var store = Filled();

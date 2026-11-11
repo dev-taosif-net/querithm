@@ -201,15 +201,4 @@ public class OraclePackageTests
         Assert.Contains("APP.PKG", ex.Message);
     }
 
-    [Theory]
-    [InlineData(ObjectKind.Table)]
-    [InlineData(ObjectKind.Proc)]
-    [InlineData(ObjectKind.View)]
-    public void Every_other_kind_still_refuses_until_S11(ObjectKind kind)
-    {
-        var provider = new OracleProvider();
-        var ex = Assert.Throws<NotSupportedException>(() => provider.Scripter.ScriptAsync(null!, Ref(kind), ScriptKind.Create, default).GetAwaiter().GetResult());
-        Assert.Equal(OracleUnavailable.Reason, ex.Message);
-        Assert.IsType<OracleScripter>(provider.Scripter);
-    }
 }

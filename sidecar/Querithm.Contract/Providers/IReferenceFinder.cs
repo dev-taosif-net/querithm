@@ -66,4 +66,10 @@ public interface IReferenceFinder
 
     /// <summary>The definition is stored parsed by the server (PostgreSQL views, BEGIN ATOMIC functions): it follows a rename by itself.</summary>
     bool ServerTracked(string definition, ObjectKind kind);
+
+    /// <summary>
+    /// Phase D4 S11: the rename dialog's new name in the catalog's spelling, as the engine reads it typed (Oracle folds
+    /// <c>emp2</c> to EMP2 and keeps <c>"emp2"</c> exact). Default: as typed.
+    /// </summary>
+    string CatalogName(string typed) => typed;
 }

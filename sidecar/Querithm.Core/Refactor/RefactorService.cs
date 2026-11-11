@@ -34,9 +34,14 @@ public sealed class RefactorService(SessionManager sessions, MetadataService met
     /// How an engine's renames behave (Phase D0e: one exhaustive table instead of SQL Server / else-PostgreSQL branches,
     /// so an engine without its own rules is refused rather than treated like one of them).
     /// </summary>
+    /// <param name="RenameRecreates">
+    /// Phase D4 S11 (Oracle): views and routines have no RENAME, so the renamed object is created under the new name from
+    /// its rewritten definition and the old one dropped after it (the dialect refuses <c>RenameObject</c> for them).
+    /// </param>
+    /// <param name="OneNamespace">Phase D4 S11 (Oracle): tables, views, sequences, synonyms, routines, packages and types of a schema share one name space.</param>
     sealed record RenameRules(
         bool ModuleNamesResolveInOwnSchema, bool ServerRenamesOwnHeader, bool SchemaBinding, bool ColumnRenameNeedsModel, bool RoutineOverloads, bool RelationsShareNamespace,
-        bool RecreateDropsFirst = false);
+        bool RecreateDropsFirst = false, bool RenameRecreates = false, bool OneNamespace = false);
 
     static RenameRules RulesFor(Engine e) => e switch
     {
@@ -50,6 +55,10 @@ public sealed class RefactorService(SessionManager sessions, MetadataService met
         // space), leaving every definition that names them alone; routines cannot be renamed (the dialect refuses).
         Engine.MySql => new(ModuleNamesResolveInOwnSchema: true, ServerRenamesOwnHeader: true, SchemaBinding: false, ColumnRenameNeedsModel: false,
             RoutineOverloads: false, RelationsShareNamespace: true, RecreateDropsFirst: true), // no CREATE OR REPLACE for routines and triggers
+        // Oracle (D4 S11): a unit's bare names resolve in its owner's schema; view and PL/SQL text is stored as written and
+        // only becomes invalid on a rename; ALTER TABLE … RENAME [COLUMN] exists, views and routines are recreated.
+        Engine.Oracle => new(ModuleNamesResolveInOwnSchema: true, ServerRenamesOwnHeader: false, SchemaBinding: false, ColumnRenameNeedsModel: false,
+            RoutineOverloads: false, RelationsShareNamespace: true, RenameRecreates: true, OneNamespace: true),
         _ => throw new QuerithmException("refactorUnsupported", $"Rename is not available for {ProfileRules.EngineName(e)} yet."),
     };
 
@@ -72,8 +81,9 @@ public sealed class RefactorService(SessionManager sessions, MetadataService met
         };
     }
 
-    /// <summary>dbo / public; where a database is the schema (MySQL, SQLite's main), the tab's database.</summary>
-    static string DefaultSchema(IDbProvider p, string? database) => p.Traits.DefaultSchema ?? database ?? "";
+    /// <summary>dbo / public; Oracle's login schema; where a database is the schema (MySQL, SQLite's main), the tab's database.</summary>
+    static string DefaultSchema(Session? s, IDbProvider p, string? database) =>
+        p.Traits.DefaultSchema ?? (s != null ? p.LoginSchema(s.Profile) : null) ?? database ?? "";
 
     static RefKind Map(RefactorKind k) => (RefKind)(int)k;
     static RefactorKind Map(RefKind k) => (RefactorKind)(int)k;
@@ -105,7 +115,7 @@ public sealed class RefactorService(SessionManager sessions, MetadataService met
         var snap = db == null ? null : metadata.Cache.Get(s.Profile.Id, db, s.Id);
         if (snap == null) return new SymbolAtResult();
         var names = NamesFor(provider);
-        var t = f.TargetAt(p.Text, p.Offset, Context(snap, DefaultSchema(provider, db), names));
+        var t = f.TargetAt(p.Text, p.Offset, Context(snap, DefaultSchema(s, provider, db), names));
         if (t == null) return new SymbolAtResult();
         var resolved = Resolve(snap, names, new RefactorTarget { Kind = Map(t.Kind), Schema = t.Schema, Name = t.Name, Column = t.Column }, out _);
         return new SymbolAtResult { Target = resolved };
@@ -117,6 +127,12 @@ public sealed class RefactorService(SessionManager sessions, MetadataService met
         why = null;
         var idx = IndexOf(snap, names);
         if (!idx.ByQualified.TryGetValue((t.Schema, t.Name), out var o)) { why = $"{t.Schema}.{t.Name} is not in the cached metadata."; return null; }
+        if (o.Kind is ObjectKind.Package or ObjectKind.PackageBody)
+        {
+            why = $"{o.Schema}.{o.Name} is a package: its usages are its members' calls, and finding or renaming package members is not available yet.";
+            return null;
+        }
+        if (o.Kind == ObjectKind.Synonym) { why = $"{o.Schema}.{o.Name} is a synonym: find the usages of the object it points to."; return null; }
         if (t.Kind == RefactorKind.Column)
         {
             var c = o.Columns?.FirstOrDefault(x => names.Equals(x.Name, t.Column));
@@ -165,13 +181,15 @@ public sealed class RefactorService(SessionManager sessions, MetadataService met
         var needle = resolved.Column ?? resolved.Name;
         var defs = metadata.Store.Definitions(s.Profile.Id, db);
         var found = new ConcurrentBag<Found>();
-        var modules = snap.Objects.Where(o => o.Kind is ObjectKind.View or ObjectKind.Proc or ObjectKind.Func or ObjectKind.Tvf or ObjectKind.Trigger).ToList();
+        // Packages too (Oracle, D4 S11): a body that reads the target breaks with it like any routine.
+        var modules = snap.Objects.Where(o => o.Kind is ObjectKind.View or ObjectKind.Proc or ObjectKind.Func or ObjectKind.Tvf or ObjectKind.Trigger
+            or ObjectKind.Package or ObjectKind.PackageBody).ToList();
         Parallel.ForEach(modules, new ParallelOptions { CancellationToken = ct }, o =>
         {
             if (!defs.TryGetValue(o.Id, out var def)) return;
             if (def == null)
             {
-                r.Unchecked.Add(new UncheckedObject { Object = Ref(r, o), Reason = "Encrypted or not visible to this login (VIEW DEFINITION): its definition is not available, so it cannot be checked." });
+                r.Unchecked.Add(new UncheckedObject { Object = Ref(r, o), Reason = "Encrypted, wrapped or not visible to this login (VIEW DEFINITION): its definition is not available, so it cannot be checked." });
                 return;
             }
             // Cheap pre-filter: a module that does not name it as a word cannot reference it — nor a column of a table
@@ -179,12 +197,12 @@ public sealed class RefactorService(SessionManager sessions, MetadataService met
             if (!RefText.ContainsWord(def, needle) || (resolved.Column != null && !RefText.ContainsWord(def, resolved.Name))) return;
             Interlocked.Increment(ref r.Scanned);
             // Unqualified names in a module resolve against the module's schema (SQL Server) or the default one.
-            var ctx = Context(snap, RulesFor(s.Provider.Engine).ModuleNamesResolveInOwnSchema ? o.Schema : DefaultSchema(s.Provider, db), names);
+            var ctx = Context(snap, RulesFor(s.Provider.Engine).ModuleNamesResolveInOwnSchema ? o.Schema : DefaultSchema(s, s.Provider, db), names);
             // The snapshot's modify marker changes with the object, so a cached scan never outlives its definition.
             var key = $"{s.Profile.Id}|{db}|{o.Id}|{o.ModifyDate}|{def.Length}|{rt}";
             var scan = _scans.GetOrAdd(key, _ => f.Find(def, rt, ctx));
             if (scan.DynamicSql)
-                r.Unchecked.Add(new UncheckedObject { Object = Ref(r, o), Reason = "Builds SQL at run time (EXEC / sp_executesql / EXECUTE): it may reference this, but that cannot be checked." });
+                r.Unchecked.Add(new UncheckedObject { Object = Ref(r, o), Reason = "Builds SQL at run time (EXEC / sp_executesql / EXECUTE / EXECUTE IMMEDIATE): it may reference this, but that cannot be checked." });
             if (scan.Hits.Count == 0) return;
             if (f.ServerTracked(def, o.Kind)) r.ServerUpdated.Add(o);
             foreach (var h in scan.Hits) found.Add(new Found(o, null, def, h));
@@ -195,7 +213,7 @@ public sealed class RefactorService(SessionManager sessions, MetadataService met
                                                 (resolved.Column == null || RefText.ContainsWord(t.Text, resolved.Name)));
         Parallel.ForEach(mentioned, new ParallelOptions { CancellationToken = ct }, tab =>
         {
-            var scan = f.Find(tab.Text, rt, Context(snap, DefaultSchema(s.Provider, db), names));
+            var scan = f.Find(tab.Text, rt, Context(snap, DefaultSchema(s, s.Provider, db), names));
             foreach (var h in scan.Hits) found.Add(new Found(null, tab.TabId, tab.Text, h));
         });
         r.Found.AddRange(found.OrderBy(x => x.TabId == null ? 1 : 0).ThenBy(x => x.TabId).ThenBy(x => x.Object?.Schema).ThenBy(x => x.Object?.Name).ThenBy(x => x.Hit.Offset));
@@ -251,7 +269,8 @@ public sealed class RefactorService(SessionManager sessions, MetadataService met
 
     static ModuleKind ModuleKindOf(ObjectKind k) => k switch
     {
-        ObjectKind.View => ModuleKind.View, ObjectKind.Proc => ModuleKind.Procedure, ObjectKind.Trigger => ModuleKind.Trigger, _ => ModuleKind.Function,
+        ObjectKind.View => ModuleKind.View, ObjectKind.Proc => ModuleKind.Procedure, ObjectKind.Trigger => ModuleKind.Trigger,
+        ObjectKind.Package => ModuleKind.Package, ObjectKind.PackageBody => ModuleKind.PackageBody, _ => ModuleKind.Function,
     };
 
     /// <summary>Why the new name is taken (a sibling column, or an object the engine keeps in the same name space), or null.</summary>
@@ -269,6 +288,8 @@ public sealed class RefactorService(SessionManager sessions, MetadataService met
         static string Args(SnapObject? o) => string.Join(",", (o?.Params ?? []).Where(x => !x.Output).OrderBy(x => x.Ordinal).Select(x => x.Type.ToLowerInvariant()));
         bool Clashes(SnapObject o)
         {
+            // Oracle: every schema object but triggers (and a package's body, which shares its specification's name).
+            if (rules.OneNamespace) return o.Kind is not (ObjectKind.Trigger or ObjectKind.PackageBody);
             if (rules.RelationsShareNamespace)
             {
                 // Tables, views, sequences and types share pg_class / pg_type; routines clash only on the same arguments.
@@ -301,10 +322,56 @@ public sealed class RefactorService(SessionManager sessions, MetadataService met
         return (ModuleOrder.Drop(nodes, r.Names, Warn).Select(k => byKey[k]).ToList(), ModuleOrder.Create(nodes, r.Names, Warn).Select(k => byKey[k]).ToList());
     }
 
+    /// <summary>
+    /// Rewritten modules in create order from the references the finder sees in their own text (D4 S11, Oracle): CREATE OR
+    /// REPLACE compiles against what exists, and a unit calling one still invalid fails (PLS-00905), so what is called
+    /// goes first. A package body comes after its specification.
+    /// </summary>
+    static List<(SnapObject Obj, string After, bool SchemaBound)> OrderedByText(ScanResult r, List<(SnapObject Obj, string After, bool SchemaBound)> rewritten,
+        Func<string, RefContext> context, List<string> warnings)
+    {
+        string Key((SnapObject Obj, string After, bool SchemaBound) x) => $"{x.Obj.Schema}.{x.Obj.Name}\u0001{x.Obj.Id}";
+        static RefKind? KindOfModule(ObjectKind k) => k switch
+        {
+            ObjectKind.View => RefKind.View, ObjectKind.Proc => RefKind.Procedure, ObjectKind.Func or ObjectKind.Tvf => RefKind.Function, _ => null,
+        };
+        var byKey = rewritten.ToDictionary(Key);
+        var nodes = new Dictionary<string, ModelModule>();
+        foreach (var x in rewritten)
+        {
+            var before = r.Definitions[x.Obj.Id];
+            var refs = new List<ModelRef>();
+            foreach (var y in rewritten)
+            {
+                if (y.Obj.Id == x.Obj.Id) continue;
+                if (x.Obj.Kind == ObjectKind.PackageBody && y.Obj.Kind == ObjectKind.Package && r.Names.Equals(x.Obj.Schema, y.Obj.Schema) && r.Names.Equals(x.Obj.Name, y.Obj.Name))
+                {
+                    refs.Add(new ModelRef(y.Obj.Schema, y.Obj.Name));
+                    continue;
+                }
+                if (KindOfModule(y.Obj.Kind) is not { } kind || !RefText.ContainsWord(before, y.Obj.Name)) continue;
+                if (r.Finder.Find(before, new RefTarget(kind, y.Obj.Schema, y.Obj.Name), context(x.Obj.Schema)).Hits.Any(h => !h.Definition))
+                    refs.Add(new ModelRef(y.Obj.Schema, y.Obj.Name));
+            }
+            // A specification and its body share a name: the body's node is told apart so neither waits on itself.
+            nodes[Key(x)] = new ModelModule
+            {
+                Schema = x.Obj.Schema, Name = x.Obj.Kind == ObjectKind.PackageBody ? x.Obj.Name + "\u0001body" : x.Obj.Name, Kind = ModuleKindOf(x.Obj.Kind), References = refs.ToArray(),
+            };
+        }
+        var warned = new HashSet<string>();
+        return ModuleOrder.Create(nodes, r.Names, w => { if (warned.Add(w)) warnings.Add(w); }).Select(k => byKey[k]).ToList();
+    }
+
     public async Task<RenamePreviewResult> PreviewRenameAsync(RenameParams p, CancellationToken ct)
     {
-        var newName = CheckedName(p.NewName);
+        var typed = CheckedName(p.NewName);
         var r = await ScanAsync(p.SessionId, p.Database, p.Target, p.Tabs, ct).ConfigureAwait(false);
+        // The catalog's spelling of what was typed (Oracle folds an unquoted name to upper case).
+        var newName = r.Finder.CatalogName(typed);
+        if (newName.Length == 0) throw QuerithmException.Invalid("Enter the new name.");
+        try { r.Finder.Rename(newName, newName); }
+        catch (ArgumentException ex) { throw QuerithmException.Invalid(ex.Message); } // a name the engine cannot hold at all
         var t = r.Target;
         var oldName = t.Column ?? t.Name;
         if (r.Names.Equals(oldName, newName) && oldName == newName) throw QuerithmException.Invalid("The new name is the same as the old one.");
@@ -363,6 +430,8 @@ public sealed class RefactorService(SessionManager sessions, MetadataService met
             ? await objects.OnConnectionAsync(r.Session.Id, r.Database, c => d.ReadModelAsync(c, ct), ct).ConfigureAwait(false)
             : null;
         var (dropOrder, createOrder) = ordered ? Ordered(r, rewritten, model!, warnings) : (rewritten, rewritten);
+        if (rules.RenameRecreates && rewritten.Count > 1)
+            createOrder = OrderedByText(r, rewritten, schema => Context(r.Snapshot, schema, r.Names), warnings);
         foreach (var (o, _, sb) in dropOrder.Where(x => x.SchemaBound))
             Step(MigrationPhase.DropModules, d.DropModule(new ModelModule { Schema = o.Schema, Name = o.Name, Kind = ModuleKindOf(o.Kind) }), $"drop schema-bound {o.Schema}.{o.Name} (recreated below)");
         if (t.Kind == RefactorKind.Column)
@@ -404,7 +473,23 @@ public sealed class RefactorService(SessionManager sessions, MetadataService met
             if (rules.RoutineOverloads && t.Kind is RefactorKind.Function or RefactorKind.Procedure &&
                 r.Snapshot.Objects.Count(o => r.Names.Equals(o.Schema, t.Schema) && r.Names.Equals(o.Name, t.Name)) > 1)
                 throw new QuerithmException("refactorOverloaded", $"{t.Schema}.{t.Name} is overloaded: rename the overload you mean with ALTER FUNCTION … RENAME by hand.");
-            Step(MigrationPhase.Tables, d.RenameObject(Map(t.Kind), t.Schema, t.Name, newName), $"rename {t.Kind.ToString().ToLowerInvariant()} {t.Schema}.{t.Name} to {newName}");
+            if (rules.RenameRecreates && t.Kind is RefactorKind.View or RefactorKind.Function or RefactorKind.Procedure)
+            {
+                // No RENAME for it (Oracle): its rewritten definition, created under the new name first, then the old one dropped.
+                var self = rewritten.FindIndex(x => isSelf(x.Obj));
+                if (self < 0)
+                    throw new QuerithmException("refactorTarget",
+                        $"The definition of {t.Schema}.{t.Name} is not available (wrapped, or not readable by this login), so it cannot be created under the new name.");
+                var first = rewritten[self];
+                createOrder = [first, .. createOrder.Where(x => !isSelf(x.Obj))];
+                warnings.Add($"{t.Schema}.{t.Name} is created as {t.Schema}.{newName} and the old one dropped: grants on it are not carried over, grant them again on the new name.");
+            }
+            else Step(MigrationPhase.Tables, d.RenameObject(Map(t.Kind), t.Schema, t.Name, newName), $"rename {t.Kind.ToString().ToLowerInvariant()} {t.Schema}.{t.Name} to {newName}");
+            // Synonyms point to the object by name: after the rename they point to nothing.
+            var target = r.Snapshot.Objects.FirstOrDefault(o => isSelf(o) && KindOf(o.Kind) == t.Kind);
+            if (target != null)
+                foreach (var syn in r.Snapshot.Objects.Where(o => o.Kind == ObjectKind.Synonym && o.TargetObjectId == target.Id))
+                    warnings.Add($"Synonym {syn.Schema}.{syn.Name} points to {t.Schema}.{t.Name}: after the rename it points to nothing; recreate it for {t.Schema}.{newName}.");
         }
         foreach (var (o, after, _) in createOrder)
         {
@@ -414,7 +499,12 @@ public sealed class RefactorService(SessionManager sessions, MetadataService met
             if (rules.RecreateDropsFirst && d.NeedsDropBeforeCreate(existing, wanted, major))
                 Step(MigrationPhase.DropModules, d.DropModule(existing), $"drop {o.Schema}.{o.Name} (recreated below)");
             Step(MigrationPhase.Modules, d.CreateModule(wanted, major),
-                $"{(isSelf(o) ? "rewrite the definition of" : "update")} {o.Schema}.{name}");
+                $"{(isSelf(o) ? rules.RenameRecreates && t.Kind is RefactorKind.View or RefactorKind.Function or RefactorKind.Procedure ? "create under the new name" : "rewrite the definition of" : "update")} {o.Schema}.{name}");
+        }
+        if (rules.RenameRecreates && t.Kind is RefactorKind.View or RefactorKind.Function or RefactorKind.Procedure)
+        {
+            var old = r.Snapshot.Objects.First(o => isSelf(o) && KindOf(o.Kind) == t.Kind);
+            Step(MigrationPhase.Modules, d.DropModule(new ModelModule { Schema = old.Schema, Name = old.Name, Kind = ModuleKindOf(old.Kind) }), $"drop the old {old.Schema}.{old.Name}");
         }
         var tracked = previews.Where(x => x.ServerUpdated).Select(x => $"{x.Object.Schema}.{x.Object.Name}").ToList();
         // A PostgreSQL view follows the column but keeps its own output column name, so its readers keep working.

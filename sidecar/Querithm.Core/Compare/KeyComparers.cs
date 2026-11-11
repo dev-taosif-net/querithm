@@ -78,8 +78,11 @@ public static class KeyComparers
         return t.ToLowerInvariant();
     }
 
-    static bool TryNumber(string s, out decimal v) =>
-        decimal.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out v);
+    /// <summary>
+    /// Phase D4 S11: an exact number, whatever its digits — Oracle NUMBER keeps 38 significant digits and PostgreSQL numeric
+    /// more, past <see cref="decimal"/>'s 28, where two different keys would round to one and look like a duplicate.
+    /// </summary>
+    static bool TryNumber(string s, out ExactNumber v) => ExactNumber.TryParse(s, out v);
 
     /// <summary>A key part normalised once per row, so the merge compares values, not text.</summary>
     public static IComparable Normalize(ValueKind kind, string text, bool padded, string column)
@@ -125,9 +128,9 @@ public static class KeyComparers
     static int Compare(IComparable x, IComparable y)
     {
         if (x.GetType() == y.GetType()) return x.CompareTo(y);
-        // Mixed numeric representations of one family (decimal vs double).
-        if (x is decimal dx && y is double dy) return ((double)dx).CompareTo(dy);
-        if (x is double ex && y is decimal ey) return ex.CompareTo((double)ey);
+        // Mixed numeric representations of one family (exact vs double).
+        if (x is ExactNumber dx && y is double dy) return dx.ToDouble().CompareTo(dy);
+        if (x is double ex && y is ExactNumber ey) return ex.CompareTo(ey.ToDouble());
         return string.CompareOrdinal(x.ToString(), y.ToString());
     }
 
@@ -164,6 +167,65 @@ public static class KeyComparers
         if (o.TrimCharPadding && (ks == ValueKind.PaddedText || kt == ValueKind.PaddedText)) { a = a.TrimEnd(' '); b = b.TrimEnd(' '); }
         return string.Equals(a, b, o.IgnoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
     }
+}
+
+/// <summary>
+/// A decimal number of any length as <c>Mantissa × 10^Exponent</c>, trailing zeros removed (1.50 and 1.5 are one value):
+/// compared exactly, never through a binary or 28-digit type.
+/// </summary>
+public readonly record struct ExactNumber(System.Numerics.BigInteger Mantissa, int Exponent) : IComparable
+{
+    /// <summary>[sign] digits [. digits] [e [sign] digits], surrounding blanks allowed; at most 1,000 digits.</summary>
+    public static bool TryParse(string text, out ExactNumber value)
+    {
+        value = default;
+        var s = text.AsSpan().Trim();
+        if (s.IsEmpty || s.Length > 1100) return false;
+        var i = 0;
+        var negative = false;
+        if (s[0] is '+' or '-') { negative = s[0] == '-'; i++; }
+        var digits = new System.Text.StringBuilder(s.Length);
+        var fraction = 0;
+        var seenPoint = false;
+        var any = false;
+        for (; i < s.Length; i++)
+        {
+            var c = s[i];
+            if (char.IsAsciiDigit(c)) { digits.Append(c); any = true; if (seenPoint) fraction++; }
+            else if (c == '.' && !seenPoint) seenPoint = true;
+            else break;
+        }
+        if (!any) return false;
+        var exponent = 0;
+        if (i < s.Length)
+        {
+            if (s[i] is not ('e' or 'E')) return false;
+            if (!int.TryParse(s[(i + 1)..], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out exponent) || Math.Abs(exponent) > 100_000) return false;
+        }
+        var m = System.Numerics.BigInteger.Parse(digits.ToString(), NumberStyles.None, CultureInfo.InvariantCulture);
+        var e = exponent - fraction;
+        if (m.IsZero) e = 0;
+        else
+            while (m % 10 == 0) { m /= 10; e++; }
+        value = new ExactNumber(negative ? -m : m, e);
+        return true;
+    }
+
+    public int CompareTo(object? obj)
+    {
+        if (obj is not ExactNumber o) return 1;
+        if (Mantissa.Sign != o.Mantissa.Sign) return Mantissa.Sign.CompareTo(o.Mantissa.Sign);
+        if (Mantissa.IsZero) return 0;
+        // Same sign: align the exponents (scale the one with the larger exponent up).
+        var (a, b) = Exponent >= o.Exponent
+            ? (Mantissa * System.Numerics.BigInteger.Pow(10, Exponent - o.Exponent), o.Mantissa)
+            : (Mantissa, o.Mantissa * System.Numerics.BigInteger.Pow(10, o.Exponent - Exponent));
+        return a.CompareTo(b);
+    }
+
+    public double ToDouble() => double.Parse(ToString(), NumberStyles.Float, CultureInfo.InvariantCulture);
+
+    public override string ToString() => $"{Mantissa.ToString(CultureInfo.InvariantCulture)}E{Exponent.ToString(CultureInfo.InvariantCulture)}";
 }
 
 /// <summary>A string ordered by Unicode code point (the order of BIN2 and COLLATE "C").</summary>

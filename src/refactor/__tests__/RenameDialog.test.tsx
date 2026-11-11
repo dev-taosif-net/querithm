@@ -123,8 +123,12 @@ describe("object rename", () => {
     await waitFor(() => expect(m.diffs[0].model.original.getValue()).toBe("BEFORE1"));
     expect(m.diffs[0].model.modified.getValue()).toBe("AFTER1");
     expect(m.models[0].lang).toBe("tsql");
+    // The focused group is a highlighted row: its muted line numbers take the highlight's muted color (4.5:1, D4 S11 smoke-ui).
+    expect(screen.getByText("dbo.usp_a").closest("div")!.className).toContain("q-hl");
     fireEvent.click(screen.getByText("dbo.v1"));
     await waitFor(() => expect(m.diffs[0].model.modified.getValue()).toBe("A2"));
+    expect(screen.getByText("dbo.v1").closest("div")!.className).toContain("q-hl");
+    expect(screen.getByText("dbo.usp_a").closest("div")!.className).not.toContain("q-hl");
   });
 
   it("possible hits start unchecked; toggling re-requests with include/exclude", async () => {

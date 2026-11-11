@@ -115,10 +115,13 @@ public sealed class DataCompareService(SessionManager sessions, MetadataService 
         var sql = side.Query!.Trim();
         if (compare.QueryRefusal(sql) is { } why) throw new QuerithmException("compareQuery", $"The {role} query: {why}");
         var (prefix, body) = compare.DerivedQuery(sql);
-        var columns = await ReadAsync(s, db, compare, $"{prefix}SELECT * FROM (\n{body}\n) AS q WHERE 1 = 0", async (r, _) =>
+        // No AS before a derived table's alias: Oracle refuses it (D4 S11), every other engine takes it either way.
+        var columns = await ReadAsync(s, db, compare, $"{prefix}SELECT * FROM (\n{body}\n) q WHERE 1 = 0", async (r, _) =>
         {
             var schema = await r.GetColumnSchemaAsync(ct).ConfigureAwait(false);
-            return schema.Select(c => (c.ColumnName, c.DataTypeName ?? "", false, false, false)).ToList();
+            // The provider's own type names where the dialect reads those (Oracle: NUMBER(10,2), not the driver's Decimal).
+            var shapes = compare.QueryTypesFromProvider ? s.Provider.DescribeColumns(r) : null;
+            return schema.Select((c, i) => (c.ColumnName, (shapes != null && i < shapes.Count ? shapes[i]?.TypeName : null) ?? c.DataTypeName ?? "", false, false, false)).ToList();
         }, ct).ConfigureAwait(false);
         var dup = columns.GroupBy(c => c.ColumnName, StringComparer.OrdinalIgnoreCase).FirstOrDefault(g => g.Count() > 1 || string.IsNullOrEmpty(g.Key));
         if (dup != null) throw new QuerithmException("compareQuery", $"The {role} query's columns need distinct names ({(string.IsNullOrEmpty(dup.Key) ? "a column has no name" : dup.Key)}).");
@@ -208,9 +211,14 @@ public sealed class DataCompareService(SessionManager sessions, MetadataService 
         else throw new QuerithmException("compareKey", "Choose the key columns: neither side has a primary key to match rows by.");
         var keyPairs = keySource.Select(name => pairs.FirstOrDefault(x => string.Equals(x.Source, name, StringComparison.OrdinalIgnoreCase))
                                                 ?? throw QuerithmException.Invalid($"Key column {name} is not compared on both sides.")).ToArray();
-        var valuePairs = pairs.Where(x => !keyPairs.Contains(x)).ToArray();
-
         string TypeOf(Resolved r, string name) => r.Columns[Find(r, name)].Type;
+        // Values a side's engine cannot compare (Oracle LOBs, XMLTYPE, objects): never a key, left out with the reason.
+        string? Refused(ColumnPair x) => src.Compare.ValueRefusal(TypeOf(src, x.Source)) ?? tgt.Compare.ValueRefusal(TypeOf(tgt, x.Target));
+        foreach (var kp in keyPairs)
+            if (Refused(kp) is { } keyWhy) throw new QuerithmException("compareKey", $"{kp.Source} cannot be a key: {keyWhy}.");
+        var refused = pairs.Where(x => !keyPairs.Contains(x) && Refused(x) != null).ToList();
+        if (refused.Count > 0) notes.Add($"Not compared: {string.Join("; ", refused.Select(x => $"{x.Source} ({Refused(x)})"))}.");
+        var valuePairs = pairs.Where(x => !keyPairs.Contains(x) && !refused.Contains(x)).ToArray();
         var sk = keyPairs.Select(x => src.Compare.KindOf(TypeOf(src, x.Source))).ToArray();
         var tk = keyPairs.Select(x => tgt.Compare.KindOf(TypeOf(tgt, x.Target))).ToArray();
         for (var i = 0; i < keyPairs.Length; i++)
@@ -228,7 +236,8 @@ public sealed class DataCompareService(SessionManager sessions, MetadataService 
         notes.Add(src.Compare.IsolationHint);
 
         var plan = new ComparePlan(keyPairs.Select(x => x.Source).ToArray(), sk, tk, valuePairs.Select(x => x.Source).ToArray(), sv, tv,
-            src.Compare.PadsTrailingSpaces || tgt.Compare.PadsTrailingSpaces, options);
+            src.Compare.PadsTrailingSpaces || tgt.Compare.PadsTrailingSpaces, options, src.Compare.EmptyTextIsNull || tgt.Compare.EmptyTextIsNull);
+        if (plan.EmptyIsNull) notes.Add("An empty string and NULL count as one value: Oracle stores '' as NULL.");
         var exec = executions.OpenStream("-- data compare");
         var state = new State(Ulid.New().ToString(), src, tgt, keyPairs, valuePairs, plan, exec);
         _compares[state.Id] = state;
@@ -251,7 +260,7 @@ public sealed class DataCompareService(SessionManager sessions, MetadataService 
         var list = key.Concat(values).Select((c, i) => $"{q.ValueText(Expr(Name(c)), Type(Name(c)))} AS {q.Quote($"c{i}")}");
         var order = key.Select(c => r.Compare.OrderExpression(Expr(Name(c)), r.Compare.KindOf(Type(Name(c)))));
         var (prefix, body) = r.Table != null ? ("", "") : r.Compare.DerivedQuery(r.Query!);
-        var from = r.Table != null ? $"{q.Quote(r.Schema!)}.{q.Quote(r.Table)}" : $"(\n{body}\n) AS q";
+        var from = r.Table != null ? $"{q.Quote(r.Schema!)}.{q.Quote(r.Table)}" : $"(\n{body}\n) q";
         return $"{prefix}SELECT {string.Join(", ", list)} FROM {from} ORDER BY {string.Join(", ", order)}";
     }
 

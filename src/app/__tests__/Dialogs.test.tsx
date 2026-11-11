@@ -46,7 +46,7 @@ vi.mock("../../import/ImportWizardDialog", () => ({ ImportWizardDialog: () => <d
 vi.mock("../../refactor/RenameDialog", () => ({ RenameDialog: () => <div>rename-dialog</div> }));
 vi.mock("../../store/connections", () => ({ useConnections: { getState: () => ({ sessionFor: h.sessionFor }) } }));
 
-import { Dialogs } from "../Dialogs";
+import { Dialogs, oracleArguments } from "../Dialogs";
 import { useUi } from "../../store/ui";
 import { useTabs } from "../../store/tabs";
 import { useProfiles } from "../../store/profiles";
@@ -579,6 +579,51 @@ describe("execProc (both engines)", () => {
     await userEvent.setup().click(screen.getByText("Script to new tab"));
     // keyed by empty name: both parameters share one value slot; blank values render as NULL
     expect(((h.a.newQueryTab.mock.calls[0] as any[])[0] as any).text).toBe("SELECT * FROM dbo.p(NULL, NULL);\n");
+  });
+  it("Oracle (D4 S11): the sidecar builds the block from the values; OUT / IN OUT take a value in, a refused one is said inline", async () => {
+    useProfiles.setState({ profiles: [ms, pg, { id: "or1", name: "Ora", engine: "oracle", environment: "dev", auth: "password", username: "app", host: "h" }] });
+    useSnapshots.setState({
+      entries: { "or1|FREEPDB1": { key: "or1|FREEPDB1", profileId: "or1", database: "FREEPDB1", status: "ready", index: { byId: new Map([[9, { id: 9, schema: "APP", name: "P", kind: "proc", params: [
+        { name: "A", type: "NUMBER", ordinal: 1, output: false, hasDefault: false },
+        { name: "C", type: "NUMBER", ordinal: 2, output: true, hasDefault: false },
+        { name: "E", type: "DATE", ordinal: 3, output: false, hasDefault: true },
+      ] }]]) } as any, version: 1 } as any },
+    });
+    h.sessionFor.mockResolvedValueOnce("s-or").mockResolvedValueOnce("s-or");
+    h.rpc.mockRejectedValueOnce(new Error("A: 'x' is not a number.")).mockResolvedValueOnce({ sql: "BEGIN\n  APP.P(A => 1);\nEND;\n/" });
+    render(<Dialogs />);
+    show({ kind: "execProc", profileId: "or1", database: "FREEPDB1", objectId: 9 });
+    expect(screen.getByText(/OUT and IN OUT values come back as a result row/)).toBeInTheDocument();
+    expect(screen.getByText(/OUT \/ IN OUT/)).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.type(screen.getByRole("textbox", { name: "A" }), "x");
+    await user.click(screen.getByText("Script to new tab"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("A: 'x' is not a number.");
+    expect(h.a.newQueryTab).not.toHaveBeenCalled();
+    expect(h.rpc).toHaveBeenLastCalledWith("meta.script", expect.objectContaining({
+      sessionId: "s-or", kind: "execute",
+      object: { profileId: "or1", database: "FREEPDB1", schema: "APP", name: "P", kind: "proc", objectId: 9 },
+      arguments: [{ name: "A", value: { isNull: false, useDefault: false, text: "x" } }, { name: "E", value: { isNull: false, useDefault: true, text: null } }],
+    }));
+    // Untick C's NULL to give the IN OUT parameter its value in.
+    await user.click(screen.getByRole("checkbox", { name: "C NULL" }));
+    await user.type(screen.getByRole("textbox", { name: "C" }), "21");
+    await user.click(screen.getByText("Script to new tab"));
+    await waitFor(() => expect(h.a.newQueryTab).toHaveBeenCalled());
+    expect(((h.a.newQueryTab.mock.calls[0] as any[])[0] as any).text).toBe("BEGIN\n  APP.P(A => 1);\nEND;\n/\n");
+    expect((h.rpc.mock.calls.at(-1) as any[])[1].arguments).toContainEqual({ name: "C", value: { isNull: false, useDefault: false, text: "21" } });
+  });
+  it("oracleArguments: defaults as useDefault, unticked NULL as NULL, outputs only with a value", () => {
+    const ps = [
+      { name: "A", type: "NUMBER", ordinal: 1, output: false, hasDefault: false },
+      { name: "B", type: "NUMBER", ordinal: 2, output: false, hasDefault: true },
+      { name: "O", type: "VARCHAR2", ordinal: 3, output: true, hasDefault: false },
+    ];
+    expect(oracleArguments(ps, { A: { v: "", isNull: true }, B: { v: "", isNull: true }, O: { v: "", isNull: true } })).toEqual([
+      { name: "A", value: { isNull: true, useDefault: false, text: null } },
+      { name: "B", value: { isNull: false, useDefault: true, text: null } },
+    ]);
+    expect(oracleArguments(ps, { A: { v: "1", isNull: false }, B: { v: "2", isNull: false }, O: { v: "in", isNull: false } }).map((a) => a.value.text)).toEqual(["1", "2", "in"]);
   });
   it("Cancel closes without creating a tab", async () => {
     seed("ms1", "db", "proc", []);

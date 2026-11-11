@@ -119,7 +119,24 @@ public sealed class ObjectService(SessionManager sessions, MetadataService metad
     public async Task<SqlText> ScriptAsync(ScriptParams p, CancellationToken ct)
     {
         var s = sessions.Get(p.SessionId);
-        var sql = await WithConnectionAsync(s, c => s.Provider.Scripter.ScriptAsync(c.Db, p.Object, p.Kind, p.WithBody, ct), ct, p.Object.Database).ConfigureAwait(false);
+        if (p.Arguments is { } args)
+        {
+            if (p.Kind != ScriptKind.Execute) throw QuerithmException.Invalid("Values are only taken for EXECUTE.");
+            if (args.Length > 1000 || args.Any(a => a.Name.Length is 0 or > 256 || (a.Value.Text?.Length ?? 0) > 1_000_000))
+                throw QuerithmException.Invalid("Too many or too long Execute values.");
+        }
+        string sql;
+        try
+        {
+            sql = await WithConnectionAsync(s, c => p.Arguments is { } a
+                ? s.Provider.Scripter.ScriptExecuteAsync(c.Db, p.Object, a, ct)
+                : s.Provider.Scripter.ScriptAsync(c.Db, p.Object, p.Kind, p.WithBody, ct), ct, p.Object.Database).ConfigureAwait(false);
+        }
+        catch (ArgumentException ex) when (p.Arguments != null)
+        {
+            // A value the parameter's type cannot take: said as invalid input, before any tab opens.
+            throw QuerithmException.Invalid(ex.Message);
+        }
         return new SqlText { Sql = sql };
     }
 

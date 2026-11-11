@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Dependency, Dialect, HistoryEntry, HistoryRetention, SnapObject } from "../ipc/contract";
+import type { Dependency, Dialect, HistoryEntry, HistoryRetention, ScriptArgument, SnapObject } from "../ipc/contract";
 import { rpc, shell } from "../ipc/client";
 import { useUi, type Dialog, toast } from "../store/ui";
 import { useTabs } from "../store/tabs";
@@ -442,13 +442,33 @@ function DiffDialog({ d, close }: { d: Extract<Dialog, { kind: "diff" }>; close:
   );
 }
 
+type ExecValues = Record<string, { v: string; isNull: boolean }>;
+
+/**
+ * D4 S11, Oracle: the dialog's values for the sidecar, which types each one against the routine's live ALL_ARGUMENTS
+ * (and refuses a value its parameter cannot take). An IN parameter left on its default is sent as `useDefault` (named
+ * notation then leaves it out), an unticked one as NULL; an OUT / IN OUT parameter is sent only with a typed value (the
+ * start value of an IN OUT one; Oracle ignores it for OUT).
+ */
+export function oracleArguments(params: SnapObject["params"], values: ExecValues): ScriptArgument[] {
+  return (params ?? []).flatMap((p): ScriptArgument[] => {
+    const x = values[p.name];
+    if (p.output) return x && !x.isNull ? [{ name: p.name, value: { isNull: false, useDefault: false, text: x.v } }] : [];
+    if (!x || x.isNull) return [{ name: p.name, value: { isNull: !p.hasDefault, useDefault: p.hasDefault, text: null } }];
+    return [{ name: p.name, value: { isNull: false, useDefault: false, text: x.v } }];
+  });
+}
+
 /** Execute a procedure (§10): a parameter form from the cached param rows generates DECLARE/EXEC/SELECT. */
 function ExecProcDialog({ d, close }: { d: Extract<Dialog, { kind: "execProc" }>; close: () => void }) {
   const entry = useSnapshots((s) => s.get(d.profileId, d.database));
   const obj: SnapObject | undefined = entry?.index?.byId.get(d.objectId);
   const engine = useProfiles((s) => s.byId(d.profileId)?.engine);
   const params = obj?.params ?? [];
-  const [values, setValues] = useState<Record<string, { v: string; isNull: boolean }>>(() => Object.fromEntries(params.map((p) => [p.name, { v: "", isNull: p.hasDefault }])));
+  // Oracle: an OUT / IN OUT value starts as NULL (ticked); its field gives an IN OUT parameter the value passed in.
+  const oracle = dialectOf(engine) === "oracle";
+  const [values, setValues] = useState<ExecValues>(() => Object.fromEntries(params.map((p) => [p.name, { v: "", isNull: p.hasDefault || (oracle && p.output) }])));
+  const [error, setError] = useState<string | null>(null);
   if (!obj) return <Modal title="Execute" onClose={close}><div className="text-muted">The object is not in the metadata cache yet.</div></Modal>;
   const traits = engineTraits(engine);
   if (!traits.procedures) return <Modal title="Execute" onClose={close}><div className="text-muted">{traits.shortLabel} has no stored procedures.</div></Modal>;
@@ -504,20 +524,41 @@ function ExecProcDialog({ d, close }: { d: Extract<Dialog, { kind: "execProc" }>
       case "sqlite":
       case "duckDb":
         return null;
-      // Phase D4 placeholder (hidden engine): Oracle procedures are not offered yet (ENGINES.oracle.procedures is false).
+      // D4 S11: the sidecar builds Oracle's block (see `go`): it alone knows which outputs are IN OUT and each type's literals.
       case "oracle":
         return null;
       default:
         return assertNever(dialect);
     }
   };
-  const go = (run: boolean) => {
-    const sql = build();
-    if (sql === null) return;
+  const open = (sql: string, run: boolean) => {
     const id = newQueryTab({ profileId: d.profileId, database: d.database, text: sql + "\n", title: `EXEC ${obj.name}.sql` });
     close();
     if (run) setTimeout(() => void runQuery(id), 30);
   };
+  const go = (run: boolean) => {
+    if (oracle) {
+      // The sidecar types each value against the routine's own parameters; a value it refuses is said here, nothing opens.
+      void (async () => {
+        try {
+          const { useConnections } = await import("../store/connections");
+          const sessionId = await useConnections.getState().sessionFor(d.profileId);
+          const r = await rpc("meta.script", {
+            sessionId, kind: "execute", withBody: false, arguments: oracleArguments(params, values),
+            object: { profileId: d.profileId, database: d.database, schema: obj.schema, name: obj.name, kind: obj.kind, objectId: obj.id },
+          });
+          open(r.sql, run);
+        } catch (e) {
+          setError((e as Error).message);
+        }
+      })();
+      return;
+    }
+    const sql = build();
+    if (sql === null) return;
+    open(sql, run);
+  };
+  const editable = (p: (typeof params)[number]) => !(p.output && !oracle) && !values[p.name]?.isNull;
   return (
     <Modal
       title={`Execute ${obj.schema}.${obj.name}`}
@@ -537,17 +578,19 @@ function ExecProcDialog({ d, close }: { d: Extract<Dialog, { kind: "execProc" }>
       }
     >
       {!params.length && <div className="text-muted">No parameters.</div>}
+      {oracle && params.some((p) => p.output) && <div className="text-muted mb-2">OUT and IN OUT values come back as a result row, ref cursors as result sets of their own. Untick NULL to give an IN OUT parameter its value in.</div>}
+      {error && <div role="alert" className="text-err mb-2">{error}</div>}
       <div className="space-y-2">
         {params.map((p, i) => (
           <div key={p.name || i} className="grid grid-cols-[170px_1fr_70px] gap-2 items-center">
             <span className="q-mono text-ident truncate" title={`${p.name} ${p.type}`}>
-              {p.name || `$${p.ordinal}`} <span className="text-muted">{p.type}{p.output ? " OUT" : ""}</span>
+              {p.name || `$${p.ordinal}`} <span className="text-muted">{p.type}{p.output ? (oracle ? " OUT / IN OUT" : " OUT") : ""}</span>
             </span>
-            <input className="q-input" autoFocus={i === 0} disabled={p.output || values[p.name]?.isNull} value={values[p.name]?.v ?? ""} onChange={(e) => setValues((s) => ({ ...s, [p.name]: { v: e.target.value, isNull: false } }))} />
-            {!p.output && (
-              <label className="flex items-center gap-1 text-muted" title={p.hasDefault ? "Use the parameter's default" : "Pass NULL"}>
-                <input type="checkbox" checked={values[p.name]?.isNull ?? false} onChange={(e) => setValues((s) => ({ ...s, [p.name]: { v: s[p.name]?.v ?? "", isNull: e.target.checked } }))} />
-                {p.hasDefault ? "default" : "NULL"}
+            <input className="q-input" autoFocus={i === 0} aria-label={p.name} disabled={!editable(p)} placeholder={oracle && p.output ? "value in (IN OUT)" : undefined} value={values[p.name]?.v ?? ""} onChange={(e) => { setError(null); setValues((s) => ({ ...s, [p.name]: { v: e.target.value, isNull: false } })); }} />
+            {(!p.output || oracle) && (
+              <label className="flex items-center gap-1 text-muted" title={p.hasDefault && !p.output ? "Use the parameter's default" : "Pass NULL"}>
+                <input type="checkbox" aria-label={`${p.name} ${p.hasDefault && !p.output ? "default" : "NULL"}`} checked={values[p.name]?.isNull ?? false} onChange={(e) => setValues((s) => ({ ...s, [p.name]: { v: s[p.name]?.v ?? "", isNull: e.target.checked } }))} />
+                {p.hasDefault && !p.output ? "default" : "NULL"}
               </label>
             )}
           </div>

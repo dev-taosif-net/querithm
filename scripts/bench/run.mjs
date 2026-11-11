@@ -107,6 +107,10 @@ const TARGETS = {
   "20.oracle": ["Oracle: grid edits, DML preview for 100 staged cells", "ms", 15],
   "23.oracle": ["Oracle: import 100k × 10 CSV into a new table (array binding, median of 3)", "ms", 2000],
   "27.oracle": ["Oracle: tier-2 completion latency in a 10k-line PL/SQL package body (cursor queries, SELECT INTO, UPDATE; p95)", "ms", 150],
+  // D4 S11: compare and find usages on the 600-table schema of #9.oracle / #10.oracle.
+  "21.oracle": ["Oracle: schema compare of the app user's schema with itself (600 tables, 150 views, 200 triggers)", "ms", 2000],
+  "22.oracle": ["Oracle: data compare 100k × 10 against a copy with 1,000 changed rows", "ms", 1500],
+  "24.oracle": ["Oracle: find usages of a column a view reads + 5 open tabs (definitions cached)", "ms", 120],
   "11cold.mysql": ["MySQL: execute → first batch on a cold pool connection (TCP, TLS, login, identity read, SELECT 1, median)", "ms", 300],
   "8.mysql": ["MySQL: database switch on an existing connection (COM_INIT_DB, median)", "ms", 20],
   "15.mysql": ["MySQL: cancel latency (KILL QUERY on a side connection)", "ms", 500],
@@ -1048,6 +1052,82 @@ END;
         dropSql: `DROP TABLE IF EXISTS ${schema}."q_bench_import" PURGE`, dropped: (t) => snapshotHas(t, false), created: (t) => snapshotHas(t, true),
       });
       record("23.oracle", imp.ms, { rows: imp.rows, samples: imp.samples });
+
+      // #21.oracle (D4 S11): the app user's schema (600 tables, 150 views, 200 triggers) compared with itself, both sides
+      // read in parallel on two sessions through the ALL_* views.
+      {
+        const a = await call("session.open", { profileId: profile.id, secret: ORACLE.password });
+        const b = await call("session.open", { profileId: profile.id, secret: ORACLE.password });
+        const sides = { source: { sessionId: a.sessionId, database: ORACLE.service, schema }, target: { sessionId: b.sessionId, database: ORACLE.service, schema } };
+        await call("schemaCompare.run", sides); // warm-up (the first read of the dictionary views pays their hard parse)
+        const runs = [];
+        let items = 0;
+        for (let i = 0; i < 3; i++) {
+          const t0 = performance.now();
+          const r = await call("schemaCompare.run", sides);
+          runs.push(performance.now() - t0);
+          items = r.items.length;
+          if (r.items.some((x) => x.class !== "identical")) throw new Error("#21.oracle: the schema differs from itself");
+        }
+        record("21.oracle", median(runs), { objects: items, samples: runs.map((x) => Math.round(x)) });
+        await call("session.close", { sessionId: a.sessionId, force: true });
+        await call("session.close", { sessionId: b.sessionId, force: true });
+      }
+
+      // #22.oracle: 100k × 10 against a copy with 1,000 changed rows; sidecar memory delta ≤ 64 MB, as #22.
+      {
+        for (const sql of [
+          "DROP TABLE IF EXISTS q_bench_dc_a PURGE",
+          "DROP TABLE IF EXISTS q_bench_dc_b PURGE",
+          "CREATE TABLE q_bench_dc_a (id NUMBER(10) PRIMARY KEY, name VARCHAR2(40), qty NUMBER(10), price NUMBER(10,2), ok NUMBER(1), born DATE, at TIMESTAMP(6), code VARCHAR2(12), note VARCHAR2(60), ratio BINARY_DOUBLE)",
+          `INSERT /*+ APPEND */ INTO q_bench_dc_a SELECT level, 'name ' || level, MOD(level, 100), MOD(level, 1000) + 0.25, MOD(level, 2), DATE '2026-01-01' + MOD(level, 365),
+             TIMESTAMP '2026-01-01 00:00:00' + NUMTODSINTERVAL(level, 'MINUTE'), 'C' || level, 'note ' || level, MOD(level, 10) / 10 FROM dual CONNECT BY level <= 100000`,
+          "COMMIT",
+          "CREATE TABLE q_bench_dc_b AS SELECT * FROM q_bench_dc_a",
+          "ALTER TABLE q_bench_dc_b ADD PRIMARY KEY (id)",
+          "UPDATE q_bench_dc_b SET name = name || '!' WHERE MOD(id, 100) = 0",
+          "COMMIT",
+        ]) await run(sql);
+        await snapshotHas("Q_BENCH_DC_B", true);
+        const side = (table) => ({ sessionId, database: ORACLE.service, schema, table });
+        const runs = [];
+        let peak = 0;
+        let rows = 0;
+        for (let i = 0; i < 3; i++) {
+          const before = rssMb(sc.child.pid);
+          const timer = setInterval(() => { peak = Math.max(peak, rssMb(sc.child.pid) - before); }, 20);
+          const t0 = performance.now();
+          const st = await call("dataCompare.start", { source: side("Q_BENCH_DC_A"), target: side("Q_BENCH_DC_B") });
+          const done = await until((m, p) => m === "dataCompare.progress" && p.compareId === st.compareId && p.done, 300_000, "oracle data compare", true);
+          runs.push(performance.now() - t0);
+          clearInterval(timer);
+          if (done.error) throw new Error(`#22.oracle: ${done.error}`);
+          rows = done.different;
+          await call("query.close", { executionId: st.executionId }).catch(() => {});
+        }
+        if (rows !== 1000) throw new Error(`#22.oracle: ${rows} differences, not 1,000`);
+        record("22.oracle", median(runs), { differences: rows, memoryDeltaMb: Math.round(peak), memoryGatePass: peak <= 64, samples: runs.map((x) => Math.round(x)) });
+        await run("DROP TABLE q_bench_dc_a PURGE");
+        await run("DROP TABLE q_bench_dc_b PURGE");
+      }
+
+      // #24.oracle: find usages of ID in QB_T2 … QB_T8 (each has a view reading it) plus 5 open tabs, definitions cached first.
+      {
+        await refresh();
+        const tab = Array.from({ length: 200 }, (_, i) => `SELECT o.*, ${i} AS n FROM qb_t${(i % 8) + 1} o WHERE o.id > ${i};`).join("\n");
+        const tabs = Array.from({ length: 5 }, (_, i) => ({ tabId: `bench${i}`, title: `Bench${i}.sql`, text: tab }));
+        const args = (n) => ({ sessionId, database: ORACLE.service, target: { kind: "column", schema, name: `QB_T${n}`, column: "ID" }, tabs });
+        await call("refactor.findUsages", args(1)); // fills the definition cache
+        const cold = [];
+        let last;
+        for (let i = 2; i <= 8; i++) {
+          const t0 = performance.now();
+          last = await call("refactor.findUsages", args(i));
+          cold.push(performance.now() - t0);
+        }
+        if (!last.hits.some((h) => h.object?.name === "QB_V8")) throw new Error("#24.oracle: the view reading QB_T8.ID was not found");
+        record("24.oracle", median(cold), { objectsScanned: last.objectsScanned, hits: last.hits.length, samples: cold.map((x) => Math.round(x * 10) / 10) });
+      }
     } finally {
       await run(dropAll);
     }

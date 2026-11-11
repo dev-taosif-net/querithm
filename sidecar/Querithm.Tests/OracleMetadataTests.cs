@@ -242,11 +242,9 @@ public class OracleMetadataTests
     }
 
     [Fact]
-    public void The_provider_reads_its_catalog_and_still_refuses_dependencies_with_the_reason()
+    public void The_provider_reads_its_catalog()
     {
         var provider = new OracleProvider();
         Assert.IsType<OracleMetadata>(provider.Metadata);
-        var ex = Assert.Throws<NotSupportedException>(() => provider.Metadata.GetDependenciesAsync(null!, new ObjectRef { Schema = "A", Name = "B" }, default).GetAwaiter().GetResult());
-        Assert.Equal(DependenciesNotYet, ex.Message);
     }
 }

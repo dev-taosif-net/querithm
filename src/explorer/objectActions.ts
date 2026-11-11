@@ -56,6 +56,9 @@ export function generateDmlTemplate(o: SnapObject, engine: Engine | undefined, k
 
   if (kind === "insert") {
     const targetCols = cols.filter((c) => !c.identity && !c.computed);
+    // Oracle has no DEFAULT VALUES (D4 S11): the first generated column takes its DEFAULT.
+    const generated = cols.find((c) => !c.computed) ?? cols[0];
+    if (cols.length && !targetCols.length && dialectOf(engine) === "oracle") return `INSERT INTO ${qTable} (${q(generated.name)})\nVALUES (DEFAULT);\n`;
     if (cols.length && !targetCols.length) return `INSERT INTO ${qTable} DEFAULT VALUES;\n`;
     if (!targetCols.length) return `INSERT INTO ${qTable} (/* columns */)\nVALUES (/* values */);\n`;
     const colList = targetCols.map((c) => q(c.name)).join(", ");

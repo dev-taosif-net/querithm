@@ -315,6 +315,8 @@ public partial class OracleIntelligenceTests
     [InlineData("ALTER SESSION SET CURRENT_SCHEMA = hr")]
     [InlineData("BEGIN v.DELETE; v.DELETE(1); END;")]
     [InlineData("BEGIN FOR r IN (SELECT * FROM t FOR UPDATE) LOOP NULL; END LOOP; END;")]
+    [InlineData("DECLARE c SYS_REFCURSOR; BEGIN OPEN c FOR SELECT 1 FROM dual; DBMS_SQL.RETURN_RESULT(c); END;")] // D4 S11: hands back an open cursor
+    [InlineData("DECLARE c SYS_REFCURSOR; BEGIN DBMS_SQL.GET_NEXT_RESULT(x, c); END;")]
     public void Safe_statements_are_not_destructive(string sql) => Assert.Empty(Rules(sql));
 
     [Theory]
@@ -325,6 +327,7 @@ public partial class OracleIntelligenceTests
     [InlineData("BEGIN\n  EXECUTE IMMEDIATE 'DROP TABLE ' || v_name;\nEND;", "dynamicSql")]
     [InlineData("DECLARE c INTEGER := DBMS_SQL.OPEN_CURSOR; BEGIN DBMS_SQL.PARSE(c, v, DBMS_SQL.NATIVE); END;", "dynamicSql")]
     [InlineData("BEGIN DBMS_UTILITY.EXEC_DDL_STATEMENT('DROP TABLE t'); END;", "dynamicSql")]
+    [InlineData("BEGIN DBMS_SQL.RETURN_RESULT(c); DBMS_SQL.EXECUTE(c2); END;", "dynamicSql")] // only RETURN_RESULT / GET_NEXT_RESULT are exempt
     [InlineData("BEGIN\n  DELETE FROM t;\nEND;", "deleteWithoutWhere")]
     [InlineData("BEGIN\n  FORALL i IN 1..n UPDATE t SET v = 0;\nEND;", "updateWithoutWhere")]
     [InlineData("BEGIN\n  MERGE INTO t USING s ON (1 = 1) WHEN MATCHED THEN UPDATE SET v = 1;\nEND;", "merge")]

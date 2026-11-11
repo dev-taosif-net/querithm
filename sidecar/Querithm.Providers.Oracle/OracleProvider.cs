@@ -51,7 +51,7 @@ public sealed class OracleProvider : IDbProvider
     readonly OracleMetadata _metadata = new();
     /// <summary>EXPLAIN PLAN / PLAN_TABLE and GATHER_PLAN_STATISTICS / V$SQL_PLAN_STATISTICS_ALL since D4 S09.</summary>
     public IPlanProvider Plans { get; } = new OraclePlans();
-    /// <summary>Packages since D4 S08; every other kind refuses until D4 S11.</summary>
+    /// <summary>Packages since D4 S08, every other kind since D4 S11.</summary>
     public IObjectScripter Scripter => _scripter ??= new OracleScripter(_metadata);
     OracleScripter? _scripter;
     public ITraceProvider? Trace => null;
@@ -60,9 +60,12 @@ public sealed class OracleProvider : IDbProvider
     public IDataEditDialect DataEdit { get; } = new OracleDataEdit();
     /// <summary>Imports since D4 S10 (array-bound INSERT, never OracleBulkCopy).</summary>
     public IImportDialect Import { get; } = new OracleImport();
-    public ISchemaCompareDialect? SchemaCompare => null;
-    public IDataCompareDialect? DataCompare => null;
-    public IReferenceFinder? References => null;
+    /// <summary>Schema compare since D4 S11: one statement per step, no transaction (Oracle commits DDL).</summary>
+    public ISchemaCompareDialect? SchemaCompare { get; } = new OracleSchemaCompare();
+    /// <summary>Data compare since D4 S11: binary text order, exact NUMBER, '' = NULL, the sync script one PL/SQL block.</summary>
+    public IDataCompareDialect? DataCompare { get; } = new OracleDataCompare();
+    /// <summary>Find usages and rename since D4 S11, on tokens.</summary>
+    public IReferenceFinder? References { get; } = new OracleReferenceFinder();
     /// <summary>Only the connection identity so far (§6 rule 7); the monitor itself is refused until D4 S12.</summary>
     public IActivityProvider? Activity { get; } = new OracleActivity();
     public ITransactionControl Transactions { get; } = new OracleTransactions();
@@ -94,12 +97,16 @@ public sealed class OracleProvider : IDbProvider
         Feature.Transactions => null,
         Feature.ChangeDatabase => ChangeDatabaseRefusal,
         Feature.DataEdit or Feature.Import => null,
-        Feature.SchemaCompare or Feature.SchemaCompareApply => "Schema compare is not available for Oracle yet.",
-        Feature.DataCompare or Feature.DataCompareApply => "Data compare is not available for Oracle yet.",
-        Feature.References => "Find usages and rename are not available for Oracle yet.",
+        Feature.SchemaCompare or Feature.SchemaCompareApply => null,
+        Feature.DataCompare or Feature.DataCompareApply => null,
+        Feature.References => null,
         Feature.Monitor => OracleActivity.MonitorNotYet,
         _ => "Not available for Oracle yet.",
     };
+
+    /// <summary>The user is the schema: a tab's bare names resolve in the login's own, folded as Oracle folds it (D4 S11 find usages).</summary>
+    public string? LoginSchema(Profile profile) =>
+        string.IsNullOrWhiteSpace(profile.Username) ? null : OracleIdentifiers.Identity(profile.Username.Trim());
 
     public const string ChangeDatabaseRefusal = "An Oracle connection reaches one service; open another service in a connection of its own.";
 

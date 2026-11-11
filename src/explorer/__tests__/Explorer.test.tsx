@@ -911,6 +911,20 @@ describe("generateDmlTemplate", () => {
     expect(del).toBe("DELETE FROM dbo.Orders\nWHERE [Code] = /* varchar */ <value>;\n");
   });
 
+  it("Oracle (D4 S11): upper-case names bare, quoted otherwise, and no DEFAULT VALUES", () => {
+    const t: SnapObject = {
+      id: 1, schema: "APP", name: "ORDERS", kind: "table",
+      columns: [
+        { name: "ID", type: "NUMBER", pk: true, identity: true, computed: false, nullable: false, ordinal: 1 },
+        { name: "Note", type: "VARCHAR2(40 CHAR)", pk: false, identity: false, computed: false, nullable: true, ordinal: 2 },
+      ],
+    };
+    expect(generateDmlTemplate(t, "oracle", "insert")).toBe('INSERT INTO APP.ORDERS ("Note")\nVALUES (/* Note (VARCHAR2(40 CHAR)) */ <value>);\n');
+    expect(generateDmlTemplate(t, "oracle", "delete")).toBe("DELETE FROM APP.ORDERS\nWHERE ID = /* NUMBER */ <value>;\n");
+    const onlyIdentity: SnapObject = { ...t, columns: [t.columns![0]] };
+    expect(generateDmlTemplate(onlyIdentity, "oracle", "insert")).toBe("INSERT INTO APP.ORDERS (ID)\nVALUES (DEFAULT);\n");
+  });
+
   it("handles tables without columns gracefully", () => {
     const empty: SnapObject = { id: 2, schema: "dbo", name: "Empty", kind: "table", columns: [] };
     expect(generateDmlTemplate(empty, "mssql", "insert")).toContain("/* columns */");

@@ -15,7 +15,7 @@ public sealed record DiffRow(DiffKind Kind, string?[]? Source, string?[]? Target
 public sealed record ComparePlan(
     string[] KeyNames, ValueKind[] SourceKeyKinds, ValueKind[] TargetKeyKinds,
     string[] ValueNames, ValueKind[] SourceKinds, ValueKind[] TargetKinds,
-    bool PaddedKeys, DataCompareOptions Options)
+    bool PaddedKeys, DataCompareOptions Options, bool EmptyIsNull = false)
 {
     public int KeyCount => KeyNames.Length;
 }
@@ -106,7 +106,11 @@ public static class DataComparer
             for (var i = 0; i < plan.ValueNames.Length; i++)
             {
                 var k = plan.KeyCount + i;
-                if (KeyComparers.ValuesEqual(plan.SourceKinds[i], plan.TargetKinds[i], s.Row![k], t.Row![k], plan.Options)) continue;
+                var a = s.Row![k];
+                var b = t.Row![k];
+                // Oracle keeps '' as NULL: with it on either side the two are one value.
+                if (plan.EmptyIsNull) { if (a == "") a = null; if (b == "") b = null; }
+                if (KeyComparers.ValuesEqual(plan.SourceKinds[i], plan.TargetKinds[i], a, b, plan.Options)) continue;
                 mask ??= new byte[maskBytes];
                 mask[i >> 3] |= (byte)(1 << (i & 7));
             }

@@ -718,7 +718,178 @@ public sealed class OracleMetadata : IMetadataProvider
             }
         }
         catch (Exception ex) when (IsDenied(ex)) { return null; }
-        return units.Count == 0 ? null : string.Join("\n", units.Select(u => "CREATE OR REPLACE " + Qualify(u.Text.ToString().TrimEnd(), name) + "\n/"));
+        return units.Count == 0 ? null : string.Join("\n", units.Select(u => UnitDefinition(name, u.Text.ToString())));
+    }
+
+    /// <summary>A PL/SQL unit's ALL_SOURCE text as a script: CREATE OR REPLACE, its owner named, ending in <c>/</c>.</summary>
+    internal static string UnitDefinition(string qualified, string source) => "CREATE OR REPLACE " + Qualify(source.TrimEnd(), qualified) + "\n/";
+
+    /// <summary>
+    /// A view from ALL_VIEWS.TEXT with its output columns named (ALL_TAB_COLUMNS): rewritten later (a rename, a
+    /// migration), the view keeps the names its readers use even when the query's own expressions change.
+    /// </summary>
+    internal static string ViewDefinition(string qualified, IReadOnlyList<string> columns, string text) =>
+        $"CREATE OR REPLACE VIEW {qualified}{(columns.Count > 0 ? " (" + string.Join(", ", columns.Select(OracleIdentifiers.QuoteIfNeeded)) + ")" : "")} AS\n{text.Trim().TrimEnd(';').TrimEnd()};";
+
+    /// <summary>ALL_SOURCE of a unit created from wrapped (obfuscated) text: <c>PROCEDURE p wrapped …</c>.</summary>
+    internal static bool IsWrapped(string source)
+    {
+        var code = OracleTokenizer.Tokenize(source).Where(t => !t.IsTrivia).Take(12).ToList();
+        var k = code.FindIndex(t => t.Is("PROCEDURE") || t.Is("FUNCTION") || t.Is("TRIGGER") || t.Is("PACKAGE") || t.Is("TYPE"));
+        if (k < 0) return false;
+        var n = k + 1;
+        if (n < code.Count && code[n].Is("BODY")) n++;
+        if (n >= code.Count) return false;
+        while (n + 2 < code.Count && code[n + 1].IsP(".")) n += 2; // owner.name
+        return n + 1 < code.Count && code[n + 1].Is("WRAPPED"); // the word right after the unit's name
+    }
+
+    // ------------------------------------------------------------------------------------------ definitions (D4 S11)
+
+    /// <summary>
+    /// Views, standalone routines, triggers and packages by id (find usages and schema compare start from cached text):
+    /// views from ALL_VIEWS with their columns (<see cref="ViewDefinition"/>), PL/SQL from ALL_SOURCE (<see
+    /// cref="UnitDefinition"/>). A wrapped unit is null (its source is obfuscated: like an encrypted module elsewhere); a
+    /// package body the login cannot see is not listed. One read per 500 ids per view, never GET_DDL per object.
+    /// </summary>
+    public async Task<IReadOnlyList<(long Id, string? Definition)>> GetDefinitionsAsync(DbConnection connection, IReadOnlyList<long> objectIds, CancellationToken ct)
+    {
+        var result = new List<(long, string?)>();
+        foreach (var chunk in objectIds.Distinct().Chunk(500))
+        {
+            var (ids, bind) = IdBinds(chunk);
+            var objects = new Dictionary<long, (string Owner, string Name, string Type)>();
+            await ReadAsync(connection, $"""
+                SELECT {NoFeedback} object_id, owner, object_name, object_type FROM {_view("ALL_OBJECTS")}
+                WHERE object_id IN ({ids}) AND object_type IN ('VIEW', 'PROCEDURE', 'FUNCTION', 'TRIGGER', 'PACKAGE', 'PACKAGE BODY')
+                """, bind, Piece.Source, "ALL_OBJECTS", r => objects[Long(r, 0)] = (r.GetString(1), r.GetString(2), r.GetString(3)), ct).ConfigureAwait(false);
+            if (objects.Count == 0) continue;
+            var viewText = new Dictionary<long, string?>();
+            var viewCols = new Dictionary<long, List<string>>();
+            if (objects.Values.Any(o => o.Type == "VIEW"))
+            {
+                await ReadAsync(connection, $"""
+                    SELECT {NoFeedback} o.object_id, v.text FROM {_view("ALL_OBJECTS")} o JOIN {_view("ALL_VIEWS")} v ON v.owner = o.owner AND v.view_name = o.object_name
+                    WHERE o.object_id IN ({ids}) AND o.object_type = 'VIEW'
+                    """, bind, Piece.Views, "ALL_VIEWS", r => viewText[Long(r, 0)] = Str(r, 1), ct).ConfigureAwait(false);
+                await ReadAsync(connection, $"""
+                    SELECT {NoFeedback} o.object_id, c.column_name FROM {_view("ALL_OBJECTS")} o JOIN {_view("ALL_TAB_COLUMNS")} c ON c.owner = o.owner AND c.table_name = o.object_name
+                    WHERE o.object_id IN ({ids}) AND o.object_type = 'VIEW' ORDER BY o.object_id, c.column_id
+                    """, bind, Piece.Columns, "ALL_TAB_COLUMNS", r =>
+                    {
+                        var id = Long(r, 0);
+                        if (!viewCols.TryGetValue(id, out var list)) viewCols[id] = list = [];
+                        list.Add(r.GetString(1));
+                    }, ct).ConfigureAwait(false);
+            }
+            var source = new Dictionary<long, StringBuilder>();
+            if (objects.Values.Any(o => o.Type != "VIEW"))
+                await ReadAsync(connection, $"""
+                    SELECT {NoFeedback} o.object_id, s.text FROM {_view("ALL_OBJECTS")} o
+                    JOIN {_view("ALL_SOURCE")} s ON s.owner = o.owner AND s.name = o.object_name AND s.type = o.object_type
+                    WHERE o.object_id IN ({ids}) AND o.object_type <> 'VIEW' ORDER BY o.object_id, s.line
+                    """, bind, Piece.Source, "ALL_SOURCE", r =>
+                    {
+                        var id = Long(r, 0);
+                        if (!source.TryGetValue(id, out var sb)) source[id] = sb = new StringBuilder();
+                        sb.Append(Str(r, 1));
+                    }, ct).ConfigureAwait(false);
+            foreach (var (id, o) in objects)
+            {
+                var qualified = $"{OracleIdentifiers.QuoteIfNeeded(o.Owner)}.{OracleIdentifiers.QuoteIfNeeded(o.Name)}";
+                if (o.Type == "VIEW")
+                {
+                    if (viewText.TryGetValue(id, out var text) && text != null) result.Add((id, ViewDefinition(qualified, viewCols.GetValueOrDefault(id) ?? [], text)));
+                    continue;
+                }
+                if (!source.TryGetValue(id, out var src)) continue; // not readable: left out, so it is fetched again next time
+                var unit = src.ToString();
+                result.Add((id, IsWrapped(unit) ? null : UnitDefinition(qualified, unit)));
+            }
+        }
+        return result;
+    }
+
+    // ------------------------------------------------------------------------------------------ dependencies (D4 S11)
+
+    /// <summary>The ALL_OBJECTS / ALL_DEPENDENCIES types of a kind (a view may be a materialized view).</summary>
+    internal static string[] ObjectTypes(ObjectKind kind) => kind switch
+    {
+        ObjectKind.Table => ["TABLE"],
+        ObjectKind.View => ["VIEW", "MATERIALIZED VIEW"],
+        ObjectKind.Proc => ["PROCEDURE"],
+        ObjectKind.Func or ObjectKind.Tvf => ["FUNCTION"],
+        ObjectKind.Trigger => ["TRIGGER"],
+        ObjectKind.Type => ["TYPE", "TYPE BODY"],
+        ObjectKind.Sequence => ["SEQUENCE"],
+        ObjectKind.Synonym => ["SYNONYM"],
+        ObjectKind.Package => ["PACKAGE"],
+        ObjectKind.PackageBody => ["PACKAGE BODY"],
+        _ => [],
+    };
+
+    /// <summary>One ALL_DEPENDENCIES row as the panel reads it (unit tests feed canned rows).</summary>
+    internal sealed record DependencyRow(bool Uses, string Owner, string Name, string Type, long? ObjectId);
+
+    /// <summary>
+    /// The panel's rows: what the server recorded, never names found in text. Oracle's own schemas (STANDARD, DBMS_OUTPUT,
+    /// the PUBLIC synonyms for them) are left out, and so is the object itself (a materialized view's container table,
+    /// a package body's own specification is kept: the body uses it). Kinds Querithm does not list are skipped.
+    /// </summary>
+    internal static Dependency[] AssembleDependencies(ObjectRef obj, IEnumerable<DependencyRow> rows) =>
+        rows.Where(r => !(r.Owner == obj.Schema && r.Name == obj.Name && ObjectTypes(obj.Kind).Contains(r.Type) && r.Type != "PACKAGE"))
+            .Where(r => !(r.Owner == obj.Schema && r.Name == obj.Name && obj.Kind == ObjectKind.View && r.Type == "TABLE"))
+            .Select(r => (r, Kind: KindOf(r.Type == "TYPE BODY" ? "TYPE" : r.Type)))
+            .Where(x => x.Kind != null)
+            .Select(x => new Dependency
+            {
+                Direction = x.r.Uses ? DependencyDirection.Uses : DependencyDirection.UsedBy,
+                Object = new ObjectRef { ProfileId = obj.ProfileId, Database = obj.Database, Schema = x.r.Owner, Name = x.r.Name, Kind = x.Kind!.Value, ObjectId = x.r.ObjectId },
+            })
+            .DistinctBy(d => (d.Direction, d.Object.Schema, d.Object.Name, d.Object.Kind))
+            .OrderBy(d => d.Direction).ThenBy(d => d.Object.Schema, StringComparer.Ordinal).ThenBy(d => d.Object.Name, StringComparer.Ordinal)
+            .ToArray();
+
+    /// <summary>
+    /// ALL_DEPENDENCIES both ways (D4 S11): what the object references (views, PL/SQL, triggers record them; a table
+    /// references nothing there) and what references it, each joined to ALL_OBJECTS for its id. Owners Oracle maintains are
+    /// left out, as are PUBLIC synonyms that point into them.
+    /// </summary>
+    public async Task<Dependency[]> GetDependenciesAsync(DbConnection connection, ObjectRef obj, CancellationToken ct)
+    {
+        var types = ObjectTypes(obj.Kind);
+        if (types.Length == 0) return [];
+        var typeList = string.Join(", ", types.Select((_, i) => ":t" + i.ToString(CultureInfo.InvariantCulture)));
+        await using var cmd = Command(connection, $"""
+            WITH m AS (SELECT username FROM {_view("ALL_USERS")} WHERE oracle_maintained = 'Y'),
+            d AS (
+              SELECT 1 AS uses, d.referenced_owner AS owner, d.referenced_name AS name, d.referenced_type AS type
+              FROM {_view("ALL_DEPENDENCIES")} d WHERE d.owner = :owner AND d.name = :name AND d.type IN ({typeList})
+              UNION
+              SELECT 0, d.owner, d.name, d.type
+              FROM {_view("ALL_DEPENDENCIES")} d WHERE d.referenced_owner = :owner AND d.referenced_name = :name AND d.referenced_type IN ({typeList})
+            )
+            SELECT {NoFeedback} d.uses, d.owner, d.name, d.type, o.object_id
+            FROM d LEFT JOIN {_view("ALL_OBJECTS")} o ON o.owner = d.owner AND o.object_name = d.name AND o.object_type = d.type
+            WHERE d.owner NOT IN (SELECT username FROM m)
+              AND NOT (d.owner = 'PUBLIC' AND d.type = 'SYNONYM' AND EXISTS (
+                SELECT 1 FROM {_view("ALL_SYNONYMS")} s WHERE s.owner = 'PUBLIC' AND s.synonym_name = d.name AND (s.table_owner IN (SELECT username FROM m) OR s.db_link IS NOT NULL)))
+            """);
+        cmd.Parameters.Add(new OracleParameter("owner", obj.Schema));
+        cmd.Parameters.Add(new OracleParameter("name", obj.Name));
+        for (var i = 0; i < types.Length; i++) cmd.Parameters.Add(new OracleParameter("t" + i.ToString(CultureInfo.InvariantCulture), types[i]));
+        var rows = new List<DependencyRow>();
+        try
+        {
+            await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await r.ReadAsync(ct).ConfigureAwait(false))
+                rows.Add(new DependencyRow(Long(r, 0) == 1, r.GetString(1), r.GetString(2), r.GetString(3), LongOrNull(r, 4)));
+        }
+        catch (Exception ex) when (IsDenied(ex))
+        {
+            throw new NotSupportedException(DeniedNote("Dependencies are not shown", "ALL_DEPENDENCIES, ALL_USERS or ALL_SYNONYMS", ex));
+        }
+        return AssembleDependencies(obj, rows);
     }
 
     /// <summary>
@@ -741,15 +912,6 @@ public sealed class OracleMetadata : IMetadataProvider
         var kind = code[n - 1];
         return unit[..(kind.Offset + kind.Length)] + " " + qualified + unit[(code[end].Offset + code[end].Length)..];
     }
-
-    /// <summary>Find usages and the dependency panel arrive with D4 S11 (ALL_DEPENDENCIES and the reference finder).</summary>
-    internal const string DependenciesNotYet = "Dependencies for Oracle are not available in this build of Querithm yet.";
-
-    public Task<IReadOnlyList<(long Id, string? Definition)>> GetDefinitionsAsync(DbConnection connection, IReadOnlyList<long> objectIds, CancellationToken ct) =>
-        Task.FromException<IReadOnlyList<(long Id, string? Definition)>>(new NotSupportedException(DependenciesNotYet));
-
-    public Task<Dependency[]> GetDependenciesAsync(DbConnection connection, ObjectRef obj, CancellationToken ct) =>
-        Task.FromException<Dependency[]>(new NotSupportedException(DependenciesNotYet));
 
     /// <summary>
     /// GET_DDL already writes CREATE OR REPLACE for views and PL/SQL; a definition read another way gets it (on tokens) when its

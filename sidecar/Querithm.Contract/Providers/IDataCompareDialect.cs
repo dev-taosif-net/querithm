@@ -58,4 +58,19 @@ public interface IDataCompareDialect
 
     /// <summary>The sync script's transaction: begin (with any session settings) and commit.</summary>
     (string Begin, string Commit) SyncTransaction { get; }
+
+    /// <summary>
+    /// Phase D4 S11: the engine stores an empty string as NULL (Oracle), so a compare with it on either side counts '' and
+    /// NULL as one value — the difference could never be synced away.
+    /// </summary>
+    bool EmptyTextIsNull => false;
+
+    /// <summary>
+    /// Phase D4 S11: why values of this type are not compared at all (they are read in part, or as text that says nothing
+    /// of the value: Oracle LOBs, XMLTYPE, objects), or null. Such a column is left out with the reason, and is never a key.
+    /// </summary>
+    string? ValueRefusal(string? columnType) => null;
+
+    /// <summary>Phase D4 S11: a custom query's column types come from the provider's <c>DescribeColumns</c> (the catalog's names), not the driver's.</summary>
+    bool QueryTypesFromProvider => false;
 }

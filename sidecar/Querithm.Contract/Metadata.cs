@@ -258,6 +258,18 @@ public sealed record ScriptParams
     public ScriptKind Kind { get; init; }
     /// <summary>Phase D4 (Oracle): a package specification's CREATE / ALTER script also carries its body. Ignored for every other kind.</summary>
     public bool WithBody { get; init; }
+    /// <summary>
+    /// Phase D4 S11 (Oracle): EXECUTE with the Execute dialog's values, by parameter name; the sidecar turns each into a
+    /// literal of the parameter's type (or refuses it). Null: a template with NULL / defaults. Ignored by other kinds.
+    /// </summary>
+    public ScriptArgument[]? Arguments { get; init; }
+}
+
+/// <summary>One Execute dialog value: the parameter's name as the catalog spells it, and its value (NULL, the default, or text).</summary>
+public sealed record ScriptArgument
+{
+    public required string Name { get; init; }
+    public required GridValue Value { get; init; }
 }
 
 public sealed record SqlText
