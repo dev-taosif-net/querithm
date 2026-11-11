@@ -162,6 +162,31 @@ describe("ProfileEditor: Oracle", () => {
   });
 });
 
+describe("ProfileEditor: Oracle through SSH (D4 S07)", () => {
+  it("offers the SSH tunnel and saves it with the listener as the bastion reaches it", async () => {
+    m.engines = ORACLE();
+    render(<ProfileEditor preset="oracle" onClose={() => {}} />);
+    await userEvent.type(nameBox(), "ora via bastion");
+    await userEvent.clear(hostBox());
+    await userEvent.type(hostBox(), "db-internal");
+    await userEvent.type(screen.getByLabelText("Service name"), "ORCLPDB1");
+    await pickEnv("Dev");
+    await openRow(/^SSH tunnel/);
+    await userEvent.click(screen.getByRole("checkbox", { name: /Connect through an SSH bastion/ }));
+    await userEvent.type(screen.getByPlaceholderText("bastion.example.com"), "jump.example.com");
+    await userEvent.type(screen.getByPlaceholderText("deploy"), "ops");
+    await userEvent.type(screen.getByPlaceholderText("/home/me/.ssh/id_ed25519"), "/keys/id_ed25519");
+    await userEvent.click(saveBtn());
+    await waitFor(() => expect(saveSpy).toHaveBeenCalled());
+    const saved = saveSpy.mock.calls[0][0];
+    expect(saved).toMatchObject({ engine: "oracle", host: "db-internal", databaseDefault: "ORCLPDB1", tlsMode: "default" });
+    expect(saved.ssh).toMatchObject({ host: "jump.example.com", port: 22, username: "ops", auth: "privateKey", keyPath: "/keys/id_ed25519" });
+    // The tunnel's routing options are the sidecar's own; the dialog never writes them.
+    expect(saved.options?.tunnelHost).toBeUndefined();
+    expect(saved.options?.tunnelPort).toBeUndefined();
+  });
+});
+
 describe("Oracle profile rules (pure)", () => {
   const ora = (over: Partial<Profile> = {}): Profile => base("o", "oracle", { auth: "password", databaseDefault: "FREEPDB1", ...over });
 

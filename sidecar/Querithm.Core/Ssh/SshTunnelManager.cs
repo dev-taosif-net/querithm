@@ -33,12 +33,12 @@ public sealed class SshTunnelManager(KnownHosts known, ILogger log) : IAsyncDisp
 
         internal sealed class Ticket { public bool Used; }
 
-        /// <summary>A connect window for one driver open: one connection may come in while it is held.</summary>
-        public IDisposable Expect()
+        /// <summary>A connect window for one driver open: <paramref name="connections"/> connections (1–4) may come in while it is held.</summary>
+        public IDisposable Expect(int connections = 1)
         {
-            var t = new Ticket();
-            lock (_tickets) _tickets.Add(t);
-            return new Releaser(() => { lock (_tickets) _tickets.Remove(t); });
+            var mine = Enumerable.Range(0, Math.Clamp(connections, 1, 4)).Select(_ => new Ticket()).ToList();
+            lock (_tickets) _tickets.AddRange(mine);
+            return new Releaser(() => { lock (_tickets) _tickets.RemoveAll(mine.Contains); });
         }
 
         internal bool TakeTicket()

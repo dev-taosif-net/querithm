@@ -199,6 +199,8 @@ public static class FixtureSecrets
             // Phase D4: Oracle Free's least-privileged test user and its monitor user (oracle/startup/01-users.sh creates both).
             "oracle" => ComposeValue(Compose.Value, "oracle", "QUERITHM_APP_PASSWORD"),
             "oracle-mon" => ComposeValue(Compose.Value, "oracle", "QUERITHM_MON_PASSWORD"),
+            // D4 S07: SYSTEM, only to end a test's own session (ALTER SYSTEM KILL SESSION) from outside.
+            "oracle-admin" => ComposeValue(Compose.Value, "oracle", "ORACLE_PWD"),
             _ => throw new ArgumentOutOfRangeException(nameof(engine), engine, "no fixture password"),
         };
     }

@@ -62,13 +62,13 @@ public class OracleSkeletonTests
     }
 
     [Fact]
-    public void Server_profiles_are_checked_and_the_tunnel_refuses_until_d4_s07()
+    public void Server_profiles_are_checked_and_the_tunnel_targets_the_listener()
     {
         var p = new Profile { Id = "x", Name = "ora", Engine = Engine.Oracle, Host = "db.invalid", Port = 1521, Auth = AuthKind.Password, Username = "u", DatabaseDefault = "S" };
         Assert.Null(_oracle.ValidateProfile(p));
         Assert.NotNull(_oracle.ValidateProfile(p with { Location = LocationKind.File }));
         Assert.NotNull(_oracle.ValidateProfile(p with { Auth = AuthKind.Windows }));
-        Assert.Equal(OracleProvider.NoTunnelYet, _oracle.TunnelTarget(p).Refusal);
+        Assert.Equal(("db.invalid", 1521, (string?)null), _oracle.TunnelTarget(p));
         Assert.NotNull(_oracle.Plans.Refusal("SELECT 1 FROM DUAL", PlanMode.Estimated));
         Assert.Equal((2484, AuthKind.Password, "Oracle"), (_oracle.Traits.DefaultPort, _oracle.Traits.DefaultAuth, _oracle.Traits.Name));
         Assert.Equal("Oracle", ProfileRules.EngineName(Engine.Oracle));

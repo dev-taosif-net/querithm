@@ -23,7 +23,7 @@ namespace Querithm.Tests.Integration;
 /// </summary>
 public sealed class OracleProviderIntegrationTests
 {
-    const int TcpPort = OracleIntegrationTests.Port, TcpsPort = 15211;
+    internal const int TcpPort = OracleIntegrationTests.Port, TcpsPort = 15211;
     static string AppPassword => FixtureSecrets.Password("oracle");
     static string MonPassword => FixtureSecrets.Password("oracle-mon");
 
@@ -50,7 +50,7 @@ public sealed class OracleProviderIntegrationTests
     }
 
     /// <summary>The fixture's self-signed server certificate (its own CA), read from a TLS handshake and written as PEM.</summary>
-    static async Task<string> FixtureCaAsync(string dir)
+    internal static async Task<string> FixtureCaAsync(string dir)
     {
         using var tcp = new TcpClient();
         await tcp.ConnectAsync("127.0.0.1", TcpsPort);
@@ -366,6 +366,8 @@ public sealed class OracleProviderIntegrationTests
         var since = Stopwatch.StartNew();
         var (done, _, id) = await Run(h, sid, "BEGIN DBMS_SESSION.SLEEP(30); END;");
         Assert.NotEqual(ExecState.Done, done.State);
+        // D4 S07: ODP.NET ends its timeout with a bare "A task was canceled."; the tab is told it was the query timeout.
+        Assert.Contains("query timeout (2 s)", done.Error?.Message);
         Assert.True(since.Elapsed < TimeSpan.FromSeconds(15), $"ended after {since.Elapsed.TotalMilliseconds:0} ms");
         Assert.Equal(ExecState.Done, (await Run(h, sid, "SELECT 1 FROM dual")).Done.State);
     }

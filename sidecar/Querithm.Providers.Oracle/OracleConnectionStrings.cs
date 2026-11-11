@@ -73,7 +73,33 @@ internal static class OracleConnectionStrings
         return TransportFor(p).Refusal;
     }
 
-    public static string Descriptor(Profile p)
+    /// <summary>
+    /// Set by <see cref="OracleProvider.RouteThrough"/> only: the server's own host and port as the SSH bastion reaches them.
+    /// Read only for a loopback host (<see cref="TunnelOf"/>), so a stored option cannot retarget a direct connection;
+    /// <see cref="OracleProvider.ValidateProfile"/> refuses a profile that names them itself.
+    /// </summary>
+    public const string TunnelHostOption = "tunnelHost", TunnelPortOption = "tunnelPort";
+
+    /// <summary>The real server behind the SSH forward this profile dials (a loopback host), or null for a direct connection.</summary>
+    public static (string Host, int Port)? TunnelOf(Profile p) =>
+        p.Options?.GetValueOrDefault(TunnelHostOption) is { Length: > 0 } host && ValidHost(host)
+            && int.TryParse(p.Options.GetValueOrDefault(TunnelPortOption), NumberStyles.None, CultureInfo.InvariantCulture, out var port) && port is > 0 and <= 65535
+            && System.Net.IPAddress.TryParse(p.Host, out var ip) && System.Net.IPAddress.IsLoopback(ip)
+            ? (host, port) : null;
+
+    /// <summary>
+    /// A certificate subject the descriptor can carry inside its quotes (<c>SSL_SERVER_CERT_DN="…"</c>): printable ASCII
+    /// without a quote, a parenthesis or a backslash, at most 1,024 characters.
+    /// </summary>
+    internal static bool ValidCertDn(string? dn) =>
+        !string.IsNullOrEmpty(dn) && dn.Length <= 1024 && dn.All(c => c is >= ' ' and <= '~' and not ('"' or '(' or ')' or '\\'));
+
+    /// <param name="certDn">
+    /// Through an SSH forward with Verify full: the subject of the certificate already checked against the real server name
+    /// (<see cref="OracleTunnelTls"/>). The driver then checks the chain and that exact subject, since the address it dials
+    /// (127.0.0.1) is not the name the certificate was issued for.
+    /// </param>
+    public static string Descriptor(Profile p, string? certDn = null)
     {
         var host = (p.Host ?? "").Trim();
         if (host.Length == 0) host = "localhost";
@@ -89,18 +115,33 @@ internal static class OracleConnectionStrings
         // One address, no retries: a timeout means what it says. Timeouts in seconds.
         sb.Append(CultureInfo.InvariantCulture, $"(CONNECT_TIMEOUT={timeout})(TRANSPORT_CONNECT_TIMEOUT={timeout})(RETRY_COUNT=0)");
         sb.Append(CultureInfo.InvariantCulture, $"(ADDRESS=(PROTOCOL={(tcps ? "TCPS" : "TCP")})(HOST={host})(PORT={port}))");
-        sb.Append("(CONNECT_DATA=").Append(UsesSid(p) ? "(SID=" : "(SERVICE_NAME=").Append(service).Append("))");
-        if (tcps) sb.Append("(SECURITY=(SSL_SERVER_DN_MATCH=").Append(transport == Transport.Tcps ? "TRUE" : "FALSE").Append("))");
+        // Through a tunnel, a dedicated server: a shared-server dispatcher may answer with a redirect to its own port, which
+        // the forward does not reach.
+        var tunnelled = TunnelOf(p) != null;
+        sb.Append("(CONNECT_DATA=").Append(UsesSid(p) ? "(SID=" : "(SERVICE_NAME=").Append(service).Append(')');
+        if (tunnelled) sb.Append("(SERVER=DEDICATED)");
+        sb.Append(')');
+        if (tcps)
+        {
+            sb.Append("(SECURITY=(SSL_SERVER_DN_MATCH=").Append(transport == Transport.Tcps ? "TRUE" : "FALSE").Append(')');
+            if (certDn != null)
+            {
+                if (transport != Transport.Tcps || !tunnelled || !ValidCertDn(certDn)) throw new ArgumentException("The server certificate's subject cannot be used to check this connection.");
+                sb.Append("(SSL_SERVER_CERT_DN=\"").Append(certDn).Append("\")");
+            }
+            sb.Append(')');
+        }
+        else if (certDn != null) throw new ArgumentException("A plain TCP connection has no certificate to check.");
         return sb.Append(')').ToString();
     }
 
     /// <summary>Pooling off (Core pools); TNS_ADMIN is the empty <paramref name="tnsAdmin"/> directory; the trust wallet when the profile names a CA file.</summary>
-    public static string Build(Profile p, string? secret, string tnsAdmin, string? walletDir)
+    public static string Build(Profile p, string? secret, string tnsAdmin, string? walletDir, string? certDn = null)
     {
         if (Validate(p) is { } why) throw new ArgumentException(why);
         var b = new OracleConnectionStringBuilder
         {
-            DataSource = Descriptor(p),
+            DataSource = Descriptor(p, certDn),
             UserID = p.Username ?? "",
             Password = secret ?? "",
             Pooling = false,

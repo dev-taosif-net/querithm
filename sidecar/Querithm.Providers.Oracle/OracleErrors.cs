@@ -76,9 +76,69 @@ internal static class OracleErrors
             12545 => "The host could not be found or reached (ORA-12545). Check the host name.",
             12170 or 12535 => "The connection timed out before the server answered (ORA-" + Code(ex).ToString("D5", CultureInfo.InvariantCulture) + "). Check the host, the port and any firewall in between.",
             1013 => "The statement was cancelled (ORA-01013).",
-            3113 or 3114 or 3135 => "The connection to the server was lost (ORA-" + Code(ex).ToString("D5", CultureInfo.InvariantCulture) + ").",
+            28 => "The server ended this session (ORA-00028: it was killed, for example by ALTER SYSTEM KILL SESSION). " + LostTail,
+            1012 => "This session is no longer signed in on the server (ORA-01012). " + LostTail,
+            2396 => "The server ended this session after it was idle for too long (ORA-02396). " + LostTail,
+            3113 or 3114 or 3135 or 12537 or 12547 or 12570 or 12571 =>
+                "The connection to the server was lost (ORA-" + Code(ex).ToString("D5", CultureInfo.InvariantCulture) + "): the server or the network closed it. " + LostTail,
             _ => null,
         };
+    }
+
+    /// <summary>What a lost connection means for the tab (Core discards the connection; the next run opens another).</summary>
+    internal const string LostTail = "Run again to reconnect; whatever this session had not committed was rolled back by the server.";
+
+    /// <summary>Codes after which the driver connection is gone (it reports itself closed; Core discards it).</summary>
+    internal static bool IsConnectionLost(int code) => code is 28 or 1012 or 2396 or 3113 or 3114 or 3135 or 12537 or 12547 or 12570 or 12571;
+
+    /// <summary>
+    /// A connect through an SSH forward that failed because the driver dialled another address: the listener answered with
+    /// a redirect (a RAC SCAN listener handing the client to a node, a shared-server dispatcher, a REDIRECT) and the driver
+    /// followed it, outside the tunnel. The forward itself is a live loopback listener, so a host that does not resolve
+    /// (ORA-12545) or "no listener" at an address other than the forward can only be such a redirect. Null for any other
+    /// failure. Reads the driver's messages, not SQL.
+    /// </summary>
+    internal static string? RedirectRefusal(Exception ex, int forwardPort, string serverHost, int serverPort)
+    {
+        string? target = null;
+        var redirected = false;
+        for (Exception? e = ex; e != null; e = e.InnerException)
+        {
+            if (e is System.Net.Sockets.SocketException { SocketErrorCode: System.Net.Sockets.SocketError.HostNotFound or System.Net.Sockets.SocketError.TryAgain or System.Net.Sockets.SocketError.NoData })
+                redirected = true;
+            switch (LeadingCode(e.Message))
+            {
+                case 12545:
+                    redirected = true;
+                    break;
+                case 12541 when NoListenerAt(e.Message) is { } at && !(IsLoopback(at.Host) && at.Port == forwardPort):
+                    redirected = true;
+                    target = string.Create(CultureInfo.InvariantCulture, $"{at.Host}:{at.Port}");
+                    break;
+            }
+        }
+        if (!redirected) return null;
+        var where = target == null ? "another address" : target;
+        return $"The Oracle listener at {serverHost}:{serverPort} sent the connection on to {where} (a RAC SCAN listener, a shared-server dispatcher or a REDIRECT), " +
+               "and the SSH tunnel reaches only the listener itself. Connect to a node's own listener and service (not the SCAN name), or connect without the SSH tunnel.";
+    }
+
+    static bool IsLoopback(string host) =>
+        host.Equals("localhost", StringComparison.OrdinalIgnoreCase) || (System.Net.IPAddress.TryParse(host, out var ip) && System.Net.IPAddress.IsLoopback(ip));
+
+    /// <summary>"ORA-12541: Cannot connect. No listener at host H port P. …": the host and port the driver dialled.</summary>
+    internal static (string Host, int Port)? NoListenerAt(string message)
+    {
+        const string marker = "No listener at";
+        var i = message.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (i < 0) return null;
+        var words = message[(i + marker.Length)..].Split((char[])[' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+        var h = Array.FindIndex(words, w => w.Equals("host", StringComparison.OrdinalIgnoreCase));
+        if (h < 0 || h + 3 >= words.Length || !words[h + 2].Equals("port", StringComparison.OrdinalIgnoreCase)) return null;
+        var host = words[h + 1];
+        var portText = words[h + 3].TrimEnd('.', ',', ';');
+        if (!OracleConnectionStrings.ValidHost(host) || !int.TryParse(portText, NumberStyles.None, CultureInfo.InvariantCulture, out var port) || port is < 1 or > 65535) return null;
+        return (host, port);
     }
 
     /// <summary>

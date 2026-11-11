@@ -18,7 +18,8 @@ namespace Querithm.Providers.Oracle;
 /// cref="OracleTransactions"/>), cancel (OracleCommand.Cancel: a break on the command's own connection) and ORA- errors
 /// with their position work. Since D4 S04 every Oracle type reaches the grid typed or as exact text (<see cref="OracleTypes"/>),
 /// DBMS_OUTPUT and compile errors are read after each batch (<see cref="OracleOutput"/>) and <c>:name</c> binds by name.
-/// Since D4 S05 the catalog is read (<see cref="OracleMetadata"/>); plans, scripting, grid edit and import still refuse with
+/// Since D4 S05 the catalog is read (<see cref="OracleMetadata"/>). Since D4 S07 a profile goes through an SSH tunnel, Verify
+/// full still checking the real server name, and a lost connection says so; plans, scripting, grid edit and import still refuse with
 /// a reason until their session (D4 S08–S12).
 /// </summary>
 public sealed class OracleProvider : IDbProvider
@@ -96,7 +97,12 @@ public sealed class OracleProvider : IDbProvider
 
     public const string ChangeDatabaseRefusal = "An Oracle connection reaches one service; open another service in a connection of its own.";
 
-    public string? ValidateProfile(Profile p) => Traits.Unavailable ?? OracleConnectionStrings.Validate(p);
+    public string? ValidateProfile(Profile p) =>
+        Traits.Unavailable
+        ?? (p.Options is { } o && (o.ContainsKey(OracleConnectionStrings.TunnelHostOption) || o.ContainsKey(OracleConnectionStrings.TunnelPortOption))
+            ? "The tunnelHost and tunnelPort options are Querithm's own (set while an SSH tunnel is open); remove them from the profile."
+            : null)
+        ?? OracleConnectionStrings.Validate(p);
 
     static readonly ConditionalWeakTable<DbConnection, ProductInfo> Products = new();
 
@@ -106,10 +112,38 @@ public sealed class OracleProvider : IDbProvider
 
     public ConnectionLifetime LifetimeFor(Profile profile) => ConnectionLifetime.Pooled;
 
-    /// <summary>SSH for Oracle arrives in D4 S07 (with TCPS checked against the real server name through the forward).</summary>
-    public const string NoTunnelYet = "SSH tunnels for Oracle are not available in this build of Querithm yet.";
-    public (Profile Profile, string? Note) RouteThrough(Profile profile, string host, int port) => throw new NotSupportedException(NoTunnelYet);
-    public (string Host, int Port, string? Refusal) TunnelTarget(Profile profile) => ("", 0, NoTunnelYet);
+    /// <summary>
+    /// The listener's host and port as the bastion reaches them (the profile's own: Querithm writes one address). The port
+    /// follows the transport, as for a direct connection (2484 TCPS, 1521 TCP).
+    /// </summary>
+    public (string Host, int Port, string? Refusal) TunnelTarget(Profile p)
+    {
+        if (OracleConnectionStrings.Validate(p) is { } why) return ("", 0, why);
+        var host = (p.Host ?? "").Trim();
+        if (host.Length == 0) host = "localhost";
+        var (transport, _) = OracleConnectionStrings.TransportFor(p);
+        return (host, p.Port ?? (transport == OracleConnectionStrings.Transport.Tcp ? OracleConnectionStrings.TcpPort : OracleConnectionStrings.TcpsPort), null);
+    }
+
+    /// <summary>
+    /// The driver dials the forward; the real host and port ride along (<see cref="OracleConnectionStrings.TunnelOf"/>) so
+    /// Verify full still checks the certificate against the server's own name (<see cref="OracleTunnelTls"/>, PT5-4) and a
+    /// listener redirect is named for what it is.
+    /// </summary>
+    public (Profile Profile, string? Note) RouteThrough(Profile p, string host, int port)
+    {
+        var (realHost, realPort, _) = TunnelTarget(p);
+        var options = new Dictionary<string, string>(p.Options ?? [])
+        {
+            [OracleConnectionStrings.TunnelHostOption] = realHost,
+            [OracleConnectionStrings.TunnelPortOption] = realPort.ToString(CultureInfo.InvariantCulture),
+        };
+        return (p with { Host = host, Port = port, Options = options }, null);
+    }
+
+    /// <summary>Verify full through a tunnel opens two connections through the forward: Querithm's own TLS check, then the driver's.</summary>
+    public int TunnelConnectsPerOpen(Profile routed) =>
+        OracleConnectionStrings.TunnelOf(routed) != null && OracleConnectionStrings.TransportFor(routed).Transport == OracleConnectionStrings.Transport.Tcps ? 2 : 1;
 
     /// <summary>
     /// The directory named as TNS_ADMIN: Querithm's own and empty, so the driver finds no sqlnet.ora / tnsnames.ora (and
@@ -157,6 +191,9 @@ public sealed class OracleProvider : IDbProvider
     public string BuildConnectionString(Profile profile, string? secret, string? database) =>
         OracleConnectionStrings.Build(profile, secret, EmptyTnsAdmin(), TrustWallet(profile));
 
+    string BuildChecked(Profile profile, string? secret, string? certDn) =>
+        OracleConnectionStrings.Build(profile, secret, EmptyTnsAdmin(), TrustWallet(profile), certDn);
+
     public ConnectionStringAffinity ConnectionStringAffinity(IReadOnlyDictionary<string, string> keywords) => OracleConnectionStrings.Affinity(keywords);
 
     public ParseConnectionStringResult ParseConnectionString(string connectionString, Profile basis) => OracleConnectionStrings.Parse(connectionString, basis);
@@ -165,10 +202,19 @@ public sealed class OracleProvider : IDbProvider
 
     public async Task<DbConnection> OpenAsync(Profile profile, string? secret, string? database, FileGrant? file, CancellationToken ct)
     {
-        var c = new OracleConnection(BuildConnectionString(profile, secret, database));
+        if (OracleConnectionStrings.Validate(profile) is { } why) throw new ArgumentException(why);
+        var tunnel = OracleConnectionStrings.TunnelOf(profile);
+        string? certDn = null;
+        if (tunnel is { } real && OracleConnectionStrings.TransportFor(profile).Transport == OracleConnectionStrings.Transport.Tcps)
+            certDn = await OracleTunnelTls.ServerSubjectAsync(profile.Host!, profile.Port!.Value, real.Host, profile.CaPath, profile.TimeoutS ?? 0, ct).ConfigureAwait(false);
+        var c = new OracleConnection(BuildChecked(profile, secret, certDn));
         try
         {
-            await c.OpenAsync(ct).ConfigureAwait(false);
+            try { await c.OpenAsync(ct).ConfigureAwait(false); }
+            catch (Exception ex) when (tunnel is { } t && OracleErrors.RedirectRefusal(ex, profile.Port!.Value, t.Host, t.Port) is { } redirect)
+            {
+                throw new InvalidOperationException(redirect, ex);
+            }
             var product = await ReadProductAsync(c, ct).ConfigureAwait(false);
             if (MajorOf(c.ServerVersion) is { } major && major < MinimumMajor)
                 throw new NotSupportedException($"This server runs Oracle {product.Version}. Querithm connects to Oracle {MinimumMajor}c or later.");

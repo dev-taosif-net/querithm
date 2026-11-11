@@ -273,7 +273,7 @@ public sealed class SessionManager : IAsyncDisposable
             tunnel = await Tunnels.EnsureAsync(profile, sshSecret, host, port, ct).ConfigureAwait(false);
         }
         var (routed, _) = provider.RouteThrough(profile, tunnel.Local.Address.ToString(), tunnel.Local.Port);
-        using (tunnel.Expect())
+        using (tunnel.Expect(provider.TunnelConnectsPerOpen(routed)))
         {
             var conn = await provider.OpenAsync(routed, secret, database, null, ct).ConfigureAwait(false);
             _viaTunnel.AddOrUpdate(conn, tunnel);

@@ -88,6 +88,13 @@ public interface IDbProvider
     /// <summary>The server's TCP endpoint as the SSH bastion must reach it, or why it cannot be tunnelled.</summary>
     (string Host, int Port, string? Refusal) TunnelTarget(Profile profile);
 
+    /// <summary>
+    /// How many connections one <see cref="OpenAsync"/> of the <paramref name="routed"/> profile makes through the SSH forward
+    /// (the forward admits only those it expects where the OS cannot name a connection's process). One for every engine but
+    /// Oracle with Verify full, which checks the certificate on a handshake of its own first (D4 S07).
+    /// </summary>
+    int TunnelConnectsPerOpen(Profile routed) => 1;
+
     /// <summary>Connection string with driver pooling off (Core pools physical connections itself).</summary>
     string BuildConnectionString(Profile profile, string? secret, string? database);
 

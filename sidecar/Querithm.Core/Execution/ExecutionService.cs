@@ -329,6 +329,15 @@ public sealed class ExecutionService : IAsyncDisposable
         return null;
     }
 
+    /// <summary>The query timeout by name when the driver's own text does not give a reason (D4 S07).</summary>
+    internal static string TimeoutText(Session session, Exception ex)
+    {
+        var timeout = session.Provider.Traits.FixedCommandTimeoutS ?? session.Profile.CommandTimeoutS ?? 0;
+        return ex is OperationCanceledException && timeout > 0
+            ? $"The statement ran longer than the query timeout ({timeout} s) and was stopped. Raise the timeout in the connection's settings, or set it to 0 for none."
+            : ex.Message;
+    }
+
     /// <summary>
     /// Rolls an actual plan back (to its savepoint inside the user's transaction) within <see cref="Contract.Providers.Cleanup.Limit"/>.
     /// When that fails the connection is closed instead — the server then rolls back — so the plan's changes never stay
@@ -533,10 +542,13 @@ public sealed class ExecutionService : IAsyncDisposable
             else if (ct.IsCancellationRequested) cancelled = true;
             else
             {
-                // Stopped by a timeout that is not the user's cancel: work was left undone, so the run failed.
+                // Stopped by a timeout that is not the user's cancel: work was left undone, so the run failed. A driver that
+                // ends its command timeout with a bare OperationCanceledException (ODP.NET: "A task was canceled.") says
+                // nothing about why, so the query timeout is named.
                 hadError = true;
-                firstError ??= new ErrorInfo { Message = ex.Message, BatchIndex = batchIndex };
-                Message(exec, new ServerMessage { ExecutionId = exec.IdText, Severity = Severity.Error, Message = ex.Message, BatchIndex = batchIndex, Ts = Time.NowMs() }, server: false);
+                var text = TimeoutText(session, ex);
+                firstError ??= new ErrorInfo { Message = text, BatchIndex = batchIndex };
+                Message(exec, new ServerMessage { ExecutionId = exec.IdText, Severity = Severity.Error, Message = text, BatchIndex = batchIndex, Ts = Time.NowMs() }, server: false);
             }
         }
         catch (Exception ex)
