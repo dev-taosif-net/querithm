@@ -120,6 +120,8 @@ jobs:
           cat self-test.txt
           test "$status" -eq 0
           for m in "monitorJson ok" "monitorHistory ok" "sqlite ok" "arrow ok" "mysql ok" "duckdb ok" "oracle ok"; do grep -q "$m" self-test.txt || { echo "::error::missing '$m'"; exit 1; }; done
+          if [ "${{ matrix.rid }}" = osx-x64 ]; then want="oracle platform unavailable: Oracle's driver"; else want="oracle platform supported"; fi
+          grep -q "$want" self-test.txt || { echo "::error::missing '$want'"; exit 1; }
       - run: node scripts/gen-notices.mjs
       # No signing key here: the packages are signed in the sign job (createUpdaterArtifacts would need the key).
       - name: Build the installers (unsigned)

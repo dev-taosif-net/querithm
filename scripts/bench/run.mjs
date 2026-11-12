@@ -96,6 +96,7 @@ const TARGETS = {
   // Phase D2: MySQL 8.4 (the fixture's mysql84, TLS required), hidden behind the dev setting like SQLite.
   // Phase D4: Oracle (hidden engine), the fixture's Oracle Free.
   "11b.oracle": ["Oracle: execute → first batch on a cold pool connection (TCP, login, product + identity read, SELECT 1 FROM dual, median)", "ms", 300],
+  "15.oracle": ["Oracle: cancel latency (OracleCommand.Cancel of a running SELECT)", "ms", 500],
   "9.oracle": ["Oracle: metadata snapshot load from SQLite (600 tables, 150 views, 200 triggers)", "ms", 80],
   "10.oracle": ["Oracle: incremental refresh with 10 changed objects (least-privileged user, ALL_* views)", "ms", 2000],
   // D4 S06: the editor on an Oracle tab (oracle language, Oracle lexer rules, the app user's snapshot).
@@ -964,6 +965,32 @@ async function oracleMetrics() {
   END LOOP;
 END;
 /`;
+    // #15.oracle (D4 S13): cancel a running statement after 200 ms; query.cancel → query.done(cancelled). The break goes over
+    // the command's own connection (OracleCommand.Cancel, ORA-01013), which stays open for the next run. The metric is a
+    // running SELECT (a 10^10-row cartesian count), as #15 cancels a running query on the other engines. Two more shapes are
+    // kept beside it: a busy PL/SQL loop, and DBMS_SESSION.SLEEP, which notices a break only between its sleep intervals
+    // (§16 "Oracle cancel": seconds, whatever the client does).
+    const cancelOf = async (sql) => {
+      const out = [];
+      for (let i = 0; i < RUNS; i++) {
+        const ex = await call("query.execute", { sessionId, sql, options: { noHistory: true } });
+        await sleep(200);
+        const t0 = performance.now();
+        await call("query.cancel", { executionId: ex.executionId });
+        const d = await until((m, p) => m === "query.done" && p.executionId === ex.executionId, 30_000, "oracle cancel", true);
+        if (d.state !== "cancelled") throw new Error(`#15.oracle: state ${d.state} for ${sql.slice(0, 40)}`);
+        out.push(Math.round((performance.now() - t0) * 10) / 10);
+      }
+      return out;
+    };
+    const cancelSelect = await cancelOf("SELECT COUNT(*) FROM (SELECT 1 FROM dual CONNECT BY LEVEL <= 100000) a, (SELECT 1 FROM dual CONNECT BY LEVEL <= 100000) b");
+    const cancelLoop = await cancelOf("DECLARE n PLS_INTEGER := 0; BEGIN LOOP n := MOD(n + 1, 1000); END LOOP; END;");
+    const cancelSleep = await cancelOf("BEGIN DBMS_SESSION.SLEEP(30); END;");
+    record("15.oracle", median(cancelSelect), { samples: cancelSelect, plsqlLoopMedianMs: median(cancelLoop), plsqlLoopSamples: cancelLoop, dbmsSessionSleepMedianMs: median(cancelSleep), dbmsSessionSleepSamples: cancelSleep });
+    // #8.oracle: n/a — a connection reaches one service and schemas live inside it (§6 database-switching table), so there
+    // is no database switch to time; ALTER SESSION SET CURRENT_SCHEMA is a schema change, not #8.
+    results["8.oracle"] = { metric: "Oracle: database switch on an existing connection", unit: "ms", target: 20, value: null, pass: true, notApplicable: "one service per connection; no database switching (§6)" };
+    console.log("  #8.oracle n/a: one service per connection; no database switching (§6)");
     await run(dropAll);
     const cols = Array.from({ length: 14 }, (_, c) => `c${c} VARCHAR2(40)`).join(", ");
     await run(`BEGIN

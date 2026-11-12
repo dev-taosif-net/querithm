@@ -72,6 +72,9 @@ jobs:
           cat self-test.txt
           test "$status" -eq 0
           for m in "monitorJson ok" "monitorHistory ok" "sqlite ok" "arrow ok" "mysql ok" "duckdb ok" "oracle ok"; do grep -q "$m" self-test.txt || { echo "::error::missing '$m'"; exit 1; }; done
+          # D4 S13: Intel macOS lists Oracle with the driver's reason (owner decision O6); every other RID supports it.
+          if [ "${{ matrix.rid }}" = osx-x64 ]; then want="oracle platform unavailable: Oracle's driver"; else want="oracle platform supported"; fi
+          grep -q "$want" self-test.txt || { echo "::error::missing '$want'"; exit 1; }
           echo "${{ matrix.rid }}: trimmed sidecar $(wc -c < "$exe" | tr -d ' ') bytes, self-test ok" | tee -a "$GITHUB_STEP_SUMMARY"
       # L23: the Host suppresses trim warnings (SMO, SqlClient and StreamJsonRpc warn and are rooted instead); this publish
       # shows them and fails when there are more than scripts/trim-warnings-baseline.json lists.

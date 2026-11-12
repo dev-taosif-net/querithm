@@ -231,6 +231,20 @@ try {
   if (oracleOnly) {
     console.log("[step] Oracle profile, PL/SQL, DBMS_OUTPUT, cancel");
     const editorText = (sql) => page.evaluate((s) => window.__bench.setEditorText?.(s), sql);
+    // Waits (up to 30 s) until the sidecar's snapshot of FREEPDB1 has (or no longer has) an object of that exact name, then
+    // a moment for its meta.updated to reach the webview's snapshot store. A DDL's refresh has no fixed duration on Oracle Free.
+    const oracleSnapshotHas = async (profileId, name, present) => {
+      const ok = await page.evaluate(async (id, n, want) => {
+        for (let i = 0; i < 150; i++) {
+          const snap = await window.__bench.rpc("meta.snapshot", { profileId: id, database: "FREEPDB1" }).catch(() => null);
+          if (snap && (snap.objects ?? []).some((o) => o.name === n) === want) return true;
+          await new Promise((r) => setTimeout(r, 200));
+        }
+        return false;
+      }, profileId, name, present);
+      await sleep(300);
+      return ok;
+    };
     const typeSql = async (sql) => {
       await page.click(".monaco-editor .view-lines");
       if (!(await editorText(sql))) {
@@ -410,7 +424,8 @@ try {
       writeFileSync(oraCsv, "id,name,amount,born\n1,Alpha,1.50,2026-10-21\n2,Beta,2.25,2026-10-22\n3,Gamma,,\n");
       await typeSql('DROP TABLE IF EXISTS "smoke_import_ora" PURGE');
       await runAndShowMessages();
-      await sleep(1500); // the DDL's metadata refresh, which the wizard's new-table check reads
+      // The DROP's metadata refresh, which the wizard's new-table check reads (a table left by an earlier run must be gone).
+      if (!(await oracleSnapshotHas(ora.id, "smoke_import_ora", false))) errors.push("oracle: smoke_import_ora never left the snapshot after its DROP");
       await page.keyboard.down("Control"); await page.keyboard.down("Alt"); await page.keyboard.press("I"); await page.keyboard.up("Alt"); await page.keyboard.up("Control");
       await page.waitForFunction(() => [...document.querySelectorAll("button")].some((b) => b.textContent === "Choose file…"), { timeout: 10_000 }).catch(() => errors.push("oracle: import wizard did not open"));
       const [oraChooser] = await Promise.all([
@@ -438,7 +453,9 @@ try {
       console.log("[step] Oracle find usages, rename, schema and data compare");
       await typeSql("CREATE OR REPLACE VIEW smoke_ora_v AS SELECT id, name FROM smoke_ora_t");
       await runAndShowMessages();
-      await sleep(2000); // the DDL's metadata refresh
+      // The DDL's metadata refresh (D4 S13: on a busy fixture it landed ~4 s after the DDL, past the fixed 2 s this step
+      // waited, and find usages then searched a snapshot without the view).
+      if (!(await oracleSnapshotHas(ora.id, "SMOKE_ORA_V", true))) errors.push("oracle: SMOKE_ORA_V never reached the snapshot after its CREATE VIEW");
       await typeSql("SELECT t.name FROM smoke_ora_t t");
       await page.keyboard.press("Escape");
       await page.keyboard.press("Home");

@@ -59,7 +59,10 @@ public sealed class OracleRecoveryTests
         {
             await using var k = admin.CreateCommand();
             k.CommandText = $"ALTER SYSTEM KILL SESSION '{sid},{serial}' IMMEDIATE";
-            await k.ExecuteNonQueryAsync();
+            // ORA-00031 "session marked for kill": the session was busy (here: mid network write of a result) and the server
+            // kills it as soon as it can — still a kill. Seen once in D4 S13's gate run (1 of 4 runs of this class).
+            try { await k.ExecuteNonQueryAsync(); }
+            catch (OracleException e) when (e.Number == 31) { }
         }
         return targets.Count;
     }

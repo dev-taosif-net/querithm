@@ -12,7 +12,8 @@ internal static class EngineSetup
     /// <summary>
     /// A new engine's provider ships hidden until its release gates pass; QUERITHM_DEV_ENGINES or the dev.engines setting
     /// exposes it. SQLite, MySQL / MariaDB and DuckDB left the flag in 0.2.0 (owner decision 2026-11-01, after
-    /// release-smoke passed on every RID). Oracle (Phase D4) stays behind it until D4 S13's release gates pass.
+    /// release-smoke passed on every RID). Oracle (Phase D4) stays behind it: D4 S13's release gates ran on
+    /// 2026-11-12 and the owner kept it hidden until CI release-smoke has passed on every RID.
     /// </summary>
     public static Engine[] BehindFlag => [Engine.Oracle];
 

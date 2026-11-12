@@ -156,6 +156,14 @@ if (args is ["--self-test"])
     }
     catch (Exception ex) { Console.Error.WriteLine($"oracle self-test error: {ex.GetType().Name}: {ex.Message}"); }
     Console.Error.WriteLine($"oracle {(oracleOk ? "ok" : "FAILED")}");
+    // D4 S13 (owner decision O6): where ODP.NET is not supported (Intel macOS) the engine is listed with this reason and its
+    // profiles refuse with it; the app still starts. CI's release-smoke checks the line on every RID.
+    try
+    {
+        var oracleTraits = new Querithm.Providers.Oracle.OracleProvider(Path.Combine(Path.GetTempPath(), $"querithm-self-test-{Environment.ProcessId}")).Traits;
+        Console.Error.WriteLine(oracleTraits.Unavailable is { } why ? $"oracle platform unavailable: {why}" : "oracle platform supported");
+    }
+    catch (Exception ex) { Console.Error.WriteLine($"oracle platform self-test error: {ex.GetType().Name}: {ex.Message}"); oracleOk = false; }
     return dictionary.SqlServer.Count > 0 && dictionary.Postgres.Count > 0 && jsonOk && historyOk && sqliteOk && mysqlOk && arrowOk && duckdbOk && oracleOk ? 0 : 1;
 }
 
