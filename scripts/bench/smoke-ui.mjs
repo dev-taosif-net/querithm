@@ -516,6 +516,16 @@ try {
       await page.keyboard.down("Control"); await page.keyboard.press("W"); await page.keyboard.up("Control");
       await sleep(400);
       await closeDialogs();
+
+      // D4 S12: the activity monitor on the least-privileged app user (no V$ view): the tab opens and says, from the
+      // sidecar, which grant the monitor needs instead of an empty list. The granted levels are OracleMonitorTests'.
+      console.log("[step] Oracle activity monitor (no V$SESSION grant)");
+      await page.evaluate((id) => window.__bench.openMonitor(id), ora.id);
+      await page.waitForFunction(() => document.body.innerText.includes("V_$SESSION"), { timeout: 30_000 })
+        .catch(async () => errors.push(`oracle: the activity monitor did not say which grant it needs: ${(await page.evaluate(() => document.body.innerText)).slice(0, 400)}`));
+      await shot("27o-oracle-monitor-grant");
+      await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.getAttribute("aria-label")?.startsWith("Close Activity"))?.click());
+      await sleep(400);
     }
   } else {
   // (Not re-indented: the full run below is unchanged.)

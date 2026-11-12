@@ -23,7 +23,7 @@ import { notebookOf, useNotebooks } from "../store";
 import { parseNotebook } from "../format";
 import { collectCells, toHtml, toMarkdown } from "../exportNotebook";
 import { ArrowResultSet, ExecutionData, executionData } from "../../results/model";
-import { duckDbShapes, mySqlShapes, sqliteShapes } from "../../results/__tests__/fixtures";
+import { duckDbShapes, mySqlShapes, oracleShapes, sqliteShapes } from "../../results/__tests__/fixtures";
 import { useProfiles } from "../../store/profiles";
 import { useTabs } from "../../store/tabs";
 import type { Engine } from "../../ipc/contract";
@@ -105,5 +105,22 @@ describe("DuckDB", () => {
     expect(md).toContain("| 3 | NULL | NULL |");
     expect(html).toContain("<td>{&#39;a&#39;: 1, &#39;b&#39;: &#39;x&#39;}</td>");
     expect(html).toContain("<td>[1, NULL, 3]</td>");
+  });
+});
+
+describe("Oracle (D4 S12)", () => {
+  it("saves exact NUMBER, BINARY_DOUBLE NaN / -Infinity, a BC DATE, zone, TIMESTAMP(9) and INTERVAL text as the grid shows them; the file stays valid", async () => {
+    const id = notebookWith("oracle", oracleShapes());
+    const out = savedOutput(id); // parseNotebook read it back: NaN and the infinities are text, not invalid JSON numbers
+    expect(out.columns).toEqual(["ID", "AMT", "BIG", "N", "BD", "D", "TZ", "TS9", "IDS", "R", "B", "C3"]);
+    expect(out.rows[0]).toEqual([
+      "1", "1.250", "99999999999999999999999999999999999999", "0.3333333333333333333333333333333333333333", "1.5", "2024-02-29 13:14:15",
+      "2024-07-01 02:30:00.500000 America/New_York", "2024-01-02 03:04:05.123456789", "+01 02:03:04.123456", "0xABCD", "1", "a  ",
+    ]);
+    expect(out.rows[1]).toEqual(["2", "-0.005", "0", "-12.5", "NaN", "-3999-03-04 05:06:07", "2024-07-01 02:30:00.000000 +05:30", null, "-00 00:00:01.000000", null, "0", null]);
+    expect(out.rows[2][4]).toBe("-Infinity");
+    const { md, html } = await exported(id);
+    expect(md).toContain("| 2 | -0.005 | 0 | -12.5 | NaN | -3999-03-04 05:06:07 | 2024-07-01 02:30:00.000000 +05:30 | NULL |");
+    expect(html).toContain("<td>2024-07-01 02:30:00.500000 America/New_York</td>");
   });
 });

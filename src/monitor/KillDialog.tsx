@@ -2,7 +2,7 @@
 // server needs the session id typed, and a high (or unknown) rollback risk adds the rollback checkbox. The sidecar
 // enforces all of it again. Rollback time is never estimated (P9). Enter never submits.
 import { useEffect, useState } from "react";
-import type { ActivityRow, KillMode, KillPreview, KillResult } from "../ipc/contract";
+import type { ActivityRow, Engine, KillMode, KillPreview, KillResult, SessionKey } from "../ipc/contract";
 import { rpc } from "../ipc/client";
 import { Modal } from "../app/Modal";
 import { ServerChip } from "../app/EnvTag";
@@ -20,8 +20,20 @@ export function riskLabel(p: KillPreview | null): string {
   }
 }
 
-export function KillDialog({ model, row, mode, prod, profileId, onClose, onDone }: {
-  model: MonitorModel; row: ActivityRow; mode: KillMode; prod: boolean; profileId?: string; onClose: () => void; onDone?: (r: KillResult) => void;
+/**
+ * How the server names the session: Oracle tells a reused SID apart by its SERIAL# (the first part of the sidecar's
+ * "SERIAL#:LOGON_TIME" identity), which an ALTER SYSTEM KILL SESSION names too; other engines by the id alone.
+ */
+export function sessionLabel(engine: Engine | undefined, key: SessionKey): string {
+  if (engine === "oracle") {
+    const serial = key.instance.split(":")[0];
+    if (/^\d+$/.test(serial)) return `${key.id}, serial# ${serial}`;
+  }
+  return String(key.id);
+}
+
+export function KillDialog({ model, row, mode, prod, profileId, engine, onClose, onDone }: {
+  model: MonitorModel; row: ActivityRow; mode: KillMode; prod: boolean; profileId?: string; engine?: Engine; onClose: () => void; onDone?: (r: KillResult) => void;
 }) {
   const [preview, setPreview] = useState<KillPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -61,7 +73,7 @@ export function KillDialog({ model, row, mode, prod, profileId, onClose, onDone 
   };
 
   const facts: [string, string][] = [
-    ["Session", `${row.key.id}${row.status ? ` · ${escapeForDisplay(row.status)}` : ""}`],
+    ["Session", `${sessionLabel(engine, row.key)}${row.status ? ` · ${escapeForDisplay(row.status)}` : ""}`],
     ["Login", escapeForDisplay(text(row.login))],
     ["Host", escapeForDisplay(text(row.host))],
     ["Program", escapeForDisplay(text(row.program))],
@@ -78,7 +90,7 @@ export function KillDialog({ model, row, mode, prod, profileId, onClose, onDone 
   }
   return (
     <Modal
-      title={terminate ? `Terminate session ${row.key.id}?` : `Cancel the running query of session ${row.key.id}?`}
+      title={terminate ? `Terminate session ${sessionLabel(engine, row.key)}?` : `Cancel the running query of session ${sessionLabel(engine, row.key)}?`}
       subtitle={terminate ? "The session ends; the server rolls back its open transaction." : "Only the running statement is cancelled; the session stays connected."}
       danger
       width={620}

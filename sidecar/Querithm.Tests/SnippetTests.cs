@@ -45,6 +45,7 @@ public class SnippetTests
         Assert.All(all.TakeWhile(s => s.BuiltIn), s => Assert.StartsWith(BuiltInSnippets.IdPrefix, s.Id));
         Assert.Contains(all, s => s.BuiltIn && s.Dialect == Dialect.Tsql);
         Assert.Contains(all, s => s.BuiltIn && s.Dialect == Dialect.Pg);
+        Assert.Contains(all, s => s.BuiltIn && s.Dialect == Dialect.Oracle);
         var b = all.First(s => s.BuiltIn);
         Assert.Equal("snippetReadOnly", Refused(() => Store.Save(b with { Title = "mine" })).Code);
         Assert.Equal("snippetReadOnly", Refused(() => Store.Delete(b.Id)).Code);
@@ -156,5 +157,28 @@ public class SnippetTests
         Assert.Equal(before.Length, (await h.Rpc.SnippetList()).Length);
         Assert.Equal("invalid", Assert.Throws<QuerithmException>(() => { _ = h.Rpc.SnippetSave(new SnippetSaveParams { Snippet = null! }); }).Code);
         Assert.Equal("invalid", Assert.Throws<QuerithmException>(() => { _ = h.Rpc.SnippetDelete(new SnippetRef { Id = "" }); }).Code);
+    }
+    /// <summary>A snippet body as Monaco inserts it when every placeholder keeps its default (test helper, not SQL parsing).</summary>
+    public static string Expanded(string body, IReadOnlyDictionary<string, string>? values = null) =>
+        System.Text.RegularExpressions.Regex.Replace(
+            System.Text.RegularExpressions.Regex.Replace(body, @"\$\{\d+:([^}]*)\}", m => values?.GetValueOrDefault(m.Groups[1].Value) ?? m.Groups[1].Value),
+            @"\$\d+", "").Replace(@"\$", "$");
+
+    /// <summary>D4 S12: each Oracle built-in splits into the statements it shows, PL/SQL units whole with their END;.</summary>
+    [Theory]
+    [InlineData("fetchf", "Sql")]
+    [InlineData("plblock", "PlSql")]
+    [InlineData("forcur", "PlSql")]
+    [InlineData("pkg", "PlSql,PlSql")]
+    [InlineData("mergeinto", "Sql")]
+    public void Oracle_built_ins_split_into_the_statements_they_show(string prefix, string kinds)
+    {
+        var snippet = BuiltInSnippets.All.Single(b => b.Dialect == Dialect.Oracle && b.Prefix == prefix);
+        var text = Expanded(snippet.Body);
+        var statements = Querithm.Intelligence.Oracle.OracleSplitter.Split(text);
+        Assert.Equal(kinds, string.Join(",", statements.Select(st => st.Kind)));
+        foreach (var st in statements.Where(st => st.Kind == Querithm.Intelligence.Oracle.OracleStatementKind.PlSql))
+            Assert.EndsWith(";", text[st.Start..st.End].TrimEnd());
+        Assert.DoesNotContain("${", text);
     }
 }

@@ -111,7 +111,7 @@ export function ActivityTab({ tool }: { tool: ToolTab }) {
         </div>
         {side && <SidePanel model={model} view={side} engine={engine} profileId={profileId} onClose={() => setSide(null)} />}
       </div>
-      {kill && <KillDialog model={model} row={kill.row} mode={kill.mode} prod={profile?.environment === "prod"} profileId={profileId} onClose={() => setKill(null)} />}
+      {kill && <KillDialog model={model} row={kill.row} mode={kill.mode} prod={profile?.environment === "prod"} profileId={profileId} engine={engine} onClose={() => setKill(null)} />}
     </div>
   );
 }

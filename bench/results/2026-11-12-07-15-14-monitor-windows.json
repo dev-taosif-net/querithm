@@ -1,0 +1,69 @@
+{
+  "date": "2026-11-12T07:15:14.7934398Z",
+  "os": "Microsoft Windows 10.0.26200",
+  "cores": 12,
+  "fixture": "scripts/bench/docker/compose.yml (SQL Server 2022, PostgreSQL 16, MySQL 8.4)",
+  "results": {
+    "28-oracle-idle": {
+      "sessions": 101,
+      "serverQueryMs": {
+        "median": 382.7985,
+        "p95": 747.9851,
+        "target": 100
+      },
+      "sidecarProcessingMs": {
+        "median": 0.4935,
+        "p95": 1.4884,
+        "target": 10
+      },
+      "payloadBytesPerTick": {
+        "median": 44284,
+        "max": 61057,
+        "target": 524288
+      },
+      "tickLagMs": {
+        "p95": 16,
+        "max": 16,
+        "target": 200
+      },
+      "ticks": 30,
+      "partsMs": {
+        "sessions": {
+          "median": 95.8725,
+          "p95": 124.5635
+        },
+        "waits": {
+          "median": 10.5514,
+          "p95": 18.5803
+        },
+        "metrics": {
+          "median": 51.7495,
+          "p95": 79.373
+        }
+      },
+      "note": "Oracle Free: PROCESSES = 200, so 100 idle sessions instead of 500"
+    },
+    "31-oracle": {
+      "entries": 262,
+      "fullReadMs": {
+        "median": 26.1102,
+        "p95": 36.0747,
+        "samples": 8,
+        "target": 1500
+      },
+      "deltaAndTop100Ms": {
+        "median": 0.5554,
+        "p95": 1.4461,
+        "target": 20
+      },
+      "note": "V$SQLSTATS read in full every refresh (no incremental cutoff); SQL Server\u0027s full-read target"
+    },
+    "32-oracle": {
+      "sidecarCpuPercent": {
+        "value": 0.3579960489483566,
+        "target": 1,
+        "note": "whole test process, all cores; every pane at 2 s, 100 idle sessions"
+      }
+    }
+  }
+}

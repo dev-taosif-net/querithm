@@ -103,7 +103,7 @@ public static class KillGuard
         if (p.ExpectedStatementStart != null && (p.ExpectedStatementStart.Length is 0 or > 64 || !activity.IsValidStatementStart(p.ExpectedStatementStart)))
             return "Invalid statement start.";
         if (p.Mode == KillMode.CancelRequest && rules.CancelNeedsStatementStart && p.ExpectedStatementStart == null)
-            return "Cancelling on PostgreSQL needs the statement start the dialog showed.";
+            return $"Cancelling on {Sessions.ProfileRules.EngineName(engine)} needs the statement start the dialog showed.";
         if (!Enum.IsDefined(p.Mode)) return "Unknown kill mode.";
         return null;
     }

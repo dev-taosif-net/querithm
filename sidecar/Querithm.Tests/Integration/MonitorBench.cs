@@ -291,6 +291,133 @@ public class MonitorBench
         }
     }
 
+    /// <summary>
+    /// D4 S12: metrics 28, 31 and 32 on the Oracle Free fixture, monitored as SYSTEM. Oracle Free runs with PROCESSES = 200
+    /// (about 90 taken by the instance), so the session list holds 100 idle app-user sessions, not 500 (§14 row 28.oracle).
+    /// 31: 20,000 distinct statements parsed into the shared pool first, then V$SQLSTATS read in full (Oracle has no
+    /// incremental cutoff that would find an aged-out entry). 32: the sidecar's CPU over 60 s with every pane at 2 s.
+    /// </summary>
+    [OptInFact("QUERITHM_BENCH_MONITOR")]
+    public async Task M28_M31_M32_oracle_100_sessions_full_sqlstats_and_cpu()
+    {
+        await using var host = new TestHost(new Querithm.Providers.Oracle.OracleProvider(Directory.CreateTempSubdirectory("qora-bench-").FullName));
+        var profile = await host.Rpc.ProfileSave(new Profile
+        {
+            Id = "", Name = "ora-bench", Engine = Engine.Oracle, Host = "127.0.0.1", Port = OracleIntegrationTests.Port, Auth = AuthKind.Password,
+            Username = "system", DatabaseDefault = OracleIntegrationTests.Service, TlsMode = TlsMode.Disable, TimeoutS = 30,
+        });
+        await host.Rpc.SessionOpen(new SessionOpenParams { ProfileId = profile.Id, Secret = FixtureSecrets.Password("oracle-admin") });
+        var appString = OracleIntegrationTests.ConnectionString(OracleIntegrationTests.AppUser);
+        await using (var fill = new Oracle.ManagedDataAccess.Client.OracleConnection(appString))
+        {
+            await fill.OpenAsync();
+            await using var cmd = fill.CreateCommand();
+            cmd.CommandTimeout = 600;
+            cmd.CommandText = "DECLARE n NUMBER; BEGIN FOR i IN 1 .. 20000 LOOP EXECUTE IMMEDIATE 'SELECT /* q_bench31 */ COUNT(*) FROM dual WHERE ' || i || ' > 0' INTO n; END LOOP; END;";
+            await cmd.ExecuteNonQueryAsync();
+        }
+        var idle = new List<Oracle.ManagedDataAccess.Client.OracleConnection>();
+        try
+        {
+            for (var i = 0; i < 100; i += 10)
+                idle.AddRange(await Task.WhenAll(Enumerable.Range(0, 10).Select(async _ =>
+                {
+                    var c = new Oracle.ManagedDataAccess.Client.OracleConnection(appString);
+                    await c.OpenAsync();
+                    return c;
+                })));
+            var proc = Process.GetCurrentProcess();
+            var m = await host.Rpc.MonitorStart(new MonitorStartParams { ProfileId = profile.Id, IntervalMs = 2_000 });
+            var monitor = host.Services.Monitors.Get(m.MonitorId);
+            await Task.Delay(6_000);
+            var startSeq = monitor.Seq;
+            var cpu0 = proc.TotalProcessorTime;
+            var wall = Stopwatch.StartNew();
+            await Task.Delay(60_000);
+            var cpu = (proc.TotalProcessorTime - cpu0).TotalMilliseconds / wall.Elapsed.TotalMilliseconds / Environment.ProcessorCount * 100;
+            var snaps = host.Notifier.Of<MonitorSnapshot>().Where(x => x.MonitorId == m.MonitorId && x.Sessions != null).ToList();
+            var measured = snaps.Where(x => x.Seq > startSeq).ToList();
+            var opts = Json.Options;
+            long Bytes(MonitorSnapshot x) => JsonSerializer.SerializeToUtf8Bytes(x, opts).Length;
+            var lags = monitor.Scheduler?.RecentLags.Select(x => (double)x).ToList() ?? [];
+            var r = await monitor.InteractiveAsync("bench", async (sess, c, ct) =>
+            {
+                var server = new List<double>();
+                var processing = new List<double>();
+                var store = new TextStore();
+                for (var i = 0; i < 31; i++)
+                {
+                    var sw = Stopwatch.StartNew();
+                    var t = await sess.TickAsync(c, new TickRequest(true, true, true, true, ActivityMonitor.MaxSessions), ct);
+                    server.Add(sw.Elapsed.TotalMilliseconds);
+                    sw.Restart();
+                    var keyed = t.Sessions!.Value!.Select(x => x.TextId != null && t.SessionTexts!.GetValueOrDefault(x.TextId) is { } text ? x with { TextId = store.InternForSession(x.Key, text) } : x).ToArray();
+                    store.Commit(keyed.Select(x => x.TextId).OfType<string>(), keyed.Select(x => x.Key).ToHashSet());
+                    BlockingGraph.Build(keyed);
+                    processing.Add(sw.Elapsed.TotalMilliseconds);
+                }
+                // Profile of the tick's parts, each read alone (the tick runs them one after another).
+                var parts = new Dictionary<string, List<double>> { ["sessions"] = [], ["waits"] = [], ["metrics"] = [] };
+                for (var i = 0; i < 21; i++)
+                    foreach (var (name, req) in new[]
+                    {
+                        ("sessions", new TickRequest(true, false, false, false, ActivityMonitor.MaxSessions)),
+                        ("waits", new TickRequest(false, true, false, false, ActivityMonitor.MaxSessions)),
+                        ("metrics", new TickRequest(false, false, true, false, ActivityMonitor.MaxSessions)),
+                    })
+                    {
+                        var sw = Stopwatch.StartNew();
+                        await sess.TickAsync(c, req, ct);
+                        if (i > 0) parts[name].Add(sw.Elapsed.TotalMilliseconds);
+                    }
+                var full = new List<double>();
+                var delta = new List<double>();
+                var entries = 0;
+                var tracker = new TopQueriesTracker();
+                for (var i = 0; i < 8; i++)
+                {
+                    var sw = Stopwatch.StartNew();
+                    var read = await sess.TopQueriesAsync(c, ct);
+                    full.Add(sw.Elapsed.TotalMilliseconds);
+                    entries = Math.Max(entries, read.Value!.Entries.Length);
+                    sw.Restart();
+                    var (_, top) = tracker.Update(read.Value!, "cpu", false, 100);
+                    delta.Add(sw.Elapsed.TotalMilliseconds);
+                    var keys = top.Select(x => x.Sample!.TextKey).ToList();
+                    if (keys.Count > 0) await sess.TopQueryTextsAsync(c, keys, ct);
+                }
+                return (server, processing, full, delta, entries, parts);
+            }, 600_000);
+            Results["28-oracle-idle"] = new
+            {
+                sessions = snaps.First().Sessions!.Length,
+                serverQueryMs = new { median = P(r.server, 0.5), p95 = P(r.server, 0.95), target = 100 },
+                sidecarProcessingMs = new { median = P(r.processing.Skip(1), 0.5), p95 = P(r.processing.Skip(1), 0.95), target = 10 },
+                payloadBytesPerTick = new { median = P(measured.Select(x => (double)Bytes(x)), 0.5), max = measured.Max(Bytes), target = 512 * 1024 },
+                tickLagMs = new { p95 = P(lags, 0.95), max = lags.Count > 0 ? lags.Max() : 0, target = 200 },
+                ticks = measured.Count,
+                partsMs = r.parts.ToDictionary(kv => kv.Key, kv => new { median = P(kv.Value, 0.5), p95 = P(kv.Value, 0.95) }),
+                note = "Oracle Free: PROCESSES = 200, so 100 idle sessions instead of 500",
+            };
+            Results["31-oracle"] = new
+            {
+                // Oracle Free's shared pool keeps only part of the 20,000 parsed statements: the read is over what it keeps.
+                entries = r.entries,
+                fullReadMs = new { median = P(r.full, 0.5), p95 = P(r.full, 0.95), samples = r.full.Count, target = 1_500 },
+                deltaAndTop100Ms = new { median = P(r.delta.Skip(1), 0.5), p95 = P(r.delta.Skip(1), 0.95), target = 20 },
+                note = "V$SQLSTATS read in full every refresh (no incremental cutoff); SQL Server's full-read target",
+            };
+            Results["32-oracle"] = new { sidecarCpuPercent = new { value = cpu, target = 1, note = "whole test process, all cores; every pane at 2 s, 100 idle sessions" } };
+            Save();
+            Assert.True(snaps.First().Sessions!.Length >= 100);
+            Assert.True(r.entries > 0, "V$SQLSTATS read no entry");
+        }
+        finally
+        {
+            foreach (var c in idle) await c.DisposeAsync();
+        }
+    }
+
     [OptInFact("QUERITHM_BENCH_MONITOR")]
     public void M29_history_of_10_minutes_at_2_s_with_500_sessions_stays_under_50MB_and_scrubs_fast()
     {

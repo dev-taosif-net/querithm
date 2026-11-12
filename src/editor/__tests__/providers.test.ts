@@ -639,6 +639,19 @@ describe("diagnostics", () => {
     expect(fake.monaco.editor.setModelMarkers).toHaveBeenCalledWith(m, "querithm", []);
   });
 
+  it("Oracle has none either (D4 S12, as PostgreSQL): the server's errors mark their line and column after a run instead", async () => {
+    vi.useFakeTimers();
+    useProfiles.setState({ profiles: [{ id: "ora", name: "Ora", engine: "oracle", username: "querithm_app", environment: "dev" } as never] });
+    const m = new FakeModel("SELEC 1 FROM dual", "oracle", { toString: () => "u://oradiag" }) as FakeModel & { tabId: string };
+    m.tabId = "oradiag";
+    useTabs.setState({ tabs: { ...useTabs.getState().tabs, oradiag: { id: "oradiag", title: "q", profileId: "ora", database: "FREEPDB1" } as never } });
+    fake.monaco.editor.setModelMarkers.mockClear();
+    notify(m.tabId, m);
+    await vi.advanceTimersByTimeAsync(310);
+    expect(rpc).not.toHaveBeenCalled();
+    expect(fake.monaco.editor.setModelMarkers).toHaveBeenCalledWith(m, "querithm", []);
+  });
+
   it("drops results for a stale version, a disposed model, and sidecar errors", async () => {
     vi.useFakeTimers();
     const m = doc("tsql", "select 1");

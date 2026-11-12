@@ -66,7 +66,7 @@ public sealed class OracleProvider : IDbProvider
     public IDataCompareDialect? DataCompare { get; } = new OracleDataCompare();
     /// <summary>Find usages and rename since D4 S11, on tokens.</summary>
     public IReferenceFinder? References { get; } = new OracleReferenceFinder();
-    /// <summary>Only the connection identity so far (§6 rule 7); the monitor itself is refused until D4 S12.</summary>
+    /// <summary>The connection identity (§6 rule 7, D4 S03) and the activity monitor (D4 S12) from the V$ views the account may read.</summary>
     public IActivityProvider? Activity { get; } = new OracleActivity();
     public ITransactionControl Transactions { get; } = new OracleTransactions();
 
@@ -100,7 +100,8 @@ public sealed class OracleProvider : IDbProvider
         Feature.SchemaCompare or Feature.SchemaCompareApply => null,
         Feature.DataCompare or Feature.DataCompareApply => null,
         Feature.References => null,
-        Feature.Monitor => OracleActivity.MonitorNotYet,
+        // D4 S12: implemented where the account may read V$SESSION; the monitor stops with the grant it needs otherwise.
+        Feature.Monitor => null,
         _ => "Not available for Oracle yet.",
     };
 
@@ -120,7 +121,9 @@ public sealed class OracleProvider : IDbProvider
     static readonly ConditionalWeakTable<DbConnection, ProductInfo> Products = new();
 
     /// <summary>Read once at open (<see cref="ReadProductAsync"/>); the driver's handshake version until then.</summary>
-    public ProductInfo Product(DbConnection connection) =>
+    public ProductInfo Product(DbConnection connection) => ProductOf(connection);
+
+    internal static ProductInfo ProductOf(DbConnection connection) =>
         Products.TryGetValue(connection, out var p) ? p : new ProductInfo { Name = "Oracle", Version = CleanVersion(connection.ServerVersion) };
 
     public ConnectionLifetime LifetimeFor(Profile profile) => ConnectionLifetime.Pooled;

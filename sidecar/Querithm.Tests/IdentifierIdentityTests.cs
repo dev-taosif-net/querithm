@@ -89,6 +89,7 @@ public class IdentifierIdentityTests
         Assert.Equal("unsupported", Assert.Throws<QuerithmException>(() => MonitorRules.For(unknown)).Code);
         Assert.NotNull(MonitorRules.For(Engine.Mssql));
         Assert.NotNull(MonitorRules.For(Engine.Pg));
+        Assert.True(MonitorRules.For(Engine.Oracle).CancelNeedsStatementStart); // D4 S12: CANCEL SQL names the execution
         Assert.False(WaitDictionary.Default.Info(unknown, "LCK_M_X").Known); // never another engine's descriptions
         Assert.True(WaitDictionary.Default.Info(Engine.Mssql, "LCK_M_X").Known);
     }

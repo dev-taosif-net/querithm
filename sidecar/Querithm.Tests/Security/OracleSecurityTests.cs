@@ -253,4 +253,47 @@ public sealed class OracleSecurityTests
         Assert.Equal("ALTER TABLE \"APP\".\"T\" RENAME COLUMN \"a b\" TO \"DROP\";", d.RenameColumn(t with { Name = "T" }, "a b", "DROP"));
         Assert.Throws<ArgumentException>(() => new OracleReferenceFinder().Rename("x", "y\" --"));
     }
+    /// <summary>
+    /// D4 S12, §13 rule 7 (monitor kills): the terminate and cancel blocks bind the identity and build ALTER SYSTEM only from the
+    /// V$SESSION row that still matches it; an identity that is not "SERIAL#:YYYYMMDDHH24MISS" binds nothing.
+    /// </summary>
+    [Fact]
+    public void Oracle_kills_are_built_on_the_server_from_the_verified_session_row()
+    {
+        foreach (var sql in new[] { OracleActivitySession.KillSql, OracleActivitySession.CancelSql })
+        {
+            Assert.Contains("s.SID = :sid AND s.SERIAL# = :serial AND s.LOGON_TIME = TO_DATE(:logon, 'YYYYMMDDHH24MISS')", sql);
+            var alter = sql[sql.IndexOf("EXECUTE IMMEDIATE", StringComparison.Ordinal)..sql.IndexOf(":p_done := 1", StringComparison.Ordinal)];
+            // Only the block's own variables, read from V$SESSION, reach the statement text: no bind, no literal from outside.
+            Assert.DoesNotContain(":", alter.Replace("TO_CHAR(", "").Replace("'TM9'", ""));
+            Assert.Contains("v_sid", alter);
+            Assert.Contains("v_serial", alter);
+        }
+        Assert.Contains("s.SQL_ID = :sqlid AND s.SQL_EXEC_ID = :execid", OracleActivitySession.CancelSql);
+        Assert.Contains("|| v_sql ||", OracleActivitySession.CancelSql);
+
+        foreach (var bad in new[] { "1:2026' OR 1=1 --", "1:99999999999999", "1:20261340000000", "-1:20261112061739", "1:2026111206173", "" })
+        {
+            using var cmd = new Oracle.ManagedDataAccess.Client.OracleCommand();
+            Assert.False(OracleActivitySession.BindIdentity(cmd, new SessionKey { Id = 66, Instance = bad }), bad);
+            Assert.Empty(cmd.Parameters);
+        }
+        using (var cmd = new Oracle.ManagedDataAccess.Client.OracleCommand())
+            Assert.False(OracleActivitySession.BindIdentity(cmd, new SessionKey { Id = 0, Instance = "441:20261112061739" }));
+        using (var ok = new Oracle.ManagedDataAccess.Client.OracleCommand())
+        {
+            Assert.True(OracleActivitySession.BindIdentity(ok, new SessionKey { Id = 66, Instance = "441:20261112061739" }));
+            Assert.Equal((66L, 441L, "20261112061739"), ((long)ok.Parameters["sid"].Value, (long)ok.Parameters["serial"].Value, (string)ok.Parameters["logon"].Value));
+        }
+    }
+
+    /// <summary>D4 S12: the probe's dynamic SQL names only its own constant view list.</summary>
+    [Fact]
+    public void Oracle_monitor_probe_runs_only_its_own_view_names()
+    {
+        var probe = OracleActivity.ProbeSql;
+        Assert.DoesNotContain("{", probe);
+        foreach (var line in probe.Split('\n').Where(l => l.Contains("can('", StringComparison.Ordinal)))
+            Assert.Matches(@"can\('V\$[A-Z_]+'\)", line);
+    }
 }

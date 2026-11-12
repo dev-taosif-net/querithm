@@ -1,5 +1,6 @@
 // Chart data (Phase C1): aggregation, binning and down-sampling of result columns. Pure functions over typed arrays,
 // run in chartData.worker.ts so a 1M-row result is never walked on the main thread.
+import { isoYear } from "../results/model";
 import { DEFAULT_BINS, MAX_BINS, MAX_SCATTER_SERIES, type ChartAgg, type ChartSpec } from "./chartSpec";
 
 /** x values: numbers (NaN = NULL; dates and timestamps as epoch ms) or labels (null = NULL). */
@@ -16,6 +17,8 @@ export interface ChartInput {
   series?: (string | null)[];
   /** A value lost precision on the way to a double (bigint or decimal beyond 2^53). */
   lossy: boolean;
+  /** NaN / ±Infinity values extracted as NaN (not drawn); NULL-like in the arrays, told apart in the notes. */
+  nonFinite?: number;
 }
 
 /** "date": temporal values that are all midnights; "category": labels, positions are their index. */
@@ -38,6 +41,8 @@ export interface ChartMeta {
   duplicates: number;
   /** Donut: categories left out because their value was zero or negative. */
   negativeSkipped: number;
+  /** Values that were NaN or ±Infinity in the plotted columns, not drawn. */
+  nonFinite: number;
 }
 
 export interface SeriesData {
@@ -74,7 +79,7 @@ export const OTHER = "Other";
 const DAY = 86_400_000;
 
 export function emptyMeta(rows = 0, lossy = false): ChartMeta {
-  return { rows, plotted: 0, nullsSkipped: 0, lossy, sampled: null, foldedCategories: 0, foldedSeries: 0, duplicates: 0, negativeSkipped: 0 };
+  return { rows, plotted: 0, nullsSkipped: 0, lossy, sampled: null, foldedCategories: 0, foldedSeries: 0, duplicates: 0, negativeSkipped: 0, nonFinite: 0 };
 }
 
 function xKindOf(x: XInput, positions?: ArrayLike<number>): XKind {
@@ -98,7 +103,7 @@ export function formatX(v: number, kind: XKind): string {
   if (kind === "date" || kind === "time") {
     const d = new Date(v);
     if (Number.isNaN(d.getTime())) return String(v);
-    const day = `${d.getUTCFullYear().toString().padStart(4, "0")}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+    const day = `${isoYear(d.getUTCFullYear())}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
     if (kind === "date") return day;
     const ms = d.getUTCMilliseconds();
     return `${day} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}${ms ? `.${pad(ms, 3)}` : ""}`;
@@ -579,9 +584,11 @@ function xyChart(spec: ChartSpec, input: ChartInput, xName: string, maxPoints: n
 export function computeChart(spec: ChartSpec, input: ChartInput, maxPoints = MAX_POINTS): ChartData {
   const xName = spec.x ?? "";
   if (!input.rows) return { shape: "empty", reason: "The result has no rows.", meta: emptyMeta(0, input.lossy) };
-  if (spec.kind === "histogram") return histogram(spec, input, xName);
-  if (spec.kind === "bar" || spec.kind === "pie") return categoryChart(spec, input, xName);
-  return xyChart(spec, input, xName, Math.max(MIN_POINTS, Math.min(MAX_POINTS, Math.round(maxPoints))));
+  const data = spec.kind === "histogram" ? histogram(spec, input, xName)
+    : spec.kind === "bar" || spec.kind === "pie" ? categoryChart(spec, input, xName)
+    : xyChart(spec, input, xName, Math.max(MIN_POINTS, Math.min(MAX_POINTS, Math.round(maxPoints))));
+  data.meta.nonFinite = input.nonFinite ?? 0;
+  return data;
 }
 
 /** The plotted (aggregated) data as CSV: the x column, then one column per series. */

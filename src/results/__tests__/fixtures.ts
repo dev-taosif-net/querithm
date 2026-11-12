@@ -1,6 +1,6 @@
 // Shared builders for component/action tests: Arrow result sets, edit info and execution views.
 import {
-  Binary, Bool, Decimal, Field, Int8, Int32, Int64, makeData, RecordBatch, Schema, Struct, TimestampMicrosecond, Uint8, Utf8, vectorFromArray, type Data, type DataType,
+  Binary, Bool, Decimal, Field, Float64, Int8, Int32, Int64, makeData, RecordBatch, Schema, Struct, TimestampMicrosecond, Uint8, Utf8, vectorFromArray, type Data, type DataType,
 } from "apache-arrow";
 import type { ResultEditInfo } from "../../ipc/contract";
 import type { ExecutionView } from "../../store/executions";
@@ -166,5 +166,37 @@ export function duckDbShapes(): RecordBatch {
     { name: "tz", type: new TimestampMicrosecond("UTC"), values: [], data: timestampData([1_793_420_430_123_456n, null, 0n], "UTC"), meta: field("TimestampTz", 9) },
     { name: "bl", type: new Binary(), values: [new Uint8Array([0xaa, 0xbb]), null, new Uint8Array([])], meta: field("Blob", 10) },
     { name: "b", type: new Bool(), values: [true, false, null], meta: field("Boolean", 11) },
+  ]);
+}
+
+/** Microseconds since 1970 of a UTC calendar time; a year ≤ 0 is astronomical (0 = 1 BC), as the sidecar sends BC dates. */
+export const utcMicros = (y: number, mo: number, d: number, h = 0, mi = 0, s = 0) => {
+  const t = new Date(0);
+  t.setUTCFullYear(y, mo - 1, d);
+  t.setUTCHours(h, mi, s, 0);
+  return BigInt(t.getTime()) * 1000n;
+};
+
+/**
+ * Oracle (D4 S04 OracleTypes, asserted by `Oracle_types_arrive_typed_or_as_exact_text`): NUMBER(p,s) within 38 digits as
+ * Decimal128(p,s); unconstrained NUMBER / FLOAT as exact numeric text; BINARY_DOUBLE as Float64 (NaN and ±Infinity are
+ * values); DATE and TIMESTAMP(0–6) as Timestamp<µs> without a zone (a BC date in ISO numbering); TIMESTAMP(7–9), TIMESTAMP
+ * WITH TIME ZONE (region name or offset) and INTERVAL as the sidecar's exact text; RAW as Binary; BOOLEAN as Bool; CHAR(3)
+ * blank-padded. Oracle has no empty string: '' arrives as NULL.
+ */
+export function oracleShapes(): RecordBatch {
+  return makeBatch([
+    { name: "ID", type: new Decimal(0, 10, 128), values: [], data: decimalData([1n, 2n, 3n], 0, 10), meta: field("NUMBER(10)", 0) },
+    { name: "AMT", type: new Decimal(3, 12, 128), values: [], data: decimalData([1250n, -5n, null], 3, 12), meta: field("NUMBER(12,3)", 1) },
+    { name: "BIG", type: new Decimal(0, 38, 128), values: [], data: decimalData([99999999999999999999999999999999999999n, 0n, null], 0, 38), meta: field("NUMBER(38)", 2) },
+    { name: "N", type: new Utf8(), values: ["0.3333333333333333333333333333333333333333", "-12.5", null], meta: field("NUMBER", 3, NUMERIC) },
+    { name: "BD", type: new Float64(), values: [1.5, NaN, -Infinity], meta: field("BINARY_DOUBLE", 4) },
+    { name: "D", type: new TimestampMicrosecond(), values: [], data: timestampData([utcMicros(2024, 2, 29, 13, 14, 15), utcMicros(-3999, 3, 4, 5, 6, 7), null]), meta: field("DATE", 5) },
+    { name: "TZ", type: new Utf8(), values: ["2024-07-01 02:30:00.500000 America/New_York", "2024-07-01 02:30:00.000000 +05:30", null], meta: field("TIMESTAMP(6) WITH TIME ZONE", 6) },
+    { name: "TS9", type: new Utf8(), values: ["2024-01-02 03:04:05.123456789", null, "1970-01-01 00:00:00.000000000"], meta: field("TIMESTAMP(9)", 7) },
+    { name: "IDS", type: new Utf8(), values: ["+01 02:03:04.123456", "-00 00:00:01.000000", null], meta: field("INTERVAL DAY(2) TO SECOND(6)", 8) },
+    { name: "R", type: new Binary(), values: [new Uint8Array([0xab, 0xcd]), null, new Uint8Array([0x01])], meta: field("RAW(2)", 9) },
+    { name: "B", type: new Bool(), values: [true, false, null], meta: field("BOOLEAN", 10) },
+    { name: "C3", type: new Utf8(), values: ["a  ", null, "abc"], meta: field("CHAR(3)", 11) },
   ]);
 }

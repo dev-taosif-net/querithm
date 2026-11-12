@@ -80,3 +80,23 @@ export function duckDbSnapshot(database = "sales"): SchemaSnapshot {
     fks: [fk("order_customer_id_fkey", 22, 21, [["customer_id", "id"]])],
   };
 }
+
+/**
+ * Oracle (D4 S12): the login schema APP (names folded to upper case) — CUSTOMER ← "ORDER" (a reserved word) ← ORDERS, and
+ * "orders", created quoted in lower case beside ORDERS; HR.REGION in another schema; a view. The database is the service.
+ */
+export function oracleSnapshot(database = "FREEPDB1"): SchemaSnapshot {
+  const num = (p: number) => ({ type: `NUMBER(${p})` });
+  return {
+    profileId: "p", database, status: "fresh", refreshedAt: 0, serverVersion: "Oracle AI Database 26ai Free 23.26.0.0.0", error: null,
+    objects: [
+      table(31, "CUSTOMER", [col("ID", { ...num(10), pk: true }), col("NAME", { type: "VARCHAR2(40)" })], "APP"),
+      table(32, "ORDER", [col("ID", { ...num(10), pk: true }), col("CUSTOMER_ID", { ...num(10), nullable: true })], "APP"),
+      table(33, "orders", [col("ID", { ...num(10), pk: true })], "APP"),
+      table(34, "ORDERS", [col("ID", { ...num(10), pk: true }), col("ORDER_ID", { ...num(10), nullable: true }), col("AMOUNT", { type: "NUMBER(12,2)", nullable: true })], "APP"),
+      table(35, "REGION", [col("CODE", { type: "VARCHAR2(3)", pk: true })], "HR"),
+      view(36, "V_ORDERS", "APP"),
+    ],
+    fks: [fk("ORDER_CUSTOMER_FK", 32, 31, [["CUSTOMER_ID", "ID"]]), fk("ORDERS_ORDER_FK", 34, 32, [["ORDER_ID", "ID"]])],
+  };
+}

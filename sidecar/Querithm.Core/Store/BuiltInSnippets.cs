@@ -28,5 +28,18 @@ public static class BuiltInSnippets
         S(Dialect.Pg, "plfn", "CREATE OR REPLACE FUNCTION (PL/pgSQL)",
             "CREATE OR REPLACE FUNCTION ${1:public.fn_name}(${2:p_id int})\nRETURNS ${3:int}\nLANGUAGE plpgsql AS \\$\\$\nDECLARE\n    ${4:v_result int};\nBEGIN\n    $0\n    RETURN ${5:v_result};\nEND\n\\$\\$;", "ddl"),
         S(Dialect.Pg, "doblock", "DO block", "DO \\$\\$\nBEGIN\n    $0\nEND\n\\$\\$;", "plpgsql"),
+        // D4 S12: Oracle. PL/SQL units end with a "/" line (SQL*Plus convention, which the splitter reads), so a snippet
+        // followed by more statements still runs as written.
+        S(Dialect.Oracle, "fetchf", "SELECT … FETCH FIRST", "SELECT ${1:*}\nFROM ${2:table_name}\nWHERE ${3:1 = 1}\nFETCH FIRST ${4:100} ROWS ONLY;$0", "query"),
+        S(Dialect.Oracle, "plblock", "Anonymous PL/SQL block",
+            "DECLARE\n    ${1:v_count NUMBER};\nBEGIN\n    $0\n    NULL;\nEXCEPTION\n    WHEN OTHERS THEN\n        ROLLBACK;\n        RAISE;\nEND;\n/", "plsql"),
+        S(Dialect.Oracle, "forcur", "Cursor FOR loop",
+            "BEGIN\n    FOR ${1:r} IN (SELECT ${2:column_name} FROM ${3:table_name} WHERE ${4:1 = 1}) LOOP\n        DBMS_OUTPUT.PUT_LINE(${1:r}.${2:column_name});$0\n    END LOOP;\nEND;\n/", "plsql"),
+        S(Dialect.Oracle, "pkg", "Package specification and body",
+            "CREATE OR REPLACE PACKAGE ${1:pkg_name} AS\n    PROCEDURE ${2:do_work}(${3:p_id IN NUMBER});\nEND ${1:pkg_name};\n/\n"
+            + "CREATE OR REPLACE PACKAGE BODY ${1:pkg_name} AS\n    PROCEDURE ${2:do_work}(${3:p_id IN NUMBER}) IS\n    BEGIN\n        $0\n        NULL;\n    END ${2:do_work};\nEND ${1:pkg_name};\n/", "ddl"),
+        S(Dialect.Oracle, "mergeinto", "MERGE (insert or update)",
+            "MERGE INTO ${1:table_name} t\nUSING (SELECT ${2:1} AS ${3:id}, ${4:'x'} AS ${5:col} FROM dual) s\nON (t.${3:id} = s.${3:id})\n"
+            + "WHEN MATCHED THEN UPDATE SET t.${5:col} = s.${5:col}\nWHEN NOT MATCHED THEN INSERT (${3:id}, ${5:col}) VALUES (s.${3:id}, s.${5:col});$0", "dml"),
     ];
 }

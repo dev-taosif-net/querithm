@@ -103,6 +103,12 @@ export function numericTextKey(text: string): string {
 
 const pad = (n: number, w = 2) => String(n).padStart(w, "0");
 
+/**
+ * An ISO 8601 year: four digits, with a sign before year 0 (astronomical numbering, 0 = 1 BC, which is how the sidecar
+ * sends Oracle's BC dates). Without it year -45 printed as "0-45".
+ */
+export const isoYear = (y: number) => (y < 0 ? `-${String(-y).padStart(4, "0")}` : String(y).padStart(4, "0"));
+
 function formatMicros(us: bigint, offsetMinutes: number | null, tz: string | null): string {
   const shifted = offsetMinutes != null ? us + BigInt(offsetMinutes) * 60_000_000n : us;
   let ms = Number(shifted / 1000n);
@@ -112,7 +118,7 @@ function formatMicros(us: bigint, offsetMinutes: number | null, tz: string | nul
     ms -= 1;
   }
   const d = new Date(ms);
-  const base = `${d.getUTCFullYear().toString().padStart(4, "0")}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+  const base = `${isoYear(d.getUTCFullYear())}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
   let frac = `${pad(d.getUTCMilliseconds(), 3)}${micro ? pad(micro, 3) : ""}`;
   frac = frac.replace(/0+$/, "");
   const fraction = frac ? `.${frac}` : "";
@@ -525,7 +531,7 @@ export function formatValue(col: ColumnModel, vec: Vector, i: number, row: Vecto
     }
     case Type.Date: {
       const d = new Date(vec.get(i) as number);
-      return `${d.getUTCFullYear().toString().padStart(4, "0")}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+      return `${isoYear(d.getUTCFullYear())}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
     }
     case Type.Time:
       return formatTimeMicros(vec.get(i) as bigint);

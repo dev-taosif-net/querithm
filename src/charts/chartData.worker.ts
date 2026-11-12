@@ -29,6 +29,7 @@ interface Held {
   labels: (string | null)[][];
   temporal: boolean;
   lossy: boolean;
+  nonFinite: number;
   /** Concatenations, dropped when a batch arrives. */
   numAll?: Float64Array;
   labelAll?: (string | null)[];
@@ -41,7 +42,7 @@ export class ChartColumns {
 
   reset(columns: WantedColumn[]) {
     this.rows = 0;
-    this.held = new Map(columns.map((w) => [w.name, { want: w, nums: [], labels: [], temporal: false, lossy: false }]));
+    this.held = new Map(columns.map((w) => [w.name, { want: w, nums: [], labels: [], temporal: false, lossy: false, nonFinite: 0 }]));
   }
 
   append(ipc: Uint8Array) {
@@ -58,6 +59,7 @@ export class ChartColumns {
           h.nums.push(c.values);
           h.temporal ||= c.temporal;
           h.lossy ||= c.lossy;
+          h.nonFinite += c.nonFinite;
         }
         if (h.want.label) h.labels.push(labelChunk(vec, col, vectors));
         h.numAll = undefined;
@@ -100,13 +102,16 @@ export class ChartColumns {
     const x = this.held.get(spec.x ?? "");
     if (!x) throw new Error("the x column was not extracted");
     const ys = spec.kind === "histogram" ? [] : spec.y.map((n) => ({ name: n, values: this.nums(n) }));
-    const lossy = [x, ...spec.y.map((n) => this.held.get(n))].some((h) => !!h?.lossy);
+    const used = [x, ...(spec.kind === "histogram" ? [] : spec.y.map((n) => this.held.get(n)))];
+    const lossy = used.some((h) => !!h?.lossy);
+    const nonFinite = used.reduce((n, h) => n + (h?.want.num ? h.nonFinite : 0), 0);
     return {
       rows: this.rows,
       x: x.want.num ? { type: "num", values: this.nums(x.want.name), temporal: x.temporal } : { type: "cat", values: this.labels(x.want.name) },
       ys,
       series: spec.series && spec.kind !== "histogram" ? this.labels(spec.series) : undefined,
       lossy,
+      nonFinite,
     };
   }
 }

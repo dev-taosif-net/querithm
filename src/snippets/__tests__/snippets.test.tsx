@@ -121,12 +121,42 @@ describe("snippet store", () => {
     expect(snippetsFor(LIB, "sqlite").map((s) => s.prefix)).toEqual(["audit"]);
     expect(snippetsFor([...LIB, blankSnippet({ id: "m1", prefix: "myonly", dialect: "mySql" })], "mySql").map((s) => s.prefix)).toEqual(["audit", "myonly"]);
     expect(snippetsFor([...LIB, blankSnippet({ id: "d1", prefix: "duckonly", dialect: "duckDb" })], "duckDb").map((s) => s.prefix)).toEqual(["audit", "duckonly"]);
+    expect(snippetsFor([...LIB, blankSnippet({ id: "o1", prefix: "plblock", dialect: "oracle" })], "oracle").map((s) => s.prefix)).toEqual(["audit", "plblock"]);
   });
 
   it("the snippet editor offers every dialect, the Phase D ones included", () => {
     render(<SnippetEditor snippet={blankSnippet({ prefix: "x" })} close={() => {}} />);
     const options = [...document.querySelectorAll("option")].map((o) => o.getAttribute("value"));
-    expect(options).toEqual(expect.arrayContaining(["tsql", "pg", "sqlite", "mySql", "duckDb"]));
+    expect(options).toEqual(expect.arrayContaining(["tsql", "pg", "sqlite", "mySql", "duckDb", "oracle"]));
+  });
+
+  it("a hidden engine's dialect is not offered and its built-ins stay out of All dialects (D4 S12)", async () => {
+    const engines = (oracle: boolean) => ["mssql", "pg", "sqlite", "mySql", "duckDb", "oracle"].map((engine) => ({ engine, exposed: engine !== "oracle" || oracle }));
+    const ora = sn({ id: "builtin:oracle:plblock", prefix: "plblock", title: "Anonymous PL/SQL block", dialect: "oracle", builtIn: true });
+    for (const exposed of [false, true]) {
+      h.rpc.mockImplementation(async (m) => (m === "snippet.list" ? [...LIB, ora] : m === "system.engines" ? engines(exposed) : undefined));
+      useSnippets.setState({ snippets: [], loaded: false, error: undefined, failedAt: undefined });
+      render(<SnippetsPanel close={vi.fn()} />);
+      fireEvent.change(screen.getByLabelText("Dialect"), { target: { value: "all" } });
+      expect(await screen.findByText("audit")).toBeTruthy();
+      await waitFor(() => expect(h.rpc).toHaveBeenCalledWith("system.engines"));
+      const values = () => [...screen.getByLabelText("Dialect").querySelectorAll("option")].map((o) => o.getAttribute("value"));
+      if (exposed) {
+        expect(await screen.findByText("plblock")).toBeTruthy();
+        expect(values()).toContain("oracle");
+      } else {
+        await waitFor(() => expect(values()).not.toContain("oracle"));
+        expect(screen.queryByText("plblock")).toBeNull();
+        expect(values()).toEqual(expect.arrayContaining(["all", "tsql", "pg", "sqlite", "mySql", "duckDb"]));
+      }
+      cleanup();
+      h.rpc.mockReset();
+    }
+    // Editing a snippet of a hidden dialect still shows its dialect.
+    h.rpc.mockImplementation(async (m) => (m === "system.engines" ? engines(false) : undefined));
+    render(<SnippetEditor snippet={blankSnippet({ prefix: "x", dialect: "oracle" })} close={() => {}} />);
+    await waitFor(() => expect(h.rpc).toHaveBeenCalledWith("system.engines"));
+    expect([...screen.getByLabelText("Snippet dialect").querySelectorAll("option")].map((o) => o.getAttribute("value"))).toContain("oracle");
   });
 });
 
@@ -153,14 +183,15 @@ describe("snippet editor", () => {
 
   it("shows saving feedback, prevents a duplicate save, and permits retry after failure", async () => {
     let reject!: (error: Error) => void;
-    h.rpc.mockImplementation(() => new Promise((_, fail) => { reject = fail; }));
+    // The editor also asks which engines are offered (D4 S12); only the save is held open.
+    h.rpc.mockImplementation((m) => (m === "system.engines" ? Promise.resolve(undefined) : new Promise((_, fail) => { reject = fail; })));
     render(<SnippetEditor snippet={blankSnippet({ title: "x", prefix: "x", body: "SELECT 1;" })} close={() => {}} />);
     const save = screen.getByRole("button", { name: "Save" });
     fireEvent.click(save);
     expect(save.getAttribute("aria-busy")).toBe("true");
     expect(save.textContent).toContain("Saving…");
     fireEvent.click(save);
-    expect(h.rpc).toHaveBeenCalledTimes(1);
+    expect(h.rpc.mock.calls.filter((c) => c[0] === "snippet.save")).toHaveLength(1);
     reject(new Error("Could not save"));
     await screen.findByRole("alert");
     expect((save as HTMLButtonElement).disabled).toBe(false);
@@ -237,7 +268,7 @@ describe("snippets panel", () => {
     h.rpc.mockResolvedValue(LIB);
     render(<SnippetsPanel close={vi.fn()} />);
     expect(await screen.findByText("audit")).toBeTruthy();
-    expect(h.rpc).toHaveBeenCalledTimes(2);
+    expect(h.rpc.mock.calls.filter((c) => c[0] === "snippet.list")).toHaveLength(2); // the panel also asks which engines are offered
   });
 });
 

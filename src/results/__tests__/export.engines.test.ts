@@ -3,7 +3,7 @@
 // decimals, DuckDB's literal text) must leave exactly as the grid shows them.
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { Float32, Table, tableToIPC, type RecordBatch } from "apache-arrow";
-import { duckDbShapes, makeBatch, mySqlShapes, sqliteShapes } from "./fixtures";
+import { duckDbShapes, makeBatch, mySqlShapes, oracleShapes, sqliteShapes } from "./fixtures";
 import { unzip } from "./zip";
 
 type Handler = (e: { data: unknown }) => Promise<void>;
@@ -122,6 +122,45 @@ describe("DuckDB", () => {
     expect(s).toContain(inline("G2", "{'a': 1, 'b': 'x'}"));
     expect(s).toContain(inline("J2", "2026-10-31 04:20:30.123456 +00:00"));
     expect(s).toContain(inline("K2", "0xAABB"));
+  });
+});
+
+describe("Oracle (D4 S12)", () => {
+  it("csv: exact NUMBER(p,s), NUMBER(38) and unconstrained NUMBER, BINARY_DOUBLE NaN / -Infinity, a BC DATE, zone, TIMESTAMP(9) and INTERVAL text", async () => {
+    expect((await text("csv", oracleShapes())).split("\r\n")).toEqual([
+      "ID,AMT,BIG,N,BD,D,TZ,TS9,IDS,R,B,C3",
+      "1,1.250,99999999999999999999999999999999999999,0.3333333333333333333333333333333333333333,1.5,2024-02-29 13:14:15,2024-07-01 02:30:00.500000 America/New_York,2024-01-02 03:04:05.123456789,+01 02:03:04.123456,0xABCD,1,a  ",
+      "2,-0.005,0,-12.5,NaN,-3999-03-04 05:06:07,2024-07-01 02:30:00.000000 +05:30,,-00 00:00:01.000000,,0,",
+      "3,,,,-Infinity,,,1970-01-01 00:00:00.000000000,,0x01,,abc",
+      "",
+    ]);
+    expect((await text("tsv", oracleShapes())).split("\r\n")[2].split("\t").slice(4, 6)).toEqual(["NaN", "-3999-03-04 05:06:07"]);
+  });
+
+  it("json stays valid: NaN and infinities as strings, decimals with their scale as exact strings, whole NUMBER(10) as numbers", async () => {
+    const [first, second, third] = await json(oracleShapes());
+    expect(first).toEqual({
+      ID: 1, AMT: "1.250", BIG: "99999999999999999999999999999999999999", N: "0.3333333333333333333333333333333333333333", BD: "1.5", D: "2024-02-29 13:14:15",
+      TZ: "2024-07-01 02:30:00.500000 America/New_York", TS9: "2024-01-02 03:04:05.123456789", IDS: "+01 02:03:04.123456", R: "0xABCD", B: "1", C3: "a  ",
+    });
+    expect(second).toMatchObject({ BD: "NaN", D: "-3999-03-04 05:06:07", TZ: "2024-07-01 02:30:00.000000 +05:30", C3: null });
+    expect(third).toMatchObject({ BD: "-Infinity", AMT: null });
+  });
+
+  it("xlsx: numbers Excel holds are numbers, a DATE an Excel date; 38 digits, NaN, -Infinity, the BC date and zone text stay text", async () => {
+    const s = await sheet(oracleShapes());
+    expect(s).toContain('<c r="B2"><v>1.250</v></c>');
+    expect(s).toContain('<c r="E2"><v>1.5</v></c>');
+    expect(s).toMatch(/<c r="F2" s="2"><v>45351\.5515625<\/v><\/c>/); // 2024-02-29 13:14:15
+    expect(s).toContain('<c r="K2" t="b"><v>1</v></c>');
+    expect(s).toContain(inline("C2", "99999999999999999999999999999999999999"));
+    expect(s).toContain(inline("D2", "0.3333333333333333333333333333333333333333"));
+    expect(s).toContain(inline("E3", "NaN"));
+    expect(s).toContain(inline("E4", "-Infinity"));
+    expect(s).toContain(inline("F3", "-3999-03-04 05:06:07")); // before Excel's calendar
+    expect(s).toContain(inline("G2", "2024-07-01 02:30:00.500000 America/New_York"));
+    expect(s).toContain(inline("I2", "+01 02:03:04.123456"));
+    expect(s).toContain(inline("L2", "a  "));
   });
 });
 

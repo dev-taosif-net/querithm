@@ -11,6 +11,8 @@ export interface NumChunk {
   /** A value lost precision converting to a double. */
   lossy: boolean;
   temporal: boolean;
+  /** Floating-point values that are NaN or ±Infinity (Oracle BINARY_DOUBLE, PostgreSQL float8): not drawn, and said so. */
+  nonFinite: number;
 }
 
 function validAt(bitmap: Uint8Array | null | undefined, nullCount: number, at: number): boolean {
@@ -50,7 +52,7 @@ function dynamicChunk(vec: Vector, cls: Vector): NumChunk {
     if (c === StorageClass.Integer && (v > SAFE || v < -SAFE)) lossy = true;
     out[i] = v;
   }
-  return { values: out, lossy, temporal: false };
+  return { values: out, lossy, temporal: false, nonFinite: 0 };
 }
 
 /** A numeric, boolean or temporal vector as doubles; `cls` is the storage-class sibling of a dynamically typed column. */
@@ -60,6 +62,7 @@ export function numericChunk(vec: Vector, col: Pick<ColumnModel, "arrowTypeId" |
   const out = new Float64Array(n);
   let lossy = false;
   let temporal = false;
+  let nonFinite = 0;
   let pos = 0;
   for (const data of vec.data) {
     const len = data.length;
@@ -80,6 +83,12 @@ export function numericChunk(vec: Vector, col: Pick<ColumnModel, "arrowTypeId" |
           const raw = values[off + i];
           const v = big ? Number(raw as bigint) : (raw as number);
           if (big && (v > SAFE || v < -SAFE)) lossy = true;
+          // NaN would read as NULL and an infinity would wreck sums, scales and histogram bins: left out and counted.
+          if (!Number.isFinite(v)) {
+            nonFinite++;
+            out[pos + i] = NaN;
+            continue;
+          }
           out[pos + i] = v;
         }
         break;
@@ -127,7 +136,7 @@ export function numericChunk(vec: Vector, col: Pick<ColumnModel, "arrowTypeId" |
     }
     pos += len;
   }
-  return { values: out, lossy, temporal };
+  return { values: out, lossy, temporal, nonFinite };
 }
 
 /** Any vector as display labels, exactly as the grid shows them (null = NULL). */

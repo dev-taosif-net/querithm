@@ -32,6 +32,11 @@ public sealed record MonitorRules(
         // (performance_schema EVENT_ID); InnoDB row waits are "wait/lock/…" instruments.
         Engine.MySql => new(MaxSessionId: int.MaxValue, CancelNeedsStatementStart: true, LockWaitPrefix: "wait/lock/", WaitsSampledPerTick: false,
             ResolvesLockObjectNames: false, RemembersTerminated: false, WaitTypeHasClass: false),
+        // Oracle (D4 S12): SIDs are positive NUMBERs; ALTER SYSTEM CANCEL SQL stops the named SQL_ID of whatever execution runs
+        // now, so a cancel names the execution (SQL_ID:SQL_EXEC_ID); row and table locks are "enq: …" events; a killed session
+        // stays in V$SESSION as KILLED, which its row reports itself.
+        Engine.Oracle => new(MaxSessionId: int.MaxValue, CancelNeedsStatementStart: true, LockWaitPrefix: "enq: ", WaitsSampledPerTick: false,
+            ResolvesLockObjectNames: false, RemembersTerminated: false, WaitTypeHasClass: false),
         _ => throw new QuerithmException("unsupported", $"The activity monitor has no rules for {Sessions.ProfileRules.EngineName(engine)}."),
     };
 }

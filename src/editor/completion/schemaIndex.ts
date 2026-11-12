@@ -1,7 +1,7 @@
 // O(1) lookups over one (profile, database) SchemaSnapshot for tier-1 completion (§9).
 import type { Dialect, ObjectKind, SchemaSnapshot, SnapObject } from "../../ipc/contract";
 import type { SchemaIndex, TableInScope } from "./types";
-import { DIALECTS, knownDialect } from "../../engines";
+import { DIALECTS, foldIdentifier, knownDialect } from "../../engines";
 
 /**
  * `loginSchema`: the signed-in user's schema, for a dialect where unqualified names resolve to it (Oracle,
@@ -78,6 +78,15 @@ export function findObject(
 export function resolveTable(idx: SchemaIndex | null, t: TableInScope): SnapObject | undefined {
   if (!idx || t.isCte || t.isDerived) return undefined;
   if (t.database && !eq(t.database, idx.database)) return undefined;
+  // D4 S12: where the server folds unquoted names (Oracle upper, PostgreSQL lower), the object stored under exactly the
+  // name the server would look up wins over another that differs only in case, and a quoted name is that object or none.
+  if (DIALECTS[knownDialect(idx.dialect)].identifierFold) {
+    const name = foldIdentifier(t.name, !!t.quoted, idx.dialect);
+    const schema = t.schema ? foldIdentifier(t.schema, !!t.schemaQuoted, idx.dialect) : undefined;
+    const hits = (idx.byName.get(t.name.toLowerCase()) ?? []).filter((o) => RELATION_KINDS.has(o.kind) && o.name === name && (schema === undefined || o.schema === schema));
+    if (hits.length) return hits.find((o) => schema !== undefined || eq(o.schema, idx.defaultSchema)) ?? hits[0];
+    if (t.quoted || t.schemaQuoted) return undefined;
+  }
   return findObject(idx, t.name, t.schema);
 }
 

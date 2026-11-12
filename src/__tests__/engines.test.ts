@@ -92,7 +92,7 @@ describe("Oracle (Phase D4, hidden engine)", () => {
       label: "Oracle Database", shortLabel: "Oracle", badge: "OR", dialect: "oracle", language: "oracle", defaultSchema: null,
       defaultPort: 2484, defaultAuth: "password", defaultUser: "system", defaultDatabase: null, statisticsIo: false,
       statisticsTime: false, actualPlan: "explainAnalyze", actualPlanConfirm: ENGINES.oracle.actualPlanConfirm, actualPlanRun: "Run for the actual plan",
-      trace: false, debugger: false, synonyms: false, packages: true, triggerFunctions: false, procedures: true, monitor: false, serverOutput: true,
+      trace: false, debugger: false, synonyms: false, packages: true, triggerFunctions: false, procedures: true, monitor: true, serverOutput: true,
       locations: ["server"],
     });
     // D4 S09: actual plans run the statement (GATHER_PLAN_STATISTICS) and are rolled back; DDL is refused, since Oracle commits it.

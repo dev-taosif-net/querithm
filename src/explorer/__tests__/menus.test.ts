@@ -223,6 +223,14 @@ describe("Oracle routine, trigger and table menus (D4 S11)", () => {
     }
   });
 
+  it("the server offers the Activity monitor (D4 S12); a routine has no debugger, said with the reason", () => {
+    const monitor = find(serverMenu(server("connected")), "Activity monitor");
+    expect(monitor.unavailable).toBeUndefined();
+    monitor.run();
+    expect(m.openActivityMonitor).toHaveBeenCalledWith("p");
+    expect(find(objectMenu(objRow(obj("proc", { schema: "APP", name: "P" }))), "Debug…").unavailable).toBe("PostgreSQL only");
+  });
+
   it("a trigger enables and disables on a table's trigger and a view's alike", () => {
     for (const parent of [obj("table"), obj("view")]) {
       const menu = objectMenu(objRow(obj("trigger", { schema: "APP", name: "TRG" })), { parent });

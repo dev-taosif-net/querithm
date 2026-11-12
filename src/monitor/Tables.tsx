@@ -197,18 +197,21 @@ export function IoPane({ model }: { model: MonitorModel }) {
 /**
  * Where top queries come from: pg_stat_statements (shared blocks and I/O time, no CPU time) on PostgreSQL; SQL Server's
  * statistics report CPU and logical reads; MySQL's statement digests report rows examined (in the logical-reads field) and
- * no CPU time.
+ * no CPU time; Oracle's V$SQLSTATS reports CPU, buffer gets (in the logical-reads field) and user I/O wait, by SQL_ID.
  */
-type TopQuerySource = "statistics" | "pgStatStatements" | "digests";
+type TopQuerySource = "statistics" | "pgStatStatements" | "digests" | "sqlStats";
 const TOP_QUERY_SOURCE: Record<Engine, TopQuerySource> = {
-  mssql: "statistics", pg: "pgStatStatements", sqlite: "statistics", mySql: "digests", duckDb: "statistics", oracle: "statistics",
+  mssql: "statistics", pg: "pgStatStatements", sqlite: "statistics", mySql: "digests", duckDb: "statistics", oracle: "sqlStats",
 };
+const READS_LABEL: Record<TopQuerySource, string> = { statistics: "logical reads", pgStatStatements: "shared blocks", digests: "rows examined", sqlStats: "buffer gets" };
+const HASH_TITLE: Record<TopQuerySource, string> = { statistics: "Query hash", pgStatStatements: "Query id", digests: "Digest", sqlStats: "SQL_ID" };
 
 export function TopQueriesPane({ model, engine, onOpenText }: { model: MonitorModel; engine: Engine; onOpenText: (text: string) => void }) {
   useTopics(model, ["top", "texts", "status", "connection"]);
   const source = TOP_QUERY_SOURCE[engine];
   const pg = source === "pgStatStatements";
-  const cpu = source === "statistics";
+  const cpu = source === "statistics" || source === "sqlStats";
+  const io = pg || source === "sqlStats";
   const [order, setOrder] = useState(cpu ? "cpu" : "duration");
   const [since, setSince] = useState(false);
   useEffect(() => {
@@ -223,11 +226,11 @@ export function TopQueriesPane({ model, engine, onOpenText }: { model: MonitorMo
     { id: "exec", title: "Executions", width: 90, value: (q) => q.execDelta, align: "right" },
     ...(!cpu ? [] : [{ id: "cpu", title: "CPU", width: 90, value: (q: TopQueryRow) => q.cpuMsDelta, render: (q: TopQueryRow) => (q.cpuMsDelta == null ? DASH : ms(q.cpuMsDelta)), align: "right" as const }]),
     { id: "dur", title: "Duration", width: 100, value: (q) => q.durationMsDelta, render: (q) => ms(q.durationMsDelta), align: "right" },
-    pg ? { id: "blks", title: "Shared blocks", width: 110, value: (q) => q.sharedBlocksDelta, align: "right" } : { id: "reads", title: source === "digests" ? "Rows examined" : "Logical reads", width: 110, value: (q) => q.logicalReadsDelta, align: "right" },
+    pg ? { id: "blks", title: "Shared blocks", width: 110, value: (q) => q.sharedBlocksDelta, align: "right" } : { id: "reads", title: READS_LABEL[source][0].toUpperCase() + READS_LABEL[source].slice(1), width: 110, value: (q) => q.logicalReadsDelta, align: "right" },
     { id: "rows", title: "Rows", width: 90, value: (q) => q.rowsDelta, align: "right" },
-    ...(pg ? [{ id: "io", title: "I/O time", width: 90, value: (q: TopQueryRow) => q.ioTimeMsDelta, render: (q: TopQueryRow) => (q.ioTimeMsDelta == null ? DASH : ms(q.ioTimeMsDelta)), align: "right" as const }] : []),
+    ...(io ? [{ id: "io", title: pg ? "I/O time" : "User I/O", width: 90, value: (q: TopQueryRow) => q.ioTimeMsDelta, render: (q: TopQueryRow) => (q.ioTimeMsDelta == null ? DASH : ms(q.ioTimeMsDelta)), align: "right" as const }] : []),
     { id: "db", title: "Database", width: 110, value: (q) => q.database },
-    { id: "hash", title: pg ? "Query id" : source === "digests" ? "Digest" : "Query hash", width: 160, value: (q) => q.queryHash },
+    { id: "hash", title: HASH_TITLE[source], width: 160, value: (q) => q.queryHash },
   ];
   return (
     <PaneFrame model={model} pane="topQueries" has={rows.length > 0} empty={since ? "No statements since the monitor started" : "No statements completed in the last interval"}>
@@ -236,12 +239,13 @@ export function TopQueriesPane({ model, engine, onOpenText }: { model: MonitorMo
         <select className="q-input h-[22px] py-0" value={order} onChange={(e) => setOrder(e.target.value)}>
           {cpu && <option value="cpu">CPU</option>}
           <option value="duration">duration</option>
-          <option value="reads">{pg ? "shared blocks" : source === "digests" ? "rows examined" : "logical reads"}</option>
+          <option value="reads">{READS_LABEL[source]}</option>
           <option value="executions">executions</option>
         </select>
         <label className="flex items-center gap-1"><input type="checkbox" checked={since} onChange={(e) => setSince(e.target.checked)} /> since the monitor started</label>
         {pg && <span className="text-muted">pg_stat_statements reports no CPU time.</span>}
         {source === "digests" && <span className="text-muted">Statement digests report no CPU time.</span>}
+        {source === "sqlStats" && <span className="text-muted">Cursors in the shared pool (V$SQLSTATS): a statement aged out of it is no longer counted.</span>}
       </div>
       <VirtualTable rows={rows} columns={cols} rowKey={(q) => `${q.queryHash}|${q.database}`} onRowClick={(q) => { const t = q.textId ? model.texts.get(q.textId) : undefined; if (t) onOpenText(t); }} testId="top-table" />
     </PaneFrame>

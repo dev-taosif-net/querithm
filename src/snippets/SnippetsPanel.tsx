@@ -9,15 +9,19 @@ import { borrowEditor } from "../editor/editors";
 import { DIALECT_LIST, DIALECTS, isDialect, knownDialect } from "../engines";
 import { blankSnippet, snippetsFor, useSnippets } from "./snippetStore";
 import { activeDialect, insertSnippet } from "./snippetActions";
+import { dialectShown, useOfferedDialects } from "./offeredDialects";
 
 const dialectLabel = (d?: Dialect | null) => (isDialect(d) ? DIALECTS[d].label : "Any");
-const dialectOptions = DIALECT_LIST.map((d) => <option key={d} value={d}>{DIALECTS[d].label}</option>);
+/** The dialects of the engines the sidecar offers (a hidden engine's stays out), plus `keep`. */
+const dialectOptions = (offered: Dialect[] | null, keep?: Dialect | "" | "all" | null) =>
+  DIALECT_LIST.filter((d) => dialectShown(offered, d, keep)).map((d) => <option key={d} value={d}>{DIALECTS[d].label}</option>);
 
 export function SnippetsPanel({ close }: { close: () => void }) {
   const { snippets, loaded, error } = useSnippets();
   const [q, setQ] = useState("");
   const [dialect, setDialect] = useState<Dialect | "all">(() => activeDialect());
   const [selected, setSelected] = useState<string | null>(null);
+  const offered = useOfferedDialects();
   // Opening the panel retries a failed load at once (completion's own retries back off).
   useEffect(() => {
     const s = useSnippets.getState();
@@ -26,9 +30,11 @@ export function SnippetsPanel({ close }: { close: () => void }) {
   const list = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return (dialect === "all" ? snippets : snippetsFor(snippets, dialect))
+      // A hidden engine's built-ins stay out of "All dialects"; the user's own snippets always show.
+      .filter((s) => !s.builtIn || !isDialect(s.dialect) || dialectShown(offered, s.dialect, dialect))
       .filter((s) => !needle || [s.prefix, s.title, ...s.tags].some((x) => x.toLowerCase().includes(needle)))
       .sort((a, b) => Number(a.builtIn) - Number(b.builtIn) || a.prefix.localeCompare(b.prefix));
-  }, [snippets, q, dialect]);
+  }, [snippets, q, dialect, offered]);
   const current = list.find((s) => s.id === selected) ?? list[0];
   const edit = (s: Snippet) => useUi.getState().openDialog({ kind: "snippetEdit", snippet: s });
   const remove = async (s: Snippet) => {
@@ -60,7 +66,7 @@ export function SnippetsPanel({ close }: { close: () => void }) {
             <input className="q-input w-full" placeholder="Search prefix, title or tag…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search snippets" autoFocus />
             <select className="q-input w-full" value={dialect} onChange={(e) => setDialect(e.target.value as Dialect | "all")} aria-label="Dialect">
               <option value="all">All dialects</option>
-              {dialectOptions}
+              {dialectOptions(offered, dialect)}
             </select>
           </div>
           <div className="flex-1 overflow-y-auto" role="listbox" aria-label="Snippet list">
@@ -118,6 +124,7 @@ export function SnippetEditor({ snippet, close }: { snippet: Snippet; close: () 
   const [prefix, setPrefix] = useState(snippet.prefix);
   const [dialect, setDialect] = useState<Dialect | "">(snippet.dialect ?? "");
   const [tags, setTags] = useState(snippet.tags.join(", "));
+  const offered = useOfferedDialects();
   const [error, setError] = useState<{ field?: string; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const savePending = useRef(false);
@@ -173,7 +180,7 @@ export function SnippetEditor({ snippet, close }: { snippet: Snippet; close: () 
           <Field label="Dialect" hint={fieldError("dialect")}>
             <select className="q-input w-full" value={dialect} onChange={(e) => setDialect(e.target.value as Dialect | "")} aria-label="Snippet dialect">
               <option value="">Any dialect</option>
-              {dialectOptions}
+              {dialectOptions(offered, snippet.dialect)}
             </select>
           </Field>
           <Field label="Tags (comma separated)" hint={fieldError("tags")}>

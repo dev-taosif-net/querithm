@@ -720,6 +720,7 @@ describe("history", () => {
         { id: "sl1", name: "Local", engine: "sqlite", environment: "dev", auth: "none", location: "memory" },
         { id: "my1", name: "Shop", engine: "mySql", environment: "prod", auth: "password", host: "h" },
         { id: "dk1", name: "Lake", engine: "duckDb", environment: "test", auth: "none", location: "file" },
+        { id: "or1", name: "Ledger", engine: "oracle", environment: "dev", auth: "password", host: "h" },
       ] as never,
       groups: [],
     });
@@ -727,6 +728,7 @@ describe("history", () => {
       { id: 4, profileId: "sl1", database: "main", sql: "select 4", executedAt: 0, status: "done", elapsedMs: 1, rowsAffected: null },
       { id: 5, profileId: "my1", database: "shop", sql: "select `5`", executedAt: 0, status: "done", elapsedMs: 1, rowsAffected: null },
       { id: 6, profileId: "dk1", database: "lake", sql: "FROM t6", executedAt: 0, status: "done", elapsedMs: 1, rowsAffected: null },
+      { id: 7, profileId: "or1", database: "FREEPDB1", sql: "SELECT 7 FROM dual", executedAt: 0, status: "done", elapsedMs: 1, rowsAffected: null },
     ]);
     render(<Dialogs />);
     show({ kind: "history" });
@@ -734,8 +736,14 @@ describe("history", () => {
     expect(screen.getByText(/\[SL\] Dev - Local · main/)).toBeInTheDocument();
     expect(screen.getByText(/\[MY\] Prod - Shop · shop/)).toBeInTheDocument();
     expect(screen.getByText(/\[DK\] Test - Lake · lake/)).toBeInTheDocument();
-    await userEvent.setup().click(screen.getByText("FROM t6"));
+    expect(screen.getByText(/\[OR\] Dev - Ledger · FREEPDB1/)).toBeInTheDocument(); // D4 S12: the Oracle service
+    const user = userEvent.setup();
+    await user.click(screen.getByText("FROM t6"));
     expect(h.a.newQueryTab).toHaveBeenCalledWith({ profileId: "dk1", database: "lake", text: "FROM t6", title: "history.sql" });
+    show({ kind: "history" });
+    await waitFor(() => expect(screen.getByText("SELECT 7 FROM dual")).toBeInTheDocument(), { timeout: 2000 });
+    await user.click(screen.getByText("SELECT 7 FROM dual"));
+    expect(h.a.newQueryTab).toHaveBeenCalledWith({ profileId: "or1", database: "FREEPDB1", text: "SELECT 7 FROM dual", title: "history.sql" });
   });
   it("searches full text when typing and shows 'Nothing found.' on failure", async () => {
     // the list call is debounced and cancelled by typing, so key the mock on the method rather than call order

@@ -819,6 +819,7 @@ class Analyzer {
     }
     // dotted name chain: [db.][schema.]name, allowing empty parts (db..t); temp #t and table variables @t
     const parts: string[] = [];
+    const quoted: boolean[] = [];
     let x = j;
     let last = -1;
     for (;;) {
@@ -826,9 +827,10 @@ class Analyzer {
       const t = T[x];
       if (isNameTok(t) || (t.kind === "variable" && parts.length === 0)) {
         parts.push(t.value);
+        quoted.push(t.kind === "qident");
         last = x;
         x++;
-        if (isPunct(T[x], ".") && x <= this.b) { x++; if (isPunct(T[x], ".")) { parts.push(""); x++; } continue; }
+        if (isPunct(T[x], ".") && x <= this.b) { x++; if (isPunct(T[x], ".")) { parts.push(""); quoted.push(false); x++; } continue; }
         break;
       }
       return undefined; // not a name, or the chain ends with '.'
@@ -859,6 +861,8 @@ class Analyzer {
       role,
     };
     if (al.cols) ref.columns = al.cols;
+    if (quoted[parts.length - 1]) ref.quoted = true;
+    if (parts.length >= 2 && quoted[parts.length - 2]) ref.schemaQuoted = true;
     this.refs.push(ref);
     this.skipUntil = Math.max(this.skipUntil, ref.endIdx);
     return ref;
@@ -1006,7 +1010,7 @@ class Analyzer {
     const seen = new Set<string>();
     for (const r of refs) {
       if ((r.role === "update" || r.role === "delete") && r.schema === undefined && !r.alias && aliasSet.has(r.name.toLowerCase())) continue;
-      const key = `${r.database ?? ""}.${r.schema ?? ""}.${r.name}|${r.alias ?? ""}`.toLowerCase();
+      const key = `${r.database ?? ""}.${r.schema ?? ""}.${r.name}|${r.alias ?? ""}`.toLowerCase() + (r.quoted ? `|"${r.name}` : "");
       if (seen.has(key)) continue;
       seen.add(key);
       const t: TableInScope = { name: r.name, isCte: r.isCte, isDerived: r.isDerived, offset: r.offset };
@@ -1014,6 +1018,8 @@ class Analyzer {
       if (r.database !== undefined) t.database = r.database;
       if (r.alias !== undefined) t.alias = r.alias;
       if (r.columns !== undefined) t.columns = r.columns;
+      if (r.quoted) t.quoted = true;
+      if (r.schemaQuoted) t.schemaQuoted = true;
       out.push(t);
     }
     return out;

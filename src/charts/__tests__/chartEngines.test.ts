@@ -3,11 +3,11 @@
 // feed (only the wanted columns, a dynamic column with its class sibling) and the worker's extraction and computation.
 import { describe, expect, it, vi } from "vitest";
 import { ArrowResultSet } from "../../results/model";
-import { duckDbShapes, mySqlShapes, sqliteShapes } from "../../results/__tests__/fixtures";
+import { duckDbShapes, mySqlShapes, oracleShapes, sqliteShapes, utcMicros } from "../../results/__tests__/fixtures";
 import { chartColumns, computeChartOnce } from "../chartFeed";
 import { ChartColumns, handle, type ChartWorkerIn } from "../chartData.worker";
 import { inferSpec, specProblem, type ChartSpec } from "../chartSpec";
-import type { ChartData } from "../chartData";
+import { formatX, type ChartData } from "../chartData";
 import type { RecordBatch } from "apache-arrow";
 
 vi.mock("../chartData.worker?worker", () => ({ default: class {} }));
@@ -105,5 +105,45 @@ describe("DuckDB", () => {
     expect(d).toMatchObject({ shape: "category", categories: ["{'a': 1, 'b': 'x'}", "{'a': NULL, 'b': NULL}"] });
     const iv = await draw(rs, { kind: "bar", x: "iv", y: ["id"], series: null, agg: "sum" });
     expect(iv).toMatchObject({ categories: ["1 year 2 months 3 days 04:05:06.789", "00:00:00"] });
+  });
+});
+
+describe("Oracle (D4 S12)", () => {
+  const rs = resultOf(oracleShapes());
+
+  it("offers NUMBER (Decimal128 or numeric text), BINARY_DOUBLE and DATE as numbers / time; zone, TIMESTAMP(9) and INTERVAL text as labels; RAW not at all", () => {
+    expect(kinds(rs)).toEqual({
+      ID: "number", AMT: "number", BIG: "number", N: "number", BD: "number", D: "temporal", TZ: "text", TS9: "text", IDS: "text", R: "binary", B: "bool", C3: "text",
+    });
+    expect(inferSpec(chartColumns(rs))?.x).toBe("D");
+    expect(specProblem({ kind: "bar", x: "D", y: ["TZ"], series: null, agg: "sum" }, chartColumns(rs))).toBe("Value columns must hold numbers.");
+  });
+
+  it("BINARY_DOUBLE NaN and -Infinity are not drawn and are said apart from NULL", async () => {
+    const bar = await draw(rs, { kind: "bar", x: "IDS", y: ["BD"], series: null, agg: "sum" });
+    // The category whose only value is NaN is skipped, as one whose only value is NULL; the note counts both values.
+    expect(bar).toMatchObject({ shape: "category", categories: ["+01 02:03:04.123456"], meta: { nonFinite: 2 } });
+    expect(values(bar, 0)).toEqual([1.5]);
+    // A histogram's bins stay finite: -Infinity would make every edge NaN and drop every count.
+    const h = await draw(rs, { kind: "histogram", x: "BD", y: [], series: null, agg: "count", bins: 4 });
+    expect(h.shape).toBe("histogram");
+    const hist = h as Extract<ChartData, { shape: "histogram" }>;
+    expect([...hist.edges].every(Number.isFinite)).toBe(true);
+    expect([...hist.counts].reduce((a, b) => a + b, 0)).toBe(1);
+    expect(hist.meta.nonFinite).toBe(2);
+  });
+
+  it("puts DATE on a time axis, a BC date included, and labels it with its sign", async () => {
+    const d = await draw(rs, { kind: "scatter", x: "D", y: ["ID"], series: null, agg: "none" });
+    const x = [...(d as { x: Float64Array }).x].sort((a, b) => a - b);
+    expect(x).toEqual([Number(utcMicros(-3999, 3, 4, 5, 6, 7) / 1000n), Number(utcMicros(2024, 2, 29, 13, 14, 15) / 1000n)]);
+    expect(formatX(x[0], "time")).toBe("-3999-03-04 05:06:07");
+    expect(d.meta).toMatchObject({ nonFinite: 0, nullsSkipped: 1 });
+  });
+
+  it("draws NUMBER(38) from its decimal, flagged approximate beyond a double's digits; zone text stays a category", async () => {
+    const d = await draw(rs, { kind: "bar", x: "TZ", y: ["BIG", "AMT"], series: null, agg: "sum" });
+    expect(d).toMatchObject({ shape: "category", categories: ["2024-07-01 02:30:00.500000 America/New_York", "2024-07-01 02:30:00.000000 +05:30"], meta: { lossy: true } });
+    expect(values(d, 1)).toEqual([1.25, -0.005]);
   });
 });

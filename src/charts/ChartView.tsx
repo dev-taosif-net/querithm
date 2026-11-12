@@ -141,7 +141,8 @@ function notes(rs: ArrowResultSet, spec: ChartSpec, data: ChartData | undefined)
   if (!data) return out;
   const m = data.meta;
   if (m.lossy) out.push({ text: "Precision: some values are beyond 2^53 and are drawn approximately", warn: true });
-  if (m.nullsSkipped) out.push({ text: `${m.nullsSkipped.toLocaleString()} row${m.nullsSkipped === 1 ? "" : "s"} skipped (NULL)` });
+  if (m.nullsSkipped) out.push({ text: `${m.nullsSkipped.toLocaleString()} row${m.nullsSkipped === 1 ? "" : "s"} skipped (${m.nonFinite ? "NULL, NaN or ±Infinity" : "NULL"})` });
+  if (m.nonFinite) out.push({ text: `${m.nonFinite.toLocaleString()} NaN or ±Infinity value${m.nonFinite === 1 ? " is" : "s are"} not drawn`, warn: true });
   if (m.sampled) out.push({ text: spec.kind === "scatter" ? `Sampled to ${m.sampled.toLocaleString()} points per series` : `Down-sampled to ${m.sampled.toLocaleString()} points per series (extremes kept)` });
   if (m.foldedCategories) out.push({ text: data.shape === "category" && data.kind === "pie" ? `${m.foldedCategories} smaller slices in Other` : `Top ${MAX_CATEGORIES} categories; ${m.foldedCategories.toLocaleString()} more in Other` });
   if (m.foldedSeries) out.push({ text: spec.kind === "bar" ? `${m.foldedSeries} smaller series in Other` : `${m.foldedSeries} more series not drawn` });

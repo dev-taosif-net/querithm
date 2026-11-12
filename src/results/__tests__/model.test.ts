@@ -4,7 +4,7 @@ import {
   vectorFromArray, type Data, type DataType,
 } from "apache-arrow";
 import { ArrowResultSet, buildColumns, classBit, exactNumber, ExecutionData, numericTextKey, shortestFloat32, shortestFloat32Uncached, StorageClass, __test } from "../model";
-import { decimalData, dynamicColumn, makeBatch, type DynamicCell } from "./fixtures";
+import { decimalData, dynamicColumn, makeBatch, utcMicros, type DynamicCell } from "./fixtures";
 
 const { decimalToString, formatMicros, formatTimeMicros } = __test;
 
@@ -62,6 +62,12 @@ describe("model: timestamps and times", () => {
     expect(formatMicros(0n, null, null)).toBe("1970-01-01 00:00:00");
     expect(formatMicros(1_500n, null, null)).toBe("1970-01-01 00:00:00.0015");
     expect(formatMicros(120_000n, null, null)).toBe("1970-01-01 00:00:00.12");
+  });
+  it("a year before 1 AD prints with its sign and four digits (Oracle BC dates, ISO numbering: 0 = 1 BC)", () => {
+    expect(formatMicros(utcMicros(-3999, 3, 4, 5, 6, 7), null, null)).toBe("-3999-03-04 05:06:07");
+    expect(formatMicros(utcMicros(-45, 12, 31, 23, 59, 59) + 250_000n, null, null)).toBe("-0045-12-31 23:59:59.25");
+    expect(formatMicros(utcMicros(0, 1, 1), null, null)).toBe("0000-01-01 00:00:00");
+    expect(formatMicros(utcMicros(5, 6, 7), null, null)).toBe("0005-06-07 00:00:00");
   });
   it("a timezone-aware column without an offset prints +00:00", () => expect(formatMicros(0n, null, "UTC")).toBe("1970-01-01 00:00:00 +00:00"));
   it("datetimeoffset shifts to local time and prints the offset", () => {

@@ -1,13 +1,14 @@
 // Per-engine ER diagrams (Phase D): the diagram is built from the snapshot's tables and foreign keys, so each engine is
 // checked on the snapshot its catalog sends — SQLite (schema "main", fk_<table>_<id> names, temporary tables in "temp"),
-// MySQL / MariaDB (the schema is the database, backtick identifiers) and DuckDB (schemas of its own, exact types) — with
+// MySQL / MariaDB (the schema is the database, backtick identifiers), DuckDB (schemas of its own, exact types) and Oracle
+// (the login schema, names folded to upper case, quoted names exact) — with
 // the card label (schema.name) and the identifier quoting of the generated JOIN and the current-query scope.
 import { describe, expect, it } from "vitest";
 import type { Dialect, SchemaSnapshot } from "../../ipc/contract";
 import { buildGraph, joinSql, layoutGraph, neighbourhood, schemaScope, statementTables } from "../erdLayout";
 import { buildSvg } from "../erdExport";
 import { buildSchemaIndex } from "../../editor/completion/schemaIndex";
-import { duckDbSnapshot, mySqlSnapshot, sqliteSnapshot } from "./fixture";
+import { duckDbSnapshot, mySqlSnapshot, oracleSnapshot, sqliteSnapshot } from "./fixture";
 
 const sorted = (s: Set<number>) => [...s].sort((a, b) => a - b);
 const labels = (snap: SchemaSnapshot, ids: Set<number>) => buildGraph(snap, ids, false).nodes.map((n) => `${n.schema}.${n.name}`);
@@ -128,5 +129,39 @@ describe("DuckDB", () => {
     expect(svg).toContain(">main.order<");
     expect(svg).toContain(">crm.region<");
     expect(svg).toContain(">DECIMAL(10,2)<");
+  });
+});
+
+describe("Oracle (D4 S12)", () => {
+  const snap = oracleSnapshot();
+
+  it("builds nodes and FK edges per schema, ORDERS and \"orders\" as two tables, with Oracle's types", () => {
+    const g = buildGraph(snap, schemaScope(snap, "APP"), false);
+    expect(g.nodes.map((n) => `${n.schema}.${n.name}`)).toEqual(["APP.CUSTOMER", "APP.ORDER", "APP.orders", "APP.ORDERS"]);
+    expect(g.edges.map((e) => [e.name, e.from, e.to, e.pairs])).toEqual([
+      ["ORDER_CUSTOMER_FK", 32, 31, [{ parent: "CUSTOMER_ID", referenced: "ID" }]],
+      ["ORDERS_ORDER_FK", 34, 32, [{ parent: "ORDER_ID", referenced: "ID" }]],
+    ]);
+    expect(g.nodes.find((n) => n.name === "ORDERS")!.columns.map((c) => [c.name, c.type, c.fk])).toEqual([["ID", "NUMBER(10)", false], ["ORDER_ID", "NUMBER(10)", true], ["AMOUNT", "NUMBER(12,2)", false]]);
+    expect(labels(snap, schemaScope(snap, "HR"))).toEqual(["HR.REGION"]);
+  });
+
+  it("the JOIN qualifies with the schema, leaves upper-case names bare and double-quotes the reserved word", () => {
+    expect(sqlOf(snap, [34, 31], "oracle")).toBe('SELECT o.*, c.*\nFROM APP.ORDERS o\nJOIN APP."ORDER" o2 ON o.ORDER_ID = o2.ID\nJOIN APP.CUSTOMER c ON o2.CUSTOMER_ID = c.ID;');  });
+
+  it("query mode folds unquoted names to upper case and takes quoted ones exactly", () => {
+    const idx = buildSchemaIndex(snap, "oracle", ["FREEPDB1"], "APP");
+    const text = 'SELECT * FROM orders o JOIN "ORDER" x ON x.ID = o.ORDER_ID;\nSELECT * FROM "orders";\nSELECT * FROM hr.region;\nSELECT * FROM "Orders";';
+    expect(statementTables(idx, text, 10, "oracle").sort()).toEqual([32, 34]); // orders is ORDERS, never "orders"
+    expect(statementTables(idx, text, text.indexOf('"orders"') - 2, "oracle")).toEqual([33]);
+    expect(statementTables(idx, text, text.indexOf("hr.region") + 2, "oracle")).toEqual([35]);
+    expect(statementTables(idx, text, text.length - 3, "oracle")).toEqual([]); // no table is named exactly "Orders"
+  });
+
+  it("cards and the SVG export are labelled <schema>.<name> as stored", () => {
+    const svg = svgOf(snap, new Set([32, 33, 34]));
+    expect(svg).toContain(">APP.ORDER<");
+    expect(svg).toContain(">APP.orders<");
+    expect(svg).toContain(">NUMBER(12,2)<");
   });
 });

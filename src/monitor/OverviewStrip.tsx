@@ -18,7 +18,8 @@ const ORDER: Record<Engine, string[]> = {
   sqlite: [],
   mySql: ["queries", "cacheHit", "activeConnections", "idleInTx", "userConnections", "deadlocks"],
   duckDb: [],
-  oracle: [],
+  // D4 S12: V$SYSSTAT rates (execute count, commits + rollbacks, logical vs physical reads), V$SESSION counts, V$SYSMETRIC CPU.
+  oracle: ["cpu", "queries", "tps", "cacheHit", "activeConnections", "idleInTx"],
 };
 
 export function formatMetric(v: MetricValue | undefined): string {

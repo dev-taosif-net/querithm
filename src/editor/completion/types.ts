@@ -16,6 +16,9 @@ export interface TableInScope {
   columns?: string[];
   /** Offset of the reference in the source text (used to rank columns of the nearest table first). */
   offset?: number;
+  /** The name / schema was written quoted: exact, never folded (D4 S12, dialects that fold unquoted names). */
+  quoted?: boolean;
+  schemaQuoted?: boolean;
 }
 
 export interface CursorContext {
