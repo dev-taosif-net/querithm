@@ -141,7 +141,7 @@ public class OraclePlanTests
         Assert.Null(Plans.Parse("""[{"text": "x", "actual": true, "operations": []}]""").Statements[0].Root);
     }
 
-    static ProviderRegistry Registry() => new([new OracleProvider()]);
+    static ProviderRegistry Registry() => new([TestOracle.Supported()]);
 
     // ------------------------------------------------------------------------------------- refused before anything runs
 

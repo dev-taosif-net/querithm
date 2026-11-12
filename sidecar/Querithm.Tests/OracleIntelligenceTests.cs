@@ -442,7 +442,7 @@ public partial class OracleIntelligenceTests
     [Fact]
     public void Identity_matches_the_providers_ordinal_name_match()
     {
-        var traits = new Querithm.Providers.Oracle.OracleProvider().Traits;
+        var traits = TestOracle.Supported().Traits;
         Assert.True(traits.NameMatch.Equals(OracleIdentifiers.Identity("emp"), OracleIdentifiers.Identity("EMP")));
         Assert.False(traits.NameMatch.Equals(OracleIdentifiers.Identity("\"emp\""), OracleIdentifiers.Identity("emp")));
     }

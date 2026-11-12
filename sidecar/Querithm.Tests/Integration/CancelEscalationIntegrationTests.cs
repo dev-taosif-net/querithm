@@ -80,7 +80,7 @@ public class CancelEscalationIntegrationTests
     [IntegrationFact]
     public async Task Oracle_is_never_closed_mid_command_and_cancel_alone_ends_the_run()
     {
-        await using var h = new TestHost(new Querithm.Providers.Oracle.OracleProvider(Directory.CreateTempSubdirectory("qora-cancel-").FullName));
+        await using var h = new TestHost(TestOracle.Supported(Directory.CreateTempSubdirectory("qora-cancel-").FullName));
         var profile = await h.Rpc.ProfileSave(new Profile
         {
             Id = "", Name = "ora", Engine = Engine.Oracle, Host = "127.0.0.1", Port = OracleIntegrationTests.Port, Auth = AuthKind.Password,

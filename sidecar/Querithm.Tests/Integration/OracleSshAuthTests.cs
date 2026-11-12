@@ -32,7 +32,7 @@ public sealed class OracleSshAuthTests
         TlsMode = tls, CaPath = caPath, TimeoutS = 30, Ssh = Bastion(),
     };
 
-    static TestHost NewHost() => new(new OracleProvider(Directory.CreateTempSubdirectory("qora-ssh-").FullName));
+    static TestHost NewHost() => new(TestOracle.Supported(Directory.CreateTempSubdirectory("qora-ssh-").FullName));
 
     /// <summary>Trusts whatever key the bastion shows (the tests' stand-in for the user comparing the fingerprint).</summary>
     static async Task TrustAsync(TestHost h, Profile p)

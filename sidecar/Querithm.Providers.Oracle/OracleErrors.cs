@@ -73,6 +73,8 @@ internal static class OracleErrors
             12514 => "The listener does not know the service named in this profile (ORA-12514). Check the service name (for example FREEPDB1 or ORCLPDB1); the listener's services are listed by lsnrctl status.",
             12505 => "The listener does not know the SID named in this profile (ORA-12505). Check the SID, or connect by service name instead.",
             12541 => "Nothing is listening at this host and port (ORA-12541). Check the port: 2484 is the usual TCPS port, 1521 the plain TCP one.",
+            // Linux and macOS: ODP.NET reports a refused (or unreachable) address as ORA-50232 where Windows says ORA-12541 (D4 S13).
+            50232 => "Nothing answered at this host and port (ORA-50232: the connection was refused or the address cannot be reached). Check the host and the port: 2484 is the usual TCPS port, 1521 the plain TCP one.",
             12545 => "The host could not be found or reached (ORA-12545). Check the host name.",
             12170 or 12535 => "The connection timed out before the server answered (ORA-" + Code(ex).ToString("D5", CultureInfo.InvariantCulture) + "). Check the host, the port and any firewall in between.",
             1013 => "The statement was cancelled (ORA-01013).",
@@ -111,7 +113,7 @@ internal static class OracleErrors
                 case 12545:
                     redirected = true;
                     break;
-                case 12541 when NoListenerAt(e.Message) is { } at && !(IsLoopback(at.Host) && at.Port == forwardPort):
+                case 12541 or 50232 when NoListenerAt(e.Message) is { } at && !(IsLoopback(at.Host) && at.Port == forwardPort):
                     redirected = true;
                     target = string.Create(CultureInfo.InvariantCulture, $"{at.Host}:{at.Port}");
                     break;
@@ -126,12 +128,17 @@ internal static class OracleErrors
     static bool IsLoopback(string host) =>
         host.Equals("localhost", StringComparison.OrdinalIgnoreCase) || (System.Net.IPAddress.TryParse(host, out var ip) && System.Net.IPAddress.IsLoopback(ip));
 
-    /// <summary>"ORA-12541: Cannot connect. No listener at host H port P. …": the host and port the driver dialled.</summary>
+    /// <summary>
+    /// "ORA-12541: Cannot connect. No listener at host H port P. …" (Windows) or "ORA-50232: Network Transport: TCP transport
+    /// address connect failure for host H port P. …" (Linux, macOS): the host and port the driver dialled.
+    /// </summary>
     internal static (string Host, int Port)? NoListenerAt(string message)
     {
-        const string marker = "No listener at";
-        var i = message.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-        if (i < 0) return null;
+        string? marker = null;
+        var i = -1;
+        foreach (var m in (string[])["No listener at", "connect failure for"])
+            if ((i = message.IndexOf(m, StringComparison.OrdinalIgnoreCase)) >= 0) { marker = m; break; }
+        if (marker == null) return null;
         var words = message[(i + marker.Length)..].Split((char[])[' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
         var h = Array.FindIndex(words, w => w.Equals("host", StringComparison.OrdinalIgnoreCase));
         if (h < 0 || h + 3 >= words.Length || !words[h + 2].Equals("port", StringComparison.OrdinalIgnoreCase)) return null;

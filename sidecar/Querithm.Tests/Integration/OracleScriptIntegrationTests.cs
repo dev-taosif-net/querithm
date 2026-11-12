@@ -32,7 +32,7 @@ public sealed class OracleScriptIntegrationTests
     internal static CancellationToken Timeout(int seconds = 120) => new CancellationTokenSource(TimeSpan.FromSeconds(seconds)).Token;
 
     internal static async Task<DbConnection> OpenAsync() =>
-        await new OracleProvider(Directory.CreateTempSubdirectory("qora-s11-").FullName).OpenAsync(ProfileOf(), Secret, null, null, Timeout());
+        await TestOracle.Supported(Directory.CreateTempSubdirectory("qora-s11-").FullName).OpenAsync(ProfileOf(), Secret, null, null, Timeout());
 
     internal static async Task ExecAsync(DbConnection c, string sql)
     {

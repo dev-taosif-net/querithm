@@ -146,7 +146,7 @@ public class SecretAtRestMatrixTests
         {
             _provider = new ScrubbingLoggerProvider(LogDir, LogLevel.Trace, echoToStderr: false);
             _logs = LoggerFactory.Create(b => b.SetMinimumLevel(LogLevel.Trace).AddProvider(_provider));
-            var providers = new ProviderRegistry([new SqlServerProvider(), new PostgresProvider(), new MySqlProvider(), new SqliteProvider(), new DuckDbProvider(DataDir), new Querithm.Providers.Oracle.OracleProvider(DataDir)]);
+            var providers = new ProviderRegistry([new SqlServerProvider(), new PostgresProvider(), new MySqlProvider(), new SqliteProvider(), new DuckDbProvider(DataDir), TestOracle.Supported(DataDir)]);
             Services = Services.Create(Store, new CapturingFrames(), new CapturingNotifier(), _logs, providers, DataDir);
             Rpc = new RpcServer(Services, () => { });
         }

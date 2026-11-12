@@ -308,7 +308,7 @@ public sealed class OracleProviderIntegrationTests
     {
         const string table = "q_s03_sp";
         await FreshTableAsync(table);
-        var provider = new OracleProvider(Directory.CreateTempSubdirectory("qora-sp-").FullName);
+        var provider = TestOracle.Supported(Directory.CreateTempSubdirectory("qora-sp-").FullName);
         await using var c = await provider.OpenAsync(Tcp(), AppPassword, null, null, CancellationToken.None);
         var tx = provider.Transactions;
         Assert.Equal(TxState.None, await tx.StateAsync(c, CancellationToken.None));
@@ -377,7 +377,7 @@ public sealed class OracleProviderIntegrationTests
     [IntegrationFact]
     public async Task Identity_is_sid_serial_and_logon_with_the_grant_and_unidentified_without_it()
     {
-        var provider = new OracleProvider(Directory.CreateTempSubdirectory("qora-id-").FullName);
+        var provider = TestOracle.Supported(Directory.CreateTempSubdirectory("qora-id-").FullName);
         await using (var mon = await provider.OpenAsync(Tcp(OracleIntegrationTests.MonitorUser), MonPassword, null, null, CancellationToken.None))
         {
             var key = await provider.Activity!.IdentityAsync(mon, CancellationToken.None);
@@ -404,7 +404,7 @@ public sealed class OracleProviderIntegrationTests
     [IntegrationFact]
     public async Task The_service_is_the_only_database_and_switching_is_refused()
     {
-        var provider = new OracleProvider(Directory.CreateTempSubdirectory("qora-db-").FullName);
+        var provider = TestOracle.Supported(Directory.CreateTempSubdirectory("qora-db-").FullName);
         await using var c = await provider.OpenAsync(Tcp(), AppPassword, null, null, CancellationToken.None);
         var dbs = await provider.ListDatabasesAsync(c, CancellationToken.None);
         Assert.Equal(OracleIntegrationTests.Service, Assert.Single(dbs).Name.ToUpperInvariant());

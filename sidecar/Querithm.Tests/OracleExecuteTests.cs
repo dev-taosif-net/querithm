@@ -162,7 +162,7 @@ public class OracleExecuteTests
     [Fact]
     public void Parameters_bind_by_name_and_only_those_the_statement_names_are_sent()
     {
-        IDbProvider p = new OracleProvider();
+        IDbProvider p = TestOracle.Supported();
         using var cmd = new OracleCommand("SELECT :a, :\"Odd\", :1 FROM dual");
         p.AddParameter(cmd, new QueryParameter { Name = "a", Value = "x" });
         p.AddParameter(cmd, new QueryParameter { Name = ":\"Odd\"", Value = "y" });
@@ -187,7 +187,7 @@ public class OracleExecuteTests
     [InlineData("")]
     [InlineData(":")]
     public void A_parameter_without_a_name_is_refused(string name) =>
-        Assert.Throws<ArgumentException>(() => ((IDbProvider)new OracleProvider()).AddParameter(new OracleCommand("SELECT 1 FROM dual"), new QueryParameter { Name = name, Value = "x" }));
+        Assert.Throws<ArgumentException>(() => ((IDbProvider)TestOracle.Supported()).AddParameter(new OracleCommand("SELECT 1 FROM dual"), new QueryParameter { Name = name, Value = "x" }));
 
     // ---- compile errors ----
 
@@ -287,7 +287,7 @@ public class OracleExecuteTests
     {
         await using var rig = new Rig();
         rig.Provider.AfterBatchText = text => text.Contains("PROCEDURE")
-            ? [new ProviderMessage(Severity.Error, "PLS-00201: identifier 'X' must be declared", Line: 3, Number: 201)]
+            ? [new ProviderMessage(Severity.Error, "PLS-00201: identifier 'X' must be declared", Line: 3, Number: 201, FailsRun: true)]
             : [];
         var s = rig.Open();
         var done = await rig.Run(s, "SELECT 1 FROM dual;\nCREATE PROCEDURE p AS\nBEGIN\n  x := 1;\nEND;\n/\nSELECT 2 FROM dual", new ExecuteOptions { LineOffset = 10 });
@@ -296,6 +296,21 @@ public class OracleExecuteTests
         Assert.Equal(3, rig.Provider.Prepared.Count); // and the last SELECT still ran
         var m = rig.Notifier.Of<ServerMessage>().Single(x => x.Number == 201);
         Assert.Equal(13, m.EditorLine);
+    }
+
+    [Fact]
+    public async Task An_error_row_read_after_a_batch_that_does_not_fail_the_run_is_only_shown()
+    {
+        // D4 S13 regression (every engine): MySQL / MariaDB's SHOW WARNINGS still lists the 1317 of a cancelled statement after a
+        // table-less SELECT (which does not clear the diagnostics area); since S04 that failed the next run. Only a message the
+        // provider marks FailsRun (Oracle's compile errors) fails it.
+        await using var rig = new Rig();
+        rig.Provider.AfterBatchText = _ => [new ProviderMessage(Severity.Error, "Query execution was interrupted", Number: 1317)];
+        var s = rig.Open();
+        var done = await rig.Run(s, "SELECT 1", new ExecuteOptions());
+        Assert.Equal(ExecState.Done, done.State);
+        Assert.Null(done.Error);
+        Assert.Equal(Severity.Error, rig.Notifier.Of<ServerMessage>().Single(x => x.Number == 1317).Severity);
     }
 
     [Fact]

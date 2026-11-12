@@ -24,7 +24,7 @@ public sealed class OracleTunnelTests : IDisposable
     readonly string _dir = Directory.CreateTempSubdirectory("qora-tun-").FullName;
     readonly OracleProvider _oracle;
 
-    public OracleTunnelTests() => _oracle = new OracleProvider(_dir, unavailable: null);
+    public OracleTunnelTests() => _oracle = TestOracle.Supported(_dir);
 
     public void Dispose()
     {
@@ -305,6 +305,18 @@ public sealed class OracleTunnelTests : IDisposable
     }
 
     [Fact]
+    public async Task A_closed_port_is_named_in_querithms_words_on_every_platform()
+    {
+        // The real driver against a loopback port nothing listens on: ORA-12541 on Windows, ORA-50232 on Linux and macOS
+        // (D4 S13: the raw driver text reached the user there).
+        int port;
+        using (var probe = new TcpListener(IPAddress.Loopback, 0)) { probe.Start(); port = ((IPEndPoint)probe.LocalEndpoint).Port; }
+        var direct = P(TlsMode.Disable, host: "127.0.0.1", port: port) with { Ssh = null };
+        var ex = await Assert.ThrowsAnyAsync<Exception>(() => _oracle.OpenAsync(direct, "pw", null, null, CancellationToken.None));
+        Assert.Contains("this host and port", Assert.Single(_oracle.TranslateException(ex)).Message);
+    }
+
+    [Fact]
     public void Redirect_detection_reads_only_connect_failures_away_from_the_forward()
     {
         static Exception Driver(string inner) => new Exception("ORA-50201: Oracle Communication: Failed to connect to server", new IOException(inner));
@@ -316,6 +328,10 @@ public sealed class OracleTunnelTests : IDisposable
         Assert.Null(OracleErrors.RedirectRefusal(Driver("ORA-01017: invalid credential"), 40001, "db", 2484));
         Assert.Null(OracleErrors.RedirectRefusal(Driver("ORA-12537: TNS:connection closed"), 40001, "db", 2484));
         Assert.Null(OracleErrors.NoListenerAt("ORA-12541: No listener at host bad)host port 1."));
+        // D4 S13: on Linux and macOS ODP.NET reports a refused address as ORA-50232, not ORA-12541 (the first CI run there).
+        Assert.Contains("10.1.2.3:1521", OracleErrors.RedirectRefusal(Driver("ORA-50232: Network Transport: TCP transport address connect failure for  host 10.1.2.3 port 1521. (CONNECTION_ID=x)"), 40001, "db", 2484));
+        Assert.Null(OracleErrors.RedirectRefusal(Driver("ORA-50232: Network Transport: TCP transport address connect failure for  host 127.0.0.1 port 40001. (CONNECTION_ID=x)"), 40001, "db", 2484));
+        Assert.Equal(("127.0.0.1", 1), OracleErrors.NoListenerAt("ORA-50232: Network Transport: TCP transport address connect failure for  host 127.0.0.1 port 1. (CONNECTION_ID=x)"));
     }
 
     // ---- lost connections, timeouts ----

@@ -260,7 +260,7 @@ public class OracleMetadataTests
     [Fact]
     public void The_provider_reads_its_catalog()
     {
-        var provider = new OracleProvider();
+        var provider = TestOracle.Supported();
         Assert.IsType<OracleMetadata>(provider.Metadata);
     }
 }

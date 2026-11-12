@@ -300,7 +300,7 @@ public class MonitorBench
     [OptInFact("QUERITHM_BENCH_MONITOR")]
     public async Task M28_M31_M32_oracle_100_sessions_full_sqlstats_and_cpu()
     {
-        await using var host = new TestHost(new Querithm.Providers.Oracle.OracleProvider(Directory.CreateTempSubdirectory("qora-bench-").FullName));
+        await using var host = new TestHost(TestOracle.Supported(Directory.CreateTempSubdirectory("qora-bench-").FullName));
         var profile = await host.Rpc.ProfileSave(new Profile
         {
             Id = "", Name = "ora-bench", Engine = Engine.Oracle, Host = "127.0.0.1", Port = OracleIntegrationTests.Port, Auth = AuthKind.Password,

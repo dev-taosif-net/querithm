@@ -13,7 +13,7 @@ public sealed class OracleFeatureMatrixTests
 {
     static async Task<(TestHost H, string Sid)> OpenAsync()
     {
-        var h = new TestHost(new OracleProvider(Directory.CreateTempSubdirectory("qora-feat-").FullName));
+        var h = new TestHost(TestOracle.Supported(Directory.CreateTempSubdirectory("qora-feat-").FullName));
         var p = await h.Rpc.ProfileSave(new Profile
         {
             Id = "", Name = "ora-features", Engine = Engine.Oracle, Host = "127.0.0.1", Port = OracleIntegrationTests.Port, Auth = AuthKind.Password,

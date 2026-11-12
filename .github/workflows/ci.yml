@@ -103,7 +103,9 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with: { dotnet-version: 10.0.x }
       - run: pnpm install --frozen-lockfile
-      - run: docker compose -f scripts/bench/docker/compose.yml up -d --build --wait || (sleep 20 && docker compose -f scripts/bench/docker/compose.yml ps)
+      # D4 S13: --profile oracle adds Oracle Free (about 2 GB RAM, a few minutes to its first healthy check): the Oracle
+      # integration suites and the bench's Oracle metrics need it, and without it every one of them failed to connect.
+      - run: docker compose -f scripts/bench/docker/compose.yml --profile oracle up -d --build --wait || (sleep 20 && docker compose -f scripts/bench/docker/compose.yml --profile oracle ps)
       - run: node scripts/bench/gen-schema.mjs --apply   # waits until SQL Server and PostgreSQL take queries (no healthchecks)
       - run: node scripts/fixture/load-testdb.mjs   # querithm_test for PostgresTestDbIntegrationTests
       # Before the tests: W10 runs the trimmed release sidecar's --self-test (wait dictionary under trimming).
@@ -113,6 +115,9 @@ jobs:
       # Runs even when the integration tests or the bench failed, so one red step does not hide the E2E result.
       - if: ${{ !cancelled() }}
         run: node scripts/bench/smoke-ui.mjs smoke-screens --no-build
+      - if: ${{ !cancelled() }}
+        name: UI smoke, Oracle workflow (hidden engine exposed)
+        run: node scripts/bench/smoke-ui.mjs smoke-screens-oracle --oracle --no-build
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
@@ -120,6 +125,7 @@ jobs:
           path: |
             bench/results/
             smoke-screens/
+            smoke-screens-oracle/
 
   audit:
     runs-on: ubuntu-24.04

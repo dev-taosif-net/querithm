@@ -37,7 +37,7 @@ public sealed class OraclePlanIntegrationTests
     static CancellationToken Timeout(int seconds = 120) => new CancellationTokenSource(TimeSpan.FromSeconds(seconds)).Token;
 
     static async Task<DbConnection> OpenAsync(string user = App) =>
-        await new OracleProvider(Directory.CreateTempSubdirectory("qora-plan-").FullName).OpenAsync(ProfileOf(user), Secret(user), null, null, Timeout());
+        await TestOracle.Supported(Directory.CreateTempSubdirectory("qora-plan-").FullName).OpenAsync(ProfileOf(user), Secret(user), null, null, Timeout());
 
     static async Task<object?> ScalarAsync(DbConnection c, string sql)
     {
@@ -88,7 +88,7 @@ public sealed class OraclePlanIntegrationTests
         finally { Once.Release(); }
     }
 
-    static TestHost NewHost() => new(new OracleProvider(Directory.CreateTempSubdirectory("qora-plan-host-").FullName));
+    static TestHost NewHost() => new(TestOracle.Supported(Directory.CreateTempSubdirectory("qora-plan-host-").FullName));
 
     static async Task<string> SessionAsync(TestHost h, string user, EnvironmentKind environment = EnvironmentKind.Dev)
     {
@@ -305,7 +305,7 @@ public sealed class OraclePlanIntegrationTests
         await FreshAsync();
         var dir = Directory.CreateTempSubdirectory("qora-tier2-").FullName;
         await using var services = Services.Create(LocalStore.InMemory(), new CapturingFrames(), new CapturingNotifier(), NullLoggerFactory.Instance,
-            new ProviderRegistry(EngineSetup.Providers(dir), ProviderRegistry.HiddenEngines(EngineSetup.BehindFlag, "oracle")), dir);
+            new ProviderRegistry(TestOracle.ShippedProviders(dir), ProviderRegistry.HiddenEngines(EngineSetup.BehindFlag, "oracle")), dir);
         var rpc = new RpcServer(services, () => { });
         var p = await rpc.ProfileSave(ProfileOf(App));
         await rpc.SessionOpen(new SessionOpenParams { ProfileId = p.Id, Secret = Secret(App) });

@@ -20,7 +20,7 @@ public sealed class OracleMonitorTests
 
     sealed class Rig : IAsyncDisposable
     {
-        public TestHost H { get; } = new(new OracleProvider(Directory.CreateTempSubdirectory("qora-mon-").FullName));
+        public TestHost H { get; } = new(TestOracle.Supported(Directory.CreateTempSubdirectory("qora-mon-").FullName));
         public Profile P { get; private set; } = null!;
         readonly List<OracleConnection> _foreign = [];
 

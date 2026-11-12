@@ -23,3 +23,9 @@ id = "generic-api-key"
     '''^sidecar/Querithm\.Tests/Security/PentestSecretLeakTests\.cs$''',
   ]
   regexes = ['''^wrong\-pw\-xyz\-123$''', '''^0123456789abcdef0123456789abcdef$''', '''^private\-db\-zz1$''', '''^wrong\-phrase\-42$''', '''^zq10\-unclosed\-ms$''']
+
+  [[rules.allowlists]]
+  description = "The Oracle Free fixture's monitor-account password (D4 S01): scripts/bench/docker/compose.yml is one of the two files that may hold fixture credentials (CLAUDE.md §3), and the account exists only in the fixture bound to 127.0.0.1"
+  condition = "AND"
+  paths = ['''^scripts/bench/docker/compose\.yml$''']
+  regexes = ['''^Querithm_Mon_2026$''']

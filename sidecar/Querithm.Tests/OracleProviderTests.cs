@@ -15,7 +15,7 @@ public sealed class OracleProviderTests : IDisposable
     readonly string _dir = Directory.CreateTempSubdirectory("qora-prov-").FullName;
     readonly OracleProvider _oracle;
 
-    public OracleProviderTests() => _oracle = new OracleProvider(_dir);
+    public OracleProviderTests() => _oracle = TestOracle.Supported(_dir);
 
     public void Dispose()
     {

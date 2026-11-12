@@ -17,7 +17,7 @@ namespace Querithm.Tests;
 /// </summary>
 public class OracleSkeletonTests
 {
-    readonly OracleProvider _oracle = new();
+    readonly OracleProvider _oracle = TestOracle.Supported();
 
     public static TheoryData<Feature> Features
     {
@@ -85,7 +85,7 @@ public class OracleSkeletonTests
     public async Task Exposed_by_the_dev_setting_a_run_passes_the_guard_and_client_commands_are_refused()
     {
         var dir = Directory.CreateTempSubdirectory("qora-").FullName;
-        var registry = new ProviderRegistry(EngineSetup.Providers(dir), ProviderRegistry.HiddenEngines(EngineSetup.BehindFlag, "oracle"));
+        var registry = new ProviderRegistry(TestOracle.ShippedProviders(dir), ProviderRegistry.HiddenEngines(EngineSetup.BehindFlag, "oracle"));
         await using (var services = Services.Create(LocalStore.InMemory(), new CapturingFrames(), new CapturingNotifier(), NullLoggerFactory.Instance, registry, dir))
         {
             var rpc = new RpcServer(services, () => { });

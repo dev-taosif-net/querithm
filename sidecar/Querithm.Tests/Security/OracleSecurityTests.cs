@@ -26,7 +26,7 @@ public sealed class OracleSecurityTests
     static async Task Run(Func<RpcServer, string, Task> body)
     {
         var dir = Directory.CreateTempSubdirectory("qora-sec-").FullName;
-        var registry = new ProviderRegistry(EngineSetup.Providers(dir), ProviderRegistry.HiddenEngines(EngineSetup.BehindFlag, "oracle"));
+        var registry = new ProviderRegistry(TestOracle.ShippedProviders(dir), ProviderRegistry.HiddenEngines(EngineSetup.BehindFlag, "oracle"));
         await using (var services = Services.Create(LocalStore.InMemory(), new CapturingFrames(), new CapturingNotifier(), NullLoggerFactory.Instance, registry, dir))
         {
             var rpc = new RpcServer(services, () => { });
@@ -120,7 +120,7 @@ public sealed class OracleSecurityTests
         {
             var p = new Profile { Id = "p", Name = "ora", Engine = Engine.Oracle, Host = "db.example.test", Auth = AuthKind.Password, Username = "u", DatabaseDefault = "S" };
             Assert.Equal(TlsMode.Default, p.TlsMode);
-            var ds = new Oracle.ManagedDataAccess.Client.OracleConnectionStringBuilder(new OracleProvider(dir).BuildConnectionString(p, "pw", null)).DataSource;
+            var ds = new Oracle.ManagedDataAccess.Client.OracleConnectionStringBuilder(TestOracle.Supported(dir).BuildConnectionString(p, "pw", null)).DataSource;
             Assert.Contains("(PROTOCOL=TCPS)", ds);
             Assert.Contains("(SSL_SERVER_DN_MATCH=TRUE)", ds);
         }
@@ -142,7 +142,7 @@ public sealed class OracleSecurityTests
         try
         {
             var p = new Profile { Id = "p", Name = "ora", Engine = Engine.Oracle, Host = "h", Auth = AuthKind.Password, Username = "u", DatabaseDefault = "S" };
-            var cs = new OracleProvider(dir).BuildConnectionString(p, "fake ora;spaced=pw", null);
+            var cs = TestOracle.Supported(dir).BuildConnectionString(p, "fake ora;spaced=pw", null);
             Assert.DoesNotContain("fake ora", LogScrubber.Scrub(cs));
         }
         finally { Directory.Delete(dir, true); }
@@ -168,7 +168,7 @@ public sealed class OracleSecurityTests
     [Fact]
     public void A_pasted_proxy_or_wallet_password_is_dropped_not_kept_anywhere()
     {
-        var r = new OracleProvider().ParseConnectionString("Data Source=//h/S;User Id=app;Password=fake-main;Proxy User Id=p;Proxy Password=fake-proxy;WALLET_PASSWORD=fake-wallet",
+        var r = TestOracle.Supported().ParseConnectionString("Data Source=//h/S;User Id=app;Password=fake-main;Proxy User Id=p;Proxy Password=fake-proxy;WALLET_PASSWORD=fake-wallet",
             new Profile { Id = "", Name = "x", Engine = Engine.Oracle, Auth = AuthKind.Password });
         Assert.Equal("fake-main", r.Secret);
         var rest = System.Text.Json.JsonSerializer.Serialize(new { r.Profile, r.Unknown, r.NotApplied, r.Notes });

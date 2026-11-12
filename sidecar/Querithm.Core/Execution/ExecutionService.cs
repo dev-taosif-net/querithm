@@ -464,7 +464,7 @@ public sealed class ExecutionService : IAsyncDisposable
                             {
                                 int? editorLine = m.Line is > 0 ? batch.StartLine + m.Line.Value - 1 + lineOffset : null;
                                 var editorColumn = editorLine != null ? EditorColumn(exec.Sql, batch, m.Line, m.Column) : null;
-                                if (m.Severity == Severity.Error)
+                                if (m.Severity == Severity.Error && m.FailsRun) // the batch's own failure only (D4 S13: not a stale SHOW WARNINGS row)
                                 {
                                     hadError = true;
                                     firstError ??= new ErrorInfo { Message = m.Message, Number = m.Number, Line = m.Line, EditorLine = editorLine, EditorColumn = editorColumn, Procedure = m.Procedure, BatchIndex = batchIndex };

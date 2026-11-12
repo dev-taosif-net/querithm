@@ -25,7 +25,7 @@ public sealed class OracleRecoveryTests
         Username = OracleIntegrationTests.AppUser, DatabaseDefault = OracleIntegrationTests.Service, TlsMode = TlsMode.Disable, TimeoutS = 30,
     };
 
-    static TestHost NewHost() => new(new OracleProvider(Directory.CreateTempSubdirectory("qora-rec-").FullName));
+    static TestHost NewHost() => new(TestOracle.Supported(Directory.CreateTempSubdirectory("qora-rec-").FullName));
 
     static async Task<string> OpenAsync(TestHost h, Profile? p = null)
     {

@@ -212,7 +212,7 @@ public sealed class OracleScriptTests
     [Fact]
     public void The_provider_scripts_every_kind_through_its_scripter()
     {
-        var provider = new OracleProvider();
+        var provider = TestOracle.Supported();
         Assert.IsType<OracleScripter>(provider.Scripter);
         Assert.Equal("SELECT *\nFROM APP.T\nFETCH FIRST 1000 ROWS ONLY;", provider.Scripter.ScriptAsync(null!, Ref(ObjectKind.Table, "T"), ScriptKind.SelectTop, default).GetAwaiter().GetResult());
     }

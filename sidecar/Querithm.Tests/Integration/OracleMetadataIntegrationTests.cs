@@ -34,7 +34,7 @@ public sealed class OracleMetadataIntegrationTests
     static async Task<DbConnection> OpenAsync(string user = App)
     {
         var dir = Directory.CreateTempSubdirectory("qora-meta-").FullName;
-        return await new OracleProvider(dir).OpenAsync(ProfileOf(user), Secret(user), null, null, Timeout());
+        return await TestOracle.Supported(dir).OpenAsync(ProfileOf(user), Secret(user), null, null, Timeout());
     }
 
     static CancellationToken Timeout(int seconds = 120) => new CancellationTokenSource(TimeSpan.FromSeconds(seconds)).Token;
@@ -394,7 +394,7 @@ public sealed class OracleMetadataIntegrationTests
         var dir = Directory.CreateTempSubdirectory("qora-meta-host-").FullName;
         var notifier = new CapturingNotifier();
         await using var services = Services.Create(LocalStore.InMemory(), new CapturingFrames(), notifier, NullLoggerFactory.Instance,
-            new ProviderRegistry(EngineSetup.Providers(dir), ProviderRegistry.HiddenEngines(EngineSetup.BehindFlag, "oracle")), dir);
+            new ProviderRegistry(TestOracle.ShippedProviders(dir), ProviderRegistry.HiddenEngines(EngineSetup.BehindFlag, "oracle")), dir);
         var rpc = new RpcServer(services, () => { });
         var p = await rpc.ProfileSave(ProfileOf(App));
         await rpc.SessionOpen(new SessionOpenParams { ProfileId = p.Id, Secret = Secret(App) });

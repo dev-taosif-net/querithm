@@ -71,7 +71,7 @@ public sealed class OracleEditImportTests
     /// <summary>A host with a session and a fresh snapshot (editability resolves result columns against it).</summary>
     static async Task<Opened> OpenAsync(EnvironmentKind environment = EnvironmentKind.Dev)
     {
-        var h = new TestHost(new OracleProvider(Directory.CreateTempSubdirectory("qora-edit-").FullName));
+        var h = new TestHost(TestOracle.Supported(Directory.CreateTempSubdirectory("qora-edit-").FullName));
         var p = await h.Rpc.ProfileSave(ProfileOf(environment));
         var sid = (await h.Rpc.SessionOpen(new SessionOpenParams { ProfileId = p.Id, Secret = FixtureSecrets.Password("oracle") })).SessionId;
         await RefreshAsync(h, p);

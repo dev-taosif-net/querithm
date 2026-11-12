@@ -644,8 +644,8 @@ public class CancelRecoveryTests
     public async Task Oracle_whose_close_waits_for_the_running_call_is_never_closed_and_an_unacknowledged_cancel_is_reported()
     {
         await using var rig = new Rig();
-        Assert.False(((IDbProvider)new Querithm.Providers.Oracle.OracleProvider()).CloseAbortsCommand);
-        rig.Provider.CloseAbortsCommand = ((IDbProvider)new Querithm.Providers.Oracle.OracleProvider()).CloseAbortsCommand;
+        Assert.False(((IDbProvider)TestOracle.Supported()).CloseAbortsCommand);
+        rig.Provider.CloseAbortsCommand = ((IDbProvider)TestOracle.Supported()).CloseAbortsCommand;
         rig.StuckOn("WAITFOR", (cmd, _) => UntilClosed(cmd));
         var s = rig.Open();
 

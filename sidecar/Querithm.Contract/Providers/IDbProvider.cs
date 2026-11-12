@@ -173,7 +173,7 @@ public interface IDbProvider
     /// <summary>
     /// Phase D4: <see cref="AfterBatchMessagesAsync(DbConnection, CancellationToken)"/> with the batch that just ran, for
     /// messages that depend on it (Oracle: the compile errors of the PL/SQL unit a <c>CREATE</c> made, which the driver
-    /// does not raise). Lines are relative to <paramref name="batchText"/>; an Error marks the run failed.
+    /// does not raise). Lines are relative to <paramref name="batchText"/>; a message with <see cref="ProviderMessage.FailsRun"/> marks the run failed.
     /// </summary>
     Task<IReadOnlyList<ProviderMessage>> AfterBatchMessagesAsync(DbConnection connection, string batchText, CancellationToken ct) =>
         AfterBatchMessagesAsync(connection, ct);
@@ -313,6 +313,11 @@ public sealed record ColumnShape(Type Clr, string TypeName, ColumnHint Hint = Co
 /// <summary>A dynamically typed value's storage class, sent per cell in the <c>&lt;col&gt;__class</c> sibling (Phase D0f).</summary>
 public enum StorageClass : byte { Null = 0, Integer = 1, Real = 2, Text = 3, Blob = 4 }
 
+/// <param name="FailsRun">
+/// An after-batch message that is the batch's own failure (Oracle: a compile error the driver does not raise), so the run is
+/// Failed. False by default: other after-batch rows are shown only (MySQL's SHOW WARNINGS may still list an earlier statement's
+/// error, such as a cancelled query's 1317, after a statement that does not clear the diagnostics area — D4 S13).
+/// </param>
 public sealed record ProviderMessage(
     Severity Severity,
     string Message,
@@ -321,4 +326,5 @@ public sealed record ProviderMessage(
     int? Number = null,
     int? State = null,
     int? Class = null,
-    int? Column = null);
+    int? Column = null,
+    bool FailsRun = false);
