@@ -156,7 +156,14 @@ public sealed class DataCompareService(SessionManager sessions, MetadataService 
             await using var cmd = conn.Db.CreateCommand();
             cmd.CommandText = sql;
             cmd.CommandTimeout = 0;
-            await using var r = await cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess, ct).ConfigureAwait(false);
+            await using var r = await ExecuteWithSnapshotRetryAsync(
+                c => cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess, c), d.SnapshotTooOld, d.SnapshotRetryDelay,
+                async c =>
+                {
+                    // A new snapshot needs a new transaction: SET TRANSACTION READ ONLY fixes it at its start.
+                    if (readOnly) await s.Provider.Transactions.RollbackAsync(conn.Db, c).ConfigureAwait(false);
+                    readOnly = await s.Provider.Transactions.BeginReadOnlyAsync(conn.Db, c).ConfigureAwait(false);
+                }, ct).ConfigureAwait(false);
             return await read(r, ct).ConfigureAwait(false);
         }
         finally
@@ -164,6 +171,27 @@ public sealed class DataCompareService(SessionManager sessions, MetadataService 
             if (readOnly) { try { using var cleanup = Cleanup.Start(); await s.Provider.Transactions.RollbackAsync(conn.Db, cleanup.Token).ConfigureAwait(false); } catch { /* connection gone */ } }
             // The pool reads the state: a read transaction that did not end is never handed to the next borrower.
             await release().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Runs the SELECT; when it fails because the read's snapshot predates the table's last DDL (<see
+    /// cref="IDataCompareDialect.SnapshotTooOld"/>), starts a new snapshot after the dialect's delay and runs it once more.
+    /// No row has been read then, so nothing is counted twice; a second failure is the compare's error.
+    /// </summary>
+    internal static async Task<DbDataReader> ExecuteWithSnapshotRetryAsync(
+        Func<CancellationToken, Task<DbDataReader>> execute, Func<Exception, bool> snapshotTooOld, TimeSpan delay, Func<CancellationToken, Task> newSnapshot,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await execute(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (snapshotTooOld(ex) && !ct.IsCancellationRequested)
+        {
+            await Task.Delay(delay, ct).ConfigureAwait(false);
+            await newSnapshot(ct).ConfigureAwait(false);
+            return await execute(ct).ConfigureAwait(false);
         }
     }
 

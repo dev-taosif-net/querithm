@@ -46,6 +46,12 @@ public sealed class OracleDataCompare : IDataCompareDialect
 
     public bool QueryTypesFromProvider => true;
 
+    /// <summary>
+    /// ORA-01466: Oracle maps DDL time to SCNs only every few seconds, so a READ ONLY transaction started just after a CREATE
+    /// or ALTER may refuse the table (CI 43581675301: a compare right after its tables were created).
+    /// </summary>
+    public bool SnapshotTooOld(Exception ex) => ex is global::Oracle.ManagedDataAccess.Client.OracleException o && OracleErrors.Code(o) == 1466;
+
     public string? ValueRefusal(string? columnType)
     {
         var t = OracleColumnType.Parse(columnType);

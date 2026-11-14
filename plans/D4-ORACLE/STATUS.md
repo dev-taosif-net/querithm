@@ -94,6 +94,15 @@ Found later the same day:
   got the "cursor aged out … Ask for it again" refusal for the first actual plan on the fresh instance (3 / 3 after).
   The refusal is the designed degradation; whether a short re-read of V$SQL_PLAN_STATISTICS_ALL would avoid it is
   **open**.
+- CI 43581675301 (15f688d): `OracleCompareTests.Exact_keys_…` failed with ORA-01466 — the compare's READ ONLY snapshot
+  started seconds after its tables were created (Oracle maps DDL time to SCNs only every few seconds); a user comparing a
+  table just created would see the same. Fixed: `IDataCompareDialect.SnapshotTooOld` (Oracle: ORA-01466; others never)
+  and `DataCompareService.ExecuteWithSnapshotRetryAsync` — when the SELECT itself fails so, before any row is read, the
+  read ends its transaction, waits 3 s, starts a new snapshot and runs once more; a second failure is the compare's error.
+  Tests: `DataCompareTests.A_select_refused_for_its_snapshot_runs_once_more_in_a_new_one`,
+  `…Other_errors_and_a_second_refusal_are_the_compares_error`, `…A_cancel_during_the_wait_ends_the_read`,
+  `OracleDataCompareTests.A_snapshot_older_than_the_tables_ddl_is_ora_01466_only`; `QUERITHM_IT=1` compare suites for SQL
+  Server, PostgreSQL, MySQL 8.4 / 9.7, MariaDB and Oracle 24 / 24.
 - CI Intel macOS: `RenameDialog.test.tsx` missed Testing Library's 1 s `findBy` (300 ms debounce + render on the slow
   runner). Vitest now reads `QUERITHM_TEST_TIME_SCALE` like the sidecar tests: `testTimeout` and `asyncUtilTimeout`
   scale with it (`src/testing/timeScale.setup.ts`, test `timeScale.test.ts`); scale 1 changes nothing.

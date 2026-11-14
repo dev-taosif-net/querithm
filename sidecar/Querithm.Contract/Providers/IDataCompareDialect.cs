@@ -73,4 +73,14 @@ public interface IDataCompareDialect
 
     /// <summary>Phase D4 S11: a custom query's column types come from the provider's <c>DescribeColumns</c> (the catalog's names), not the driver's.</summary>
     bool QueryTypesFromProvider => false;
+
+    /// <summary>
+    /// The read's snapshot is older than the table's last DDL (Oracle ORA-01466: a table created or altered seconds before a
+    /// READ ONLY transaction): the read ends its transaction, waits <see cref="SnapshotRetryDelay"/> and runs once more.
+    /// Asked only when the SELECT itself fails, before any row is read.
+    /// </summary>
+    bool SnapshotTooOld(Exception ex) => false;
+
+    /// <summary>How long a <see cref="SnapshotTooOld"/> read waits before its one retry.</summary>
+    TimeSpan SnapshotRetryDelay => TimeSpan.FromSeconds(3);
 }

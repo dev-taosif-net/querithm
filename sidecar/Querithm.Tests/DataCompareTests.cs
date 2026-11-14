@@ -513,4 +513,47 @@ public class DataCompareTests
         Assert.Equal("Showing the first 10 differences (Keep): raise Keep to see more.", done.TruncatedNote);
         Assert.Equal(30, done.SourceOnly);
     }
+
+    // ------------------------------------------------------------- a snapshot older than the table's DDL (Oracle ORA-01466)
+
+    sealed class SnapshotError : System.Data.Common.DbException { public SnapshotError() : base("ORA-01466") { } }
+
+    static Task<System.Data.Common.DbDataReader> Reader() => Task.FromResult<System.Data.Common.DbDataReader>(new System.Data.DataTable().CreateDataReader());
+
+    [Fact]
+    public async Task A_select_refused_for_its_snapshot_runs_once_more_in_a_new_one()
+    {
+        var (runs, snapshots) = (0, 0);
+        var r = await DataCompareService.ExecuteWithSnapshotRetryAsync(
+            _ => ++runs == 1 ? throw new SnapshotError() : Reader(), ex => ex is SnapshotError, TimeSpan.FromMilliseconds(10),
+            _ => { snapshots++; return Task.CompletedTask; }, CancellationToken.None);
+        Assert.NotNull(r);
+        Assert.Equal((2, 1), (runs, snapshots));
+    }
+
+    [Fact]
+    public async Task Other_errors_and_a_second_refusal_are_the_compares_error()
+    {
+        var snapshots = 0;
+        Task NewSnapshot(CancellationToken _) { snapshots++; return Task.CompletedTask; }
+        await Assert.ThrowsAsync<InvalidOperationException>(() => DataCompareService.ExecuteWithSnapshotRetryAsync(
+            _ => throw new InvalidOperationException("denied"), ex => ex is SnapshotError, TimeSpan.Zero, NewSnapshot, CancellationToken.None));
+        Assert.Equal(0, snapshots);
+        var runs = 0;
+        await Assert.ThrowsAsync<SnapshotError>(() => DataCompareService.ExecuteWithSnapshotRetryAsync(
+            _ => { runs++; throw new SnapshotError(); }, ex => ex is SnapshotError, TimeSpan.Zero, NewSnapshot, CancellationToken.None));
+        Assert.Equal((2, 1), (runs, snapshots)); // one retry, never a loop
+    }
+
+    [Fact]
+    public async Task A_cancel_during_the_wait_ends_the_read()
+    {
+        using var cts = new CancellationTokenSource();
+        var runs = 0;
+        var t = DataCompareService.ExecuteWithSnapshotRetryAsync(
+            _ => { runs++; throw new SnapshotError(); }, ex => ex is SnapshotError, TimeSpan.FromMinutes(5), _ => Task.CompletedTask, cts.Token);
+        await cts.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => t.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(1, runs);
+    }
 }

@@ -133,6 +133,15 @@ public sealed class OracleDataCompareTests
         Assert.Equal(sign == 0, KeyComparers.ValuesEqual(ValueKind.Decimal, ValueKind.Decimal, a, b, new DataCompareOptions()));
     }
 
+    [Fact]
+    public void A_snapshot_older_than_the_tables_ddl_is_ora_01466_only()
+    {
+        Assert.True(D.SnapshotTooOld(OracleErrorFactory.Create(1466, "ORA-01466: unable to read data - table definition has changed")));
+        Assert.False(D.SnapshotTooOld(OracleErrorFactory.Create(942, "ORA-00942: table or view does not exist")));
+        Assert.False(D.SnapshotTooOld(new InvalidOperationException("ORA-01466")));
+        Assert.False(((IDataCompareDialect)new Querithm.Providers.Postgres.PostgresDataCompare()).SnapshotTooOld(OracleErrorFactory.Create(1466, "x"))); // other engines: never
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("1.2.3")]
