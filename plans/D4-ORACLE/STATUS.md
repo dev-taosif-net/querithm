@@ -111,6 +111,13 @@ Gate: Vitest 5115 / 5115; `dotnet test sidecar` 4440 passed / 381 skipped / 0 fa
 (SQL Server, PostgreSQL ×3, MySQL ×3, MariaDB, SSH fixtures) 3949 passed / 1 failed (W10, stale publish, then passed);
 CI run 43574413376 on cef027e green on every job (integration with the Oracle fixture 4924 passed / 0 failed, smoke and
 smoke --oracle, bench, release-smoke on every RID, audit).
+Final: CI run 43583478694 on 7f00b20 green on every job (integration 4934 passed / 0 failed; smoke, smoke --oracle,
+release-smoke on every RID, audit). Bench in that run: #22 1,465 ms, 22.mysql 332 ms, 22.oracle 1,143 ms (all ≤ 1,500);
+the runner was slower across the board (median +35 % over 75 metrics against run 43574413376, SQLite / DuckDB / UI
+metrics this branch's last changes cannot touch +50 to +240 %), #22 +63 %. A back-to-back local `pnpm bench -- --engine`
+on 2ab36b1 and 7f00b20 was not run; it is the open check for #22. Local: `dotnet test sidecar` 4444 / 0 (one
+`CancelRecoveryTests` frame-cancel flake in an earlier run, 5 / 5 alone — the known one); `QUERITHM_IT=1` Oracle suite
+979 / 0.
 
 ## Decisions taken (owner answers to README "Open decisions")
 
