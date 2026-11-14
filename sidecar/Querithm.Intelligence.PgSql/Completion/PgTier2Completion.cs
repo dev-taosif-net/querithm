@@ -245,8 +245,11 @@ public static class PgTier2Completion
         var chain = new List<string> { b[k].Name };
         for (var j = k - 1; j >= 1 && chain.Count < 3 && b[j].IsP(".") && b[j - 1].IsIdent; j -= 2) chain.Insert(0, b[j - 1].Name);
         var sch = chain.Count >= 2 ? chain[^2] : null;
-        var found = chain.Count <= 2 ? schema.Routines(sch, b[k].Name).ToList() : [];
-        if (found.Count == 0 && chain.Count >= 2 && PgCompletionRules.Current.MemberRoutines is { } members) found = members(schema.Snapshot, chain).ToList();
+        var members = PgCompletionRules.Current.MemberRoutines;
+        // db.schema.fn( (PostgreSQL, DuckDB) resolves by schema and name; with member routines a three-part chain is
+        // schema.pkg.member( instead, never a schema named after the package.
+        var found = chain.Count <= 2 || members == null ? schema.Routines(sch, b[k].Name).ToList() : [];
+        if (found.Count == 0 && chain.Count >= 2 && members != null) found = members(schema.Snapshot, chain).ToList();
         return found;
     }
 

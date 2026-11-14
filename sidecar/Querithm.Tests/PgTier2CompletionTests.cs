@@ -256,4 +256,14 @@ public class PgTier2CompletionTests
         Assert.Empty(Sig("SELECT nope(|)").Signatures);
         Assert.Empty(Sig("SELECT 'calc_discount(|'").Signatures);
     }
+
+    [Fact]
+    public void A_database_qualified_call_resolves_by_its_schema_and_name()
+    {
+        // Regression (D4 cross-check): db.schema.fn( found nothing once three-part chains went to the Oracle-only
+        // pkg.member lookup; PostgreSQL and DuckDB name the catalog first and must keep signature help.
+        Assert.Equal(2, Sig("SELECT shop.public.calc_discount(100, |)").Signatures.Length);
+        var items = Complete("SELECT shop.public.calc_discount(|").Select(i => i.Label).ToList();
+        Assert.Contains("p_total =>", items);
+    }
 }

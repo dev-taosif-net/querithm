@@ -337,6 +337,8 @@ public partial class OracleIntelligenceTests
     [InlineData("BEGIN DBMS_SQL.RETURN_RESULT(c); DBMS_SQL.EXECUTE(c2); END;", "dynamicSql")] // only RETURN_RESULT / GET_NEXT_RESULT are exempt
     [InlineData("BEGIN\n  DELETE FROM t;\nEND;", "deleteWithoutWhere")]
     [InlineData("BEGIN\n  FORALL i IN 1..n UPDATE t SET v = 0;\nEND;", "updateWithoutWhere")]
+    [InlineData("BEGIN\n  UPDATE (SELECT v FROM t) SET v = 0;\nEND;", "updateWithoutWhere")] // DML on an inline view
+    [InlineData("BEGIN\n  DELETE (SELECT * FROM t);\nEND;", "deleteWithoutWhere")]
     [InlineData("BEGIN\n  MERGE INTO t USING s ON (1 = 1) WHEN MATCHED THEN UPDATE SET v = 1;\nEND;", "merge")]
     public void Dml_and_dynamic_sql_in_a_block_count(string sql, string rule) => Assert.Contains(rule, Rules(sql + "\n/"));
 

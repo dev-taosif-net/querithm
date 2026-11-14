@@ -204,8 +204,10 @@ public sealed class OracleLanguageService : IDialectService
                 s.Add("dynamicSql", stmtText, t, $"{t.Text.ToUpperInvariant()} runs SQL text built at run time, which cannot be checked for destructive statements.");
                 continue;
             }
-            // Static DML: a DELETE / UPDATE / MERGE word that is not a collection method (v.DELETE) or FOR UPDATE.
-            if ((t.Is("DELETE") || t.Is("UPDATE") || t.Is("MERGE")) && !prev.IsP(".") && !prev.Is("FOR") && !next.IsP(".") && !next.IsP("("))
+            // Static DML: a DELETE / UPDATE / MERGE word that is not a collection method (v.DELETE, v.DELETE(1)) or FOR UPDATE.
+            // A "(" after it is DML on an inline view (UPDATE (SELECT …) SET …, DELETE (SELECT …)): the prev "." test already
+            // keeps collection methods out, so it counts.
+            if ((t.Is("DELETE") || t.Is("UPDATE") || t.Is("MERGE")) && !prev.IsP(".") && !prev.Is("FOR") && !next.IsP("."))
             {
                 var end = i;
                 while (end < code.Count && !code[end].IsP(";")) end++;

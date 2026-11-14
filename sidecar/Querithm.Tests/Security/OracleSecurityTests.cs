@@ -55,6 +55,7 @@ public sealed class OracleSecurityTests
     [InlineData("BEGIN\n  EXECUTE IMMEDIATE 'DROP TABLE t';\nEND;\n/", "drop")]
     [InlineData("BEGIN\n  EXECUTE IMMEDIATE v_sql;\nEND;\n/", "dynamicSql")]
     [InlineData("BEGIN\n  DELETE FROM t;\nEND;\n/", "deleteWithoutWhere")]
+    [InlineData("BEGIN\n  UPDATE (SELECT v FROM t) SET v = 0;\nEND;\n/", "updateWithoutWhere")]
     public async Task A_destructive_statement_is_blocked_without_confirmedDestructive(string sql, string rule)
     {
         await Run(async (rpc, sid) =>
