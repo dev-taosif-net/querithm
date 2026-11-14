@@ -67,6 +67,26 @@ Found, not fixed (open, smaller):
 - Gaps in tests: the < 19c refusal, ROWID / UROWID column types, the "transaction lost" notice in the restart test, a
   `CancelRecoveryTests` case for the import loader; `OracleIdentifiers.Quote` refusing `"` is in STATUS only, not §16.
 
+## Cross-check after S13 (2026-11-14)
+
+Independent read of the branch against CLAUDE.md and README, then every suite. Three defects confirmed and fixed, each with
+a regression test that failed before the fix:
+
+| # | Defect | Fix | Regression test |
+|---|---|---|---|
+| 1 | §13 destructive guard: `UPDATE (SELECT …) SET …` / `DELETE (SELECT …)` inside a PL/SQL block were skipped (a `(` after the word was taken for a collection method call), so a Prod profile ran them with no destructive confirm | `ClassifyPlSql` drops the `(` test; the prev `.` test keeps `v.DELETE(1)` out | `OracleIntelligenceTests.Dml_and_dynamic_sql_in_a_block_count`, `OracleSecurityTests.A_destructive_statement_is_blocked_without_confirmedDestructive` (inline-view cases) |
+| 2 | PostgreSQL / DuckDB: `db.schema.fn(` lost signature help and named arguments (three-part chains went only to the Oracle `pkg.member` lookup since S08) | `PgTier2Completion.Call` resolves by schema and name when the dialect has no member routines | `PgTier2CompletionTests.A_database_qualified_call_resolves_by_its_schema_and_name` |
+| 3 | Data compare on every engine (S11 `ExactNumber`): each numeric cell went through StringBuilder + BigInteger. Probe, 600k decimal(10,2)-shaped cells (#22's numeric cells, both sides), Release, Linux: `decimal.TryParse` 35–42 ms; `ExactNumber` 388 ms cold / 87 ms warm | ≤ 19 significant digits accumulate in a `ulong`; longer mantissas keep the BigInteger path: 90 ms cold / 77–80 ms warm (≈ +40 ms per #22 compare, ~4 % of the 1,153 ms baseline of `2026-11-03-14-21-29-linux.json`). CI bench on the branch before this fix: #22 898 ms, 22.mysql 246 ms (target 1,500) | `OracleDataCompareTests.Numbers_compare_exactly_past_28_digits` (19 / 20-digit boundary cases) |
+
+Also: `MonitorMemoryTests` text-store check failed once in a full local run (heap 129 B vs 515 B counted: the process-wide
+heap moved under other tests' leftover work); it now measures a fresh store up to three times and reports every reading.
+W10 failed locally only because the published trimmed sidecar predated the branch; after `build-sidecar --release` it passes.
+
+Gate: Vitest 5115 / 5115; `dotnet test sidecar` 4440 passed / 381 skipped / 0 failed; `QUERITHM_IT=1` without Oracle
+(SQL Server, PostgreSQL ×3, MySQL ×3, MariaDB, SSH fixtures) 3949 passed / 1 failed (W10, stale publish, then passed);
+CI run 43574413376 on cef027e green on every job (integration with the Oracle fixture 4924 passed / 0 failed, smoke and
+smoke --oracle, bench, release-smoke on every RID, audit).
+
 ## Decisions taken (owner answers to README "Open decisions")
 
 | # | Answer | Date |

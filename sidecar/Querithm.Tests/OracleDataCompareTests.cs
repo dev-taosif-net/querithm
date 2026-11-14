@@ -118,6 +118,13 @@ public sealed class OracleDataCompareTests
     [InlineData("0.000000000000000000000000000000001", "0", 1)]
     [InlineData("99999999999999999999999999999999999999", "1E38", -1)]
     [InlineData(" 7 ", "7.0", 0)]
+    // The ulong path (≤ 19 significant digits) and the BigInteger path give one value at the boundary.
+    [InlineData("9999999999999999999", "10000000000000000000", -1)]
+    [InlineData("1000000000000000000000", "1e21", 0)]
+    [InlineData("12345678901234567890", "1.2345678901234567890e19", 0)]
+    [InlineData("0001.50", "1.5", 0)]
+    [InlineData("1234567890123456789.5", "1234567890123456789.50", 0)]
+    [InlineData("-18446744073709551616", "-18446744073709551615", -1)]
     public void Numbers_compare_exactly_past_28_digits(string a, string b, int sign)
     {
         Assert.True(ExactNumber.TryParse(a, out var x));

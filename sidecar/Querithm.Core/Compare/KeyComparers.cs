@@ -184,14 +184,27 @@ public readonly record struct ExactNumber(System.Numerics.BigInteger Mantissa, i
         var i = 0;
         var negative = false;
         if (s[0] is '+' or '-') { negative = s[0] == '-'; i++; }
-        var digits = new System.Text.StringBuilder(s.Length);
+        // Up to 19 significant digits accumulate in a ulong (every key and value of the usual numeric types); only a longer
+        // mantissa goes through text and BigInteger. 600k decimal(10,2)-shaped cells: 87 ms through BigInteger every time
+        // (decimal.TryParse: 35 ms), 380 ms before the JIT warmed up; see STATUS.md, cross-check 2026-11-14.
+        ulong small = 0;
+        var significant = 0;
+        System.Text.StringBuilder? digits = null;
         var fraction = 0;
         var seenPoint = false;
         var any = false;
         for (; i < s.Length; i++)
         {
             var c = s[i];
-            if (char.IsAsciiDigit(c)) { digits.Append(c); any = true; if (seenPoint) fraction++; }
+            if (char.IsAsciiDigit(c))
+            {
+                any = true;
+                if (seenPoint) fraction++;
+                if (digits != null) digits.Append(c);
+                else if (small == 0 && c == '0') { } // a leading zero adds nothing
+                else if (significant < 19) { small = small * 10 + (ulong)(c - '0'); significant++; }
+                else digits = new System.Text.StringBuilder(s.Length).Append(small.ToString(CultureInfo.InvariantCulture)).Append(c);
+            }
             else if (c == '.' && !seenPoint) seenPoint = true;
             else break;
         }
@@ -202,11 +215,20 @@ public readonly record struct ExactNumber(System.Numerics.BigInteger Mantissa, i
             if (s[i] is not ('e' or 'E')) return false;
             if (!int.TryParse(s[(i + 1)..], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out exponent) || Math.Abs(exponent) > 100_000) return false;
         }
-        var m = System.Numerics.BigInteger.Parse(digits.ToString(), NumberStyles.None, CultureInfo.InvariantCulture);
         var e = exponent - fraction;
-        if (m.IsZero) e = 0;
+        System.Numerics.BigInteger m;
+        if (digits == null)
+        {
+            if (small == 0) e = 0;
+            else
+                while (small % 10 == 0) { small /= 10; e++; }
+            m = small;
+        }
         else
-            while (m % 10 == 0) { m /= 10; e++; }
+        {
+            m = System.Numerics.BigInteger.Parse(digits.ToString(), NumberStyles.None, CultureInfo.InvariantCulture);
+            while (m % 10 == 0) { m /= 10; e++; } // never zero: it holds 20 significant digits
+        }
         value = new ExactNumber(negative ? -m : m, e);
         return true;
     }
