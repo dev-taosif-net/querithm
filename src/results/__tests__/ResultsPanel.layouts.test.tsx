@@ -103,6 +103,23 @@ describe("choosing the layout", () => {
     expect(within(switchGroup()!).getByRole("button", { name: "Stacked: one under another" }).getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("the layout switch and Differences sit left of Grid / Chart, so switching to a chart does not move them", async () => {
+    setup(2, "side");
+    render(<LivePanel />);
+    await waitFor(() => expect(screen.getAllByTestId("grid")).toHaveLength(2));
+    const view = () => screen.getByRole("group", { name: "Show the result as" });
+    const before = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(before(switchGroup()!, view())).toBe(true);
+    expect(before(document.querySelector("[data-q-side-diff]")!, view())).toBe(true);
+    const row = switchGroup()!.parentElement!;
+    const slot = () => [...row.children].indexOf(switchGroup()!);
+    const at = slot();
+    fireEvent.click(within(view()).getByRole("button", { name: "Chart" }));
+    await waitFor(() => expect(screen.getAllByTestId("chart").length).toBeGreaterThan(0));
+    expect(slot()).toBe(at);
+    expect(before(switchGroup()!, view())).toBe(true);
+  });
+
   it("the Settings default applies to a tab without its own choice", async () => {
     useSettings.setState({ resultLayout: "side" } as never);
     setup(2);
@@ -160,6 +177,48 @@ describe("Stacked", () => {
     expect(within(sections()[0]).getByRole("button", { name: "Expand result set 1" })).toBeTruthy();
   });
 
+  it("the caption's button collapses and expands a set by a real click (pointer then click), the selected one too, without selecting it", async () => {
+    setup(3, "stacked");
+    render(<LivePanel />);
+    await waitFor(() => expect(screen.getAllByTestId("grid")).toHaveLength(3));
+    const press = (name: string) => {
+      const b = screen.getByRole("button", { name });
+      fireEvent.pointerDown(b);
+      fireEvent.click(b);
+    };
+    const isCollapsed = (i: number) => !!within(sections()[i]).queryByRole("button", { name: `Expand result set ${i + 1}` });
+    // Another set: it collapses and the selection stays where it was.
+    press("Collapse result set 2");
+    expect(isCollapsed(1)).toBe(true);
+    expect(sections()[0].hasAttribute("data-q-pane-selected")).toBe(true);
+    // The selected set collapses too.
+    press("Collapse result set 1");
+    expect(isCollapsed(0)).toBe(true);
+    press("Expand result set 2");
+    expect(isCollapsed(1)).toBe(false);
+    expect(sections()[0].hasAttribute("data-q-pane-selected")).toBe(true);
+    // Selecting a collapsed set elsewhere (a chip, Alt+PageDown) opens it.
+    act(() => useTabs.getState().update("tab1", { resultIndex: 1 }));
+    act(() => useTabs.getState().update("tab1", { resultIndex: 0 }));
+    await waitFor(() => expect(isCollapsed(0)).toBe(false));
+  });
+
+  it("staged edits keep the selected set open (its button says why); another set still collapses without the lock's toast", async () => {
+    setup(2, "stacked", { edits: { 0: editInfo() } });
+    render(<LivePanel />);
+    await waitFor(() => expect(screen.getAllByTestId("grid")).toHaveLength(2));
+    act(() => void stagingFor("e1", executionData.get("e1")!.resultSets[0], "mssql")!.addRow());
+    await waitFor(() => expect(document.querySelector("[data-q-ledger-locked]")).toBeTruthy());
+    const own = screen.getByRole("button", { name: "Collapse result set 1" });
+    expect(own.hasAttribute("disabled")).toBe(true);
+    expect(own.getAttribute("title")).toBe("Apply or discard the staged changes first");
+    const other = screen.getByRole("button", { name: "Collapse result set 2" });
+    fireEvent.pointerDown(other);
+    fireEvent.click(other);
+    expect(screen.getByRole("button", { name: "Expand result set 2" })).toBeTruthy();
+    expect(toast).not.toHaveBeenCalled();
+  });
+
   it("a pane's splitter resizes it by keyboard (a row per arrow, Home/End to the limits, Enter fits the rows)", async () => {
     setup(2, "stacked");
     render(<LivePanel />);
@@ -202,6 +261,19 @@ describe("Stacked", () => {
 });
 
 describe("Side by side", () => {
+  it("each column is its own card, numbered by its set; the selected card is marked and follows a click", async () => {
+    setup(3, "side");
+    render(<LivePanel />);
+    await waitFor(() => expect(screen.getAllByTestId("grid")).toHaveLength(3));
+    const badges = () => sections().map((s) => s.querySelector("[data-q-pane-badge]")?.textContent);
+    expect(badges()).toEqual(["1", "2", "3"]);
+    const marked = () => sections().map((s) => s.classList.contains("border-accent"));
+    expect(marked()).toEqual([true, false, false]);
+    fireEvent.pointerDown(sections()[2]);
+    await waitFor(() => expect(marked()).toEqual([false, false, true]));
+    expect(sections()[2].querySelector("[data-q-pane-badge]")?.className).toContain("bg-accent-solid");
+  });
+
   it("shows up to three columns; a column's menu picks its set, swapping with the column that had it", async () => {
     setup(4, "side");
     render(<LivePanel />);

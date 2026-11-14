@@ -149,7 +149,7 @@ describe("shared group editors", () => {
   it("builds editor options from settings and applies them to all live editors", () => {
     const c = document.createElement("div");
     const e = ed.attachEditor("g4", c, "x", false) as any;
-    expect(e.opts).toMatchObject({ fontSize: 14, wordWrap: "on", renderLineHighlight: "all", occurrencesHighlight: "singleFile" });
+    expect(e.opts).toMatchObject({ fontSize: 14, wordWrap: "on", renderLineHighlight: "all", occurrencesHighlight: "singleFile", selectionHighlight: false });
     expect(e.opts.minimap.enabled).toBe(true);
     expect(e.opts.find.addExtraSpaceOnTop).toBe(false);
     expect(e.opts.suggest.snippetsPreventQuickSuggestions).toBe(false);

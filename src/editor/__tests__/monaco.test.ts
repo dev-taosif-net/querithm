@@ -107,6 +107,8 @@ describe("monaco bootstrap", () => {
     expect(t.colors["minimap.background"]).toBe("#ffffff");
     expect(t.colors["editor.lineHighlightBackground"]).toBe("#f6f8fa");
     expect(t.colors["editor.selectionBackground"]).toBe("#2563eb26");
+    // The selection looks the same unfocused (Run takes the focus).
+    expect(t.colors["editor.inactiveSelectionBackground"]).toBe("#2563eb26");
     expect(t.colors["editorWidget.border"]).toBe("#aabbccdd");
   });
 

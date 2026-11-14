@@ -47,11 +47,13 @@ interface PaneCallbacks {
 
 /**
  * Selecting a pane by pointer or keyboard focus. A locked panel keeps the selection: the other panes are dimmed, and
- * a click says why instead of switching.
+ * a click says why instead of switching. The collapse button acts on its pane without selecting it: selecting first
+ * kept the pane open (the selected pane was never collapsed), so a click on it did nothing.
  */
 function useSelectHandlers(p: PaneModel, selected: boolean, cb: PaneCallbacks) {
-  const pick = (e: { preventDefault(): void; stopPropagation(): void }) => {
+  const pick = (e: { target: EventTarget | null; preventDefault(): void; stopPropagation(): void }) => {
     if (!p.current || selected) return;
+    if (e.target instanceof Element && e.target.closest("[data-q-pane-toggle]")) return;
     if (cb.locked) {
       e.preventDefault();
       e.stopPropagation();
@@ -157,6 +159,8 @@ const StackPane = memo(function StackPane({ pane, index, selected, mounted, avai
   const fit = Math.max(fitHeight(pane.rs.rowCount, avail), chart ? 240 : 0);
   const h = height ?? fit;
   const n = pane.rs.index + 1;
+  // Staged edits live in the selected set's grid: it stays open until they are applied or discarded.
+  const keepOpen = selected && !!cb.locked && !collapsed;
   return (
     <section
       ref={observe}
@@ -178,10 +182,12 @@ const StackPane = memo(function StackPane({ pane, index, selected, mounted, avai
         lead={
           <button
             type="button"
-            className="w-4 h-4 rounded flex items-center justify-center hover:bg-hover hover:text-fg shrink-0"
+            className="w-4 h-4 rounded flex items-center justify-center hover:bg-hover hover:text-fg shrink-0 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
             aria-expanded={!collapsed}
             aria-label={`${collapsed ? "Expand" : "Collapse"} result set ${n}`}
-            title={collapsed ? "Expand" : "Collapse"}
+            title={keepOpen ? "Apply or discard the staged changes first" : collapsed ? "Expand" : "Collapse"}
+            disabled={keepOpen}
+            data-q-pane-toggle
             onClick={() => setCollapsed(!collapsed)}
           >
             <Icon name="chevron" size={11} strokeWidth={2} className={collapsed ? "-rotate-90" : ""} />
@@ -266,15 +272,21 @@ export function StackedSets({ items, chartKeys, ...cb }: PaneCallbacks & { items
     };
   }, []);
 
-  // The selected item comes into view when it changes (a chip, Alt+PageDown); nothing else scrolls the stack.
+  // The selected item opens and comes into view when it changes (a chip, Alt+PageDown); nothing else scrolls the
+  // stack. A set collapsed while selected stays collapsed until it is selected again.
   useEffect(() => {
     if (!cb.selectedKey) return;
+    const k = cb.selectedKey;
+    // Only a set that is collapsed costs a state change (a 500-set switch must not re-render for nothing).
+    setCollapsed((s) => (s[k] ?? orderRef.current.indexOf(k) >= COLLAPSE_AFTER ? { ...s, [k]: false } : s));
     const el = [...(box.current?.querySelectorAll<HTMLElement>("[data-q-stack-key]") ?? [])].find((x) => x.dataset.qStackKey === cb.selectedKey);
     el?.scrollIntoView?.({ block: "nearest" });
   }, [cb.selectedKey]);
 
   const panes = items.filter((i): i is Extract<StackItem, { kind: "pane" }> => i.kind === "pane").map((i) => i.pane);
   const order = panes.map((p) => p.key);
+  const orderRef = useRef(order);
+  orderRef.current = order;
   const keep = new Set(cb.selectedKey && order.includes(cb.selectedKey) ? [cb.selectedKey] : []);
   // Grids coming into view mount one per frame (placeholders until then), so no frame builds several at once; the
   // selected one mounts at once. Grids leaving the window unmount at once.
@@ -317,7 +329,7 @@ export function StackedSets({ items, chartKeys, ...cb }: PaneCallbacks & { items
             mounted={mounted.has(p.key)}
             avail={avail}
             height={heights[p.key]}
-            collapsed={!selected && (collapsed[p.key] ?? i >= COLLAPSE_AFTER)}
+            collapsed={collapsed[p.key] ?? i >= COLLAPSE_AFTER}
             setHeight={(h) => setHeights((s) => {
               const next = { ...s };
               if (h === undefined) delete next[p.key];
@@ -336,19 +348,36 @@ export function StackedSets({ items, chartKeys, ...cb }: PaneCallbacks & { items
   );
 }
 
-function SidePane({ pane, first, selected, picker, cb }: { pane: PaneModel; first: boolean; selected: boolean; picker?: ReactNode; cb: PaneCallbacks }) {
+/** The set's number on a side pane's caption, so the columns read as different sets at a glance. */
+function SetBadge({ pane, selected }: { pane: PaneModel; selected: boolean }) {
+  return (
+    <span
+      aria-hidden
+      className={`min-w-[18px] h-[16px] px-1 rounded text-[10px] font-semibold tabular-nums flex items-center justify-center shrink-0 ${selected ? "bg-accent-solid text-accent-fg" : "bg-hover text-muted"}`}
+      data-q-pane-badge
+    >
+      {pane.rs.index + 1}
+    </span>
+  );
+}
+
+/**
+ * A side pane is a card of its own (border, gutter around it), and the selected one's border is the accent: with
+ * only a hairline between them, two grids read as one wide table.
+ */
+function SidePane({ pane, selected, picker, cb }: { pane: PaneModel; selected: boolean; picker?: ReactNode; cb: PaneCallbacks }) {
   const handlers = useSelectHandlers(pane, selected, cb);
   return (
     <section
       role="group"
       aria-label={paneTitle(pane)}
       aria-current={selected || undefined}
-      className={`flex-1 basis-0 min-w-[280px] flex flex-col min-h-0 ${first ? "" : "border-l-2 border-line"}`}
+      className={`flex-1 basis-0 min-w-[280px] flex flex-col min-h-0 rounded-[3px] border overflow-hidden bg-bg ${selected ? "border-accent" : "border-line-strong"}`}
       data-q-pane-key={pane.key}
       data-q-pane-selected={selected ? "" : undefined}
       {...handlers}
     >
-      <Caption pane={pane} selected={selected} title={picker}>{cb.tools(pane)}</Caption>
+      <Caption pane={pane} selected={selected} title={picker} lead={<SetBadge pane={pane} selected={selected} />}>{cb.tools(pane)}</Caption>
       <div className="flex-1 min-h-0 relative flex" data-q-pane-body>
         {cb.renderBody(pane, selected)}
         {cb.locked && !selected && pane.current && <LockVeil why={cb.locked} />}
@@ -365,9 +394,9 @@ function SidePane({ pane, first, selected, picker, cb }: { pane: PaneModel; firs
 export function SideSets({ columns, picker, ...cb }: PaneCallbacks & { columns: PaneModel[]; picker: (pane: PaneModel, slot: number) => ReactNode }) {
   let slot = 0;
   return (
-    <div className="flex-1 min-h-0 min-w-0 flex overflow-x-auto" role="group" aria-label={`Result sets side by side, ${columns.length}`} data-q-layout="side">
-      {columns.map((p, i) => (
-        <SidePane key={p.key} pane={p} first={i === 0} selected={p.key === cb.selectedKey} picker={p.current ? picker(p, slot++) : undefined} cb={cb} />
+    <div className="flex-1 min-h-0 min-w-0 flex gap-1.5 p-1.5 bg-panel-2 overflow-x-auto" role="group" aria-label={`Result sets side by side, ${columns.length}`} data-q-layout="side">
+      {columns.map((p) => (
+        <SidePane key={p.key} pane={p} selected={p.key === cb.selectedKey} picker={p.current ? picker(p, slot++) : undefined} cb={cb} />
       ))}
     </div>
   );

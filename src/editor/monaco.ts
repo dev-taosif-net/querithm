@@ -87,6 +87,8 @@ export function applyMonacoTheme() {
       "editorLineNumber.activeForeground": hex("--q-fg"),
       "editor.lineHighlightBackground": hex("--q-panel"),
       "editor.selectionBackground": hex("--q-sel"),
+      // A selection keeps its fill when Run takes the focus (Monaco's default pales it), so what Run runs stays plain.
+      "editor.inactiveSelectionBackground": hex("--q-sel"),
       "editorCursor.foreground": hex("--q-fg"),
       "editorWidget.background": hex("--q-raised"),
       "editorWidget.border": hex("--q-line"),

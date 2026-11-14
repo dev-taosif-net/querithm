@@ -338,10 +338,23 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
     <FilterField rs={rs} filter={filter} setFilter={setFilter} compact={width === "narrow"} />
   );
 
-  // The layout switch (only with two or more sets to lay out), Restore for a maximized set, and side by side's
-  // Differences. Hidden while editing: the edit row replaces the tools, and the ledger is locked anyway.
+  // The layout switch (only with two or more sets to lay out), side by side's Differences and Restore for a
+  // maximized set. They lead the row, left of Grid / Chart, so they stay put while the tools after them come and
+  // go (Copy, Filter and Edit hide for a chart). Hidden while editing: the edit row replaces the tools, and the
+  // ledger is locked anyway.
   const layoutTools = multi ? (
     <>
+      <Seg
+        label="Lay out the result sets"
+        value={chosen}
+        compact
+        options={[
+          { value: "tabs", label: "Tabs: one result set at a time", icon: "layoutTabs" },
+          { value: "stacked", label: "Stacked: one under another", icon: "layoutStacked" },
+          { value: "side", label: "Side by side", icon: "split", unavailable: layoutWhy },
+        ]}
+        onChange={(v) => setResultLayout(tab.id, v)}
+      />
       {layout === "side" && sideCols.length === 2 && (
         <button
           type="button" className="q-btn h-[22px] px-2 shrink-0" aria-pressed={sideDiff} data-q-side-diff
@@ -358,18 +371,6 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
           {width !== "narrow" && `Back to ${LAYOUT_LABEL[chosen]}`}
         </button>
       )}
-      <span aria-hidden className="w-px h-4 bg-line shrink-0" />
-      <Seg
-        label="Lay out the result sets"
-        value={chosen}
-        compact
-        options={[
-          { value: "tabs", label: "Tabs: one result set at a time", icon: "layoutTabs" },
-          { value: "stacked", label: "Stacked: one under another", icon: "layoutStacked" },
-          { value: "side", label: "Side by side", icon: "split", unavailable: layoutWhy },
-        ]}
-        onChange={(v) => setResultLayout(tab.id, v)}
-      />
     </>
   ) : undefined;
 
@@ -377,6 +378,7 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
     <EditTools tabId={tab.id} executionId={executionId!} rs={rs} staging={staging} handle={handle} filterBox={filterBox} onDone={() => setEditKey(null)} />
   ) : rs ? (
     <>
+      {layoutTools && <>{layoutTools}<span aria-hidden className="w-px h-4 bg-line shrink-0" /></>}
       <Seg
         label="Show the result as"
         value={chartOn ? "chart" : "grid"}
@@ -414,7 +416,6 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
       >
         {width === "narrow" ? undefined : chartOn ? "Export rows" : "Export"}
       </MenuButton>
-      {layoutTools}
     </>
   ) : multi ? layoutTools : undefined;
 

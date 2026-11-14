@@ -108,6 +108,9 @@ function editorOptions(): monaco.editor.IStandaloneEditorConstructionOptions {
     smoothScrolling: false,
     cursorSmoothCaretAnimation: "off",
     occurrencesHighlight: s.reducedDecorations ? "off" : "singleFile",
+    // No tint on other copies of the selected text: with equal lines it looked like they were selected too, while Run
+    // (rightly) runs only the selection.
+    selectionHighlight: false,
     bracketPairColorization: { enabled: !s.reducedDecorations },
     // snippetsPreventQuickSuggestions: typing over a snippet placeholder (e.g. `table_name`) must still suggest.
     suggest: { showStatusBar: true, preview: false, showWords: false, insertMode: "replace", filterGraceful: true, snippetsPreventQuickSuggestions: false },
