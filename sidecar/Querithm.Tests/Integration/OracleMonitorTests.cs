@@ -23,6 +23,14 @@ public sealed class OracleMonitorTests
         public TestHost H { get; } = new(TestOracle.Supported(Directory.CreateTempSubdirectory("qora-mon-").FullName));
         public Profile P { get; private set; } = null!;
         readonly List<OracleConnection> _foreign = [];
+        readonly CancellationTokenSource _stop = new();
+
+        /// <summary>
+        /// Cancelled first on dispose: a foreign statement still running (a test failed before its cancel or kill) gets a
+        /// break and ends, instead of its connection's Dispose waiting on it for ever (ODP.NET holds the connection lock
+        /// while a command runs; one failure hung the whole integration run, CI 43577279333).
+        /// </summary>
+        public CancellationToken Stop => _stop.Token;
 
         /// <summary>The monitor's profile signs in as <paramref name="user"/>; the sessions it watches are the app user's.</summary>
         public async Task InitAsync(string user)
@@ -57,12 +65,12 @@ public sealed class OracleMonitorTests
             return c;
         }
 
-        public static async Task ExecAsync(OracleConnection c, string sql, int timeoutS = 30)
+        public static async Task ExecAsync(OracleConnection c, string sql, int timeoutS = 30, CancellationToken ct = default)
         {
             await using var cmd = c.CreateCommand();
             cmd.CommandText = sql;
             cmd.CommandTimeout = timeoutS;
-            await cmd.ExecuteNonQueryAsync();
+            await cmd.ExecuteNonQueryAsync(ct);
         }
 
         public async Task<MonitorSnapshot> WaitSnapshotAsync(string monitorId, Func<MonitorSnapshot, bool> until, int timeoutMs = 30_000)
@@ -87,8 +95,12 @@ public sealed class OracleMonitorTests
 
         public async ValueTask DisposeAsync()
         {
-            foreach (var c in _foreign) try { await c.DisposeAsync(); } catch { /* killed */ }
+            await _stop.CancelAsync();
+            // ODP.NET's Dispose blocks its thread: off the test's thread, and bounded, so a stuck one is abandoned.
+            foreach (var c in _foreign)
+                try { await Task.Run(c.Dispose).WaitAsync(TimeSpan.FromSeconds(30)); } catch { /* killed, or abandoned */ }
             await H.DisposeAsync();
+            _stop.Dispose();
         }
     }
 
@@ -110,7 +122,7 @@ public sealed class OracleMonitorTests
         holder.BeginTransaction();
         victim.BeginTransaction();
         await Rig.ExecAsync(holder, $"UPDATE {Table} SET v = v + 1 WHERE id = {id}");
-        var victimDone = Task.Run(() => Rig.ExecAsync(victim, $"UPDATE {Table} SET v = 0 WHERE id = {id}", 90));
+        var victimDone = Task.Run(() => Rig.ExecAsync(victim, $"UPDATE {Table} SET v = 0 WHERE id = {id}", 90, rig.Stop));
         return (holder, victim, victimDone, h, v);
     }
 
@@ -189,7 +201,7 @@ public sealed class OracleMonitorTests
             await using var cmd = busy.CreateCommand();
             cmd.CommandText = "SELECT /* q_s12_long */ COUNT(*) FROM all_objects a, all_objects b, all_objects c";
             cmd.CommandTimeout = 120;
-            await cmd.ExecuteScalarAsync();
+            await cmd.ExecuteScalarAsync(rig.Stop);
         });
         var m = await rig.H.Rpc.MonitorStart(new MonitorStartParams { ProfileId = rig.P.Id, IntervalMs = 1_000, Panes = [MonitorPane.Sessions] });
         var snap = await rig.WaitSnapshotAsync(m.MonitorId, s => s.Sessions?.Any(r => r.Key.Id == b && r.StatementStart != null && r.Command == "SELECT") == true);

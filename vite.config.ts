@@ -27,6 +27,9 @@ export default defineConfig({
     include: ["src/**/__tests__/**/*.test.{ts,tsx}", "scripts/**/__tests__/**/*.test.ts"],
     environment: "node",
     // UI component tests opt in per file with `// @vitest-environment jsdom`.
+    // Slow runners (QUERITHM_TEST_TIME_SCALE, ci.yml): test and async-wait limits scale with it.
+    setupFiles: ["src/testing/timeScale.setup.ts"],
+    testTimeout: 5_000 * Math.max(1, Number(process.env.QUERITHM_TEST_TIME_SCALE) || 1),
     coverage: {
       provider: "v8",
       include: ["src/**/*.{ts,tsx}", "scripts/**/*.mjs"],

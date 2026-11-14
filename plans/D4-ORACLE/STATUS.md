@@ -82,6 +82,22 @@ Also: `MonitorMemoryTests` text-store check failed once in a full local run (hea
 heap moved under other tests' leftover work); it now measures a fresh store up to three times and reports every reading.
 W10 failed locally only because the published trimmed sidecar predated the branch; after `build-sidecar --release` it passes.
 
+Found later the same day:
+- CI 43577279333 (73617af): the integration job hung in `OracleMonitorTests.A_running_statement_is_cancelled_by_its_execution_and_its_session_stays`
+  (cancelled after 50 min); reproduced locally on the first run after the Oracle fixture started. `dotnet-stack`: an
+  assertion failed before the cancel, and `Rig.DisposeAsync` disposed the busy connection while its 3× ALL_OBJECTS
+  query still ran — ODP.NET's Dispose waits on the connection lock the running command holds, for ever. Fixed in the
+  test rig: the long foreign statements take `Rig.Stop`, cancelled first on dispose, and each connection's Dispose runs
+  off the test thread with a 30 s bound. Which assertion failed is not known (0 / 4 alone, full Oracle suite 979 / 0
+  after the fix); the next failure reports its message instead of hanging. **Open.**
+- Same first run: `OraclePlanIntegrationTests.The_actual_plan_has_the_last_runs_rows_starts_and_buffers_with_the_grants`
+  got the "cursor aged out … Ask for it again" refusal for the first actual plan on the fresh instance (3 / 3 after).
+  The refusal is the designed degradation; whether a short re-read of V$SQL_PLAN_STATISTICS_ALL would avoid it is
+  **open**.
+- CI Intel macOS: `RenameDialog.test.tsx` missed Testing Library's 1 s `findBy` (300 ms debounce + render on the slow
+  runner). Vitest now reads `QUERITHM_TEST_TIME_SCALE` like the sidecar tests: `testTimeout` and `asyncUtilTimeout`
+  scale with it (`src/testing/timeScale.setup.ts`, test `timeScale.test.ts`); scale 1 changes nothing.
+
 Gate: Vitest 5115 / 5115; `dotnet test sidecar` 4440 passed / 381 skipped / 0 failed; `QUERITHM_IT=1` without Oracle
 (SQL Server, PostgreSQL ×3, MySQL ×3, MariaDB, SSH fixtures) 3949 passed / 1 failed (W10, stale publish, then passed);
 CI run 43574413376 on cef027e green on every job (integration with the Oracle fixture 4924 passed / 0 failed, smoke and
