@@ -41,11 +41,11 @@ import { useProfiles } from "../../store/profiles";
 import { useSettings } from "../../store/settings";
 import { useTabs } from "../../store/tabs";
 import { useUi } from "../../store/ui";
-import { executionData } from "../model";
+import { ArrowResultSet, executionData } from "../model";
 import { ResultsPanel } from "../ResultsPanel";
 import { stagings } from "../staging";
 import { stagingFor } from "../gridEdit";
-import { editInfo, ordersSet, registerExecution, view } from "./fixtures";
+import { editInfo, ordersBatch, ordersSet, registerExecution, view } from "./fixtures";
 import { MAX_MOUNTED, SIDE_TOO_NARROW } from "../resultLayout";
 
 beforeAll(async () => {
@@ -307,6 +307,25 @@ describe("Side by side", () => {
     fireEvent.click(screen.getByRole("button", { name: /Differences/ }));
     await waitFor(() => expect(typeof grid.all.at(-1)!.tone).toBe("function"));
     expect(document.querySelector("[data-q-panel-footer]")?.textContent).toMatch(/No differences|differ/);
+  });
+
+  it("Differences counts a selected set with fewer rows than the other one's without reading past its own rows", async () => {
+    // Regression (CI smoke 43603961716): the footer count ran to the longer set's rows and read the shorter, selected
+    // set past its end ("Render error in Results … textPhysical").
+    const longer = new ArrowResultSet(1);
+    longer.append(ordersBatch());
+    longer.append(ordersBatch());
+    longer.finish(false);
+    useExecutions.setState({ views: { e1: view("e1", { resultSetCount: 2 }) } });
+    registerExecution("e1", ordersSet(0), longer);
+    useTabs.setState({ tabs: { tab1: tab({ resultLayout: "side" }) } });
+    render(<LivePanel />);
+    await waitFor(() => expect(screen.getAllByTestId("grid")).toHaveLength(2));
+    fireEvent.pointerDown(sections()[0]);
+    await waitFor(() => expect(handleGrid()?.dataset.set).toBe("0"));
+    fireEvent.click(screen.getByRole("button", { name: /Differences/ }));
+    const extra = longer.visibleRows - ordersSet(0).visibleRows;
+    await waitFor(() => expect(document.querySelector("[data-q-panel-footer]")?.textContent).toMatch(new RegExp(`${extra * longer.columns.length} cells differ`)));
   });
 
   it("a narrow panel shows Stacked instead, and the switch says why", async () => {

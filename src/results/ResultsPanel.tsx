@@ -490,9 +490,10 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
   );
 }
 
-/** Two cells differ (compare): same view row and column, different text; a row only one side has differs. */
+/** Two cells differ (compare): same view row and column, different text; a row or column only one side has differs. */
 function differs(a: ArrowResultSet, b: ArrowResultSet, row: number, col: number): boolean {
-  if (row >= b.visibleRows || col >= b.columns.length) return true;
+  // Either side can be the shorter one (the footer count runs to the longer set's rows): read neither past its end.
+  if (row >= a.visibleRows || col >= a.columns.length || row >= b.visibleRows || col >= b.columns.length) return true;
   return a.text(row, col) !== b.text(row, col);
 }
 
