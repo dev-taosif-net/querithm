@@ -414,6 +414,27 @@ describe("saveWorkspaceNow (before an update restart)", () => {
     expect(newQueryTab).toHaveBeenCalledWith(expect.objectContaining({ id: "b", text: "select 2", activate: true }));
   });
 
+  it("a tab's own layout for several result sets is saved and restored; an unknown value in the file is dropped", async () => {
+    useTabs.setState({
+      tabs: { a: { id: "a", title: "a.sql", resultLayout: "stacked", pins: [{ executionId: "e1", resultIndex: 0 }] } as any, b: { id: "b", title: "b.sql" } as any },
+      order: ["a", "b"], activeId: "a",
+    });
+    h.models.set("a", mkModel("select 1"));
+    h.models.set("b", mkModel("select 2"));
+    await saveWorkspaceNow();
+    const ws = JSON.parse(localStorage.getItem("querithm.workspace")!);
+    expect(ws.tabs[0].resultLayout).toBe("stacked");
+    expect(ws.tabs[1].resultLayout).toBeUndefined();
+    // Pins name runs, and runs are never saved: they are not in the file.
+    expect(JSON.stringify(ws)).not.toContain("pins");
+    ws.tabs[1].resultLayout = "<script>";
+    localStorage.setItem("querithm.workspace", JSON.stringify(ws));
+    useTabs.setState({ tabs: {}, order: [], activeId: undefined });
+    expect(await restoreWorkspace()).toBe(true);
+    expect(newQueryTab).toHaveBeenCalledWith(expect.objectContaining({ id: "a", resultLayout: "stacked" }));
+    expect(newQueryTab).toHaveBeenCalledWith(expect.objectContaining({ id: "b", resultLayout: undefined }));
+  });
+
   it("writes through the app-data files in the app", async () => {
     h.tauri = true;
     tabs();

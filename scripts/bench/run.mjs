@@ -80,6 +80,11 @@ const TARGETS = {
   // Result charts (Phase C1): a 1M-row result as a line chart with two series, aggregated in the chart worker.
   34: ["Chart 1M-row result, line with 2 series: Chart toggle → first paint (median)", "ms", 500],
   "34frames": ["Chart toggle on a 1M-row result: frames longer than 32 ms", "frames", 0],
+  // Results layouts (2026-11-14): a run of 500 result sets (20 rows × 10 columns each) in the Stacked layout.
+  "37switch": ["Results layout: Tabs → Stacked with 500 result sets → painted (median of 3)", "ms", 100],
+  "37frames": ["Results layout: scroll through 500 stacked result sets: frames longer than 32 ms", "frames", 0],
+  "37mounted": ["Results layout: most grids mounted at once while scrolling 500 stacked result sets", "grids", 8],
+  "37memory": ["Results layout: JS heap with 500 stacked result sets minus the same run in Tabs", "MB", 60],
   // Server-message floods (M13): one run's 100,000 PRINT (SQL Server) / RAISE NOTICE (PostgreSQL) messages, which the
   // sidecar coalesces into query.messages batches (the first 20,000 forwarded, then one "not shown" line).
   36: ["Message flood: 100k PRINT / RAISE NOTICE in one run → query.done (slower engine, median of 3, server time included)", "ms", 5000],
@@ -1459,6 +1464,12 @@ async function uiMetrics() {
     const chart = await page.evaluate(() => window.__bench.chartToggle(1_000_000, 3));
     record(34, median(chart.firstPaint), { rows: chart.rows, samples: chart.firstPaint });
     record("34frames", chart.longFrames, { frames: chart.frames.length, worstMs: Math.round(chart.worstFrameMs * 10) / 10 });
+    await page.evaluate(() => window.gc?.());
+    const lay = await page.evaluate(() => window.__bench.resultLayouts(500));
+    record("37switch", median(lay.switchMs), { samples: lay.switchMs.map(Math.round) });
+    record("37frames", lay.longFrames, { frames: lay.frames.length, worstMs: Math.round(lay.worstFrameMs * 10) / 10 });
+    record("37mounted", lay.mounted, { sets: lay.sets });
+    record("37memory", lay.memoryDeltaBytes == null ? NaN : lay.memoryDeltaBytes / 1024 / 1024);
     const frames = await page.evaluate(async () => {
       await window.__bench.startConcurrent(5, 60);
       return window.__bench.frameDrops(15_000);

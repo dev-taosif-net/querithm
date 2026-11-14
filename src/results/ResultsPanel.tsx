@@ -9,7 +9,7 @@ import { useExecutions, type ExecutionView } from "../store/executions";
 import { executionData, type ArrowResultSet } from "./model";
 import type { CopyFormat, ResultGridHandle, SelectionStats } from "./ResultGrid";
 import { formatStatNumber } from "./selectionStats";
-import { exportFormats, exportResultSet } from "./export";
+import { exportAllFormats, exportAllResultSets, exportFormats, exportResultSet } from "./export";
 import { setBottomTab } from "../app/actions";
 import { ask, toast } from "../store/ui";
 import { useDismiss } from "../app/dismiss";
@@ -26,6 +26,9 @@ import { isFinal, isLatestRun, ledgerItems, lineOf, previousRun, selectPatch, se
 import { RunNotice } from "./RunNotice";
 import { revealEditorLine } from "./reveal";
 import { useThrottledVersion } from "./useThrottledVersion";
+import { useSettings } from "../store/settings";
+import { chosenLayout, LAYOUT_LABEL, MAX_SIDE, pinUnavailable, samePin, setResultLayout, shownLayout, sideColumns, togglePin, type ResultLayout } from "./resultLayout";
+import { SideSets, StackedSets, paneTitle, type PaneModel, type StackItem } from "./ResultLayouts";
 
 // The cell viewer side panel (Phase C2) loads the first time a cell is opened in it.
 const CellViewerPanel = lazy(() => import("./viewers/CellViewerPanel").then((m) => ({ default: m.CellViewerPanel })));
@@ -44,7 +47,10 @@ export function useExecutionData(executionId?: string) {
   return data;
 }
 
-const fmt = (n: number) => n.toLocaleString();
+// One formatter for every number the panel writes: toLocaleString() builds a new one per call, which was the top cost
+// of drawing 500 chips and captions (CPU profile of §14 metric 37, 2026-11-14: ~650 ms of a Tabs → Stacked switch run).
+const NUMBER = new Intl.NumberFormat();
+const fmt = (n: number) => NUMBER.format(n);
 const rowsText = (n: number) => `${fmt(n)} ${n === 1 ? "row" : "rows"}`;
 
 /** A ledger item as a chip. */
@@ -113,6 +119,45 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
   const onViewCell = useCallback((row: number, col: number) => key && rs && setViewer({ key, row, col, order: rs.viewVersion }), [key, rs]);
   const onSpecChange = useCallback((spec: ChartSpec) => shownIndex !== undefined && setChartSpec(tab.id, shownIndex, spec), [tab.id, shownIndex]);
 
+  // Several result sets: Tabs (one at a time behind the chips), Stacked or Side by side — the tab's choice, else the
+  // Settings default. One set (and no pinned set) always shows alone, as does a comparison or a maximized set.
+  const defaultLayout = useSettings((st) => st.resultLayout);
+  const chosen = chosenLayout(tab, defaultLayout);
+  const { layout: drawn, why: layoutWhy } = shownLayout(chosen, width);
+  const sets = data?.resultSets ?? [];
+  const runName = (id: string) => (id === executionId ? "This run" : `Run ${tab.executions.indexOf(id) + 1}`);
+  const pinPanes: PaneModel[] = [];
+  for (const pin of tab.pins ?? []) {
+    if (pin.executionId === executionId) continue; // a pinned set of the shown run is shown where it belongs
+    const prs = executionData.get(pin.executionId)?.byIndex(pin.resultIndex);
+    if (prs) pinPanes.push({ key: `${pin.executionId}:${prs.index}`, executionId: pin.executionId, rs: prs, current: false, pinned: true, run: runName(pin.executionId) });
+  }
+  const isPinned = (id: string, i: number) => !!tab.pins?.some((x) => samePin(x, { executionId: id, resultIndex: i }));
+  const paneOf = (s: ArrowResultSet): PaneModel => ({ key: `${executionId}:${s.index}`, executionId: executionId!, rs: s, current: true, pinned: isPinned(executionId!, s.index) });
+  const multi = sets.length + pinPanes.length >= 2;
+  const layout: ResultLayout = !multi || !!(tab.compare && compareRs) || (tab.resultMaximized && chosen !== "tabs") ? "tabs" : drawn;
+  const maximized = multi && chosen !== "tabs" && !!tab.resultMaximized;
+  const [sideDiff, setSideDiff] = useState(false);
+  const sideIdx = layout === "side" ? sideColumns(sets.map((x) => x.index), tab.sideSets, rs?.index, Math.max(1, MAX_SIDE - pinPanes.length)) : [];
+  const sideCols: PaneModel[] = layout === "side"
+    ? [...pinPanes.slice(0, MAX_SIDE - 1), ...sideIdx.map((i) => data?.byIndex(i)).filter((x): x is ArrowResultSet => !!x).map(paneOf)]
+    : [];
+  const sideDiffOn = layout === "side" && sideDiff && sideCols.length === 2;
+  const sideOther = sideDiffOn && rs ? sideCols.find((c) => c.rs !== rs)?.rs : undefined;
+  const sideKey = sideIdx.join(",");
+  // The selected set is always in a column; the columns are kept so selecting another one never moves the rest.
+  useEffect(() => {
+    if (layout === "side" && rs && sideKey && sideKey !== (tab.sideSets ?? []).join(",")) useTabs.getState().update(tab.id, { sideSets: sideKey.split(",").map(Number) });
+  }, [layout, rs, sideKey, tab.id, tab.sideSets]);
+  // Charts of panes other than the selected one keep their own spec setter, so a batch does not re-render them.
+  const specSetters = useRef(new Map<string, (spec: ChartSpec) => void>());
+  const specSetter = (i: number) => {
+    const k = `${tab.id}:${i}`;
+    let f = specSetters.current.get(k);
+    if (!f) specSetters.current.set(k, (f = (spec: ChartSpec) => setChartSpec(tab.id, i, spec)));
+    return f;
+  };
+
   useEffect(() => {
     setStats(null);
   }, [executionId, key]);
@@ -133,6 +178,28 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
   };
 
   if (!view) return <Empty text="Run a query (F5 or Ctrl+Enter) to see results here." />;
+
+  const selectPane = (pane: PaneModel) => pane.current && useTabs.getState().update(tab.id, { resultIndex: pane.rs.index, ledgerError: undefined });
+  const pinToggle = (id: string, i: number) => {
+    const why = pinUnavailable(chosen) ?? togglePin(tab.id, { executionId: id, resultIndex: i });
+    if (why) toast("info", `${why}.`);
+  };
+  const exportName = (i: number) => `${tab.title.replace(/\.sql$/, "")}-result${i + 1}`;
+  const exportItems = (s: ArrowResultSet): MenuEntry[] => exportFormats.map(({ format: f, label }) => ({
+    label,
+    run: () => {
+      void exportResultSet(s, f, exportName(s.index))
+        .then(() => s.truncated && toast("warn", `Exported the first ${fmt(s.rowCount)} rows: the row limit cut this result set. Fetch all rows to export everything.`))
+        .catch((e) => toast("error", String(e)));
+    },
+  }));
+  const exportAllItems = (): MenuEntry[] => sets.length < 2 ? [] : [
+    "sep" as const,
+    ...exportAllFormats.map(({ format: f, label }) => ({
+      label: `All ${sets.length} result sets: ${label}`,
+      run: () => void exportAllResultSets(sets, f, tab.title.replace(/\.sql$/, "")).catch((e) => toast("error", String(e))),
+    })),
+  ];
 
   const copy = async (format: CopyFormat | boolean) => {
     try {
@@ -182,8 +249,95 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
         unavailable: !rs || it.resultIndex === rs.index ? "Pick another result set: this one is shown" : undefined,
         run: () => executionId && useTabs.getState().update(tab.id, { compare: { executionId, resultIndex: it.resultIndex } }),
       },
+      {
+        label: executionId && isPinned(executionId, it.resultIndex) ? "Unpin" : "Pin (stays on screen across runs)",
+        unavailable: pinUnavailable(chosen) ?? undefined,
+        run: () => executionId && pinToggle(executionId, it.resultIndex),
+      },
+      ...(chosen !== "tabs" && multi
+        ? [{ label: "Show alone (maximize)", run: () => useTabs.getState().update(tab.id, { resultIndex: it.resultIndex, ledgerError: undefined, resultMaximized: true }) }]
+        : []),
     ];
   };
+
+  const lockedWhy = editable?.hasChanges ? "Apply or discard the staged changes to switch result sets" : undefined;
+
+  /** What a pane shows: the selected set gets the tools' grid handle, staging and statistics; the others are views. */
+  const renderBody = (p: PaneModel, selected: boolean) => {
+    const ch = p.current ? tab.charts?.[p.rs.index] : undefined;
+    const asChart = selected ? chartOn : ch?.view === "chart";
+    const title = exportName(p.rs.index);
+    if (asChart) {
+      return (
+        <Suspense fallback={<Empty text="Loading the chart…" />}>
+          <div className="flex-1 min-w-0 flex flex-col"><ChartView key={p.key} rs={p.rs} spec={ch?.spec} onSpecChange={selected ? onSpecChange : specSetter(p.rs.index)} title={title} /></div>
+        </Suspense>
+      );
+    }
+    const other = sideDiffOn ? sideCols.find((c) => c !== p && c.key !== p.key)?.rs : undefined;
+    return (
+      <Suspense fallback={<div className="flex-1 flex items-center justify-center"><LoadingStatus label="Loading the grid…" /></div>}>
+        <ResultGrid
+          key={p.key} engine={engine} rs={p.rs} executionId={p.executionId}
+          {...(selected ? {
+            handleRef: handle, staging,
+            onStaged: staging ? () => scheduleTokens(executionId!, staging) : undefined,
+            onApply: staging ? () => void applyChanges(tab.id, executionId!, staging) : undefined,
+            onStatsChange: setStats, onViewCell,
+          } : {})}
+          tone={other ? (r, c) => (differs(p.rs, other, r, c) ? "changed" : null) : undefined}
+        />
+        {!p.rs.complete && p.rs.rowCount === 0 && <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none"><LoadingStatus label="Waiting for rows…" startedAt={view.startedAt} /></div>}
+      </Suspense>
+    );
+  };
+
+  /** A pane caption's buttons: pin, show alone (the shown run's sets), and export. */
+  const paneTools = (p: PaneModel) => {
+    const n = p.rs.index + 1;
+    const pinned = isPinned(p.executionId, p.rs.index);
+    return (
+      <>
+        <PanelIconButton icon="pin" label={pinned ? `Unpin result set ${n}` : `Pin result set ${n} (stays on screen across runs)`} pressed={pinned} onClick={() => pinToggle(p.executionId, p.rs.index)} />
+        {p.current && (
+          <PanelIconButton icon="maximize" label={`Show result set ${n} alone`} onClick={() => useTabs.getState().update(tab.id, { resultIndex: p.rs.index, ledgerError: undefined, resultMaximized: true })} />
+        )}
+        <MenuButton label={`Export result set ${n}`} title={`Export result set ${n}`} icon="download" className="!h-[20px] !px-1" items={() => exportItems(p.rs)} />
+      </>
+    );
+  };
+
+  /** A side by side column's caption: which set of the run it shows (picking one already in a column swaps them). */
+  const sidePicker = (p: PaneModel, slot: number) => (
+    <MenuButton
+      label={`Column ${slot + 1}: ${paneTitle(p)}`}
+      title="Choose the result set this column shows"
+      className="!h-[20px] !px-1 !border-transparent min-w-0"
+      items={() => sets.map((x) => ({
+        label: `Result set ${x.index + 1}`, detail: rowsText(x.rowCount), checked: x.index === p.rs.index,
+        unavailable: lockedWhy,
+        run: () => {
+          const cols = [...sideIdx];
+          const at = cols.indexOf(x.index);
+          if (at >= 0) cols[at] = cols[slot];
+          cols[slot] = x.index;
+          useTabs.getState().update(tab.id, { sideSets: cols, resultIndex: x.index, ledgerError: undefined });
+        },
+      }))}
+    >
+      <span className={`truncate ${p.key === key ? "font-semibold" : ""}`}>{paneTitle(p)}</span>
+    </MenuButton>
+  );
+
+  /** Stacked: pinned sets first, then the run's sets and errors in the ledger's order. */
+  const stackItems = (): StackItem[] => [
+    ...pinPanes.map((p): StackItem => ({ kind: "pane", pane: p })),
+    ...items.flatMap((it): StackItem[] => {
+      if (it.kind === "error") return [{ kind: "error", key: `err:${it.errorIndex}`, node: <InlineError tab={tab} item={it} selected={item === it} onShow={() => select(it.key, { ctrl: false })} /> }];
+      const s = data?.byIndex(it.resultIndex);
+      return s ? [{ kind: "pane", pane: paneOf(s) }] : [];
+    }),
+  ];
 
   const ledger = (
     <Chips
@@ -193,13 +347,48 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
       compared={tab.compare && tab.compare.executionId === executionId ? `s${tab.compare.resultIndex}` : undefined}
       onSelect={select}
       menuFor={chipMenu}
-      locked={editable?.hasChanges ? "Apply or discard the staged changes to switch result sets" : undefined}
+      locked={lockedWhy}
     />
   );
 
   const filterBox = rs && (
     <FilterField rs={rs} filter={filter} setFilter={setFilter} compact={width === "narrow"} />
   );
+
+  // The layout switch (only with two or more sets to lay out), Restore for a maximized set, and side by side's
+  // Differences. Hidden while editing: the edit row replaces the tools, and the ledger is locked anyway.
+  const layoutTools = multi ? (
+    <>
+      {layout === "side" && sideCols.length === 2 && (
+        <button
+          type="button" className="q-btn h-[22px] px-2 shrink-0" aria-pressed={sideDiff} data-q-side-diff
+          title="Tint the cells that differ between the two columns (rows by position)"
+          onClick={() => setSideDiff(!sideDiff)}
+        >
+          <Icon name="compare" size={13} strokeWidth={2} />
+          {width !== "narrow" && "Differences"}
+        </button>
+      )}
+      {maximized && (
+        <button type="button" className="q-btn h-[22px] px-2 shrink-0" title={`Back to ${LAYOUT_LABEL[chosen]} (Esc)`} data-q-layout-restore onClick={() => useTabs.getState().update(tab.id, { resultMaximized: undefined })}>
+          <Icon name="restore" size={13} strokeWidth={2} />
+          {width !== "narrow" && `Back to ${LAYOUT_LABEL[chosen]}`}
+        </button>
+      )}
+      <span aria-hidden className="w-px h-4 bg-line shrink-0" />
+      <Seg
+        label="Lay out the result sets"
+        value={chosen}
+        compact
+        options={[
+          { value: "tabs", label: "Tabs: one result set at a time", icon: "layoutTabs" },
+          { value: "stacked", label: "Stacked: one under another", icon: "layoutStacked" },
+          { value: "side", label: "Side by side", icon: "split", unavailable: layoutWhy },
+        ]}
+        onChange={(v) => setResultLayout(tab.id, v)}
+      />
+    </>
+  ) : undefined;
 
   const tools = rs && staging ? (
     <EditTools tabId={tab.id} executionId={executionId!} rs={rs} staging={staging} handle={handle} filterBox={filterBox} onDone={() => setEditKey(null)} />
@@ -236,28 +425,44 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
           ...(width === "narrow" && !chartOn
             ? [{ label: "Copy", hint: "Ctrl+C", run: () => void copy(false) }, { label: "Copy with headers", run: () => void copy(true) }, "sep" as const]
             : []),
-          ...exportFormats.map(({ format: f, label }) => ({
-            label,
-            run: () => {
-              void exportResultSet(rs, f, `${tab.title.replace(/\.sql$/, "")}-result${rs.index + 1}`)
-                .then(() => rs.truncated && toast("warn", `Exported the first ${fmt(rs.rowCount)} rows: the row limit cut this result set. Fetch all rows to export everything.`))
-                .catch((e) => toast("error", String(e)));
-            },
-          })),
+          ...exportItems(rs),
+          ...exportAllItems(),
         ]}
       >
         {width === "narrow" ? undefined : chartOn ? "Export rows" : "Export"}
       </MenuButton>
       {!chartOn && width !== "narrow" && <MenuButton label="Compare with…" title="Compare with another result set (Ctrl+click a chip)" icon="compare" items={compareTargets} />}
+      {layoutTools}
     </>
-  ) : undefined;
+  ) : multi ? layoutTools : undefined;
 
   return (
-    <div className="flex-1 flex flex-col min-h-0" data-q-results>
+    <div
+      className="flex-1 flex flex-col min-h-0" data-q-results data-q-result-layout={layout}
+      onKeyDown={(e) => {
+        // Esc leaves a maximized set, unless it belongs to a field or an open cell editor.
+        if (e.key !== "Escape" || !maximized || e.defaultPrevented || (e.target as HTMLElement).closest?.("input, textarea, select, [contenteditable], [role=dialog], [role=menu]")) return;
+        e.preventDefault();
+        useTabs.getState().update(tab.id, { resultMaximized: undefined });
+      }}
+    >
       <PanelRow label="Result tools" ledger={ledger} tools={tools} fill={!!staging} />
       {staging && <EnvRule profileId={tab.profileId} />}
       <RunNotice tab={tab} view={view} data={data} />
       <div key={executionId ?? "empty"} className="flex-1 min-h-0 flex">
+        {layout === "stacked" ? (
+          <StackedSets
+            items={stackItems()}
+            chartKeys={new Set(sets.filter((x) => (x === rs ? chartOn : tab.charts?.[x.index]?.view === "chart")).map((x) => `${executionId}:${x.index}`))}
+            selectedKey={item?.kind === "error" ? `err:${item.errorIndex}` : key ?? undefined}
+            locked={lockedWhy}
+            renderBody={renderBody}
+            onSelect={selectPane}
+            tools={paneTools}
+          />
+        ) : layout === "side" && item?.kind !== "error" ? (
+          <SideSets columns={sideCols} selectedKey={key ?? undefined} locked={lockedWhy} renderBody={renderBody} onSelect={selectPane} tools={paneTools} picker={sidePicker} />
+        ) : (
         <div key={chartOn ? "chart" : "grid"} className={`flex-1 min-h-0 min-w-0 relative ${chartOn ? "flex flex-col" : "flex"}`}>
           {!rs ? (
             item?.kind === "error" ? <ErrorCard tab={tab} item={item} /> : <RunSummary tab={tab} view={view} />
@@ -290,13 +495,14 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
             </>
           )}
         </div>
+        )}
         {rs && !chartOn && !comparing && viewer?.key === key && viewer.order === rs.viewVersion && viewer.col < rs.columns.length && (
           <Suspense fallback={null}>
             <CellViewerPanel key={`${viewer.row}:${viewer.col}`} tabId={tab.id} executionId={executionId!} rs={rs} row={viewer.row} col={viewer.col} engine={engine} onClose={() => setViewer(null)} />
           </Suspense>
         )}
       </div>
-      <ResultsFooter rs={rs} item={item} view={view} stats={stats} staging={staging} comparing={comparing ? compareRs : undefined} />
+      <ResultsFooter rs={rs} item={item} view={view} stats={stats} staging={staging} comparing={comparing ? compareRs : sideOther} />
     </div>
   );
 }
@@ -357,6 +563,29 @@ function ErrorCard({ tab, item }: { tab: TabState; item: Extract<LedgerItem, { k
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Stacked: an error in place, one line between the sets around it (the full text is in its card and in Messages). */
+function InlineError({ tab, item, selected, onShow }: { tab: TabState; item: Extract<LedgerItem, { kind: "error" }>; selected: boolean; onShow: () => void }) {
+  const m = item.message;
+  const line = lineOf(m);
+  return (
+    <div
+      className={`mx-2 my-1 h-[26px] px-2 rounded border q-hl flex items-center gap-2 text-[11.5px] text-err min-w-0 ${selected ? "border-err bg-err/15" : "border-err/40 bg-err/10"}`}
+      role="group" aria-label={`Error${line ? ` at line ${line}` : ""}`} data-q-stack-error
+    >
+      <Icon name="errorCircle" size={13} strokeWidth={2} />
+      <span className="font-semibold shrink-0">Error{line ? ` · line ${line}` : ""}</span>
+      <span className="q-mono truncate min-w-0 text-fg" title={m.message}>{m.message.split("\n")[0]}</span>
+      <span className="flex-1" />
+      {m.editorLine && (
+        <button type="button" className="q-btn h-[20px] px-1.5 shrink-0" onClick={() => revealEditorLine(tab.id, m.editorLine, m.editorColumn)}>
+          <Icon name="goToLine" size={12} strokeWidth={2} />Go to line {m.editorLine}
+        </button>
+      )}
+      <button type="button" className="q-btn h-[20px] px-1.5 shrink-0" onClick={onShow}>Show</button>
     </div>
   );
 }

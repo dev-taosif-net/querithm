@@ -1374,7 +1374,30 @@ this run or any kept run — beside the first, read-only; differing cells are ti
 2,000 rows, by position). **Errors never take the view away**: earlier result sets stay, and the error reaches the user
 through the red chip, the notice line, the Messages badge, the editor marker, the status bar and one announcement per
 run (polite, assertive when a statement failed; focus never moves). A run without result sets shows its summary in
-Results (row counts, PRINT output, or its error card). The **notice line** holds, in order, an older-run snapshot, the
+Results (row counts, PRINT output, or its error card). **Layouts for several result sets** (2026-11-14, the user's
+choice): **Tabs** (the default: one set at a time behind the chips, as above), **Stacked** (every set one under another
+in one scroll, as SSMS shows them; errors in place as a one-line card) and **Side by side** (up to 3 equal columns of at
+least 280 px, each column's caption picks its set; below 760 px the panel draws Stacked and the switch says why). The
+default is a setting (Query execution › Results, "Several result sets"); each tab can choose its own from the icon
+switch at the end of the Results tools, shown only when there are two sets or more to lay out, and saved with the
+workspace (validated on read). The palette has the three layouts, "show the selected set alone" and pin; none has a
+default shortcut. One **selected set** drives the tool row, the footer, Edit, the filter, the selection statistics and
+the cell viewer in every layout (a click or keyboard focus selects a pane; the chips, Alt+PageDown and the palette
+select too, and Stacked scrolls the selected set into view, never by itself); only the selected set can be edited, and
+while it has staged changes the other panes are dimmed and a click on them says why. Stacked: a grid's height fits its
+rows (3 rows to 60 % of the panel, from the full row count so a filter never moves the panes; its splitter drags, ±1 row
+by arrow, Home/End, Enter or double-click fits); sets after the 20th start collapsed (one line, its tools come when it opens); **at most 8 grids are
+mounted** (the panes near the view by IntersectionObserver, plus the selected one; the others are placeholders of the
+same height), since each grid holds its own canvases; grids coming into view mount one per frame, panes far from the
+view skip layout (`content-visibility: auto` with their reserved size), and a pane that is not selected re-renders only
+when its own set, rows, size or mount change. **Pin** (a caption's pin, the chip menu): up to 2 sets of any kept run
+stay on screen across runs, first and read-only ("Pinned · Run 1 · …"), and are unpinned with a message when their run
+falls out of the kept 3; in Tabs, Pin is unavailable with the reason. **Show alone** (a caption's maximize, the chip
+menu) draws the set as Tabs would until "Back to Stacked" or Esc (not in a field). Compare (Ctrl+click) draws its two
+panes as in Tabs whatever the layout; Side by side has its own **Differences** toggle when two columns show (tints and
+the footer count, as Compare). **Export all result sets** (Export menu, two sets or more): one save dialog, an Excel
+workbook with a sheet per set or a .zip of CSV / TSV / JSON files, one per set (a set without rows keeps its header).
+The **notice line** holds, in order, an older-run snapshot, the
 run's first error and a row-limit cut ("Fetch all rows"; Copy and Export of a cut set warn that they hold the fetched
 rows only); errors and the limit are added when the run ends, never while rows stream, so the line never moves the grid
 mid-scroll; it can be dismissed until the next run. The **Results tools** are Grid | Chart, the filter with its column
@@ -1420,6 +1443,7 @@ one per tab.
 | Format | Ctrl+Shift+F |
 | Toggle results | Ctrl+R |
 | Show the shown result set as a grid / as a chart | Ctrl+1 / Ctrl+2 |
+| Results layout: Tabs / Stacked / Side by side · show the selected set alone · pin or unpin it | Palette only (no default shortcut; bindable in Settings › Keyboard) |
 | Notebook (focus in the notebook): run the focused cell, run it and move to the next, run every cell | F5 or Ctrl+Enter, Shift+Enter, Shift+F5 |
 | Toggle object explorer / show and search it | Ctrl+B / F8 |
 | Explorer (tree focus): open / close a level, default action, menu | → / ←, Enter, Shift+F10 |
@@ -1811,6 +1835,7 @@ record loops, a temp table); a 1,000,000-row, 40-column result query. 5 runs, me
 | 35 | Results panel chrome while rows stream | `useThrottledVersion.test.tsx` (1,000 batch notifications over ~100 ms) and `BottomPanel.test.tsx` (100 notifications): renders of the ledger / badges / footer, Vitest with fake timers | ≤ 1 chrome render per 250 ms of streaming (≤ 3 for the 1,000-batch burst), the last state always shown |
 | 36 | Server-message flood: one run of 100,000 PRINT (SQL Server) / RAISE NOTICE (PostgreSQL) messages (M13) | `pnpm bench` engine metrics `36` (execute → `query.done`, median of 3, slower engine, server time included) and `36notify` (notifications the sidecar sent for one run, the most of either engine); UI metric `36frames` (`window.__bench.messageFlood`: the run in the fixture tab with Messages open, frames longer than 32 ms until it ends) | `36` ≤ 5 s; `36notify` ≤ 300 (one per message before M13); `36frames` 0 (2026-11-03: 19 of 195 frames over 32 ms, worst 50 ms, while each `query.messages` batch re-listed the whole log and formatted the time of every shown line again — 13 ms of main thread per batch in a Chrome trace, plus 22–30 ms GC callbacks freeing the per-call ICU formatters; the log is now extended per batch and lines already shown are not rendered again — 2.3 ms per batch, 0 of 202 frames, worst 16.8 ms) |
 | 34 | Chart a 1M-row result: line with two series | `pnpm bench` metrics `34` / `34frames` (`window.__bench.chartToggle`): a 1M × 40 synthetic result fully in a tab, then Grid → Chart as `CreatedAt5` × `Qty1`, `Amount3`; one warm-up toggle, 3 measured: toggle → the computed chart painted (median), and every frame interval meanwhile | first paint ≤ 500 ms; 0 frames > 32 ms (aggregation and down-sampling in the worker) |
+| 37 | Results layouts: a run of 500 result sets (20 rows × 10 columns each) in one tab | `pnpm bench` metrics `37switch` / `37frames` / `37mounted` / `37memory` (`window.__bench.resultLayouts`): Tabs → Stacked painted (median of 3 after one warm-up), the stack scrolled top to bottom 400 px per frame (every frame interval, the most mounted grids at any frame), JS heap in Stacked minus Tabs; `resultLayout.test.ts` and `ResultsPanel.layouts.test.tsx` check the mount cap, the collapse after 20 and the fit heights | switch ≤ 100 ms; 0 frames > 32 ms; ≤ 8 grids mounted; ≤ +60 MB. Measured 2026-11-14 in headless Chrome against the dev bridge (synthetic rows, no fixture): 87.5 ms, 0 of 37 frames (p95 16.8 ms at 60 Hz), 4 grids, +12.5 MB; before the profile-led fixes (a number formatter per call, a forced layout of every pane, every pane re-rendering on each visibility change, several grids mounting in one frame) 206 ms, 21 of 37 frames, 7 grids, +33 MB. WebKitGTK not measured yet |
 
 **Last verified per OS** (`bench/results/`; engine metrics drive the sidecar, UI metrics run the built
 webview in headless Chrome through the dev bridge):

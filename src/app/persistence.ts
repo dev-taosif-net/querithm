@@ -18,6 +18,7 @@ import { getModel, onModelContent, editorForTab } from "../editor/editors";
 import { newQueryTab, activeTabState, workspaceHooks } from "./actions";
 import { restoreExpansion, savedExpansion, useExplorer } from "../explorer/explorerState";
 import { cleanCharts } from "../results/resultViews";
+import { cleanLayout } from "../results/resultLayout";
 import { notebookOf, useNotebooks } from "../notebook/store";
 import { markDirty, newNotebookTab, ownerOfKey, serializeTab } from "../notebook/runtime";
 import { openNotebookPath, openNotebookText, saveNotebook } from "../notebook/files";
@@ -42,6 +43,8 @@ interface SavedTab {
   pinned?: boolean;
   /** Grid or chart per result index and the chart specs (never the data). */
   charts?: TabState["charts"];
+  /** The tab's own layout for several result sets (unset = the Settings default). */
+  resultLayout?: TabState["resultLayout"];
   /** A notebook: its document is the recovery copy <id>.sqlbook. */
   notebook?: boolean;
   /** A notebook changed since it was last saved to its file. */
@@ -273,6 +276,7 @@ function snapshotWorkspace(): WorkspaceFile {
         id: t.id, title: t.title, profileId: t.profileId, database: t.database, boundObject: t.boundObject, filePath: t.filePath, readOnly: t.readOnly,
         pinned: t.pinned || undefined,
         charts: t.charts,
+        resultLayout: t.resultLayout,
         notebook: t.notebook || undefined,
         dirty: (t.notebook && t.dirty) || undefined,
         cursorLine: editorForTab(t.id)?.getPosition()?.lineNumber,
@@ -318,7 +322,7 @@ export async function restoreWorkspace(): Promise<boolean> {
     const text = (await readScript(t.id)) ?? "";
     newQueryTab({
       id: t.id, title: t.title, profileId: t.profileId, database: t.database, boundObject: t.boundObject, filePath: t.filePath, readOnly: t.readOnly, pinned: t.pinned, text,
-      charts: cleanCharts(t.charts), activate: t.id === w.activeId, atEnd: true,
+      charts: cleanCharts(t.charts), resultLayout: cleanLayout(t.resultLayout), activate: t.id === w.activeId, atEnd: true,
     });
   }
   if (w.activeId && useTabs.getState().tabs[w.activeId]) useTabs.getState().setActive(w.activeId);

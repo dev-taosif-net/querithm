@@ -659,6 +659,33 @@ try {
   await shot("03c-results-compare");
   await page.evaluate(() => document.querySelector('[aria-label="Stop comparing"]')?.click());
   await sleep(200);
+  // Results layouts (§12): the same two sets Stacked (two real grids, one under another), then Side by side (two
+  // columns; Differences tints them), then back to Tabs so the steps below see one grid as before.
+  console.log("[step] Results layouts");
+  const layoutBtn = (name) => page.evaluate((n) => document.querySelector(`[aria-label="Lay out the result sets"] button[aria-label="${n}"]`)?.click(), name);
+  const stackedGrids = (sel) => page.evaluate((s) => document.querySelectorAll(`${s} [data-q-pane-key] .dvn-scroller`).length, sel);
+  await layoutBtn("Stacked: one under another");
+  await page.waitForFunction(() => document.querySelectorAll("[data-q-layout=stacked] [data-q-pane-key] .dvn-scroller").length === 2, { timeout: 10_000 })
+    .catch(async () => errors.push(`layouts: Stacked did not show two grids (${await stackedGrids("[data-q-layout=stacked]")})`));
+  await page.evaluate(() => document.querySelectorAll("[data-q-layout=stacked] [data-q-pane-key]")[0]?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
+  await page.waitForFunction(() => document.querySelectorAll("[data-q-pane-key]")[0]?.hasAttribute("data-q-pane-selected"), { timeout: 5_000 })
+    .catch(() => errors.push("layouts: clicking the first stacked set did not select it"));
+  await sleep(400);
+  await shot("03s-results-stacked");
+  await auditRowPopups("03s-results-stacked");
+  await layoutBtn("Side by side");
+  await page.waitForFunction(() => document.querySelectorAll("[data-q-layout=side] [data-q-pane-key] .dvn-scroller").length === 2, { timeout: 10_000 })
+    .catch(async () => errors.push(`layouts: Side by side did not show two columns (${await stackedGrids("[data-q-layout=side]")})`));
+  await page.evaluate(() => document.querySelector("[data-q-side-diff]")?.click());
+  await page.waitForFunction(() => document.querySelector("[data-q-side-diff]")?.getAttribute("aria-pressed") === "true", { timeout: 5_000 })
+    .catch(() => errors.push("layouts: Differences did not turn on"));
+  await sleep(400);
+  await shot("03t-results-side");
+  await page.evaluate(() => document.querySelector("[data-q-side-diff]")?.click());
+  await layoutBtn("Tabs: one result set at a time");
+  await page.waitForFunction(() => document.querySelector("[data-q-results]")?.getAttribute("data-q-result-layout") === "tabs", { timeout: 5_000 })
+    .catch(() => errors.push("layouts: back to Tabs did not happen"));
+  await sleep(200);
   // The chip click took the keyboard into the panel: give it back to the editor for the next query.
   await page.click(".monaco-editor .view-lines");
   // Grid editing: a single-table result is editable; stage a value, review the SQL, discard.

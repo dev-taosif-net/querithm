@@ -751,6 +751,23 @@ describe("runQuery", () => {
     expect(useTabs.getState().tabs[id].compare).toBeUndefined();
     expect(toasts()).toContain("The compared run was discarded: a tab keeps its last 3 runs.");
   });
+  it("a pinned result set stays across runs and is unpinned, with a message, when its run falls out of the kept three", async () => {
+    const id = mkTab();
+    for (const e of ["e1", "e2", "e3"]) {
+      h.rpc.mockResolvedValue({ executionId: e });
+      useTabs.getState().update(id, { busy: false });
+      await A.runQuery(id);
+    }
+    useTabs.getState().update(id, { busy: false, pins: [{ executionId: "e2", resultIndex: 0 }, { executionId: "e3", resultIndex: 1 }] });
+    h.rpc.mockResolvedValue({ executionId: "e4" });
+    await A.runQuery(id);
+    expect(useTabs.getState().tabs[id].pins).toEqual([{ executionId: "e2", resultIndex: 0 }, { executionId: "e3", resultIndex: 1 }]);
+    useTabs.getState().update(id, { busy: false });
+    h.rpc.mockResolvedValue({ executionId: "e5" });
+    await A.runQuery(id);
+    expect(useTabs.getState().tabs[id].pins).toEqual([{ executionId: "e3", resultIndex: 1 }]);
+    expect(toasts()).toContain("A pinned result set was unpinned: its run was discarded (a tab keeps its last 3 runs).");
+  });
   it("feeds frame callbacks into the execution data", async () => {
     h.rpc.mockResolvedValue({ executionId: "e1" });
     const sink: any = {};

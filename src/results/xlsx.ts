@@ -85,19 +85,39 @@ interface Sheet {
   name: string;
   chunks: Uint8Array[];
   rows: number;
+  /** The last column's letters and the column count: a workbook of several result sets has a shape per sheet. */
+  last: string;
+  cols: number;
 }
 
 /** Streams rows into worksheets (a new one every MAX_SHEET_ROWS rows), then zips the workbook. */
 export class XlsxWriter {
   private sheets: Sheet[] = [];
   private buf = "";
-  private readonly letters: string[];
+  private letters: string[];
+  /** Sheets the current result set has filled so far (a set over Excel's row limit continues on the next one). */
+  private part = 0;
+  /** The last sheet still takes rows (its closing tags are not written yet). */
+  private open = false;
 
   constructor(
-    private readonly cols: XlsxColumn[],
+    private cols: XlsxColumn[],
     private readonly opts: { sheetName?: string; maxRowsPerSheet?: number } = {},
   ) {
     this.letters = cols.map((_, i) => colLetters(i));
+  }
+
+  /**
+   * Starts the next result set of a workbook with one per sheet ("Export all result sets"): its own columns and sheet
+   * name. The rows added after this go to it.
+   */
+  nextResult(cols: XlsxColumn[], name: string) {
+    this.endSheet();
+    this.cols = cols;
+    this.letters = cols.map((_, i) => colLetters(i));
+    this.opts.sheetName = name;
+    this.part = 0;
+    this.startSheet();
   }
 
   private get max() {
@@ -106,8 +126,10 @@ export class XlsxWriter {
 
   private startSheet() {
     this.flush();
-    const sheet: Sheet = { name: sheetName(this.opts.sheetName ?? "Result", this.sheets.length + 1), chunks: [], rows: 0 };
+    this.part++;
+    const sheet: Sheet = { name: sheetName(this.opts.sheetName ?? "Result", this.part), chunks: [], rows: 0, last: this.letters[this.letters.length - 1] ?? "A", cols: this.cols.length };
     this.sheets.push(sheet);
+    this.open = true;
     const widths = this.cols
       .map((c, i) => `<col min="${i + 1}" max="${i + 1}" width="${Math.min(60, Math.max(c.kind === "temporal" ? 20 : 10, c.name.length + 3))}" customWidth="1"/>`)
       .join("");
@@ -127,9 +149,9 @@ export class XlsxWriter {
 
   private endSheet() {
     const sheet = this.sheets[this.sheets.length - 1];
-    if (!sheet) return;
-    const last = this.letters[this.letters.length - 1] ?? "A";
-    this.buf += `</sheetData>${this.cols.length ? `<autoFilter ref="A1:${last}${sheet.rows + 1}"/>` : ""}</worksheet>`;
+    if (!sheet || !this.open) return;
+    this.open = false;
+    this.buf += `</sheetData>${sheet.cols ? `<autoFilter ref="A1:${sheet.last}${sheet.rows + 1}"/>` : ""}</worksheet>`;
     this.flush();
   }
 
@@ -156,7 +178,7 @@ export class XlsxWriter {
 
   /** The hidden name Excel pairs with each sheet's header autofilter. */
   private filterName(s: Sheet, i: number) {
-    const ref = `'${xmlText(s.name).replace(/'/g, "''")}'!$A$1:$${this.letters[this.letters.length - 1]}$${s.rows + 1}`;
+    const ref = `'${xmlText(s.name).replace(/'/g, "''")}'!$A$1:$${s.last}$${s.rows + 1}`;
     return `<definedName name="_xlnm._FilterDatabase" localSheetId="${i}" hidden="1">${ref}</definedName>`;
   }
 
@@ -185,7 +207,7 @@ export class XlsxWriter {
       ["xl/workbook.xml", xml(
         `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>` +
         this.sheets.map((s, i) => `<sheet name="${xmlText(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join("") +
-        `</sheets>${this.cols.length ? `<definedNames>${this.sheets.map((s, i) => this.filterName(s, i)).join("")}</definedNames>` : ""}</workbook>`)],
+        `</sheets>${this.sheets.some((s) => s.cols) ? `<definedNames>${this.sheets.map((s, i) => (s.cols ? this.filterName(s, i) : "")).join("")}</definedNames>` : ""}</workbook>`)],
       ["xl/_rels/workbook.xml.rels", xml(
         `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
         range.map((i) => `<Relationship Id="rId${i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i}.xml"/>`).join("") +
@@ -254,7 +276,7 @@ async function deflateRaw(chunks: readonly Uint8Array[]): Promise<Uint8Array | n
 }
 
 /** A plain (non-zip64) archive: up to 4 GB per entry, which a 1M-row sheet stays well under once deflated. */
-async function zip(files: [string, Uint8Array[]][]): Promise<Uint8Array> {
+export async function zip(files: [string, Uint8Array[]][]): Promise<Uint8Array> {
   const parts: Uint8Array[] = [];
   const central: Uint8Array[] = [];
   let offset = 0;

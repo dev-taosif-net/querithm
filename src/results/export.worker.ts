@@ -1,7 +1,7 @@
 // Export runs off the main thread over the same Arrow data (§7 Grid wiring): CSV, TSV, JSON or Excel.
 import { tableFromIPC, Type, type Vector } from "apache-arrow";
 import { buildColumns, exactNumber, formatValue, StorageClass, storageClassAt, type ColumnModel } from "./model";
-import { XlsxWriter } from "./xlsx";
+import { XlsxWriter, zip } from "./xlsx";
 
 export type ExportFormat = "csv" | "json" | "tsv" | "xlsx";
 
@@ -9,6 +9,11 @@ export interface ExportRequest {
   format: ExportFormat;
   sheetName?: string;
   batches: ArrayBuffer[];
+  /**
+   * "Export all result sets": every set of the run, each as Arrow IPC streams (a set without rows sends its schema).
+   * Excel gets a sheet per set; CSV, TSV and JSON a file per set in one .zip. `batches` is then unused.
+   */
+  all?: { name: string; batches: ArrayBuffer[] }[];
 }
 
 function csvCell(v: string | null, sep: string): string {
@@ -42,17 +47,61 @@ async function xlsx({ batches, sheetName }: ExportRequest): Promise<Uint8Array> 
   return (writer ?? new XlsxWriter([], { sheetName })).finish();
 }
 
-self.onmessage = async (e: MessageEvent<ExportRequest>) => {
-  const { format, batches } = e.data;
-  if (format === "xlsx") {
-    try {
-      const out = await xlsx(e.data);
-      (self as unknown as Worker).postMessage(out, [out.buffer]);
-    } catch (err) {
-      (self as unknown as Worker).postMessage({ error: err instanceof Error ? err.message : String(err) });
+/** Every result set in one workbook, a sheet each (more when a set passes Excel's row limit). */
+async function xlsxAll(all: NonNullable<ExportRequest["all"]>): Promise<Uint8Array> {
+  const writer = new XlsxWriter([]);
+  for (const set of all) {
+    let started = false;
+    for (const buf of set.batches) {
+      const table = tableFromIPC(new Uint8Array(buf));
+      const cols = buildColumns(table.schema);
+      const dynamic = cols.some((c) => c.classField != null);
+      if (!started) writer.nextResult(cols, set.name);
+      started = true;
+      for (const batch of table.batches) {
+        const vectors = batch.schema.fields.map((_, i) => batch.getChildAt(i)!);
+        for (let i = 0; i < batch.numRows; i++) {
+          const values = cols.map((c) => (vectors[c.field].isValid(i) ? formatValue(c, vectors[c.field], i, vectors) : null));
+          writer.addRow(values, dynamic ? cols.map((c) => dynamicKind(c, vectors, i)) : undefined);
+        }
+      }
     }
-    return;
+    if (!started) writer.nextResult([], set.name);
   }
+  return writer.finish();
+}
+
+/** File names inside the .zip: the set's name, made safe for every file system, and unique. */
+export function zipEntryNames(names: readonly string[], ext: string): string[] {
+  const seen = new Set<string>();
+  return names.map((n) => {
+    const base = n.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").replace(/[. ]+$/, "").slice(0, 100) || "result";
+    let name = `${base}.${ext}`;
+    for (let i = 2; seen.has(name.toLowerCase()); i++) name = `${base} (${i}).${ext}`;
+    seen.add(name.toLowerCase());
+    return name;
+  });
+}
+
+self.onmessage = async (e: MessageEvent<ExportRequest>) => {
+  const { format, batches, all } = e.data;
+  try {
+    let out: Uint8Array;
+    if (all) {
+      if (format === "xlsx") out = await xlsxAll(all);
+      else {
+        const names = zipEntryNames(all.map((a) => a.name), format);
+        out = await zip(all.map((a, i) => [names[i], [textFile(format, a.batches)]]));
+      }
+    } else out = format === "xlsx" ? await xlsx(e.data) : textFile(format, batches);
+    (self as unknown as Worker).postMessage(out, [out.buffer]);
+  } catch (err) {
+    (self as unknown as Worker).postMessage({ error: err instanceof Error ? err.message : String(err) });
+  }
+};
+
+/** CSV, TSV or JSON of one result set. The header comes from the schema, so a set without rows still has one. */
+export function textFile(format: Exclude<ExportFormat, "xlsx">, batches: readonly ArrayBuffer[]): Uint8Array {
   const encoder = new TextEncoder();
   const parts: Uint8Array[] = [];
   let header = false;
@@ -62,12 +111,12 @@ self.onmessage = async (e: MessageEvent<ExportRequest>) => {
   for (const buf of batches) {
     const table = tableFromIPC(new Uint8Array(buf));
     const cols = buildColumns(table.schema);
+    if (!header && format !== "json") {
+      parts.push(encoder.encode(cols.map((c) => csvCell(c.name, sep)).join(sep) + "\r\n"));
+      header = true;
+    }
     for (const batch of table.batches) {
       const vectors = batch.schema.fields.map((_, i) => batch.getChildAt(i)!);
-      if (!header && format !== "json") {
-        parts.push(encoder.encode(cols.map((c) => csvCell(c.name, sep)).join(sep) + "\r\n"));
-        header = true;
-      }
       const lines: string[] = [];
       for (let i = 0; i < batch.numRows; i++) {
         const values = cols.map((c) => (vectors[c.field].isValid(i) ? formatValue(c, vectors[c.field], i, vectors) : null));
@@ -95,5 +144,5 @@ self.onmessage = async (e: MessageEvent<ExportRequest>) => {
     out.set(p, off);
     off += p.length;
   }
-  (self as unknown as Worker).postMessage(out, [out.buffer]);
-};
+  return out;
+}

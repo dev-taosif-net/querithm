@@ -2,6 +2,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { Table, tableToIPC } from "apache-arrow";
 import { Bool, Float64, Int32, Utf8 } from "apache-arrow";
 import { dynamicColumn, makeBatch, ordersBatch, type DynamicCell } from "./fixtures";
+import { unzip } from "./zip";
 
 type Handler = (e: { data: unknown }) => Promise<void>;
 const posted: unknown[] = [];
@@ -97,5 +98,49 @@ describe("export worker", () => {
       const b = makeBatch([{ name: "f", type: new Float64(), values: [1.5, 2], meta: { "q:typeName": "float" } }]);
       expect((JSON.parse(text(await run("json", [ipc(b)]))) as Record<string, unknown>[]).map((r) => r.f)).toEqual(["1.5", 2]);
     });
+  });
+});
+
+describe("export worker: all result sets of a run (one save)", () => {
+  const schemaOnly = () => {
+    const t = new Table([makeBatch([{ name: "x", type: new Int32(), values: [] }])]);
+    const bytes = tableToIPC(new Table(t.schema), "stream");
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  };
+  const other = () => ipc(makeBatch([{ name: "code", type: new Utf8(), values: ["A", "B"] }]));
+  async function runAll(format: string, all: { name: string; batches: ArrayBuffer[] }[]) {
+    await fakeSelf.onmessage!({ data: { format, batches: [], all } });
+    return posted[0] as Uint8Array;
+  }
+
+  it("Excel: a sheet per result set, each with its own columns, header filter and name; a set without rows keeps its header", async () => {
+    const files = unzip(await runAll("xlsx", [{ name: "Result set 1", batches: [ipc()] }, { name: "Result set 2", batches: [other(), other()] }, { name: "Result set 3", batches: [schemaOnly()] }]));
+    const book = files.get("xl/workbook.xml")!;
+    expect([...book.matchAll(/<sheet name="([^"]+)"/g)].map((m) => m[1])).toEqual(["Result set 1", "Result set 2", "Result set 3"]);
+    expect(book).toContain("'Result set 1'!$A$1:$C$4");
+    expect(book).toContain("'Result set 2'!$A$1:$A$5");
+    expect(book).toContain("'Result set 3'!$A$1:$A$1");
+    expect(files.get("xl/worksheets/sheet1.xml")).toContain('<autoFilter ref="A1:C4"/>');
+    expect(files.get("xl/worksheets/sheet2.xml")).toContain(">code<");
+    expect(files.get("xl/worksheets/sheet2.xml")).toContain('<autoFilter ref="A1:A5"/>');
+    expect(files.get("xl/worksheets/sheet3.xml")).toMatch(/<row r="1">.*>x<.*<\/row><\/sheetData>/);
+  });
+
+  it("CSV / TSV / JSON: a .zip with a file per result set, named safely and uniquely", async () => {
+    const files = unzip(await runAll("csv", [{ name: "Result set 1", batches: [ipc()] }, { name: "Result set 2", batches: [other()] }, { name: "Result set 3", batches: [schemaOnly()] }]));
+    expect([...files.keys()]).toEqual(["Result set 1.csv", "Result set 2.csv", "Result set 3.csv"]);
+    expect(files.get("Result set 1.csv")).toBe("id,name,qty\r\n1,one,10\r\n2,two,\r\n3,three,30\r\n");
+    expect(files.get("Result set 2.csv")).toBe("code\r\nA\r\nB\r\n");
+    expect(files.get("Result set 3.csv")).toBe("x\r\n");
+    posted.length = 0;
+    const json = unzip(await runAll("json", [{ name: "a", batches: [other()] }]));
+    expect(JSON.parse(json.get("a.json")!)).toEqual([{ code: "A" }, { code: "B" }]);
+  });
+
+  it("zip entry names: no path separators or reserved characters, no trailing dots, unique ignoring case", async () => {
+    const { zipEntryNames } = await import("../export.worker");
+    expect(zipEntryNames(["../etc/passwd", "a:b*c?", "Same", "same", "dots. ", ""], "csv")).toEqual([
+      ".._etc_passwd.csv", "a_b_c_.csv", "Same.csv", "same (2).csv", "dots.csv", "result.csv",
+    ]);
   });
 });

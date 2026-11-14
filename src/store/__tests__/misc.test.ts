@@ -187,6 +187,20 @@ describe("settings store", () => {
     expect(useSettings.getState()).toMatchObject({ theme: "dark", editorFontSize: 9, indentSize: 8, maxRows: 0, minimap: true, pinnedProfiles: [] });
   });
 
+  it("the layout for several result sets: Tabs by default; an unknown value in store.db or from set() is refused", async () => {
+    rpc.mockResolvedValueOnce([{ key: "ui.settings", valueJson: JSON.stringify({ resultLayout: "grid-of-grids" }) }]);
+    await useSettings.getState().load();
+    expect(useSettings.getState().resultLayout).toBe("tabs");
+    rpc.mockResolvedValueOnce([{ key: "ui.settings", valueJson: JSON.stringify({ resultLayout: "stacked" }) }]);
+    await useSettings.getState().load();
+    expect(useSettings.getState().resultLayout).toBe("stacked");
+    useSettings.getState().set({ resultLayout: 7 as never });
+    expect(useSettings.getState().resultLayout).toBe("stacked");
+    useSettings.getState().set({ resultLayout: "side" });
+    expect(useSettings.getState().resultLayout).toBe("side");
+    useSettings.getState().set({ resultLayout: "tabs" });
+  });
+
   it("an unknown or removed syntax theme in store.db falls back to Standard; a known one loads", async () => {
     rpc.mockResolvedValueOnce([{ key: "ui.settings", valueJson: JSON.stringify({ syntaxTheme: "rainbow" }) }]);
     await useSettings.getState().load();

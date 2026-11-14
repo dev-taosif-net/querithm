@@ -136,6 +136,9 @@ const paths = {
     </>
   ),
   split: <path d="M3 5h18v14H3zM12 5v14" />,
+  // Results layouts (§12): one set behind tabs, sets one under another.
+  layoutTabs: <path d="M3 9h18v11H3zM3 9V5h7v4M10 6h6v3" />,
+  layoutStacked: <path d="M3 4h18v7H3zM3 13h18v7H3z" />,
   step: <path d="M5 5v14M9 12h10M15 8l4 4-4 4" />,
 } satisfies Record<string, ReactNode>;
 

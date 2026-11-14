@@ -15,6 +15,7 @@ import { toast, useUi } from "../store/ui";
 import { selectionStats, type SelectionStats } from "./selectionStats";
 export { formatStatNumber, type SelectionStats } from "./selectionStats";
 import { clampLeft } from "./tipPosition";
+import { GRID_HEADER_PX, GRID_ROW_PX, GRID_SCALE } from "./gridScale";
 import { DEFAULT_ENGINE, dialectOf, DIALECTS } from "../engines";
 import type { Engine } from "../ipc/contract";
 
@@ -178,8 +179,7 @@ function describe(c: ColumnModel, staging?: GridStaging): string {
 }
 
 /** Compact starting width: header text plus enough room for a typical value of the type; the user can widen any column. */
-/** Uniform size factor for the grid (fonts, row/header heights, padding, default widths). */
-export const GRID_SCALE = 0.93;
+export { GRID_SCALE };
 
 function defaultWidth(name: string, typeName: string): number {
   const base = Math.max(name.length * 7 + 12, 40);
@@ -809,8 +809,8 @@ export function ResultGrid({
       smoothScrollX
       smoothScrollY
       overscrollX={0}
-      rowHeight={Math.round(24 * GRID_SCALE)}
-      headerHeight={Math.round(28 * GRID_SCALE)}
+      rowHeight={GRID_ROW_PX}
+      headerHeight={GRID_HEADER_PX}
       width="100%"
       height="100%"
       theme={theme}

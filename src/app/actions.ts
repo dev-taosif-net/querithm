@@ -27,6 +27,7 @@ import { monaco } from "../editor/monaco";
 import { dropStagings, pendingIn } from "../results/staging";
 import { engineGone } from "../store/engine";
 import { resolvePendingEdits } from "../results/gridEdit";
+import { keptPins } from "../results/resultLayout";
 import { notebookHooks } from "../notebook/hooks";
 
 const KEEP_EXECUTIONS = 3;
@@ -65,6 +66,7 @@ export interface NewTabOptions {
   definitionOf?: TabState["definitionOf"];
   preview?: boolean;
   charts?: TabState["charts"];
+  resultLayout?: TabState["resultLayout"];
 }
 
 /**
@@ -92,7 +94,7 @@ export function newQueryTab(o: NewTabOptions = {}): string {
   createModel(id, o.text ?? "", languageFor(profile?.engine));
   useTabs.getState().add({
     id, title: o.title ?? `SQLQuery${++untitled}.sql`, profileId, database, readOnly: o.readOnly, boundObject: o.boundObject, filePath: o.filePath, pinned: o.pinned,
-    definitionOf: o.definitionOf, preview: o.preview, charts: o.charts,
+    definitionOf: o.definitionOf, preview: o.preview, charts: o.charts, resultLayout: o.resultLayout,
   });
   ensureTabSnapshot(tab(id));
   workspaceHooks.onTabAdded?.(id, o.activate !== false, !!o.atEnd);
@@ -622,14 +624,17 @@ export function showTabMessages(tabId: string, sql: string, lineOffset: number, 
  * shell queue, poll loop, rows), and a comparison with one of them ends and says so rather than vanish. Returns the
  * tab's new run list (and the ended comparison) to apply with the caller's own changes.
  */
-function keepRun(tabId: string, executionId: string, t: TabState): Pick<Partial<TabState>, "executions" | "compare"> {
+function keepRun(tabId: string, executionId: string, t: TabState): Pick<Partial<TabState>, "executions" | "compare" | "pins"> {
   const keep = [...t.executions, executionId];
   const dropped = keep.slice(0, Math.max(0, keep.length - KEEP_EXECUTIONS));
   for (const old of dropped) disposeExecution(old);
   const cur = tab(tabId) ?? t;
   const lostCompare = !!cur.compare && dropped.includes(cur.compare.executionId);
   if (lostCompare) toast("info", `The compared run was discarded: a tab keeps its last ${KEEP_EXECUTIONS} runs.`);
-  return { executions: keep.slice(-KEEP_EXECUTIONS), ...(lostCompare ? { compare: undefined } : {}) };
+  const executions = keep.slice(-KEEP_EXECUTIONS);
+  const pins = keptPins(cur.pins, executions);
+  if (pins !== cur.pins) toast("info", `A pinned result set was unpinned: its run was discarded (a tab keeps its last ${KEEP_EXECUTIONS} runs).`);
+  return { executions, ...(lostCompare ? { compare: undefined } : {}), ...(pins !== cur.pins ? { pins } : {}) };
 }
 
 /** Why an in-memory tab has no database any more: its session (and the database in it) is gone. */
@@ -648,7 +653,7 @@ export function markMemoryLost(tabId: string, message: string) {
   if (t.notebook) notebookHooks.outputsLost?.(tabId, message);
   else {
     for (const ex of t.executions) disposeExecution(ex);
-    useTabs.getState().update(tabId, { executions: [], activeExecutionId: undefined, resultIndex: undefined });
+    useTabs.getState().update(tabId, { executions: [], activeExecutionId: undefined, resultIndex: undefined, pins: undefined, compare: undefined });
   }
   useTabs.getState().update(tabId, { memoryLost: true, sessionId: undefined, txState: "none", txStartedAt: undefined, spid: undefined, busy: false });
   if (!t.notebook) showTabMessages(tabId, "", 1, [{ severity: "warning", message }]);

@@ -86,6 +86,14 @@ export interface TabState {
   resultIndex?: number;
   /** Grid or chart per result index, with the chart spec; saved with the workspace (specs only, never data). */
   charts?: Record<number, ResultChart>;
+  /** How this tab lays out several result sets; unset = the Settings default. Saved with the workspace. */
+  resultLayout?: "tabs" | "stacked" | "side";
+  /** Stacked / Side by side: the selected set fills the panel for now (Restore or Esc goes back). */
+  resultMaximized?: boolean;
+  /** Side by side: the run's result indexes its columns show (the next sets in order fill the rest). */
+  sideSets?: number[];
+  /** Sets of kept runs that stay on screen across runs (Stacked, Side by side), at most two; dropped with their run. */
+  pins?: { executionId: string; resultIndex: number }[];
   /** A SQL notebook (Phase C3): the panel shows cells instead of one editor; no model of its own. */
   notebook?: boolean;
 }

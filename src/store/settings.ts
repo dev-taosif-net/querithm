@@ -57,6 +57,11 @@ export interface Settings {
   notebookStopOnError: boolean;
   /** Where query tabs put their results panel (§12 bottom panel): under the editor, or on its right. */
   panelDock: "bottom" | "right";
+  /**
+   * How a run with several result sets is laid out (§12 bottom panel): one at a time behind the ledger chips, one under
+   * another (as SSMS shows them), or side by side. New tabs use it; each tab can choose its own in the Results tools.
+   */
+  resultLayout: "tabs" | "stacked" | "side";
   /** Interface scale in percent (L26): the webview's page zoom, so text, the grid and the editor grow together (src/app/uiScale.ts). */
   uiScale: number;
 }
@@ -96,6 +101,7 @@ export const defaultSettings: Settings = {
   autoTitle: true,
   notebookStopOnError: true,
   panelDock: "bottom",
+  resultLayout: "tabs",
   uiScale: 100,
 };
 
@@ -111,6 +117,7 @@ export const settingLimits = {
 const choices: Partial<Record<keyof Settings, readonly string[]>> = {
   theme: ["dark", "light", "system"],
   panelDock: ["bottom", "right"],
+  resultLayout: ["tabs", "stacked", "side"],
   syntaxTheme: SYNTAX_THEME_IDS,
   keywordCase: ["upper", "lower", "preserve"],
 };

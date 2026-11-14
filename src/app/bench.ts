@@ -280,6 +280,74 @@ async function chartToggle(rows = 1_000_000, samples = 3) {
   return { firstPaint,  frames, long, longFrames: frames.filter((f) => f > 32).length, worstFrameMs: Math.max(...frames), rows: data.totalRows };
 }
 
+/**
+ * §14 metric 37 (results layouts): a run of `sets` result sets of 20 rows × 10 columns (the sidecar's synthetic rows,
+ * one batch shared by every set), shown in a tab. Tabs → Stacked painted (median of 3), then the stack scrolled from
+ * top to bottom: every frame interval, the most grids mounted at any frame (the mount window caps them), and the JS
+ * heap with the stack shown minus the same run in Tabs. The tab shows Tabs again afterwards.
+ */
+async function resultLayouts(sets = 500) {
+  const { ArrowResultSet } = await import("../results/model");
+  const perf = performance as Performance & { memory?: { usedJSHeapSize: number } };
+  const tabId = useTabs.getState().activeId ?? newQueryTab();
+  const src = await rpc("bench.synthetic", { rows: 20, columns: 10 });
+  const tmp = new ExecutionData(src.executionId!);
+  await streamExecution(src.executionId!, {
+    onSchema: (ri, sc) => tmp.get(ri).setSchema(sc),
+    onBatch: (ri, b) => tmp.get(ri).append(b),
+    onEndResultSet: (ri, tr) => tmp.get(ri).finish(tr),
+    onEnd: () => {},
+  }).done;
+  const one = tmp.get(0);
+  const exId = `bench-layouts-${Date.now()}`;
+  const data = new ExecutionData(exId);
+  for (let i = 0; i < sets; i++) {
+    const rs = new ArrowResultSet(i);
+    rs.setSchema(one.schema!);
+    for (const b of one.batches) rs.append(b);
+    rs.finish(false);
+    data.resultSets.push(rs);
+  }
+  executionData.set(exId, data);
+  const setAfter = Object.fromEntries(Array.from({ length: sets }, (_, i) => [i, 0]));
+  useExecutions.getState().put({ id: exId, tabId, sessionId: "", state: "done", startedAt: Date.now(), resultSetCount: sets, truncated: false, messages: [], statistics: [], plans: [], sql: "-- synthetic", lineOffset: 1, setAfter });
+  useTabs.getState().update(tabId, { activeExecutionId: exId, executions: [...useTabs.getState().tabs[tabId].executions, exId], resultIndex: 0, bottomOpen: true, bottomTab: "results", resultLayout: "tabs" });
+  await sleep(500);
+  const heapTabs = perf.memory?.usedJSHeapSize ?? null;
+  const stack = () => document.querySelector<HTMLElement>("[data-q-layout=stacked]");
+  const grids = () => stack()?.querySelectorAll(".dvn-scroller").length ?? 0;
+  const switchMs: number[] = [];
+  for (let i = 0; i < 4; i++) {
+    useTabs.getState().update(tabId, { resultLayout: "tabs" });
+    await sleep(300);
+    const t0 = performance.now();
+    useTabs.getState().update(tabId, { resultLayout: "stacked" });
+    while (grids() === 0) await raf();
+    await raf();
+    if (i) switchMs.push(performance.now() - t0); // the first one loads the grid's code
+  }
+  await sleep(500);
+  const heapStacked = perf.memory?.usedJSHeapSize ?? null;
+  const box = stack();
+  const frames: number[] = [];
+  let mounted = grids();
+  if (box) {
+    let last = await raf();
+    while (box.scrollTop + box.clientHeight < box.scrollHeight - 2 && frames.length < 3000) {
+      box.scrollTop += 400;
+      const now = await raf();
+      frames.push(now - last);
+      last = now;
+      mounted = Math.max(mounted, grids());
+    }
+  }
+  useTabs.getState().update(tabId, { resultLayout: "tabs" });
+  return {
+    switchMs, frames, longFrames: frames.filter((f) => f > 32).length, worstFrameMs: frames.length ? Math.max(...frames) : 0, mounted, sets,
+    memoryDeltaBytes: heapTabs != null && heapStacked != null ? heapStacked - heapTabs : null,
+  };
+}
+
 /** Metric 14: frame times while typing and scrolling during concurrent long queries (caller starts the queries). */
 async function frameDrops(durationMs = 10_000) {
   const frames: number[] = [];
@@ -691,6 +759,7 @@ export function installBench() {
     tabSwitch30,
     bigResult,
     chartToggle,
+    resultLayouts,
     frameDrops,
     messageFlood,
     ipcTimings,

@@ -158,6 +158,12 @@ export const settingDefs: SettingDef[] = [
           : null,
   },
   {
+    id: "resultLayout", keys: ["resultLayout"], page: "execution", group: "Results", label: "Several result sets",
+    description: "How a run that returns more than one result set is laid out, unless a tab chose its own in the Results tools.",
+    control: { kind: "segmented", options: [{ value: "tabs", label: "Tabs" }, { value: "stacked", label: "Stacked (SSMS)" }, { value: "side", label: "Side by side" }] },
+    keywords: ["multiple result sets", "layout", "ssms", "stacked", "side by side", "tabs", "grid"],
+  },
+  {
     id: "statisticsTime", keys: ["statisticsTime"], page: "execution", group: "Server statistics", label: "Server CPU and elapsed time",
     description: "Runs SET STATISTICS TIME ON, so the status bar and Messages show the time the server spent.",
     control: { kind: "switch" }, engine: { only: "mssql", other: "PostgreSQL: use Explain ▸ Actual plan for server timings." },

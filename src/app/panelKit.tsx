@@ -52,7 +52,9 @@ export function PanelRow({ ledger, tools, label, fill }: { ledger?: ReactNode; t
     <div className={row} data-q-panel-row="both">
       {ledger}
       {tools && (
-        <div className={`${fill ? "flex-1" : "ml-auto"} flex items-center gap-1.5 min-w-0`} role="toolbar" aria-label={label}>
+        // The tools keep their width and the chips give way (the ledger clips them; ←/→ reach every chip): 500 result sets must not push
+        // Export or the layout switch off the row.
+        <div className={`${fill ? "flex-1 min-w-0" : "ml-auto shrink-0"} flex items-center gap-1.5`} role="toolbar" aria-label={label}>
           {tools}
         </div>
       )}

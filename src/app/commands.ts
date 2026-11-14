@@ -23,6 +23,7 @@ import { checkForUpdates } from "../store/updates";
 import { canonical, eventToShortcut, isChord, isMac, splitBinding } from "./shortcuts";
 import { showResultAs } from "../results/resultViews";
 import { compareNext, stepError, stepOutput } from "../results/panelActions";
+import { pinShown, setResultLayout, toggleResultMaximized } from "../results/resultLayout";
 import { stepUiScale } from "./uiScale";
 
 export interface Command {
@@ -73,6 +74,12 @@ export const commands: Command[] = [
   { id: "panel.nextRun", title: "Results panel: next kept run", keys: ["Ctrl+Alt+PageDown"], category: "View", scope: "results", run: withTab((id) => stepRun(id, 1)) },
   { id: "panel.previousRun", title: "Results panel: previous kept run", keys: ["Ctrl+Alt+PageUp"], category: "View", scope: "results", run: withTab((id) => stepRun(id, -1)) },
   { id: "panel.compare", title: "Compare the shown result set with another", category: "View", run: withTab(compareNext) },
+  // Results layouts (§12): palette only by default (owner decision 2026-11-14); a shortcut can be bound in Settings.
+  { id: "results.layoutTabs", title: "Results layout: Tabs (one result set at a time)", category: "View", run: withTab((id) => setResultLayout(id, "tabs")) },
+  { id: "results.layoutStacked", title: "Results layout: Stacked (one under another, as in SSMS)", category: "View", run: withTab((id) => setResultLayout(id, "stacked")) },
+  { id: "results.layoutSide", title: "Results layout: Side by side", category: "View", run: withTab((id) => setResultLayout(id, "side")) },
+  { id: "results.maximizeSet", title: "Show the selected result set alone, or go back to the layout", category: "View", run: withTab(toggleResultMaximized) },
+  { id: "results.pin", title: "Pin or unpin the shown result set", category: "View", run: withTab(pinShown) },
   { id: "query.nextError", title: "Go to the next error of the run", keys: ["F4"], category: "Query", run: withTab((id) => stepError(id, 1)) },
   { id: "query.previousError", title: "Go to the previous error of the run", keys: ["Shift+F4"], category: "Query", run: withTab((id) => stepError(id, -1)) },
   { id: "proc.apply", title: "Apply procedure to server", keys: ["Ctrl+Shift+S"], category: "Procedure", run: withTab(applyProcedure) },

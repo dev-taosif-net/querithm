@@ -54,6 +54,17 @@ describe("PanelRow", () => {
     expect(rows[1].getAttribute("role")).toBe("toolbar");
     expect(rows[1].getAttribute("aria-label")).toBe("Tools");
   });
+
+  it("on one row the tools never shrink: many chips give way instead (500 result sets pushed Export off the row)", () => {
+    const { container, unmount } = at("wide", <PanelRow label="Tools" ledger={<span>L</span>} tools={<span>T</span>} />);
+    const tools = container.querySelector("[role=toolbar]")!;
+    expect(tools.className).toMatch(/\bshrink-0\b/);
+    expect(tools.className).not.toMatch(/\bmin-w-0\b/);
+    unmount();
+    // Edit mode fills the row with its tools, which then may shrink (their own overflow rules apply).
+    const fill = at("wide", <PanelRow label="Tools" ledger={<span>L</span>} tools={<span>T</span>} fill />);
+    expect(fill.container.querySelector("[role=toolbar]")!.className).toMatch(/\bflex-1\b.*\bmin-w-0\b/);
+  });
 });
 
 describe("Chips (the ledger)", () => {
