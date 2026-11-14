@@ -694,6 +694,9 @@ try {
   await page.keyboard.down("Control"); await page.keyboard.press("A"); await page.keyboard.up("Control");
   await page.keyboard.type("SELECT CustomerId, FullName, Email FROM dbo.Customers ORDER BY CustomerId;");
   await page.keyboard.press("F5");
+  // The layouts step left dbo.Orders (editable) selected, so its enabled Edit button would match before this run's
+  // single result replaces the two sets: wait for the second set's chip to go first.
+  await page.waitForFunction(() => !document.querySelector('[data-q-chip="s1"]'), { timeout: 15_000 }).catch(() => errors.push("grid edit: the new result did not replace the two sets"));
   await page.waitForFunction(() => !!document.querySelector("[data-q-edit-toggle]:not([aria-disabled])"), { timeout: 15_000 }).catch(() => errors.push("grid Edit button did not appear"));
   if (await page.evaluate(() => !!document.querySelector("[data-q-grid-edit]"))) errors.push("grid was editable before Edit was clicked");
   await page.evaluate(() => document.querySelector("[data-q-edit-toggle]:not([aria-disabled])")?.click());

@@ -119,6 +119,13 @@ on 2ab36b1 and 7f00b20 was not run; it is the open check for #22. Local: `dotnet
 `CancelRecoveryTests` frame-cancel flake in an earlier run, 5 / 5 alone — the known one); `QUERITHM_IT=1` Oracle suite
 979 / 0.
 
+**Open (seen 2026-11-14, dev CI run 43606347729, the 0.1.3 release prep):**
+`OracleMetadataIntegrationTests.The_snapshot_lists_every_object_kind_the_fixture_made_with_exact_names_and_notes` failed
+once at its id-uniqueness check (`stamps.Count` 91, distinct ids 88: three objects listed twice). The same sidecar code
+passed in run 43603961716 an hour earlier, so it depends on timing — probably DDL from another Oracle test class running
+during the snapshot read, making one of the stamp query's LEFT JOINs match twice. Not reproduced or fixed yet; Oracle
+stays hidden in 0.1.3.
+
 ## Decisions taken (owner answers to README "Open decisions")
 
 | # | Answer | Date |
