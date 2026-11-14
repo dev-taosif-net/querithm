@@ -299,7 +299,7 @@ try {
     await page.waitForFunction(() => document.querySelector('[role="dialog"]')?.textContent?.includes("cross the network as plain text"), { timeout: 5_000 })
       .catch(() => errors.push("oracle: TCP did not warn that it is not encrypted"));
     if (!(await page.evaluate(() => document.querySelector("[data-q-auth-unavailable]")?.textContent?.includes("Oracle wallet")))) errors.push("oracle: wallet sign-in is not shown as unavailable");
-    await page.evaluate(() => document.querySelector('[role="dialog"] input[type="radio"][aria-label="Dev"]')?.click());
+    await page.evaluate(() => document.querySelector('[role="dialog"] button[aria-pressed][aria-label="Dev"]')?.click());
     await fill("Name", "Smoke Oracle");
     await shot("27-oracle-profile");
     await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent?.trim() === "Save")?.click());
@@ -1298,7 +1298,7 @@ try {
       name?.select?.();
     });
     await page.keyboard.type(`Smoke ${e.label}`);
-    await page.evaluate(() => document.querySelector('[role="dialog"] input[type="radio"][aria-label="Local"]')?.click());
+    await page.evaluate(() => document.querySelector('[role="dialog"] button[aria-pressed][aria-label="Local"]')?.click());
     const [dbChooser] = await Promise.all([
       page.waitForFileChooser({ timeout: 10_000 }),
       clickButton("Pick file…"),

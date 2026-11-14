@@ -35,9 +35,11 @@ export function tabStops(root: HTMLElement): HTMLElement[] {
  * Cancel cancels.
  */
 export function Modal({
-  title, subtitle, children, footer, onClose, width = 520, danger = false, alert = danger, onEnter, onEscape, bodyClassName = "p-4 overflow-auto",
+  title, subtitle, children, footer, onClose, width = 520, danger = false, alert = danger, onEnter, onEscape, bodyClassName = "p-4 overflow-auto", topRule,
 }: {
   title: ReactNode; subtitle?: ReactNode; children: ReactNode; footer?: ReactNode; onClose: () => void; width?: number; danger?: boolean;
+  /** A 3 px colour rule along the dialog's top edge (the profile editor's Production marker). */
+  topRule?: string;
   /**
    * An alert dialog (WAI-ARIA alertdialog; every danger dialog is one): it opens on its `[data-modal-cancel]` control
    * (unless a field took focus first), and Enter confirms only from a text field, never from the dialog itself, so
@@ -129,7 +131,7 @@ export function Modal({
         aria-describedby={subtitle ? `${id}-subtitle` : undefined}
         tabIndex={-1}
         className={`q-modal-dialog bg-panel rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-full outline-none ${danger ? "border-2 border-err shadow-[0_0_50px_rgba(239,68,68,0.3)]" : "border border-line"}`}
-        style={{ width, maxWidth: "100%" }}
+        style={{ width, maxWidth: "100%", ...(topRule ? { borderTop: `3px solid ${topRule}` } : {}) }}
       >
         <div className={`px-4 py-3 ${danger ? "bg-err-solid text-white" : "border-b border-line"}`}>
           {/* Shown as written: titles carry identifiers and names ("Rename @OrderId", "Execute dbo.usp_Get"), which a

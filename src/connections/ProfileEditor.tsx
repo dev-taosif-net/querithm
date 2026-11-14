@@ -2,11 +2,14 @@
 // shell under the chosen retention policy; it is never part of the profile. A pasted connection string is parsed by the
 // sidecar's drivers into the same fields and is itself never stored.
 //
-// One column, read in the same order by the eye, Tab and a screen reader: server type → where → environment →
-// sign-in → name → folded extras. A new profile preselects neither the server type nor the environment; the folded rows
-// show their state in one line and open by themselves on a warning (transportSummary is their only source).
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+// One column, read in the same order by the eye, Tab and a screen reader (connection editor redesign, 2026-11-14):
+// server type → Connection → Sign in → Profile (environment, name, group) → Advanced. A fixed-size dialog: the header
+// and the footer (its status line: test result or what Save is waiting for) stay put and only the body scrolls. A new
+// profile preselects neither the server type (the first view offers the engines as tiles) nor the environment; the
+// folded Advanced rows show their state in one line and open by themselves on a warning (transportSummary decides).
+import { useEffect, useId, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { BusyButtonContent } from "../app/LoadingStatus";
+import { NumberField } from "../app/controls";
 import { SecretInput } from "../app/SecretInput";
 import { escapeForDisplay } from "../monitor/format";
 import type { AuthKind, Engine, EngineInfo, EnvironmentKind, LocationKind, Profile, SshAuthKind, SshSettings, TlsMode } from "../ipc/contract";
@@ -85,7 +88,6 @@ function locationsOf(info: readonly EngineInfo[] | null, engine: Engine): Locati
   return own?.length ? own : ENGINE_TRAITS[engine].locations;
 }
 
-const LOCATION_LABEL: Record<LocationKind, string> = { server: "Server", file: "Database file", memory: "In-memory database" };
 
 /**
  * Sign-ins an engine has that this build cannot use yet, each with the reason (shown under Sign in, never selectable).
@@ -159,10 +161,12 @@ const TLS: Record<Engine, { id: TlsMode; label: string }[]> = {
   ],
 };
 
+// A new server profile's Host starts empty: "localhost" is only its placeholder, and an empty host goes out as none
+// (withDefaultHost), which every server engine's sidecar provider reads as localhost.
 const empty = (engine: Engine): Profile => {
   const server = ENGINE_TRAITS[engine].locations.includes("server");
   return {
-    id: "", name: "", engine, host: server ? "localhost" : null, port: null, auth: ENGINE_TRAITS[engine].defaultAuth, username: ENGINE_TRAITS[engine].defaultUser,
+    id: "", name: "", engine, host: server ? "" : null, port: null, auth: ENGINE_TRAITS[engine].defaultAuth, username: ENGINE_TRAITS[engine].defaultUser,
     databaseDefault: ENGINE_TRAITS[engine].defaultDatabase, environment: "dev", color: null, groupName: null, tlsMode: "default", trustCert: false, caPath: null,
     timeoutS: 15, commandTimeoutS: 0, options: null, passwordRetention: "once", createdAt: 0, updatedAt: 0,
     ...(server ? {} : { location: ENGINE_TRAITS[engine].locations[0], file: null }),
@@ -305,10 +309,6 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
   // A new profile names neither its server type nor its environment until the user picks them (a preset names the type).
   const [engineChosen, setEngineChosen] = useState(start.known || !!preset);
   const [animated, setAnimated] = useState(false);
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => {
-    setMounted(true);
-  }, []);
   const [envChosen, setEnvChosen] = useState(start.known);
   const [envFromGroup, setEnvFromGroup] = useState<string | null>(null);
   const [nameTouched, setNameTouched] = useState(start.known);
@@ -360,7 +360,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
   const [pastedIntoHost, setPastedIntoHost] = useState(false);
   const [connStr, setConnStr] = useState("");
   const [parsed, setParsed] = useState<{ engine: Engine; unknown: string[]; notApplied: string[]; notes: string[] } | null>(null);
-  const [undo, setUndo] = useState<{ before: Profile; text: string } | null>(null);
+  const [undo, setUndo] = useState<{ before: Profile; access: "readOnly" | "readWrite" | null; text: string } | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [portOffer, setPortOffer] = useState<Engine | null>(null);
   const [prodDismissed, setProdDismissed] = useState<string | null>(null);
@@ -383,7 +383,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
   const refs = {
     name: useRef<HTMLInputElement>(null), host: useRef<HTMLInputElement>(null), port: useRef<HTMLInputElement>(null), file: useRef<HTMLButtonElement>(null),
     service: useRef<HTMLInputElement>(null),
-    engine: useRef<HTMLButtonElement>(null), environment: useRef<HTMLInputElement>(null), ack: useRef<HTMLInputElement>(null),
+    engine: useRef<HTMLButtonElement>(null), environment: useRef<HTMLButtonElement>(null), ack: useRef<HTMLInputElement>(null),
     sshHost: useRef<HTMLInputElement>(null), sshUser: useRef<HTMLInputElement>(null),
   };
   const set = (patch: Partial<Profile>) => {
@@ -422,7 +422,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
   };
   const errorLine = (f: FieldKey, className = "") => {
     const e = fieldError(f);
-    return e ? <span id={errId(f)} className={`block mt-1 text-[10.5px] text-err ${className}`}>{e}</span> : null;
+    return e ? <span id={errId(f)} className={`flex items-start gap-1.5 mt-1.5 text-[11px] text-err ${className}`}><span className="mt-px shrink-0"><Icon d={ICON.circleAlert} size={12} /></span>{e}</span> : null;
   };
 
   const transport = transportSummary(p);
@@ -435,7 +435,8 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
   const [open, setOpen] = useState(() => ({
     enc: !local && (transport.tone === "warn" || p.tlsMode !== "default" || p.trustCert || !!p.caPath),
     ssh: !!p.ssh,
-    time: (p.timeoutS ?? 15) !== 15 || (p.commandTimeoutS ?? 0) !== 0 || !!p.options?.multiSubnetFailover || p.options?.applicationIntent === "readOnly",
+    time: (p.timeoutS ?? 15) !== 15 || (p.commandTimeoutS ?? 0) !== 0,
+    avail: p.options?.multiSubnetFailover === "true" || p.options?.applicationIntent === "readOnly",
   }));
   // A row never folds a warning away: it opens when its state becomes risky.
   useEffect(() => {
@@ -461,10 +462,10 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
     const list: { key: Focusable; text: string }[] = [];
     const errs = profileFieldErrors(d);
     for (const f of ["host", "port", "service", "file"] as FieldKey[]) if (errs[f]) list.push({ key: f, text: errs[f]! });
-    list.push(...sshProblems(d));
     if (!envChosen) list.push({ key: "environment", text: "Choose the environment: Local, Dev, Test, Staging or Prod." });
     // A missing file is the reason there is no name yet: it is said once, at the file.
     if (errs.name && !errs.file) list.push({ key: "name", text: errs.name });
+    list.push(...sshProblems(d));
     // A pending connection string may have changed the transport since this render. An earlier acknowledgement
     // belongs only to the transport the checkbox displayed, never to newly parsed settings.
     const sameTransport = d.engine === p.engine && d.environment === p.environment && d.tlsMode === p.tlsMode && d.trustCert === p.trustCert;
@@ -482,7 +483,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
   /** Shows these fields' messages and focuses the first one that has a message (opening its row if folded). */
   const reveal = (fieldsToShow: FieldKey[], bad: Focusable[]) => {
     setShown((cur) => new Set([...cur, ...fieldsToShow]));
-    const order: Focusable[] = ["host", "port", "service", "file", "sshHost", "sshUser", "environment", "name", "ack"];
+    const order: Focusable[] = ["host", "port", "service", "file", "environment", "name", "sshHost", "sshUser", "ack"];
     const first = order.find((f) => bad.includes(f));
     if (!first) return;
     if (first === "ack") setOpen((o) => ({ ...o, enc: true }));
@@ -641,9 +642,10 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
   const tintText = (id: EnvironmentKind) => readableOnTint(`var(--q-env-${id})`, "var(--q-panel)", 0.14) ?? `var(--q-env-${id})`;
   const chipText = (id: EnvironmentKind) => readableOnTint(`var(--q-env-${id})`, "var(--q-panel)", 0.16) ?? `var(--q-env-${id})`;
 
-  // A user name or database already typed is kept; an engine with a default database fills an empty one. An engine on
-  // this computer starts at its first location with no file; leaving one returns to a server with its defaults. A port
-  // that was the old engine's default follows the new one.
+  // A user name or database the user typed is kept; one still equal to the old engine's default was never typed, so it
+  // follows the new engine (an engine with no default database leaves it empty). An engine on this computer starts at
+  // its first location with no file; leaving one returns to a server with its defaults. A port that was the old
+  // engine's default follows the new one.
   const pickEngine = (e: Engine) => {
     const t = ENGINE_TRAITS[e];
     const where = locationsOf(engineInfo, e);
@@ -652,11 +654,12 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
       set({ engine: e, location: where[0], file: null, auth: t.defaultAuth, host: null, port: null, username: null, databaseDefault: t.defaultDatabase, tlsMode: "default", trustCert: false, caPath: null, ssh: null });
       return;
     }
-    const dflt = t.defaultDatabase;
+    const typed = typedOver(p);
     set({
-      engine: e, auth: AUTH[e][0].id, tlsMode: "default", trustCert: false, caPath: null, username: p.username || t.defaultUser, databaseDefault: dflt === null ? p.databaseDefault : (p.databaseDefault ?? dflt),
+      engine: e, auth: AUTH[e][0].id, tlsMode: "default", trustCert: false, caPath: null,
+      username: typed.user ? p.username : t.defaultUser, databaseDefault: typed.database ? p.databaseDefault : t.defaultDatabase,
       port: p.port != null && p.port === traits.defaultPort ? null : p.port,
-      ...(local ? { location: null, file: null, host: p.host || "localhost", databaseDefault: dflt } : {}),
+      ...(local ? { location: null, file: null, host: p.host ?? "", databaseDefault: t.defaultDatabase } : {}),
     });
   };
   const chooseEngine = (e: Engine) => {
@@ -678,12 +681,39 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
       return;
     }
     if (e === p.engine) return;
-    const changes = [
-      `sign-in is ${AUTH[e][0].label}`,
-      locationsOf(engineInfo, e).includes("server") && !local ? "your host, user and database were kept" : null,
-    ].filter(Boolean);
-    setUndo({ before: p, text: `Switched to ${ENGINE_TRAITS[e].shortLabel}: ${changes.join("; ")}.` });
+    const t = ENGINE_TRAITS[e];
+    const changes = [`sign-in is ${AUTH[e][0].label}`];
+    if (locationsOf(engineInfo, e).includes("server") && !local) {
+      const typed = typedOver(p);
+      if (!typed.user && t.defaultUser) changes.push(`user is ${t.defaultUser}`);
+      const kept = [p.host?.trim() ? "host" : null, typed.user ? "user" : null, typed.database ? "database" : null].filter((x): x is string => !!x);
+      if (kept.length) changes.push(`your ${joinWords(kept)} ${kept.length > 1 ? "were" : "was"} kept`);
+    }
+    setUndo({ before: p, access, text: `Switched to ${t.shortLabel}: ${changes.join("; ")}.` });
     pickEngine(e);
+  };
+  /** Which of the current user and database the user typed (a value equal to this engine's default was not typed). */
+  function typedOver(x: Profile) {
+    const t = engineTraits(x.engine);
+    return {
+      user: !!x.username && x.username !== t.defaultUser,
+      database: !!x.databaseDefault && x.databaseDefault !== t.defaultDatabase,
+    };
+  }
+  // Undo puts back everything the switch changed: the fields and the picked file's access.
+  const undoSwitch = () => {
+    if (!undo) return;
+    setP(undo.before);
+    setAccess(undo.access);
+    setRefused(null);
+    setPortOffer(null);
+    setUndo(null);
+  };
+  /** A tile on the first view: the engine is chosen and focus moves to its first field. */
+  const pickFromTile = (e: Engine) => {
+    chooseEngine(e);
+    const where = locationsOf(engineInfo, e);
+    setFocusField(where.includes("server") ? "host" : where[0] === "file" ? "file" : null);
   };
 
   const pickFile = async () => {
@@ -704,6 +734,11 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
     } catch (e) {
       toast("error", (e as Error).message || "Could not change the file's access.");
     }
+  };
+
+  const setLocation = (l: LocationKind) => {
+    setAccess(null);
+    set({ location: l, file: l === "file" ? p.file : null });
   };
 
   const pickEnv = (e: EnvironmentKind) => {
@@ -758,13 +793,20 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
   }, [allProfiles, offered.join()]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const secretSaved = !!existing && savedSecret !== false && !kindChanged && !endpointChanged && !changeSecret && !secretTouched;
+  const fileLocations = locationsOf(engineInfo, p.engine).filter((l) => l !== "server");
+  const secretLabel = p.auth === "entraToken" ? "Access token" : "Password";
+  // The Encryption row shows an unchecked certificate in warning colour (PostgreSQL's Require included); only
+  // transportSummary's own tone opens the row by itself.
+  const transportTone = ackNeeded || transport.risk ? "warn" : transport.tone;
+  const reveal3 = animated ? "q-profile-reveal q-profile-reveal-3 " : "";
+
   const pasteBox = pasteOpen && (
-    <div className="q-profile-reveal space-y-1">
+    <div className="q-profile-reveal space-y-1.5">
       {pastedIntoHost && <p className="text-[11px] text-muted">That looks like a connection string, so it went here instead of into Host.</p>}
       <div className="flex items-center gap-2">
         <SecretInput
           className={`${INPUT} q-mono flex-1`} type="password" aria-label="Connection string" autoFocus autoComplete="off" spellCheck={false} data-no-enter-save
-          value={connStr} placeholder={fields.connectionStringExample}
+          value={connStr} placeholder={engineChosen ? fields.connectionStringExample : "Server=…;Database=…  or  postgres://…"}
           onValue={setConnStr}
           onPaste={(e) => {
             const text = e.clipboardData.getData("text");
@@ -780,24 +822,54 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
             }
           }}
         />
-        <button type="button" className="q-btn shrink-0" onClick={() => void fillFromString()} disabled={busy || !connStr.trim()}>Fill fields</button>
-        <button type="button" className="q-btn shrink-0" onClick={() => { setConnStr(""); setPasteOpen(false); setPastedIntoHost(false); }}>Cancel</button>
+        <button type="button" className={`${BTN} shrink-0`} onClick={() => void fillFromString()} disabled={busy || !connStr.trim()}>Fill fields</button>
+        <button type="button" className={`${BTN} shrink-0`} onClick={() => { setConnStr(""); setPasteOpen(false); setPastedIntoHost(false); }}>Cancel</button>
       </div>
-      <p className="text-[10.5px] text-muted">Read once by the sidecar and cleared: its settings become the fields, the string is never stored.</p>
+      <p className="text-[11px] text-muted">Read once by the sidecar and cleared: its settings become the fields, the string is never stored.</p>
     </div>
   );
-  const pasteLink = !pasteOpen && (
-    <button type="button" className="text-[11.5px] text-accent hover:underline" onClick={() => setPasteOpen(true)}>Paste a connection string…</button>
+
+  // The footer's one line: what Save is waiting for (after a Save), else the last test, else what to do next.
+  const footerStatus = summary.length > 0 ? (
+    <div role="alert" className="flex items-start gap-1.5 text-err text-[12px] leading-snug">
+      <span className="mt-0.5 shrink-0"><Icon d={ICON.circleAlert} size={14} /></span>
+      <span className="min-w-0">
+        <span className="font-semibold">{summary.length === 1 ? "1 thing needs" : `${summary.length} things need`} attention: </span>
+        {summary.map((x, i) => (
+          <span key={x.key}>
+            {i > 0 && " · "}
+            <button type="button" className="underline hover:no-underline text-left" onClick={() => reveal([], [x.key])}>{x.text}</button>
+          </span>
+        ))}
+      </span>
+    </div>
+  ) : test ? (
+    // No negative margins in here: anything past the line box would overflow the status line and give it a scrollbar.
+    <div className={`flex items-center gap-1.5 min-h-6 text-[12px] leading-snug ${testStale ? "text-muted" : test.ok ? "text-ok" : "text-err"}`}>
+      <span className="shrink-0 self-start mt-[5px]"><Icon d={test.ok ? ICON.circleCheck : ICON.circleAlert} size={14} /></span>
+      <span className="min-w-0 select-text py-[3px]">
+        {test.text}
+        {testStale && <span className="block text-[11px]">Settings changed since this test. Test again.</span>}
+      </span>
+      <button type="button" className="shrink-0 self-start w-6 h-6 flex items-center justify-center rounded opacity-70 hover:opacity-100 hover:bg-hover" aria-label="Dismiss" title="Dismiss" onClick={() => setTest(null)}>
+        <Icon d={ICON.x} size={13} />
+      </button>
+    </div>
+  ) : (
+    <span className="text-[12px] text-muted">{engineChosen ? "Not tested yet. You can save without testing." : "Pick a server type to continue."}</span>
   );
 
   return (
     <Modal
       title={
-        <span className="flex items-center gap-2 min-w-0">
-          <EnvPill env={envChosen ? p.environment : null} text={envChosen ? tintText(p.environment) : undefined} />
-          <span className="truncate">{existing ? `Edit profile — ${existing.name}` : "New connection profile"}</span>
+        <span className="flex items-center gap-2.5 min-w-0">
+          {engineChosen && <EngineMark engine={p.engine} logo={LOGOS[p.engine]} size={20} />}
+          <span className="truncate text-[14px] font-semibold">{existing ? `Edit profile — ${existing.name}` : "New connection"}</span>
+          {/* The environment is said by its own control; the pill only shows it at a glance. */}
+          {envChosen && <span aria-hidden><EnvPill env={p.environment} text={tintText(p.environment)} /></span>}
         </span>
       }
+      topRule={envChosen && p.environment === "prod" ? "var(--q-env-prod)" : undefined}
       onClose={tryClose}
       onEscape={() => {
         if (!confirmDiscard) return false;
@@ -810,256 +882,235 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
         if (a?.closest("[data-no-enter-save]") || (a instanceof HTMLInputElement && a.list) || confirmDiscard) return;
         void save();
       }}
-      width={720}
-      bodyClassName="flex flex-col min-h-0 flex-1"
+      width={760}
+      bodyClassName="flex flex-col min-h-0 h-[min(520px,calc(100vh-160px))]"
       footer={
         confirmDiscard ? (
           <>
             <span className="mr-auto self-center text-[12px] text-fg font-semibold">Discard your changes to this profile?</span>
-            <button ref={keepRef} className="q-btn q-btn-primary" onClick={() => setConfirmDiscard(false)}>Keep editing</button>
-            <button className="q-btn text-err" onClick={onClose}>Discard</button>
+            <button ref={keepRef} className={`${BTN} q-btn-primary`} onClick={() => setConfirmDiscard(false)}>Keep editing</button>
+            <button className={`${BTN} text-err`} onClick={onClose}>Discard</button>
           </>
-        ) : engineChosen ? (
-          <>
-            {existing && <button className={`${animated ? "q-profile-reveal q-profile-reveal-3 " : ""}q-btn text-err mr-auto`} onClick={() => void remove()}>Delete</button>}
-            <button className={`${animated ? "q-profile-reveal q-profile-reveal-3 " : ""}q-btn q-btn-run ${existing ? "" : "mr-auto"}`} onClick={() => void runTest()} disabled={busy} aria-busy={busyAction === "test" || undefined}><BusyButtonContent busy={busyAction === "test"} label="Test connection" busyLabel="Testing…" /></button>
-            <button className={`${animated ? "q-profile-reveal q-profile-reveal-3 " : ""}q-btn`} onClick={tryClose}>Cancel</button>
-            <button className={`${animated ? "q-profile-reveal q-profile-reveal-3 " : ""}q-btn q-btn-primary`} onClick={() => void save()} disabled={busy} aria-busy={busyAction === "save" || undefined}><BusyButtonContent busy={busyAction === "save"} label="Save" busyLabel="Saving…" /></button>
-          </>
-        ) : undefined
+        ) : (
+          <div className="flex items-center gap-2.5 w-full min-w-0">
+            {existing && <button className={`${reveal3}${BTN} text-err shrink-0`} onClick={() => void remove()}>Delete</button>}
+            {engineChosen && (
+              <button className={`${reveal3}${BTN} shrink-0`} onClick={() => void runTest()} disabled={busy} aria-busy={busyAction === "test" || undefined}>
+                <BusyButtonContent busy={busyAction === "test"} label="Test connection" busyLabel="Testing…" />
+              </button>
+            )}
+            {/* Kept mounted so a new test result is announced. */}
+            <div role="status" aria-live="polite" className="flex-1 min-w-0 max-h-[48px] overflow-auto px-1">{footerStatus}</div>
+            <button className={`${BTN} shrink-0`} onClick={tryClose}>Cancel</button>
+            {engineChosen && (
+              <button className={`${reveal3}${BTN} q-btn-primary shrink-0`} onClick={() => void save()} disabled={busy} aria-busy={busyAction === "save" || undefined}>
+                <BusyButtonContent busy={busyAction === "save"} label="Save" busyLabel="Saving…" />
+              </button>
+            )}
+          </div>
+        )
       }
     >
-      {envChosen && p.environment === "prod" && <div aria-hidden className="q-profile-reveal h-[3px] shrink-0" style={{ background: "var(--q-env-prod)" }} />}
-      <div className="flex-1 min-h-0 overflow-auto px-5 py-3.5 space-y-2.5">
-        <SmoothExpand className="space-y-2.5">
-          {summary.length > 0 && (
-            <div role="alert" className="q-profile-reveal flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 rounded-md border border-err/40 bg-err/10 text-err text-[11.5px]">
-              <span className="font-semibold">{summary.length === 1 ? "1 thing needs" : `${summary.length} things need`} attention:</span>
-              {summary.map((x) => (
-                <button key={x.key} type="button" className="underline hover:no-underline text-left" onClick={() => reveal([], [x.key])}>{x.text}</button>
-              ))}
-            </div>
-          )}
-          {undo && (
-            <Note onDismiss={() => setUndo(null)} action={<button type="button" className="text-accent hover:underline" onClick={() => { setP(undo.before); setUndo(null); }}>Undo</button>}>
-              {undo.text}
-            </Note>
-          )}
-          {parsed && (
-            <Note>
-              <div className="text-fg">Read as {ENGINE_TRAITS[knownEngine(parsed.engine)].label}. Settings the string names replaced the fields; the rest kept their values.</div>
-              {parsed.unknown.length > 0 && <div className="text-warn">Not recognised: {parsed.unknown.map(escapeForDisplay).join(", ")}</div>}
-              {parsed.notApplied.length > 0 && <div>Not applied (Querithm sets or does not offer these): {parsed.notApplied.map(escapeForDisplay).join(", ")}</div>}
-              {/* M3: a TLS setting the string names that is weaker than the engine's default */}
-              {parsed.notes.map((n) => <div key={n} className="text-warn">{escapeForDisplay(n)}</div>)}
-            </Note>
-          )}
-
-          <Line label="Server type">
-            <div className="space-y-1.5 min-w-0">
+      <div className="flex-1 min-h-0 overflow-auto px-5 py-4 space-y-4">
+        <div className={GRID}>
+          <span className={LABEL}>Server type</span>
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="flex-1 min-w-0">
               <EngineSelect ref={refs.engine} value={engineChosen ? p.engine : null} options={offered} unavailable={unavailable} autoFocus={!engineChosen} onChange={chooseEngine} />
-              {!engineChosen && recent.length > 0 && (
-                <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
-                  Recent:
-                  {recent.map((e) => (
-                    <button key={e} type="button" className="inline-flex items-center gap-1.5 h-6 px-2 rounded-full border border-line bg-panel-2 text-fg hover:bg-hover" onClick={() => chooseEngine(e)}>
-                      <EngineMark engine={e} logo={LOGOS[e]} size={13} />
-                      {ENGINE_TRAITS[e].shortLabel}
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
-          </Line>
-        </SmoothExpand>
+            {engineChosen && !local && !pasteOpen && (
+              <button type="button" className="shrink-0 min-h-6 text-[12px] text-accent hover:underline" onClick={() => setPasteOpen(true)}>Paste a connection string…</button>
+            )}
+          </div>
+          {/* Notes about the last switch or pasted string: one live region, kept mounted so each note is announced. */}
+          <div aria-live="polite" className="col-start-2 min-w-0">
+            {undo && (
+              <Note onDismiss={() => setUndo(null)} action={<button type="button" className="min-h-6 px-1 text-accent hover:underline" onClick={undoSwitch}>Undo</button>}>
+                {undo.text}
+              </Note>
+            )}
+            {parsed && (
+              <Note>
+                <div className="text-fg">Read as {ENGINE_TRAITS[knownEngine(parsed.engine)].label}. Settings the string names replaced the fields; the rest kept their values.</div>
+                {parsed.unknown.length > 0 && <div className="text-warn">Not recognised: {parsed.unknown.map(escapeForDisplay).join(", ")}</div>}
+                {parsed.notApplied.length > 0 && <div>Not applied (Querithm sets or does not offer these): {parsed.notApplied.map(escapeForDisplay).join(", ")}</div>}
+                {/* M3: a TLS setting the string names that is weaker than the engine's default */}
+                {parsed.notes.map((n) => <div key={n} className="text-warn">{escapeForDisplay(n)}</div>)}
+              </Note>
+            )}
+          </div>
+          {engineChosen && !local && pasteOpen && <div className="col-start-2 mt-2 min-w-0">{pasteBox}</div>}
+        </div>
 
-        <SmoothExpand className="space-y-2.5">
-          {!engineChosen ? (
-            <div className="pl-[108px]">
-              <p className="text-[11.5px] text-muted">Choose a server type first: its connection fields appear here.</p>
-            </div>
-          ) : local ? (
-            <div key={p.engine} className={`${animated ? "q-profile-reveal " : ""}space-y-2.5`}>
-              <Line label="Location">
-                <div role="radiogroup" aria-label="Location" className="flex items-center gap-4 h-8">
-                  {locationsOf(engineInfo, p.engine).filter((l) => l !== "server").map((l) => (
-                    <label key={l} className="inline-flex items-center gap-1.5 text-fg cursor-pointer">
-                      <input type="radio" name={`${fid}-loc`} checked={locationOf(p) === l} onChange={() => { setAccess(null); set({ location: l, file: l === "file" ? p.file : null }); }} />
-                      {LOCATION_LABEL[l]}
-                    </label>
-                  ))}
-                </div>
-              </Line>
-              {locationOf(p) === "file" ? (
-                // A div, not Row's <label>: a label would name the buttons after the whole row and click the first one on any press.
-                <div key="file" className="q-profile-reveal grid grid-cols-[96px_1fr] items-center gap-x-3">
-                  <span className="text-[11.5px] text-muted">File</span>
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className={`flex-1 min-w-0 truncate q-mono text-[11.5px] ${p.file ? "text-fg" : "text-muted"}`} data-testid="picked-file">
+        {!engineChosen ? (
+          <div className="space-y-4">
+            {pasteOpen ? pasteBox : (
+              <button
+                type="button" onClick={() => setPasteOpen(true)}
+                className="w-full flex items-center gap-3 min-h-[52px] px-4 py-2 rounded-lg border border-dashed border-line-strong text-left hover:bg-hover"
+              >
+                <span className="text-accent shrink-0"><Icon d={ICON.clipboard} size={18} /></span>
+                <span className="flex-1 min-w-0">
+                  <span className="block text-[13px] font-medium text-fg">Paste a connection string</span>
+                  <span className="block text-[11.5px] text-muted truncate">Server=…;Database=… or postgres://… — the server type is read from it; the string is never stored</span>
+                </span>
+              </button>
+            )}
+            <EngineTiles options={offered} unavailable={unavailable} recent={recent} infoOf={(e) => locationsOf(engineInfo, e)} onPick={pickFromTile} />
+          </div>
+        ) : local ? (
+          <Section title="Database" className={animated ? "q-profile-reveal" : ""}>
+            {locationOf(p) === "file" ? (
+              <div className={`${GRID} items-start`}>
+                <span className={`${LABEL} pt-3.5`}>File</span>
+                <div className="space-y-2 min-w-0">
+                  <div className="flex items-center gap-3 px-3.5 py-3 rounded-lg border border-line bg-panel-2">
+                    <span className="text-accent shrink-0"><Icon d={ICON.database} size={20} /></span>
+                    <span id={`${fid}-file-name`} className={`flex-1 min-w-0 truncate q-mono text-[12px] ${p.file ? "text-fg font-medium" : "text-muted"}`} data-testid="picked-file">
                       {p.file ? (p.file.displayName ?? "Picked file") : "No file picked"}
                     </span>
                     {access && <Badge tone={access === "readWrite" ? "warn" : "ok"}>{access === "readWrite" ? "Writes allowed" : "Read-only"}</Badge>}
-                    <button type="button" ref={refs.file} className="q-btn shrink-0" onClick={() => void pickFile()} aria-describedby={fieldError("file") ? errId("file") : undefined}>{p.file ? "Re-pick file…" : "Pick file…"}</button>
-                    {p.file && <button type="button" className="q-btn shrink-0" onClick={() => void allowWrites()}>Allow writes…</button>}
                   </div>
-                  {errorLine("file", "col-start-2")}
-                  <span className="col-start-2 mt-1 text-[10.5px] text-muted">Querithm reads only the file you pick here, read-only until you allow writes.</span>
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <button type="button" ref={refs.file} className={BTN} onClick={() => void pickFile()} aria-describedby={[`${fid}-file-name`, fieldError("file") ? errId("file") : ""].filter(Boolean).join(" ")}>{p.file ? "Re-pick file…" : "Pick file…"}</button>
+                    {p.file && <button type="button" className={BTN} onClick={() => void allowWrites()}>Allow writes…</button>}
+                    {fileLocations.includes("memory") && (
+                      <>
+                        <span className="text-[12px] text-muted">or</span>
+                        <button type="button" className="min-h-6 text-[12px] text-accent hover:underline" onClick={() => setLocation("memory")}>Use an in-memory database instead</button>
+                      </>
+                    )}
+                  </div>
+                  {errorLine("file")}
+                  <p className="text-[11px] text-muted">Querithm reads only the file you pick here, read-only until you allow writes.</p>
                 </div>
-              ) : (
-                <p key="mem" className="q-profile-reveal pl-[108px] text-[11px] text-muted leading-snug">Each tab gets its own empty database, and it is gone when the tab closes. Nothing is written to disk.</p>
-              )}
-            </div>
-          ) : (
-            <div key={p.engine} className={`${animated ? "q-profile-reveal " : ""}space-y-2.5`}>
-              <div className="grid grid-cols-[96px_1fr_auto_84px] items-center gap-x-3">
-                <label htmlFor={`${fid}-host`} className="text-[11.5px] text-muted">Host</label>
-                <input
-                  id={`${fid}-host`} ref={refs.host} className={`${INPUT} q-mono`} value={p.host ?? ""} onChange={(e) => { set({ host: e.target.value }); setNote(null); }} placeholder="localhost"
-                  title="Empty: localhost" autoComplete="off" spellCheck={false} onPaste={onHostPaste} onBlur={onHostBlur}
-                  {...invalidProps("host", fields.instanceNames ? `${fid}-host-hint` : undefined)}
-                />
-                <label htmlFor={`${fid}-port`} className="text-[11.5px] text-muted">Port</label>
-                <input
-                  id={`${fid}-port`} ref={refs.port} className={`${INPUT} q-mono`} type="number" min={1} max={65535} step={1} inputMode="numeric"
-                  placeholder={defaultPort == null ? "" : String(defaultPort)} value={p.port == null || Number.isNaN(p.port) ? "" : p.port}
-                  // A number the field cannot read ("1e" while typing) is kept as invalid, never silently the default.
-                  onChange={(e) => set({ port: e.target.value ? Number(e.target.value) : e.target.validity?.badInput ? NaN : null })}
-                  onWheel={(e) => (e.target as HTMLInputElement).blur()}
-                  onBlur={onPortBlur}
-                  {...invalidProps("port")}
-                />
-                {hostList.length > 1 && (
-                  <span className="col-start-2 col-span-3 mt-1 text-[10.5px] text-warn" aria-live="polite">
-                    This profile names {hostList.length} servers; the driver tries them in order and may connect to the last one, {escapeForDisplay(hostList[hostList.length - 1])}.
-                  </span>
-                )}
-                {fields.instanceNames && <span id={`${fid}-host-hint`} className="col-start-2 col-span-3 mt-1 text-[10.5px] text-muted">Server name, host\instance, or tcp:host</span>}
-                {note && <span className="col-start-2 col-span-3 mt-1 text-[10.5px] text-muted" aria-live="polite">{note}</span>}
-                {errorLine("host", "col-start-2 col-span-3")}
-                {errorLine("port", "col-start-2 col-span-3")}
+              </div>
+            ) : (
+              <div className={`${GRID} items-start`}>
+                <span className={LABEL}>In-memory</span>
+                <div className="space-y-1.5 min-w-0">
+                  <p className="text-[12px] text-fg leading-snug">Each tab gets its own empty database, and it is gone when the tab closes. Nothing is written to disk.</p>
+                  {fileLocations.includes("file") && (
+                    <button type="button" className="min-h-6 text-[12px] text-accent hover:underline" onClick={() => setLocation("file")}>Use a database file instead</button>
+                  )}
+                </div>
+              </div>
+            )}
+          </Section>
+        ) : (
+          <>
+            <Section title="Connection" className={animated ? "q-profile-reveal" : ""}>
+              <div className={`${GRID} items-start`}>
+                <label htmlFor={`${fid}-host`} className={`${LABEL} h-8 flex items-center`}>Host</label>
+                <div className="min-w-0">
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto_96px] items-center gap-x-2.5">
+                    <input
+                      id={`${fid}-host`} ref={refs.host} className={`${INPUT} q-mono`} value={p.host ?? ""} onChange={(e) => { set({ host: e.target.value }); setNote(null); }} placeholder="localhost"
+                      title="Empty: localhost" autoComplete="off" spellCheck={false} onPaste={onHostPaste} onBlur={onHostBlur}
+                      {...invalidProps("host", fields.instanceNames ? `${fid}-host-hint` : undefined)}
+                    />
+                    <label htmlFor={`${fid}-port`} className={LABEL}>Port</label>
+                    <input
+                      id={`${fid}-port`} ref={refs.port} className={`${INPUT} q-mono`} type="number" min={1} max={65535} step={1} inputMode="numeric"
+                      placeholder={defaultPort == null ? "" : String(defaultPort)} value={p.port == null || Number.isNaN(p.port) ? "" : p.port}
+                      // A number the field cannot read ("1e" while typing) is kept as invalid, never silently the default.
+                      onChange={(e) => set({ port: e.target.value ? Number(e.target.value) : e.target.validity?.badInput ? NaN : null })}
+                      onWheel={(e) => (e.target as HTMLInputElement).blur()}
+                      onBlur={onPortBlur}
+                      {...invalidProps("port")}
+                    />
+                  </div>
+                  {hostList.length > 1 && (
+                    <span className="block mt-1.5 text-[11px] text-warn">
+                      This profile names {hostList.length} servers; the driver tries them in order and may connect to the last one, {escapeForDisplay(hostList[hostList.length - 1])}.
+                    </span>
+                  )}
+                  {fields.instanceNames && <span id={`${fid}-host-hint`} className="block mt-1.5 text-[11px] text-muted">Server name, host\instance, or tcp:host</span>}
+                  {note && <span className="block mt-1.5 text-[11px] text-muted">{note}</span>}
+                  {errorLine("host")}
+                  {errorLine("port")}
+                </div>
               </div>
               {portOffer && (
-                <Offer>
-                  <span>{p.port} is the usual {ENGINE_TRAITS[portOffer].shortLabel} port.</span>
-                  <button type="button" className="q-btn h-6 px-2" onClick={() => { const port = p.port; chooseEngine(portOffer); set({ port }); }}>Switch to {ENGINE_TRAITS[portOffer].shortLabel}</button>
-                  <button type="button" className="text-accent hover:underline" onClick={() => setPortOffer(null)}>Keep {traits.shortLabel}</button>
-                </Offer>
+                <div className="pl-[148px]">
+                  <Offer>
+                    <span>{p.port} is the usual {ENGINE_TRAITS[portOffer].shortLabel} port.</span>
+                    <button type="button" className={`${BTN} h-6`} onClick={() => { const port = p.port; chooseEngine(portOffer); set({ port }); }}>Switch to {ENGINE_TRAITS[portOffer].shortLabel}</button>
+                    <button type="button" className="min-h-6 text-accent hover:underline" onClick={() => setPortOffer(null)}>Keep {traits.shortLabel}</button>
+                  </Offer>
+                </div>
               )}
               {oracle && p.tlsMode !== "disable" && p.port === 1521 && (
-                <p className="q-profile-reveal pl-[108px] text-[10.5px] text-warn" data-q-oracle-port>
+                <p className="q-profile-reveal pl-[148px] text-[11px] text-warn" data-q-oracle-port>
                   1521 is usually the plain TCP listener; TCPS listens on 2484 unless the server says otherwise. Use the server&apos;s TCPS port, or choose TCP under Encryption.
                 </p>
               )}
               {oracle ? (
-                <div className="grid grid-cols-[96px_1fr] items-center gap-x-3 gap-y-1">
-                  <label htmlFor={`${fid}-db`} className="text-[11.5px] text-muted">{oracleSid ? "SID" : "Service name"}</label>
-                  <input
-                    id={`${fid}-db`} ref={refs.service} className={`${INPUT} q-mono`} value={p.databaseDefault ?? ""} onChange={(e) => set({ databaseDefault: e.target.value || null })}
-                    placeholder={oracleSid ? "ORCL" : "FREEPDB1"} autoComplete="off" spellCheck={false} aria-required {...invalidProps("service")}
-                  />
-                  {errorLine("service", "col-start-2")}
-                  <label className="col-start-2 flex items-center gap-2 h-7 text-[11.5px] text-fg cursor-pointer">
-                    <input type="checkbox" checked={oracleSid} onChange={(e) => set({ options: { ...(p.options ?? {}), [ORACLE_SID_OPTION]: String(e.target.checked) } })} />
-                    Connect by SID (older servers without a service name)
-                  </label>
+                <div className={`${GRID} items-start`}>
+                  <label htmlFor={`${fid}-db`} className={`${LABEL} h-8 flex items-center`}>{oracleSid ? "SID" : "Service name"}</label>
+                  <div className="min-w-0 space-y-1">
+                    <input
+                      id={`${fid}-db`} ref={refs.service} className={`${INPUT} q-mono`} value={p.databaseDefault ?? ""} onChange={(e) => set({ databaseDefault: e.target.value || null })}
+                      placeholder={oracleSid ? "ORCL" : "FREEPDB1"} autoComplete="off" spellCheck={false} aria-required {...invalidProps("service")}
+                    />
+                    {errorLine("service")}
+                    <Check checked={oracleSid} onChange={(v) => set({ options: { ...(p.options ?? {}), [ORACLE_SID_OPTION]: String(v) } })}>Connect by SID (older servers without a service name)</Check>
+                  </div>
                 </div>
               ) : (
-                <Line label="Database" htmlFor={`${fid}-db`}>
-                  <input id={`${fid}-db`} className={`${INPUT} q-mono`} value={p.databaseDefault ?? ""} onChange={(e) => set({ databaseDefault: e.target.value || null })} placeholder={traits.defaultDatabase ?? "(login default)"} />
-                </Line>
+                <Row label="Database" htmlFor={`${fid}-db`}>
+                  <input id={`${fid}-db`} className={`${INPUT} q-mono`} value={p.databaseDefault ?? ""} onChange={(e) => set({ databaseDefault: e.target.value || null })} placeholder={traits.defaultDatabase ?? "(login default)"} autoComplete="off" spellCheck={false} />
+                </Row>
               )}
-              <div className="pl-[108px]">{pasteBox || pasteLink}</div>
-            </div>
-          )}
-        </SmoothExpand>
+            </Section>
 
-        {engineChosen && (
-          <SmoothExpand animateMount={mounted} className={`${animated ? "q-profile-reveal q-profile-reveal-1 " : ""}space-y-2.5`}>
-            <div className="border-t border-line" />
-
-            <EnvironmentPicker
-              fid={fid} value={envChosen ? p.environment : null} onChange={pickEnv} firstRef={refs.environment} tint={chipText}
-              invalid={summary.some((x) => x.key === "environment")} errorId={errId("environment")}
-              after={
-                <>
-                  {envFromGroup && <span className="q-profile-reveal block text-[10.5px] text-muted" aria-live="polite">Set from group “{envFromGroup}”. Change it if that’s wrong.</span>}
-                  {envChosen && p.environment === "prod" && (
-                    <div className="q-profile-reveal border-l-[3px] pl-2.5 py-1 text-[11px] text-fg rounded-r" style={{ borderColor: "var(--q-env-prod)", background: "color-mix(in srgb, var(--q-env-prod) 9%, transparent)" }}>
-                      {env.hint}
-                    </div>
-                  )}
-                  {prodWord && prodDismissed !== prodKey && (
-                    <Offer>
-                      <span>The address contains “{prodWord}”. Is this Production?</span>
-                      <button type="button" className="q-btn h-6 px-2" onClick={() => pickEnv("prod")}>Mark as Production</button>
-                      <button type="button" className="text-accent hover:underline" onClick={() => setProdDismissed(prodKey)}>It isn’t</button>
-                    </Offer>
-                  )}
-                  {lowerProd && (
-                    <Offer warn>
-                      <span className="text-fg">Lower this profile from Production to {envLabel[lowerProd]}? Its tabs lose the Production guards.</span>
-                      <button type="button" className="q-btn h-6 px-2" onClick={() => { set({ environment: lowerProd }); setEnvChosen(true); setEnvFromGroup(null); setLowerProd(null); }}>Lower it</button>
-                      <button type="button" className="text-accent hover:underline" onClick={() => setLowerProd(null)}>Keep Production</button>
-                    </Offer>
-                  )}
-                </>
-              }
-            />
-          </SmoothExpand>
-        )}
-
-        {engineChosen && !local && (
-          <SmoothExpand animateMount={mounted} className={`${animated ? "q-profile-reveal q-profile-reveal-2 " : ""}space-y-2.5`}>
-            <div className="border-t border-line" />
-            <div className="grid grid-cols-[96px_minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2.5">
-              <label htmlFor={`${fid}-auth`} className="text-[11.5px] text-muted">Sign in</label>
-              {AUTH[p.engine].length > 1 ? (
-                <select id={`${fid}-auth`} className={INPUT} value={p.auth} onChange={(e) => set({ auth: e.target.value as AuthKind })}>
-                  {AUTH[p.engine].map((a) => (
-                    <option key={a.id} value={a.id}>{a.label}</option>
+            <Section title="Sign in" className={animated ? "q-profile-reveal q-profile-reveal-1" : ""}>
+              <Row label="Method" htmlFor={AUTH[p.engine].length > 1 ? `${fid}-auth` : undefined}>
+                {AUTH[p.engine].length > 1 ? (
+                  <select id={`${fid}-auth`} aria-label="Sign in" className={`${INPUT} q-select max-w-[320px]`} value={p.auth} onChange={(e) => set({ auth: e.target.value as AuthKind })}>
+                    {AUTH[p.engine].map((a) => (
+                      <option key={a.id} value={a.id}>{a.label}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <span id={`${fid}-auth`} className="h-8 flex items-center text-[12.5px] text-fg">{AUTH[p.engine][0].label}</span>
+                )}
+              </Row>
+              {AUTH_UNAVAILABLE[knownEngine(p.engine)].length > 0 && (
+                <ul className="pl-[148px] text-[11px] text-muted space-y-0.5" data-q-auth-unavailable>
+                  {AUTH_UNAVAILABLE[knownEngine(p.engine)].map((a) => (
+                    <li key={a.label}><span className="text-fg">{a.label}</span>: {a.reason}</li>
                   ))}
-                </select>
-              ) : (
-                <span id={`${fid}-auth`} className="h-8 flex items-center text-fg">{AUTH[p.engine][0].label}</span>
+                </ul>
               )}
-              {needsSecret ? (
-                <>
-                  <span className="text-[11.5px] text-muted">Remember</span>
-                  <PasswordRetention profile={p} onChange={set} compact />
-                </>
-              ) : <span className="col-span-2" />}
               {p.auth !== "windows" && p.auth !== "entraDeviceCode" ? (
-                <>
-                  <label htmlFor={`${fid}-user`} className="text-[11.5px] text-muted">{p.auth === "entraInteractive" ? "User (optional hint)" : "User name"}</label>
-                  <input id={`${fid}-user`} className={`${INPUT} q-mono`} value={p.username ?? ""} onChange={(e) => set({ username: e.target.value })} autoComplete="off" spellCheck={false} />
-                </>
+                <Row label={p.auth === "entraInteractive" ? "User (optional hint)" : "User name"} htmlFor={`${fid}-user`}>
+                  <input id={`${fid}-user`} className={`${INPUT} q-mono max-w-[320px]`} value={p.username ?? ""} onChange={(e) => set({ username: e.target.value })} autoComplete="off" spellCheck={false} />
+                </Row>
               ) : (
-                <span className="col-start-2 text-[11px] text-muted">{p.auth === "windows" ? "Signs in as your Windows account." : "Signs in with a code shown when connecting."}</span>
+                <p className="pl-[148px] text-[12px] text-muted">{p.auth === "windows" ? "Signs in as your Windows account." : "Signs in with a code shown when connecting."}</p>
               )}
-              {needsSecret ? (
-                <>
-                  {secretSaved
-                    ? <span className="text-[11.5px] text-muted">{p.auth === "entraToken" ? "Access token" : "Password"}</span>
-                    : <label htmlFor={`${fid}-secret`} className="text-[11.5px] text-muted">{p.auth === "entraToken" ? "Access token" : "Password"}</label>}
+              {needsSecret && (
+                <Row label={secretLabel} htmlFor={secretSaved ? undefined : `${fid}-secret`}>
                   {secretSaved ? (
-                    <div className="h-8 flex items-center gap-2.5 min-w-0 text-[11.5px]">
+                    <div className="h-8 flex items-center gap-3 min-w-0 text-[12px]">
                       {forget ? (
                         <>
                           <span className="text-warn">Forgotten when you save.</span>
-                          <button type="button" className="text-accent hover:underline" onClick={() => setForget(false)}>Undo</button>
+                          <button type="button" className="min-h-6 text-accent hover:underline" onClick={() => setForget(false)}>Undo</button>
                         </>
                       ) : (
                         <>
                           <span className="text-ok truncate">Saved in the OS keyring</span>
-                          <button type="button" className="text-accent hover:underline" onClick={() => setChangeSecret(true)}>Change</button>
-                          <button type="button" className="text-accent hover:underline" onClick={() => setForget(true)}>Forget</button>
+                          <button type="button" className="min-h-6 text-accent hover:underline" onClick={() => setChangeSecret(true)}>Change</button>
+                          <button type="button" className="min-h-6 text-accent hover:underline" onClick={() => setForget(true)}>Forget</button>
                         </>
                       )}
                     </div>
                   ) : (
-                    <div className="relative">
+                    <div className="relative max-w-[320px]">
                       <SecretInput
-                        id={`${fid}-secret`} className={INPUT} style={{ paddingRight: 34 }} type={showSecret ? "text" : "password"} autoComplete="new-password" spellCheck={false}
+                        id={`${fid}-secret`} className={INPUT} style={{ paddingRight: 36 }} type={showSecret ? "text" : "password"} autoComplete="new-password" spellCheck={false}
                         value={secret} autoFocus={changeSecret && !secretTouched}
                         onValue={(v) => {
                           setSecret(v);
@@ -1071,7 +1122,8 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
                         type="button"
                         className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-6 flex items-center justify-center rounded text-muted hover:text-fg hover:bg-hover"
                         title={showSecret ? "Hide" : "Show"}
-                        aria-label={`${showSecret ? "Hide" : "Show"} ${p.auth === "entraToken" ? "token" : "password"}`}
+                        // A fixed name with the pressed state: "Show password, pressed" means it is shown.
+                        aria-label={`Show ${p.auth === "entraToken" ? "token" : "password"}`}
                         data-layout-adornment
                         aria-pressed={showSecret}
                         onClick={() => setShowSecret((v) => !v)}
@@ -1081,163 +1133,206 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
                     </div>
                   )}
                   {endpointChanged && !kindChanged && savedSecret !== false && needsSecretFor(existing!.auth) && (
-                    <span className="col-start-4 text-[10.5px] text-warn">
+                    <span className="block mt-1.5 text-[11px] text-warn">
                       The connection settings changed, so the saved {secretKind(existing!.auth) === "token" ? "token" : "password"} is not sent to them: type it again, or leave it empty to be asked when connecting.
                     </span>
                   )}
                   {kindChanged && (
-                    <span className="col-start-4 text-[10.5px] text-warn">
+                    <span className="block mt-1.5 text-[11px] text-warn">
                       The saved {secretKind(existing!.auth) === "token" ? "token" : "password"} is not used as {p.auth === "entraToken" ? "an access token" : "a password"}: enter one, or leave it empty to be asked when connecting.
                     </span>
                   )}
                   {existing && savedSecret !== false && changeSecret && !kindChanged && (
-                    <span className="col-start-4 text-[10.5px] text-muted">
-                      Leave it empty to keep the saved one. <button type="button" className="text-accent hover:underline" onClick={() => { setChangeSecret(false); setSecret(""); setSecretTouched(false); }}>Keep saved</button>
+                    <span className="block mt-1.5 text-[11px] text-muted">
+                      Leave it empty to keep the saved one. <button type="button" className="min-h-6 text-accent hover:underline" onClick={() => { setChangeSecret(false); setSecret(""); setSecretTouched(false); }}>Keep saved</button>
                     </span>
                   )}
-                </>
-              ) : <span className="col-span-2" />}
-            </div>
-            {AUTH_UNAVAILABLE[knownEngine(p.engine)].length > 0 && (
-              <ul className="pl-[108px] text-[10.5px] text-muted space-y-0.5" data-q-auth-unavailable>
-                {AUTH_UNAVAILABLE[knownEngine(p.engine)].map((a) => (
-                  <li key={a.label}><span className="text-fg">{a.label}</span>: {a.reason}</li>
-                ))}
-              </ul>
-            )}
-            {existing && needsSecretFor(existing.auth) && !needsSecret && savedSecret !== false && (
-              <p className="pl-[108px] text-[10.5px] text-warn">The saved {secretKind(existing.auth) === "token" ? "token" : "password"} is removed when you save, because this sign-in needs none.</p>
-            )}
-          </SmoothExpand>
+                </Row>
+              )}
+              {needsSecret && (
+                <Row label="Remember">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="max-w-[420px] min-w-0 flex-1"><PasswordRetention profile={p} onChange={set} compact /></div>
+                    <span className="text-[11px] text-muted shrink-0">Kept in the OS keyring</span>
+                  </div>
+                </Row>
+              )}
+              {existing && needsSecretFor(existing.auth) && !needsSecret && savedSecret !== false && (
+                <p className="pl-[148px] text-[11px] text-warn">The saved {secretKind(existing.auth) === "token" ? "token" : "password"} is removed when you save, because this sign-in needs none.</p>
+              )}
+            </Section>
+          </>
         )}
 
         {engineChosen && (
           <>
-            <SmoothExpand animateMount={mounted} className={`${animated ? "q-profile-reveal q-profile-reveal-3 " : ""}space-y-2.5`}>
-              <div className="border-t border-line" />
-              <div className="grid grid-cols-[96px_minmax(0,1fr)_auto_minmax(0,200px)] items-center gap-x-3">
-                <label htmlFor={`${fid}-name`} className="text-[11.5px] text-muted">Name</label>
-                <input
-                  id={`${fid}-name`} ref={refs.name} className={`${INPUT} ${nameTouched ? "" : "italic text-muted"}`} aria-required value={name} placeholder={suggestedName(p)}
-                  onChange={(e) => { set({ name: e.target.value }); setNameTouched(true); }}
-                  aria-description={nameTouched ? undefined : "Suggested from the connection; type to change it."}
-                  {...invalidProps("name")}
-                />
-                <label htmlFor={`${fid}-group`} className="text-[11.5px] text-muted">Group</label>
-                <input id={`${fid}-group`} className={INPUT} list={`${fid}-groups`} value={p.groupName ?? ""} placeholder="None" onChange={(e) => pickGroup(e.target.value)} />
-                <datalist id={`${fid}-groups`}>
-                  {groups.map((g) => (
-                    <option key={g.name} value={g.name} />
-                  ))}
-                </datalist>
-                {errorLine("name", "col-start-2 col-span-3")}
-              </div>
-            </SmoothExpand>
-
-            <div className={`${animated ? "q-profile-reveal q-profile-reveal-3 " : ""}rounded-md border border-line bg-panel overflow-hidden`}>
-              {!local && (
-                <Disclosure id={`${fid}-enc`} title="Encryption" summary={transport.text} tone={ackNeeded ? "warn" : transport.tone} open={open.enc} onToggle={() => setOpen((o) => ({ ...o, enc: !o.enc }))}>
-                  <Row label="Mode">
-                    <select className={INPUT} value={p.tlsMode} onChange={(e) => set({ tlsMode: e.target.value as TlsMode })} aria-label="Encryption">
-                      {TLS[p.engine].map((t) => (
-                        <option key={t.id} value={t.id}>{t.label}</option>
+            <Section title="Profile" className={animated ? "q-profile-reveal q-profile-reveal-2" : ""}>
+              <EnvironmentPicker
+                fid={fid} value={envChosen ? p.environment : null} onChange={pickEnv} firstRef={refs.environment} tint={chipText}
+                invalid={summary.some((x) => x.key === "environment")} errorId={errId("environment")}
+                after={
+                  <>
+                    {envFromGroup && <span className="q-profile-reveal block text-[11px] text-muted">Set from group “{envFromGroup}”. Change it if that’s wrong.</span>}
+                    {envChosen && p.environment === "prod" && (
+                      <p className="q-profile-reveal flex items-start gap-2 text-[11.5px] text-fg leading-snug">
+                        <span className="mt-px shrink-0" style={{ color: "var(--q-env-prod)" }}><Icon d={ICON.shield} size={14} /></span>
+                        {env.hint}
+                      </p>
+                    )}
+                    {prodWord && prodDismissed !== prodKey && (
+                      <Offer>
+                        <span>The address contains “{prodWord}”. Is this Production?</span>
+                        <button type="button" className={`${BTN} h-6`} onClick={() => pickEnv("prod")}>Mark as Production</button>
+                        <button type="button" className="min-h-6 text-accent hover:underline" onClick={() => setProdDismissed(prodKey)}>It isn’t</button>
+                      </Offer>
+                    )}
+                    {lowerProd && (
+                      <Offer warn>
+                        <span className="text-fg">Lower this profile from Production to {envLabel[lowerProd]}? Its tabs lose the Production guards.</span>
+                        <button type="button" className={`${BTN} h-6`} onClick={() => { set({ environment: lowerProd }); setEnvChosen(true); setEnvFromGroup(null); setLowerProd(null); }}>Lower it</button>
+                        <button type="button" className="min-h-6 text-accent hover:underline" onClick={() => setLowerProd(null)}>Keep Production</button>
+                      </Offer>
+                    )}
+                  </>
+                }
+              />
+              <div className={`${GRID} items-start`}>
+                <label htmlFor={`${fid}-name`} className={`${LABEL} h-8 flex items-center`}>Name</label>
+                <div className="min-w-0">
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,200px)] items-center gap-x-2.5">
+                    <input
+                      id={`${fid}-name`} ref={refs.name} className={`${INPUT} ${nameTouched ? "" : "text-muted"}`} aria-required value={name} placeholder={suggestedName(p)}
+                      onChange={(e) => { set({ name: e.target.value }); setNameTouched(true); }}
+                      aria-description={nameTouched ? undefined : "Suggested from the connection; type to change it."}
+                      {...invalidProps("name")}
+                    />
+                    <label htmlFor={`${fid}-group`} className={LABEL}>Group</label>
+                    <input id={`${fid}-group`} className={INPUT} list={`${fid}-groups`} value={p.groupName ?? ""} placeholder="No group" onChange={(e) => pickGroup(e.target.value)} />
+                    <datalist id={`${fid}-groups`}>
+                      {groups.map((g) => (
+                        <option key={g.name} value={g.name} />
                       ))}
-                    </select>
-                  </Row>
-                  {fields.trustServerCertificate ? (
-                    <Row label="Certificate" hint={p.trustCert ? <span className="q-profile-reveal text-warn">The server certificate is not validated: anyone on the network path could pose as this server. Use only for development servers.</span> : undefined}>
-                      <Check checked={p.trustCert} onChange={(v) => set({ trustCert: v })}>Trust server certificate</Check>
-                    </Row>
-                  ) : (p.tlsMode === "verifyCa" || p.tlsMode === "verifyFull" || ((knownEngine(p.engine) === "mySql" || oracle) && p.tlsMode === "default") || !!p.caPath) && (
-                    <Row label="CA certificate" hint="Used by Verify CA / Verify full.">
-                      <input className={`${INPUT} q-mono`} value={p.caPath ?? ""} onChange={(e) => set({ caPath: e.target.value || null })} placeholder="/etc/ssl/certs/root.crt" />
-                    </Row>
-                  )}
-                  {transport.risk === "plain" && <p className="q-profile-reveal pl-[108px] text-[10.5px] text-warn">The password and every result cross the network as plain text.</p>}
-                  {ackNeeded && (
-                    <div className="q-profile-reveal pl-[108px]">
-                      <label className="inline-flex items-center gap-2 text-[11.5px] font-semibold cursor-pointer" style={{ color: "var(--q-env-prod)" }}>
-                        <input ref={refs.ack} type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
-                        I accept that this Production connection {transport.risk === "plain" ? "is not encrypted" : "does not check the server certificate"}
-                      </label>
-                    </div>
-                  )}
-                </Disclosure>
-              )}
-              {!local && (
-                <SshSection
-                  id={`${fid}-ssh`} open={open.ssh} onToggle={() => setOpen((o) => ({ ...o, ssh: !o.ssh }))}
-                  ssh={p.ssh ?? null}
-                  onChange={(ssh) => set({ ssh })}
-                  secret={sshSecret}
-                  onSecret={(v) => {
-                    setSshSecret(v);
-                    setSshSecretTouched(true);
-                    setSshForget(false);
-                  }}
-                  saved={!!existing?.ssh && !sshSecretTouched && sshSaved !== false && !sshKindChanged && !endpointChanged}
-                  hostRef={refs.sshHost} userRef={refs.sshUser}
-                  forget={sshForget}
-                  onForget={existing?.ssh && sshSaved !== false ? setSshForget : undefined}
-                />
-              )}
-              <Disclosure
-                id={`${fid}-time`} title={local ? "Timeout" : "Timeouts"} open={open.time} onToggle={() => setOpen((o) => ({ ...o, time: !o.time }))}
-                summary={[
-                  !local ? `Connect ${p.timeoutS ?? 15} s` : null,
-                  `queries ${p.commandTimeoutS ? `${p.commandTimeoutS} s` : "no limit"}`,
-                  p.options?.multiSubnetFailover === "true" ? "multi-subnet failover" : null,
-                  p.options?.applicationIntent === "readOnly" ? "read-only intent" : null,
-                ].filter(Boolean).join(" · ")}
-              >
+                    </datalist>
+                  </div>
+                  {errorLine("name")}
+                </div>
+              </div>
+            </Section>
+
+            <Section title="Advanced" className={animated ? "q-profile-reveal q-profile-reveal-3" : ""}>
+              <div>
                 {!local && (
-                  <Row label="Connect timeout" hint="Seconds">
-                    <input className={`${INPUT} max-w-[120px]`} type="number" min={0} max={600} value={p.timeoutS ?? 15} onChange={(e) => set({ timeoutS: Number(e.target.value) })} />
-                  </Row>
+                  <Disclosure id={`${fid}-enc`} title="Encryption" summary={transport.text} tone={transportTone} open={open.enc} onToggle={() => setOpen((o) => ({ ...o, enc: !o.enc }))}>
+                    <Row label="Mode" htmlFor={`${fid}-tls`}>
+                      <select id={`${fid}-tls`} className={`${INPUT} q-select`} value={p.tlsMode} onChange={(e) => set({ tlsMode: e.target.value as TlsMode })} aria-label="Encryption">
+                        {TLS[p.engine].map((t) => (
+                          <option key={t.id} value={t.id}>{t.label}</option>
+                        ))}
+                      </select>
+                    </Row>
+                    {fields.trustServerCertificate ? (
+                      <Row label="Certificate" hint={p.trustCert ? <span className="q-profile-reveal text-warn">The server certificate is not validated: anyone on the network path could pose as this server. Use only for development servers.</span> : undefined} hintId={`${fid}-trust-hint`}>
+                        <Check checked={p.trustCert} onChange={(v) => set({ trustCert: v })} describedBy={p.trustCert ? `${fid}-trust-hint` : undefined}>Trust server certificate</Check>
+                      </Row>
+                    ) : (p.tlsMode === "verifyCa" || p.tlsMode === "verifyFull" || ((knownEngine(p.engine) === "mySql" || oracle) && p.tlsMode === "default") || !!p.caPath) && (
+                      <Row label="CA certificate" htmlFor={`${fid}-ca`} hint="Used by Verify CA / Verify full." hintId={`${fid}-ca-hint`}>
+                        <input id={`${fid}-ca`} className={`${INPUT} q-mono`} value={p.caPath ?? ""} onChange={(e) => set({ caPath: e.target.value || null })} placeholder="/etc/ssl/certs/root.crt" aria-describedby={`${fid}-ca-hint`} />
+                      </Row>
+                    )}
+                    {transport.risk === "plain" && <p className="q-profile-reveal pl-[148px] text-[11px] text-warn">The password and every result cross the network as plain text.</p>}
+                    {ackNeeded && (
+                      <div className="q-profile-reveal pl-[148px]">
+                        <label className="flex items-center gap-2 px-2.5 py-2 rounded-md border text-[12px] font-semibold cursor-pointer" style={{ color: "var(--q-env-prod)", borderColor: "var(--q-env-prod)", background: "color-mix(in srgb, var(--q-env-prod) 7%, transparent)" }}>
+                          <input ref={refs.ack} type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
+                          I accept that this Production connection {transport.risk === "plain" ? "is not encrypted" : "does not check the server certificate"}
+                        </label>
+                      </div>
+                    )}
+                  </Disclosure>
                 )}
-                <Row label="Command timeout" hint="Seconds. 0 = no limit">
-                  <input className={`${INPUT} max-w-[120px]`} type="number" min={0} max={86400} value={p.commandTimeoutS ?? 0} onChange={(e) => set({ commandTimeoutS: Number(e.target.value) })} />
-                </Row>
-                {fields.multiSubnetFailover && !local && (
-                  <Row label="Failover">
-                    <Check checked={p.options?.multiSubnetFailover === "true"} onChange={(v) => set({ options: { ...(p.options ?? {}), multiSubnetFailover: String(v) } })}>Multi-subnet failover</Check>
-                  </Row>
+                {!local && (
+                  <SshSection
+                    id={`${fid}-ssh`} open={open.ssh} onToggle={() => setOpen((o) => ({ ...o, ssh: !o.ssh }))}
+                    ssh={p.ssh ?? null}
+                    onChange={(ssh) => set({ ssh })}
+                    secret={sshSecret}
+                    onSecret={(v) => {
+                      setSshSecret(v);
+                      setSshSecretTouched(true);
+                      setSshForget(false);
+                    }}
+                    saved={!!existing?.ssh && !sshSecretTouched && sshSaved !== false && !sshKindChanged && !endpointChanged}
+                    hostRef={refs.sshHost} userRef={refs.sshUser}
+                    forget={sshForget}
+                    onForget={existing?.ssh && sshSaved !== false ? setSshForget : undefined}
+                  />
                 )}
-                {fields.applicationIntent && !local && (
-                  <Row label="Intent">
-                    <Check checked={p.options?.applicationIntent === "readOnly"} onChange={(v) => set({ options: { ...(p.options ?? {}), applicationIntent: v ? "readOnly" : "readWrite" } })}>Read-only intent</Check>
+                <Disclosure
+                  id={`${fid}-time`} title={local ? "Timeout" : "Timeouts"} open={open.time} onToggle={() => setOpen((o) => ({ ...o, time: !o.time }))}
+                  summary={[!local ? `Connect ${p.timeoutS ?? 15} s` : null, `queries ${p.commandTimeoutS ? `${p.commandTimeoutS} s` : "no limit"}`].filter(Boolean).join(" · ")}
+                >
+                  {!local && (
+                    <Row label="Connect timeout" htmlFor={`${fid}-connect-timeout`}>
+                      <span className="inline-flex"><NumberField id={`${fid}-connect-timeout`} value={p.timeoutS ?? 15} min={1} max={600} unit="seconds" width={96} onCommit={(n) => set({ timeoutS: n })} /></span>
+                    </Row>
+                  )}
+                  <Row label="Command timeout" htmlFor={`${fid}-command-timeout`} hint="0 = no limit" hintId={`${fid}-command-timeout-hint`}>
+                    <span className="inline-flex"><NumberField id={`${fid}-command-timeout`} value={p.commandTimeoutS ?? 0} min={0} max={86400} unit="seconds" width={96} describedBy={`${fid}-command-timeout-hint`} onCommit={(n) => set({ commandTimeoutS: n })} /></span>
                   </Row>
+                </Disclosure>
+                {!local && (fields.multiSubnetFailover || fields.applicationIntent) && (
+                  <Disclosure
+                    id={`${fid}-avail`} title="Availability" open={open.avail} onToggle={() => setOpen((o) => ({ ...o, avail: !o.avail }))}
+                    summary={[
+                      p.options?.applicationIntent === "readOnly" ? "Read-only intent" : null,
+                      p.options?.multiSubnetFailover === "true" ? "multi-subnet failover" : null,
+                    ].filter(Boolean).join(" · ") || "Read-write · single subnet"}
+                  >
+                    {fields.applicationIntent && (
+                      <Row label="Intent">
+                        <Check checked={p.options?.applicationIntent === "readOnly"} onChange={(v) => set({ options: { ...(p.options ?? {}), applicationIntent: v ? "readOnly" : "readWrite" } })}>Read-only intent</Check>
+                      </Row>
+                    )}
+                    {fields.multiSubnetFailover && (
+                      <Row label="Failover">
+                        <Check checked={p.options?.multiSubnetFailover === "true"} onChange={(v) => set({ options: { ...(p.options ?? {}), multiSubnetFailover: String(v) } })}>Multi-subnet failover</Check>
+                      </Row>
+                    )}
+                  </Disclosure>
                 )}
-              </Disclosure>
-            </div>
+              </div>
+            </Section>
           </>
         )}
       </div>
-
-      {/* Pinned under the form so a test result is visible without scrolling. */}
-      {engineChosen && (
-        <SmoothExpand animateMount={mounted} role="status" aria-live="polite" className={`${animated ? "q-profile-reveal q-profile-reveal-2 " : ""}shrink-0 border-t border-line bg-panel px-5 py-2`}>
-          {test ? (
-            <div className={`q-profile-reveal flex items-start gap-2.5 px-2.5 py-1.5 rounded-md border text-[11.5px] ${testStale ? "border-line text-muted" : test.ok ? "border-ok/40 bg-ok/10 text-ok" : "border-err/40 bg-err/10 text-err"}`}>
-              <span className="mt-px shrink-0"><Icon d={test.ok ? ICON.circleCheck : ICON.circleAlert} size={15} /></span>
-              <div className="flex-1 min-w-0 max-h-[60px] overflow-auto select-text leading-snug">
-                {test.text}
-                {testStale && <span className="block text-[10.5px]">Settings changed since this test. Test again.</span>}
-              </div>
-              <button type="button" className="shrink-0 w-5 h-5 flex items-center justify-center rounded opacity-70 hover:opacity-100 hover:bg-black/10" aria-label="Dismiss" title="Dismiss" onClick={() => setTest(null)}>
-                <Icon d={ICON.x} size={13} />
-              </button>
-            </div>
-          ) : (
-            <span className="text-[11px] text-muted">Not tested yet. You can save without testing.</span>
-          )}
-        </SmoothExpand>
-      )}
     </Modal>
   );
 }
 
 const INPUT = "q-input w-full h-8";
+/** The dialog's buttons: one size for the footer and the rows. */
+const BTN = "q-btn h-[30px] px-3.5 text-[12px]";
+/** One label column for every row, folded rows included. */
+const GRID = "grid grid-cols-[132px_minmax(0,1fr)] items-center gap-x-4";
+const LABEL = "text-[12px] text-muted";
+
+function joinWords(words: string[]): string {
+  return words.length < 2 ? words.join("") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
+
+/** A titled group of rows (Connection, Sign in, Profile, Advanced): a heading screen readers can jump to. */
+function Section({ title, className = "", children }: { title: string; className?: string; children: ReactNode }) {
+  const id = useId();
+  return (
+    <section className={`space-y-2.5 ${className}`}>
+      <h3 id={id} className="flex items-center gap-2.5 text-[11px] font-semibold tracking-[0.06em] uppercase text-muted">
+        {title}
+        <span aria-hidden className="flex-1 h-px bg-line" />
+      </h3>
+      {children}
+    </section>
+  );
+}
 
 const SSH_AUTH: { id: SshAuthKind; label: string }[] = [
   { id: "privateKey", label: "Key file" },
@@ -1261,6 +1356,7 @@ function SshSection({ id, open, onToggle, ssh, onChange, secret, onSecret, saved
   };
   // An older profile may hold the agent sign-in, which is not supported yet: it stays listed for it, with the warning.
   const auths = ssh?.auth === "agent" ? [...SSH_AUTH, { id: "agent" as SshAuthKind, label: "SSH agent (not supported yet)" }] : SSH_AUTH;
+  const secretHint = forget ? <span className="text-warn">The saved one is forgotten when you save.</span> : saved ? "Leave empty to keep the one saved in the OS keyring." : ssh?.auth === "privateKey" ? "Only if the key is protected." : undefined;
   return (
     <Disclosure id={id} title="SSH tunnel" open={open} onToggle={onToggle} summary={on ? `Through ${ssh!.host || "bastion"}` : "Off"} tone={on ? "ok" : "muted"}>
       <Row label="Tunnel">
@@ -1268,38 +1364,35 @@ function SshSection({ id, open, onToggle, ssh, onChange, secret, onSecret, saved
       </Row>
       {on && (
         <div className="q-profile-reveal space-y-2.5">
-          <Row label="Bastion" hint="With a tunnel, Host above is the address as the bastion sees it (e.g. db.internal or localhost).">
-            <div className="flex gap-2">
-              <input ref={hostRef} className={INPUT} value={ssh!.host} placeholder="bastion.example.com" onChange={(e) => set({ host: e.target.value })} aria-required />
-              <input className={`${INPUT} max-w-[90px]`} type="number" value={ssh!.port ?? 22} onChange={(e) => set({ port: Number(e.target.value) || 22 })} aria-label="SSH port" />
+          <Row label="Bastion" htmlFor={`${id}-host`} hint="With a tunnel, Host above is the address as the bastion sees it (e.g. db.internal or localhost)." hintId={`${id}-host-hint`}>
+            <div className="flex items-center gap-2">
+              <input id={`${id}-host`} ref={hostRef} className={INPUT} value={ssh!.host} placeholder="bastion.example.com" onChange={(e) => set({ host: e.target.value })} aria-required aria-describedby={`${id}-host-hint`} />
+              <NumberField id={`${id}-port`} label="SSH port" value={ssh!.port ?? 22} min={1} max={65535} width={84} onCommit={(n) => set({ port: n })} />
             </div>
           </Row>
-          <Row label="User">
-            <input ref={userRef} className={INPUT} value={ssh!.username} placeholder="deploy" onChange={(e) => set({ username: e.target.value })} aria-required />
+          <Row label="User" htmlFor={`${id}-user`}>
+            <input id={`${id}-user`} ref={userRef} className={`${INPUT} max-w-[320px]`} value={ssh!.username} placeholder="deploy" onChange={(e) => set({ username: e.target.value })} aria-required />
           </Row>
-          <Row label="Sign in with" hint={ssh!.auth === "agent" ? <span className="text-warn">SSH agent sign-in is not supported yet; choose a key file or a password.</span> : undefined}>
-            <select className={INPUT} value={ssh!.auth} onChange={(e) => set({ auth: e.target.value as SshAuthKind })}>
+          <Row label="Sign in with" htmlFor={`${id}-auth`} hint={ssh!.auth === "agent" ? <span className="text-warn">SSH agent sign-in is not supported yet; choose a key file or a password.</span> : undefined} hintId={`${id}-auth-hint`}>
+            <select id={`${id}-auth`} className={`${INPUT} q-select max-w-[320px]`} value={ssh!.auth} onChange={(e) => set({ auth: e.target.value as SshAuthKind })} aria-describedby={ssh!.auth === "agent" ? `${id}-auth-hint` : undefined}>
               {auths.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
             </select>
           </Row>
           {ssh!.auth === "privateKey" && (
             <div className="q-profile-reveal">
-              <Row label="Key file" hint="OpenSSH, PEM or PuTTY format. The path is saved; the key is read when connecting.">
+              <Row label="Key file" htmlFor={`${id}-key`} hint="OpenSSH, PEM or PuTTY format. The path is saved; the key is read when connecting." hintId={`${id}-key-hint`}>
                 <div className="flex gap-2">
-                  <input className={INPUT} value={ssh!.keyPath ?? ""} placeholder="/home/me/.ssh/id_ed25519" onChange={(e) => set({ keyPath: e.target.value || null })} />
-                  {isTauri && <button type="button" className="q-btn" onClick={() => void browse()}>Browse…</button>}
+                  <input id={`${id}-key`} className={`${INPUT} q-mono`} value={ssh!.keyPath ?? ""} placeholder="/home/me/.ssh/id_ed25519" onChange={(e) => set({ keyPath: e.target.value || null })} aria-describedby={`${id}-key-hint`} />
+                  {isTauri && <button type="button" className={BTN} onClick={() => void browse()}>Browse…</button>}
                 </div>
               </Row>
             </div>
           )}
           {ssh!.auth !== "agent" && (
-            <Row
-              label={ssh!.auth === "password" ? "Password" : "Passphrase"}
-              hint={forget ? <span className="text-warn">The saved one is forgotten when you save.</span> : saved ? "Leave empty to keep the one saved in the OS keyring." : ssh!.auth === "privateKey" ? "Only if the key is protected." : undefined}
-            >
+            <Row label={ssh!.auth === "password" ? "Password" : "Passphrase"} htmlFor={`${id}-secret`} hint={secretHint} hintId={`${id}-secret-hint`}>
               <div className="flex gap-2 items-center">
-                <SecretInput className={INPUT} type="password" value={secret} autoComplete="off" onValue={onSecret} />
-                {onForget && saved && <button type="button" className="q-btn shrink-0" onClick={() => onForget(!forget)}>{forget ? "Undo forget" : "Forget saved"}</button>}
+                <SecretInput id={`${id}-secret`} className={`${INPUT} max-w-[320px]`} type="password" value={secret} autoComplete="off" onValue={onSecret} aria-describedby={secretHint ? `${id}-secret-hint` : undefined} />
+                {onForget && saved && <button type="button" className={`${BTN} shrink-0`} onClick={() => onForget(!forget)}>{forget ? "Undo forget" : "Forget saved"}</button>}
               </div>
             </Row>
           )}
@@ -1325,13 +1418,12 @@ const ENVS: { id: EnvironmentKind; label: string; hint: string }[] = [
   { id: "prod", label: "Prod", hint: "Production: tabs and the status bar are painted, and Querithm asks before the first run and before destructive statements." },
 ];
 
-/** The header's environment pill; a dashed "No environment" until one is chosen. */
-function EnvPill({ env, text }: { env: EnvironmentKind | null; text?: string }) {
-  if (!env) return <span className="shrink-0 inline-flex items-center h-5 px-2 rounded-full text-[9.5px] font-bold tracking-wider uppercase border border-dashed border-line-strong text-muted">No environment</span>;
+/** The header's environment pill, shown once an environment is chosen. */
+function EnvPill({ env, text }: { env: EnvironmentKind; text?: string }) {
   const v = `var(--q-env-${env})`;
   return (
     <span
-      className="shrink-0 inline-flex items-center gap-1.5 h-5 px-2 rounded-full text-[9.5px] font-bold tracking-wider uppercase"
+      className="shrink-0 inline-flex items-center gap-1.5 h-[22px] px-2.5 rounded-full text-[11px] font-semibold"
       style={{ color: text, background: `color-mix(in srgb, ${v} 14%, transparent)`, border: `1px solid color-mix(in srgb, ${v} 35%, transparent)` }}
     >
       <span className="w-1.5 h-1.5 rounded-full" style={{ background: v }} />
@@ -1341,43 +1433,107 @@ function EnvPill({ env, text }: { env: EnvironmentKind | null; text?: string }) 
 }
 
 /**
- * The five environments as one radio group, all visible: nothing is chosen until the user picks (a hidden default was
- * how Production got saved as Dev), and a mouse wheel cannot change it the way it changes a focused select.
+ * The five environments as toggle buttons, all visible: nothing is chosen until the user picks (a hidden default was
+ * how Production got saved as Dev). Arrow keys only move focus, never choose, so no key press lands on Prod by itself;
+ * the chosen one shows a check mark as well as its colour.
  */
 function EnvironmentPicker({ fid, value, onChange, firstRef, tint, invalid, errorId, after }: {
-  fid: string; value: EnvironmentKind | null; onChange: (e: EnvironmentKind) => void; firstRef: RefObject<HTMLInputElement | null>;
+  fid: string; value: EnvironmentKind | null; onChange: (e: EnvironmentKind) => void; firstRef: RefObject<HTMLButtonElement | null>;
   tint: (e: EnvironmentKind) => string; invalid: boolean; errorId: string; after: ReactNode;
 }) {
+  const move = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) return;
+    const list = [...e.currentTarget.querySelectorAll<HTMLButtonElement>("button")];
+    const i = list.indexOf(document.activeElement as HTMLButtonElement);
+    if (i < 0) return;
+    e.preventDefault();
+    const back = e.key === "ArrowLeft" || e.key === "ArrowUp";
+    list[e.key === "Home" ? 0 : e.key === "End" ? list.length - 1 : Math.min(list.length - 1, Math.max(0, i + (back ? -1 : 1)))].focus();
+  };
   return (
-    <div className="grid grid-cols-[96px_1fr] items-start gap-x-3">
-      <span id={`${fid}-env-label`} className="text-[11.5px] text-muted h-8 flex items-center">Environment</span>
-      <div className="space-y-1.5 min-w-0">
+    <div className={`${GRID} items-start`}>
+      <span id={`${fid}-env-label`} className={`${LABEL} h-8 flex items-center`}>Environment</span>
+      <div className="space-y-2 min-w-0">
         <div
-          role="radiogroup" aria-labelledby={`${fid}-env-label`} aria-required="true" aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId : undefined}
-          className={`inline-flex flex-wrap rounded-md border overflow-hidden ${invalid ? "border-err" : "border-line"}`}
+          role="group" aria-labelledby={`${fid}-env-label`} aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId : undefined} onKeyDown={move}
+          className={`inline-flex flex-wrap gap-1.5 rounded-lg ${invalid ? "p-[3px] border border-err" : ""}`}
         >
           {ENVS.map((e, i) => {
             const on = value === e.id;
             const v = `var(--q-env-${e.id})`;
             return (
-              <label
-                key={e.id}
-                className={`relative inline-flex items-center gap-1.5 h-8 px-3 cursor-pointer text-[12px] border-line focus-within:outline focus-within:outline-2 focus-within:outline-accent focus-within:-outline-offset-2 ${i ? "border-l" : ""} ${on ? "font-semibold" : "text-fg hover:bg-hover"}`}
-                style={on ? { color: tint(e.id), background: `color-mix(in srgb, ${v} 16%, transparent)`, boxShadow: `inset 0 -2px 0 ${v}` } : undefined}
+              <button
+                key={e.id} ref={i === 0 ? firstRef : undefined} type="button" aria-pressed={on} aria-label={e.id === "prod" ? "Prod (Production)" : e.label}
+                onClick={() => onChange(e.id)}
+                className={`inline-flex items-center gap-1.5 h-[30px] px-3 rounded-md border text-[12px] ${on ? "font-semibold" : "border-line bg-panel-2 text-fg hover:bg-hover"}`}
+                style={on ? { color: tint(e.id), background: `color-mix(in srgb, ${v} 16%, transparent)`, borderColor: v } : undefined}
               >
-                <input
-                  ref={i === 0 ? firstRef : undefined} type="radio" name={`${fid}-env`} value={e.id} checked={on} onChange={() => onChange(e.id)}
-                  className="absolute opacity-0 w-0 h-0" aria-label={e.id === "prod" ? "Prod (Production)" : e.label}
-                />
-                <span aria-hidden className="w-2 h-2 rounded-full" style={{ background: v }} />
+                {on ? <Icon d={ICON.check} size={13} /> : <span aria-hidden className="w-2 h-2 rounded-full" style={{ background: v }} />}
                 {e.label}
-              </label>
+              </button>
             );
           })}
         </div>
-        {invalid && <span id={errorId} className="block text-[10.5px] text-err">Choose which environment this is. Nothing is picked for you.</span>}
+        {invalid && <span id={errorId} className="flex items-start gap-1.5 text-[11px] text-err"><span className="mt-px shrink-0"><Icon d={ICON.circleAlert} size={12} /></span>Choose which environment this is. Nothing is picked for you.</span>}
         {after}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The first view of a new profile: every offered engine as a tile, grouped by where its databases live. One tab stop
+ * per tile; arrow keys move between them and Enter or a click picks one. An engine the sidecar cannot run here is
+ * shown with its reason and cannot be picked.
+ */
+function EngineTiles({ options, unavailable, recent, infoOf, onPick }: {
+  options: Engine[]; unavailable: Partial<Record<Engine, string>>; recent: Engine[]; infoOf: (e: Engine) => LocationKind[]; onPick: (e: Engine) => void;
+}) {
+  const id = useId();
+  const server = options.filter((e) => infoOf(e).includes("server"));
+  const files = options.filter((e) => !infoOf(e).includes("server"));
+  const move = (ev: KeyboardEvent<HTMLDivElement>) => {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(ev.key)) return;
+    const list = [...ev.currentTarget.querySelectorAll<HTMLButtonElement>("button[data-q-engine-tile]")];
+    const i = list.indexOf(document.activeElement as HTMLButtonElement);
+    if (i < 0) return;
+    ev.preventDefault();
+    const step = ev.key === "ArrowDown" ? 3 : ev.key === "ArrowUp" ? -3 : ev.key === "ArrowLeft" ? -1 : 1;
+    list[ev.key === "Home" ? 0 : ev.key === "End" ? list.length - 1 : Math.min(list.length - 1, Math.max(0, i + step))].focus();
+  };
+  const sub = (e: Engine) => {
+    const t = ENGINE_TRAITS[e];
+    const where = infoOf(e);
+    const base = where.includes("server")
+      ? knownEngine(e) === "oracle" ? "TCPS 2484 · service name" : `Port ${t.defaultPort}`
+      : where.includes("memory") ? "File or in-memory" : "File on this computer";
+    return recent.includes(e) ? `${base} · recent` : base;
+  };
+  const group = (key: string, title: string, list: Engine[]) => list.length > 0 && (
+    <div role="group" aria-labelledby={`${id}-${key}`} className="space-y-2">
+      <span id={`${id}-${key}`} className="block text-[11px] font-semibold tracking-[0.06em] uppercase text-muted">{title}</span>
+      <div className="grid grid-cols-3 gap-2.5">
+        {list.map((e) => (
+          <button
+            key={e} type="button" data-q-engine-tile={e} aria-disabled={unavailable[e] ? true : undefined}
+            aria-describedby={`${id}-${e}-sub`}
+            onClick={() => !unavailable[e] && onPick(e)}
+            className={`flex items-center gap-3 min-h-[60px] px-3.5 py-2 rounded-lg border border-line bg-panel-2 text-left ${unavailable[e] ? "opacity-60 cursor-not-allowed" : "hover:bg-hover hover:border-line-strong"}`}
+          >
+            <EngineMark engine={e} logo={LOGOS[e]} size={28} />
+            <span className="min-w-0">
+              <span className="block text-[13px] font-medium text-fg truncate">{ENGINE_TRAITS[e].label}</span>
+              <span id={`${id}-${e}-sub`} className="block text-[11.5px] text-muted leading-snug" data-q-engine-unavailable={unavailable[e] ? true : undefined}>{unavailable[e] ?? sub(e)}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+  return (
+    <div className="space-y-4" onKeyDown={move}>
+      {group("server", "On a server", server)}
+      {group("file", "File on this computer", files)}
     </div>
   );
 }
@@ -1393,6 +1549,10 @@ const ICON = {
   x: <><path d="M18 6 6 18" /><path d="m6 6 12 12" /></>,
   circleCheck: <><circle cx="12" cy="12" r="10" /><path d="m9 12 2 2 4-4" /></>,
   circleAlert: <><circle cx="12" cy="12" r="10" /><line x1="12" x2="12" y1="8" y2="12" /><line x1="12" x2="12.01" y1="16" y2="16" /></>,
+  triangleAlert: <><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" /><path d="M12 9v4" /><path d="M12 17h.01" /></>,
+  clipboard: <><rect width="8" height="4" x="8" y="2" rx="1" /><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /></>,
+  database: <><ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M3 5v14a9 3 0 0 0 18 0V5" /><path d="M3 12a9 3 0 0 0 18 0" /></>,
+  shield: <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />,
   eyeOff: <><path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" /><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" /><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143" /><path d="m2 2 20 20" /></>,
 };
 
@@ -1405,104 +1565,40 @@ function Icon({ d, size = 16 }: { d: ReactNode; size?: number }) {
 }
 
 /**
- * Smoothly animates height transitions when a section mounts after the dialog is open or when its content expands or
- * collapses (e.g. choosing a server type, opening a disclosure, toggling SSH bastion fields, or showing hints/offers).
+ * A folded group of rarely changed settings: a heading whose button names only the group, with its one-line state
+ * (warning colour included) as the button's description. The panel exists only while open, and so does aria-controls.
  */
-function SmoothExpand({
-  children, className = "", animateMount = false, initialHeight = 0, asSection = false, role, "aria-live": ariaLive,
-}: {
-  children: ReactNode; className?: string; animateMount?: boolean; initialHeight?: number; asSection?: boolean;
-  role?: string; "aria-live"?: "polite" | "assertive" | "off";
-}) {
-  const ref = useRef<HTMLElement>(null);
-  const prevHeight = useRef<number | null>(null);
-  const animRef = useRef<Animation | null>(null);
-
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const canAnimate =
-      typeof el.animate === "function" &&
-      !window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
-
-    let fromH = prevHeight.current;
-    if (animRef.current) {
-      fromH = el.getBoundingClientRect().height;
-      animRef.current.cancel();
-      animRef.current = null;
-    }
-
-    const toH = el.getBoundingClientRect().height;
-    prevHeight.current = toH;
-
-    if (!canAnimate) return;
-
-    if (fromH === null) {
-      if (!animateMount || Math.abs(toH - initialHeight) <= 2) return;
-      fromH = initialHeight;
-    } else if (Math.abs(toH - fromH) <= 2) {
-      return;
-    }
-
-    el.style.overflow = "hidden";
-    const anim = el.animate(
-      [
-        { height: `${fromH}px`, ...(fromH === 0 ? { opacity: 0 } : {}) },
-        { height: `${toH}px`, ...(fromH === 0 ? { opacity: 1 } : {}) },
-      ],
-      { duration: 200, easing: "cubic-bezier(0.16, 1, 0.3, 1)" },
-    );
-    animRef.current = anim;
-    const clear = () => {
-      if (animRef.current === anim) {
-        el.style.overflow = "";
-        animRef.current = null;
-        prevHeight.current = el.getBoundingClientRect().height;
-      }
-    };
-    anim.onfinish = clear;
-    anim.oncancel = clear;
-  });
-
-  if (asSection) {
-    return (
-      <section ref={ref as RefObject<HTMLElement>} role={role} aria-live={ariaLive} className={className}>
-        {children}
-      </section>
-    );
-  }
+function Disclosure({ id, title, summary, tone = "muted", open, onToggle, children }: { id: string; title: string; summary: string; tone?: "ok" | "warn" | "muted"; open: boolean; onToggle: () => void; children: ReactNode }) {
   return (
-    <div ref={ref as RefObject<HTMLDivElement>} role={role} aria-live={ariaLive} className={className}>
-      {children}
+    <div className="border-b border-line last:border-b-0">
+      <h4 className="m-0 font-normal">
+        <button
+          type="button" aria-expanded={open} aria-controls={open ? `${id}-panel` : undefined} aria-describedby={`${id}-summary`} onClick={onToggle}
+          className="w-full grid grid-cols-[132px_minmax(0,1fr)_16px] items-center gap-x-4 min-h-[36px] text-left rounded hover:bg-hover"
+        >
+          <span className="text-[12.5px] font-semibold text-fg">{title}</span>
+          {/* Out of the name (the title alone names the button), read as its description. */}
+          <span id={`${id}-summary`} aria-hidden className={`flex items-center gap-1.5 min-w-0 text-[12px] ${tone === "warn" ? "text-warn" : tone === "ok" ? "text-ok" : "text-muted"}`}>
+            {tone === "warn" && <><span className="shrink-0"><Icon d={ICON.triangleAlert} size={13} /></span><span className="sr-only">⚠ </span></>}
+            <span className="truncate">{summary}</span>
+          </span>
+          <span className={`text-muted transition-transform ${open ? "rotate-90" : ""}`}><Icon d={ICON.chevronRight} size={14} /></span>
+        </button>
+      </h4>
+      {open && <div id={`${id}-panel`} className="q-profile-reveal pt-1 pb-3 space-y-2.5">{children}</div>}
     </div>
   );
 }
 
-/** A folded group of rarely changed settings: one line of state while folded, its warning colour included. */
-function Disclosure({ id, title, summary, tone = "muted", open, onToggle, children }: { id: string; title: string; summary: string; tone?: "ok" | "warn" | "muted"; open: boolean; onToggle: () => void; children: ReactNode }) {
-  return (
-    <SmoothExpand asSection className="border-b border-line last:border-b-0">
-      <button
-        type="button" aria-expanded={open} aria-controls={`${id}-panel`} onClick={onToggle}
-        className="w-full grid grid-cols-[14px_96px_minmax(0,1fr)] items-center gap-2 h-8 px-3 text-left hover:bg-hover"
-      >
-        <span className={`text-muted transition-transform ${open ? "rotate-90" : ""}`}><Icon d={ICON.chevronRight} size={13} /></span>
-        <span className="text-[12px] font-semibold text-fg">{title}</span>
-        <span className={`text-[11.5px] truncate ${tone === "warn" ? "text-warn" : tone === "ok" ? "text-ok" : "text-muted"}`}>{tone === "warn" ? "⚠ " : ""}{summary}</span>
-      </button>
-      {open && <div id={`${id}-panel`} className="q-profile-reveal px-3 pb-3 pt-1 space-y-2.5">{children}</div>}
-    </SmoothExpand>
-  );
-}
-
+/** A one-line note under Server type (a switch to undo, a pasted string's result). */
 function Note({ children, action, onDismiss }: { children: ReactNode; action?: ReactNode; onDismiss?: () => void }) {
   return (
-    <div className="q-profile-reveal flex items-start gap-2.5 px-2.5 py-2 rounded-md border border-line bg-panel text-[11.5px] text-muted leading-snug" aria-live="polite">
-      <span className="mt-px shrink-0 text-accent"><Icon d={ICON.info} size={15} /></span>
+    <div className="q-profile-reveal flex items-start gap-2 mt-1.5 text-[11.5px] text-muted leading-snug">
+      <span className="mt-px shrink-0 text-accent"><Icon d={ICON.info} size={14} /></span>
       <div className="flex-1 min-w-0 space-y-0.5 select-text">{children}</div>
       {action}
       {onDismiss && (
-        <button type="button" className="shrink-0 w-5 h-5 flex items-center justify-center rounded opacity-70 hover:opacity-100 hover:bg-hover" aria-label="Dismiss" title="Dismiss" onClick={onDismiss}>
+        <button type="button" className="shrink-0 -my-1 w-6 h-6 flex items-center justify-center rounded opacity-70 hover:opacity-100 hover:bg-hover" aria-label="Dismiss" title="Dismiss" onClick={onDismiss}>
           <Icon d={ICON.x} size={13} />
         </button>
       )}
@@ -1512,42 +1608,36 @@ function Note({ children, action, onDismiss }: { children: ReactNode; action?: R
 
 function Offer({ children, warn = false }: { children: ReactNode; warn?: boolean }) {
   return (
-    <div className={`q-profile-reveal flex flex-wrap items-center gap-x-2.5 gap-y-1 px-2.5 py-1.5 rounded-md border border-dashed text-[11.5px] text-muted ${warn ? "border-warn" : "border-line-strong"}`} aria-live="polite">
+    <div className={`q-profile-reveal flex flex-wrap items-center gap-x-2.5 gap-y-1 px-2.5 py-1.5 rounded-md border border-dashed text-[11.5px] text-muted ${warn ? "border-warn" : "border-line-strong"}`}>
       {children}
     </div>
   );
 }
 
-/** A row whose control is not one labelable element (a group of buttons or radios): a div, with an optional label for one field. */
-function Line({ label, htmlFor, children }: { label: string; htmlFor?: string; children: ReactNode }) {
+/**
+ * One labelled row: the label in the left column, the control on the right, a hint under the control. The hint is never
+ * part of the label (it would join the control's name); pass `hintId` and point the control's aria-describedby at it.
+ */
+function Row({ label, htmlFor, hint, hintId, children }: { label: string; htmlFor?: string; hint?: ReactNode; hintId?: string; children: ReactNode }) {
   return (
-    <div className="grid grid-cols-[96px_1fr] items-center gap-x-3">
-      {htmlFor ? <label htmlFor={htmlFor} className="text-[11.5px] text-muted">{label}</label> : <span className="text-[11.5px] text-muted">{label}</span>}
-      {children}
+    <div className={GRID}>
+      {htmlFor ? <label htmlFor={htmlFor} className={LABEL}>{label}</label> : <span className={LABEL}>{label}</span>}
+      <div className="min-w-0">{children}</div>
+      {hint && <span id={hintId} className="col-start-2 mt-1.5 text-[11px] text-muted">{hint}</span>}
     </div>
   );
 }
 
-function Row({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
+function Check({ checked, onChange, describedBy, children }: { checked: boolean; onChange: (v: boolean) => void; describedBy?: string; children: ReactNode }) {
   return (
-    <label className="grid grid-cols-[96px_1fr] items-center gap-x-3">
-      <span className="text-[11.5px] text-muted">{label}</span>
-      {children}
-      {hint && <span className="col-start-2 mt-1 text-[10.5px] text-muted">{hint}</span>}
+    <label className="inline-flex items-center gap-2 min-h-8 text-[12.5px] text-fg cursor-pointer">
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} aria-describedby={describedBy} /> {children}
     </label>
   );
 }
 
-function Check({ checked, onChange, children }: { checked: boolean; onChange: (v: boolean) => void; children: ReactNode }) {
-  return (
-    <span className="flex items-center gap-2 h-8 text-fg">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} /> {children}
-    </span>
-  );
-}
-
 function Badge({ tone, children }: { tone: "ok" | "warn"; children: ReactNode }) {
-  return <span className={`px-2 h-5 inline-flex items-center rounded-full border text-[10px] font-medium ${tone === "ok" ? "border-ok/50 bg-ok/10 text-ok" : "border-warn/50 bg-warn/10 text-warn"}`}>{children}</span>;
+  return <span className={`shrink-0 px-2.5 h-[22px] inline-flex items-center rounded-full border text-[11px] font-medium ${tone === "ok" ? "border-ok/50 bg-ok/10 text-ok" : "border-warn/50 bg-warn/10 text-warn"}`}>{children}</span>;
 }
 
 /** Server types grouped by where their databases live, filtered by name or alias. */
@@ -1641,7 +1731,11 @@ const EngineSelect = ({ ref, value, options, unavailable = {}, onChange, autoFoc
     } else if (e.key === "Tab") close(false);
   };
 
-  let lastServer: boolean | null = null;
+  // Options grouped under their heading (APG listbox with groups): the heading names the group for screen readers.
+  const groupsOf = [
+    { title: "On a server", items: list.filter((e) => ENGINE_TRAITS[e].locations.includes("server")) },
+    { title: "File on this computer", items: list.filter((e) => !ENGINE_TRAITS[e].locations.includes("server")) },
+  ].filter((g) => g.items.length);
   return (
     <>
       <button
@@ -1679,34 +1773,39 @@ const EngineSelect = ({ ref, value, options, unavailable = {}, onChange, autoFoc
             />
           </div>
           <ul id={`${id}-list`} role="listbox" aria-label="Server type" className="max-h-[260px] overflow-auto">
-            {list.map((e, i) => {
-              const server = ENGINE_TRAITS[e].locations.includes("server");
-              const head = server !== lastServer ? (server ? "On a server" : "File on this computer") : null;
-              lastServer = server;
-              return [
-                head && <li key={`h-${head}`} role="presentation" className="px-2.5 pt-1.5 pb-0.5 text-[9.5px] font-bold tracking-wider uppercase text-muted">{head}</li>,
-                <li
-                  key={e}
-                  id={`${id}-opt-${e}`}
-                  role="option"
-                  aria-selected={e === value}
-                  aria-disabled={unavailable[e] ? true : undefined}
-                  title={unavailable[e]}
-                  onMouseEnter={() => setActive(i)}
-                  onMouseDown={(ev) => ev.preventDefault()}
-                  onClick={() => choose(e)}
-                  className={`flex items-center gap-2.5 min-h-[32px] px-2.5 rounded text-[12px] ${unavailable[e] ? "cursor-not-allowed text-muted" : "cursor-pointer text-fg"} ${i === active ? "bg-hover" : ""}`}
-                >
-                  <EngineMark engine={e} logo={LOGOS[e]} size={18} />
-                  <span className="flex-1 min-w-0">
-                    <span className="block truncate">{ENGINE_TRAITS[e].label}</span>
-                    {unavailable[e] && <span className="block text-[10.5px] leading-snug whitespace-normal" data-q-engine-unavailable>{unavailable[e]}</span>}
-                  </span>
-                  {e === value && <span className="text-accent"><Icon d={ICON.check} size={14} /></span>}
-                </li>,
-              ];
-            })}
-            {!list.length && <li role="presentation" className="px-2.5 py-2 text-[11.5px] text-muted">No server type matches “{query}”.</li>}
+            {groupsOf.map((g) => (
+              <li key={g.title} role="group" aria-labelledby={`${id}-g-${g.title.length}`}>
+                <div id={`${id}-g-${g.title.length}`} role="presentation" className="px-2.5 pt-1.5 pb-0.5 text-[11px] font-semibold tracking-wider uppercase text-muted">{g.title}</div>
+                <ul role="presentation">
+                  {g.items.map((e) => {
+                    const i = list.indexOf(e);
+                    return (
+                      <li
+                        key={e}
+                        id={`${id}-opt-${e}`}
+                        role="option"
+                        aria-selected={e === value}
+                        aria-disabled={unavailable[e] ? true : undefined}
+                        aria-describedby={unavailable[e] ? `${id}-why-${e}` : undefined}
+                        title={unavailable[e]}
+                        onMouseEnter={() => setActive(i)}
+                        onMouseDown={(ev) => ev.preventDefault()}
+                        onClick={() => choose(e)}
+                        className={`flex items-center gap-2.5 min-h-[32px] px-2.5 rounded text-[12px] ${unavailable[e] ? "cursor-not-allowed text-muted" : "cursor-pointer text-fg"} ${i === active ? "bg-hover" : ""}`}
+                      >
+                        <EngineMark engine={e} logo={LOGOS[e]} size={18} />
+                        <span className="flex-1 min-w-0">
+                          <span className="block truncate">{ENGINE_TRAITS[e].label}</span>
+                          {unavailable[e] && <span id={`${id}-why-${e}`} className="block text-[11px] leading-snug whitespace-normal" data-q-engine-unavailable>{unavailable[e]}</span>}
+                        </span>
+                        {e === value && <span className="text-accent"><Icon d={ICON.check} size={14} /></span>}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </li>
+            ))}
+            {!list.length && <li role="presentation" className="px-2.5 py-2 text-[12px] text-muted">No server type matches “{query}”.</li>}
           </ul>
         </div>
       )}

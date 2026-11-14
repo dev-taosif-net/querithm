@@ -109,7 +109,7 @@ export function ConnectDialog({ onClose }: { onClose: () => void }) {
         </div>
       )}
       <div ref={listRef} className="px-4 py-3 overflow-auto min-h-0 max-h-[52vh] space-y-2.5">
-        {!profiles.length && <div className="text-muted py-6 text-center">No saved profiles yet. Create one to connect to SQL Server or PostgreSQL.</div>}
+        {!profiles.length && <div className="text-muted py-6 text-center">No saved profiles yet. Create one to connect to a server or a database file.</div>}
         {profiles.length > 0 && !flat.length && (
           <div className="text-muted py-6 text-center space-y-2">
             <div>No profiles match{text.trim() ? ` “${text.trim()}”` : ""}{env !== "all" ? ` in ${envLabel[env]}` : ""}.</div>

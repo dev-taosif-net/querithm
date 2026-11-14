@@ -43,7 +43,7 @@ const combo = () => screen.getByRole("combobox", { name: "Server type" });
 const testBtn = () => screen.getByRole("button", { name: "Test connection" });
 const saveBtn = () => screen.getByRole("button", { name: "Save" });
 const status = () => screen.getByRole("status");
-const env = (name: string) => screen.getByRole("radio", { name: name === "Prod" ? "Prod (Production)" : name }) as HTMLInputElement;
+const env = (name: string) => screen.getByRole("button", { name: name === "Prod" ? "Prod (Production)" : name });
 const pickEnv = (name = "Dev") => userEvent.click(env(name));
 const optionNames = () => within(screen.getByRole("listbox", { name: "Server type" })).getAllByRole("option").map((o) => o.textContent);
 const chooseEngine = async (label: string) => {
@@ -91,8 +91,9 @@ describe("sign-in matrix: MySQL / MariaDB", () => {
     const method = document.querySelector('[id$="-auth"]')!;
     expect(method.tagName).toBe("SPAN");
     expect(method.textContent).toBe("Password");
-    // The "Sign in" label still names it.
-    expect(screen.getByText("Sign in").getAttribute("for")).toBe(method.id);
+    // The row is still labelled, under the Sign in heading.
+    expect(method.closest("section")!.querySelector("h3")!.textContent).toBe("Sign in");
+    expect(screen.getByText("Method")).toBeTruthy();
     expect((screen.getByLabelText("User name") as HTMLInputElement).value).toBe("root");
     expect((screen.getByLabelText("Port") as HTMLInputElement).placeholder).toBe("3306");
     expect((screen.getByLabelText("Port") as HTMLInputElement).value).toBe("");
@@ -128,7 +129,7 @@ describe("sign-in matrix: MySQL / MariaDB", () => {
     expect(t.profileId).toBeNull();
     expect(t.secret).toBe("pw");
     expect(t.sshSecret).toBeNull();
-    expect(t.profile).toMatchObject({ engine: "mySql", auth: "password", username: "root", host: "localhost", port: null, databaseDefault: null, tlsMode: "default" });
+    expect(t.profile).toMatchObject({ engine: "mySql", auth: "password", username: "root", host: null, port: null, databaseDefault: null, tlsMode: "default" });
     expect(t.profile.ssh ?? null).toBeNull();
     expect(t.profile.location ?? null).toBeNull();
     expect(t.profile.file ?? null).toBeNull();
@@ -143,7 +144,7 @@ describe("sign-in matrix: MySQL / MariaDB", () => {
     await userEvent.click(saveBtn());
     await waitFor(() => expect(saveSpy).toHaveBeenCalled());
     const [p, secret, ssh] = savedCall();
-    expect(p).toMatchObject({ id: "", engine: "mySql", auth: "password", username: "app", host: "localhost", port: null, environment: "test" });
+    expect(p).toMatchObject({ id: "", engine: "mySql", auth: "password", username: "app", host: null, port: null, environment: "test" });
     expect(secret).toBe("s3cret");
     expect(ssh).toBe("");
   });
@@ -227,9 +228,9 @@ describe.each<[Engine, string, string]>([
   it("chosen from the picker: a file location, nothing picked, and no server, sign-in, TLS or SSH fields", async () => {
     render(<ProfileEditor onClose={() => {}} />);
     await chooseEngine(label);
-    const where = screen.getByRole("radiogroup", { name: "Location" });
-    expect(within(where).getAllByRole("radio").map((r) => r.parentElement!.textContent)).toEqual(["Database file", "In-memory database"]);
-    expect((within(where).getByRole("radio", { name: "Database file" }) as HTMLInputElement).checked).toBe(true);
+    // The file comes first; in-memory is offered as the other choice.
+    expect(screen.getByRole("button", { name: "Pick file…" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Use an in-memory database instead" })).toBeTruthy();
     expect(screen.getByTestId("picked-file").textContent).toBe("No file picked");
     expect(screen.queryByText("Read-only")).toBeNull();
     expect(screen.queryByRole("button", { name: "Allow writes…" })).toBeNull();
@@ -305,7 +306,7 @@ describe.each<[Engine, string, string]>([
     await userEvent.click(saveBtn());
     expect(saveSpy).not.toHaveBeenCalled();
     expect(screen.getByRole("alert").textContent).toContain("Choose the environment");
-    expect(screen.getByRole("radiogroup", { name: "Environment" }).getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByRole("group", { name: "Environment" }).getAttribute("aria-invalid")).toBe("true");
     await pickEnv("Prod");
     await userEvent.click(saveBtn());
     await waitFor(() => expect(saveSpy).toHaveBeenCalled());
@@ -344,7 +345,7 @@ describe.each<[Engine, string, string]>([
 
   it("in-memory: says what it is, needs no file, and saves no file, host, user or secret", async () => {
     render(<ProfileEditor preset={engine} onClose={() => {}} />);
-    await userEvent.click(screen.getByRole("radio", { name: "In-memory database" }));
+    await userEvent.click(screen.getByRole("button", { name: "Use an in-memory database instead" }));
     expect(screen.getByText(/Each tab gets its own empty database/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Pick file…" })).toBeNull();
     expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(memoryName);

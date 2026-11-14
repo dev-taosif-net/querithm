@@ -173,11 +173,12 @@ describe("ResultsPanel with data", () => {
     const foot = screen.getByText(/Result set 1 · 3 rows · 3 columns/);
     expect(foot.getAttribute("title")).toBe("Arrow stream · 1 batch · 3 columns");
     expect(screen.getByPlaceholderText("Filter 3 rows…")).toBeTruthy();
-    // Copy is one split button; Export and Compare are menus.
+    // Copy is one split button; Export is a menu. No "Compare with…" button (owner, 2026-11-14): compare starts from a
+    // chip (Ctrl+click or its menu).
     expect(screen.getByRole("button", { name: "Copy" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Copy as" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Export" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Compare with…" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Compare with…" })).toBeNull();
     expect(container.querySelector(".text-faint")).toBeNull();
   });
 
@@ -301,17 +302,13 @@ describe("ResultsPanel with data", () => {
     expect(useTabs.getState().tabs.tab1.compare).toBeUndefined();
   });
 
-  it("compare from the menu lists the sets of every kept run; the chip menu (Shift+F10) offers it too", async () => {
+  it("compare starts from a chip's menu (Shift+F10)", async () => {
     useExecutions.setState({ views: { e0: view("e0"), e1: view("e1") } });
     registerExecution("e0", ordersSet(0));
     registerExecution("e1", ordersSet(0), second(false));
     render(<LivePanel />);
     useTabs.setState({ tabs: { tab1: tab({ executions: ["e0", "e1"] }) } });
     await screen.findByTestId("grid");
-    fireEvent.click(screen.getByRole("button", { name: "Compare with…" }));
-    expect(screen.getAllByRole("menuitemcheckbox").map((m) => m.textContent)).toEqual([expect.stringContaining("Run 1 · result set 1"), expect.stringContaining("This run · result set 2")]);
-    fireEvent.click(screen.getAllByRole("menuitemcheckbox")[0]);
-    expect(useTabs.getState().tabs.tab1.compare).toEqual({ executionId: "e0", resultIndex: 0 });
     fireEvent.keyDown(screen.getByRole("tab", { name: /Result set 2/ }), { key: "F10", shiftKey: true });
     fireEvent.click(menuItem(/Compare with the shown result set/));
     expect(useTabs.getState().tabs.tab1.compare).toEqual({ executionId: "e1", resultIndex: 1 });
@@ -432,7 +429,7 @@ describe("ResultsPanel with data", () => {
     setup();
     render(<ResultsPanel tab={tab()} />);
     await screen.findByTestId("grid");
-    expect(openRowPopups()).toEqual(expect.arrayContaining(["Filter columns: All columns", "Copy as", "Export", "Compare with…"]));
+    expect(openRowPopups()).toEqual(expect.arrayContaining(["Filter columns: All columns", "Copy as", "Export"]));
   });
 
   it("Copy copies the grid selection and asks for one when there is none; Copy as offers headers, IN and Markdown", async () => {

@@ -50,7 +50,7 @@ const hostBox = () => screen.getByLabelText("Host") as HTMLInputElement;
 const portBox = () => screen.getByLabelText("Port") as HTMLInputElement;
 const combo = () => screen.getByRole("combobox", { name: "Server type" });
 const saveBtn = () => screen.getByRole("button", { name: "Save" });
-const env = (name: string) => screen.getByRole("radio", { name: name === "Prod" ? "Prod (Production)" : name }) as HTMLInputElement;
+const env = (name: string) => screen.getByRole("button", { name: name === "Prod" ? "Prod (Production)" : name });
 const pickEnv = (name = "Dev") => userEvent.click(env(name));
 const openRow = async (title: RegExp) => {
   const row = screen.getByRole("button", { name: title });

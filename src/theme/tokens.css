@@ -242,6 +242,22 @@ select {
   .q-input:focus {
     border-color: var(--q-accent);
   }
+  /* Keyboard focus: the accent border plus a 1 px ring, 2 px in all, on every field (WCAG 2.4.7). */
+  .q-input:focus-visible {
+    box-shadow: 0 0 0 1px var(--q-accent);
+  }
+  /* A native select drawn like the other fields: one chevron, the same radius and padding in both themes. */
+  .q-select {
+    appearance: none;
+    padding-right: 28px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23768390' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+  }
+  .q-select option {
+    background: var(--q-panel);
+    color: var(--q-fg);
+  }
   .q-input::placeholder {
     color: var(--q-muted);
   }
@@ -1164,12 +1180,12 @@ select {
   visibility: hidden;
   animation: q-busy-reveal 0s 180ms forwards;
 }
-.q-busy-button-label { display: inline-grid; }
+.q-busy-button-label { display: inline-grid; justify-items: center; }
 .q-busy-button-label > span,
 .q-busy-button-label::before,
 .q-busy-button-label::after { grid-area: 1 / 1; }
 .q-busy-button-label::before { content: attr(data-label); visibility: hidden; }
-.q-busy-button-label::after { content: attr(data-busy-label); visibility: hidden; }
+.q-busy-button-label::after { content: attr(data-busy-label); visibility: hidden; padding-left: 19px; } /* spinner 13 px + gap 6 px */
 @keyframes q-busy-reveal {
   to { visibility: visible; }
 }

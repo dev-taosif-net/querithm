@@ -214,23 +214,6 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
     }
   };
 
-  const compareTargets = (): MenuEntry[] => {
-    const out: MenuEntry[] = [];
-    tab.executions.forEach((id, i) => {
-      for (const s of executionData.get(id)?.resultSets ?? []) {
-        if (id === executionId && s.index === rs?.index) continue;
-        const run = id === executionId ? "This run" : `Run ${i + 1}`;
-        out.push({
-          label: `${run} · result set ${s.index + 1}`, detail: rowsText(s.rowCount),
-          checked: tab.compare?.executionId === id && tab.compare?.resultIndex === s.index,
-          run: () => useTabs.getState().update(tab.id, { compare: { executionId: id, resultIndex: s.index } }),
-        });
-      }
-    });
-    if (tab.compare) out.push("sep", { label: "Stop comparing", run: () => useTabs.getState().update(tab.id, { compare: undefined }) });
-    return out.length ? out : [{ label: "Compare with…", unavailable: "Run a query that returns two result sets, or run this one again", run: () => {} }];
-  };
-
   const chipMenu = (k: string): MenuEntry[] => {
     const it = items.find((i) => i.key === k);
     if (!it) return [];
@@ -431,7 +414,6 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
       >
         {width === "narrow" ? undefined : chartOn ? "Export rows" : "Export"}
       </MenuButton>
-      {!chartOn && width !== "narrow" && <MenuButton label="Compare with…" title="Compare with another result set (Ctrl+click a chip)" icon="compare" items={compareTargets} />}
       {layoutTools}
     </>
   ) : multi ? layoutTools : undefined;

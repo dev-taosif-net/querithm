@@ -37,7 +37,8 @@ const FALLBACK = "May fall back to plain text";
 
 // What the sidecar builds for each (TlsMatrixTests): SqlClient Strict/Mandatory validate the certificate unless
 // TrustServerCertificate, and Strict validates even with it; Npgsql Require does not validate; MySqlConnector Required
-// does not validate. PostgreSQL's default (Require) is flagged as unchecked but shown muted: only Production asks about it.
+// does not validate. PostgreSQL's default (Require) is flagged as unchecked: shown in warning colour (owner, 2026-11-14) but
+// folded, and only Production asks about it.
 const ROWS: Row[] = [
   ["mssql", "default", false, CHECKED, "ok", null, false],
   ["mssql", "default", true, UNCHECKED, "warn", "unchecked", false],
@@ -78,13 +79,13 @@ const base = (id: string, engine: Engine, over: Partial<Profile> = {}): Profile 
 
 const saveSpy = vi.fn(async (p: Profile, ..._r: unknown[]) => p);
 const row = () => screen.getByRole("button", { name: /^Encryption/ });
-const summarySpan = () => row().lastElementChild as HTMLElement;
+const summarySpan = () => document.getElementById(row().getAttribute("aria-describedby")!) as HTMLElement;
 const modeBox = () => screen.getByLabelText("Encryption") as HTMLSelectElement;
 const trustBox = () => screen.queryByRole("checkbox", { name: /Trust server certificate/ }) as HTMLInputElement | null;
 const caBox = () => screen.queryByPlaceholderText("/etc/ssl/certs/root.crt") as HTMLInputElement | null;
 const ackBox = () => screen.queryByRole("checkbox", { name: /I accept that this Production connection/ });
 const saveBtn = () => screen.getByRole("button", { name: "Save" });
-const env = (name: string) => screen.getByRole("radio", { name: name === "Prod" ? "Prod (Production)" : name });
+const env = (name: string) => screen.getByRole("button", { name: name === "Prod" ? "Prod (Production)" : name });
 const openEnc = async () => {
   if (row().getAttribute("aria-expanded") !== "true") await userEvent.click(row());
 };
@@ -95,10 +96,12 @@ const setTransport = async (mode: TlsMode, trust: boolean) => {
   const t = trustBox();
   if (t && t.checked !== trust) await userEvent.click(t);
 };
+/** The row shows an unchecked certificate in warning colour even where transportSummary's own tone is muted (PG Require). */
 const expectSummary = (text: string, tone: Tone) => {
-  expect(row().textContent).toContain(tone === "warn" ? `⚠ ${text}` : text);
-  if (tone !== "warn") expect(row().textContent).not.toContain("⚠");
-  expect(summarySpan().className).toContain(tone === "warn" ? "text-warn" : tone === "ok" ? "text-ok" : "text-muted");
+  const shown = tone === "muted" && text.includes("certificate not checked") ? "warn" : tone;
+  expect(row().textContent).toContain(shown === "warn" ? `⚠ ${text}` : text);
+  if (shown !== "warn") expect(row().textContent).not.toContain("⚠");
+  expect(summarySpan().className).toContain(shown === "warn" ? "text-warn" : shown === "ok" ? "text-ok" : "text-muted");
 };
 const label = (r: Row) => `${r[0]} ${r[1]}${r[0] === "mssql" ? ` trust=${r[2]}` : ""}`;
 
@@ -344,7 +347,7 @@ describe("TLS matrix: import notes and file engines", () => {
     for (const location of ["file", "memory"] as const)
       for (const mode of ["disable", "optional", "prefer", "require"] as TlsMode[])
         expect(transportSummary({ engine, tlsMode: mode, trustCert: true, location })).toEqual({ text: "Not used for a database on this computer", tone: "muted", risk: null });
-    const memory = screen.queryByRole("radio", { name: /In-memory/ });
+    const memory = screen.queryByRole("button", { name: /in-memory database instead/ });
     if (memory) {
       await userEvent.click(memory);
       expect(screen.queryByRole("button", { name: /^Encryption/ })).toBeNull();

@@ -47,7 +47,7 @@ const dbBox = () => screen.getByLabelText("Database") as HTMLInputElement;
 const userBox = () => screen.queryByLabelText("User name") as HTMLInputElement | null;
 const secretBox = (auth: AuthKind) => screen.queryByLabelText(auth === "entraToken" ? "Access token" : "Password") as HTMLInputElement | null;
 const remember = () => screen.queryByLabelText("Remember password") as HTMLSelectElement | null;
-const pickEnv = () => userEvent.click(screen.getByRole("radio", { name: "Dev" }));
+const pickEnv = () => userEvent.click(screen.getByRole("button", { name: "Dev" }));
 const save = () => userEvent.click(screen.getByRole("button", { name: "Save" }));
 const test = () => userEvent.click(screen.getByRole("button", { name: "Test connection" }));
 const saved = () => saveSpy.mock.calls[0] as unknown as [Profile, string | null, string | null];
@@ -123,7 +123,7 @@ describe.each(METHODS)("PostgreSQL sign-in, new profile: $auth", ({ auth, secret
     await waitFor(() => expect(m.rpc).toHaveBeenCalledWith("profile.test", expect.anything()));
     const t = testCall();
     expect(t.profileId).toBeNull();
-    expect(t.profile).toMatchObject({ engine: "pg", auth, username: "postgres", host: "localhost", databaseDefault: "postgres" });
+    expect(t.profile).toMatchObject({ engine: "pg", auth, username: "postgres", host: null, databaseDefault: "postgres" });
     expect(t.secret ?? "").toBe(secret ?? "");
     expect(t.sshSecret).toBeNull();
     // The secret is never a profile field.

@@ -119,7 +119,7 @@ describe.each(KINDS)("SQL Server sign-in %s: a new profile", (auth) => {
     render(<ProfileEditor preset="mssql" onClose={onClose} />);
     await chooseAuth(auth);
     if (NEEDS[auth]) await userEvent.type(screen.getByLabelText(secretLabel(auth)), SECRET);
-    await userEvent.click(screen.getByRole("radio", { name: "Dev" }));
+    await userEvent.click(screen.getByRole("button", { name: "Dev" }));
     await userEvent.click(saveBtn());
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     const [p, secret, ssh] = lastSave();
@@ -136,7 +136,7 @@ describe.each(KINDS)("SQL Server sign-in %s: a new profile", (auth) => {
       await chooseAuth(auth);
       await userEvent.type(screen.getByLabelText(secretLabel(auth)), "x");
       await userEvent.clear(screen.getByLabelText(secretLabel(auth)));
-      await userEvent.click(screen.getByRole("radio", { name: "Dev" }));
+      await userEvent.click(screen.getByRole("button", { name: "Dev" }));
       await userEvent.click(saveBtn());
       await waitFor(() => expect(onClose).toHaveBeenCalled());
       // A new profile has nothing in the keyring: an emptied box stores nothing (null), not a delete ("").
@@ -151,7 +151,7 @@ describe("SQL Server sign-in: a secret typed for one method and then switched to
     render(<ProfileEditor preset="mssql" onClose={onClose} />);
     await userEvent.type(screen.getByLabelText("Password"), SECRET);
     await chooseAuth(to);
-    await userEvent.click(screen.getByRole("radio", { name: "Dev" }));
+    await userEvent.click(screen.getByRole("button", { name: "Dev" }));
     await userEvent.click(saveBtn());
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(lastSave()[1]).toBeNull();

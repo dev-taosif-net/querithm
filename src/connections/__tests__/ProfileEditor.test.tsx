@@ -51,7 +51,7 @@ const combo = () => screen.getByRole("combobox", { name: "Server type" });
 const testBtn = () => screen.getByRole("button", { name: "Test connection" });
 const saveBtn = () => screen.getByRole("button", { name: "Save" });
 const status = () => screen.getByRole("status");
-const env = (name: string) => screen.getByRole("radio", { name: name === "Prod" ? "Prod (Production)" : name }) as HTMLInputElement;
+const env = (name: string) => screen.getByRole("button", { name: name === "Prod" ? "Prod (Production)" : name });
 const pickEnv = (name = "Dev") => userEvent.click(env(name));
 const openRow = async (title: RegExp) => {
   const row = screen.getByRole("button", { name: title });
@@ -81,25 +81,27 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("ProfileEditor: a new profile preselects nothing", () => {
-  it("names no server type and no environment, and hides connection fields, environment, status and footer until a type is chosen", async () => {
+  it("names no server type and no environment, offers the engines as tiles, and hides the fields, Test and Save until a type is chosen", async () => {
     render(<ProfileEditor onClose={() => {}} />);
-    expect(screen.getByText("New connection profile")).toBeTruthy();
+    expect(screen.getByText("New connection")).toBeTruthy();
     expect(combo().textContent).toContain("Choose a server type…");
-    expect(screen.getByText("No environment")).toBeTruthy();
-    expect(screen.queryByRole("radiogroup", { name: "Environment" })).toBeNull();
+    // No environment pill until one is chosen.
+    expect(screen.queryByText("Dev")).toBeNull();
+    expect(screen.queryByRole("group", { name: "Environment" })).toBeNull();
     expect(screen.queryByLabelText("Host")).toBeNull();
     expect(screen.queryByLabelText("Name")).toBeNull();
-    expect(screen.getByText("Choose a server type first: its connection fields appear here.")).toBeTruthy();
+    expect(within(screen.getByRole("group", { name: "On a server" })).getAllByRole("button").map((b) => b.getAttribute("data-q-engine-tile"))).toEqual(["mssql", "pg"]);
+    expect(screen.getByRole("button", { name: /^Paste a connection string ?Server=/ })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Paste a connection string…" })).toBeNull();
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(status().textContent).toBe("Pick a server type to continue.");
     expect(screen.queryByText(/Not tested yet/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Test connection" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
 
     await chooseEngine("PostgreSQL");
     expect(screen.getByRole("button", { name: "Paste a connection string…" })).toBeTruthy();
-    expect(screen.getByRole("radiogroup", { name: "Environment" })).toBeTruthy();
+    expect(screen.getByRole("group", { name: "Environment" })).toBeTruthy();
     expect(status().textContent).toContain("Not tested yet. You can save without testing.");
     expect(testBtn()).toBeTruthy();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
@@ -120,17 +122,31 @@ describe("ProfileEditor: a new profile preselects nothing", () => {
     await waitFor(() => expect(document.activeElement).toBe(env("Local")));
   });
 
-  it("offers the most recently used server types as one-click shortcuts", async () => {
+  it("marks recently used server types on their tiles; a tile picks the type and moves focus to Host", async () => {
     useProfiles.setState({ profiles: [base("a", "mssql", { updatedAt: 1 }), base("b", "pg", { updatedAt: 5 }), base("c", "mssql", { updatedAt: 3 })] });
     render(<ProfileEditor onClose={() => {}} />);
-    const chips = screen.getByText("Recent:").parentElement!;
-    expect(within(chips).getAllByRole("button").map((b) => b.textContent)).toEqual(["PostgreSQL", "SQL Server"]);
-    await userEvent.click(within(chips).getByRole("button", { name: "PostgreSQL" }));
+    const tile = (e: string) => document.querySelector(`[data-q-engine-tile="${e}"]`) as HTMLButtonElement;
+    expect(tile("pg").textContent).toContain("· recent");
+    expect(tile("mssql").textContent).toContain("· recent");
+    await userEvent.click(tile("pg"));
     expect(combo().textContent).toContain("PostgreSQL");
-    expect(screen.getByLabelText("Host")).toBeTruthy();
-    expect(screen.queryByText("Recent:")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("Host")));
+    expect(document.querySelector("[data-q-engine-tile]")).toBeNull();
     // the first choice is not a switch: nothing to undo
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+  });
+
+  it("arrow keys move between the tiles without picking one; Enter picks", async () => {
+    m.engines = ALL();
+    render(<ProfileEditor onClose={() => {}} />);
+    const tile = (e: string) => document.querySelector(`[data-q-engine-tile="${e}"]`) as HTMLButtonElement;
+    await waitFor(() => expect(tile("sqlite")).toBeTruthy());
+    tile("mssql").focus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(document.activeElement).toBe(tile("pg"));
+    expect(combo().textContent).toContain("Choose a server type…");
+    await userEvent.keyboard("{Enter}");
+    expect(combo().textContent).toContain("PostgreSQL");
   });
 
   it.each<[Engine, string]>([["mssql", "Microsoft SQL Server"], ["pg", "PostgreSQL"], ["mySql", "MySQL / MariaDB"], ["sqlite", "SQLite"], ["duckDb", "DuckDB"]])(
@@ -139,10 +155,10 @@ describe("ProfileEditor: a new profile preselects nothing", () => {
       render(<ProfileEditor onClose={() => {}} />);
       await chooseEngine(label);
       expect(combo().textContent).toContain(label);
-      expect(screen.getAllByRole("radio", { name: /Local|Dev|Test|Staging|Prod/ }).filter((r) => (r as HTMLInputElement).checked)).toEqual([]);
+      expect(screen.getAllByRole("button", { name: /^(Local|Dev|Test|Staging|Prod \(Production\))$/ }).filter((r) => r.getAttribute("aria-pressed") === "true")).toEqual([]);
       await userEvent.click(saveBtn());
       expect(saveSpy).not.toHaveBeenCalled();
-      expect(screen.getByRole("radiogroup", { name: "Environment" }).getAttribute("aria-invalid")).toBe("true");
+      expect(screen.getByRole("group", { name: "Environment" }).getAttribute("aria-invalid")).toBe("true");
     },
   );
 
@@ -154,7 +170,7 @@ describe("ProfileEditor: a new profile preselects nothing", () => {
       await pickEnv("Test");
       expect((screen.getByLabelText("User name") as HTMLInputElement).value).toBe(user);
       expect((screen.getByLabelText("Database") as HTMLInputElement).value).toBe(db);
-      expect(env("Test").checked).toBe(true);
+      expect((env("Test").getAttribute("aria-pressed") === "true")).toBe(true);
     },
   );
 
@@ -162,7 +178,7 @@ describe("ProfileEditor: a new profile preselects nothing", () => {
     useProfiles.setState({ profiles: [base("a", "pg", { environment: "staging" })] });
     render(<ProfileEditor copyOf="a" onClose={() => {}} />);
     expect(combo().textContent).toContain("PostgreSQL");
-    expect(env("Staging").checked).toBe(true);
+    expect((env("Staging").getAttribute("aria-pressed") === "true")).toBe(true);
     expect(nameBox().value).toBe("Name-a (copy)");
   });
 
@@ -170,8 +186,8 @@ describe("ProfileEditor: a new profile preselects nothing", () => {
     render(<ProfileEditor onClose={() => {}} />);
     await chooseEngine("PostgreSQL");
     expect(screen.getByLabelText("Host").closest(".q-profile-reveal")).not.toBeNull();
-    expect(screen.getByRole("radiogroup", { name: "Environment" }).closest(".q-profile-reveal")).not.toBeNull();
-    expect(screen.getByRole("status").classList.contains("q-profile-reveal")).toBe(true);
+    expect(screen.getByRole("group", { name: "Environment" }).closest(".q-profile-reveal")).not.toBeNull();
+    expect(testBtn().classList.contains("q-profile-reveal")).toBe(true);
     expect(saveBtn().classList.contains("q-profile-reveal")).toBe(true);
   });
 });
@@ -193,7 +209,7 @@ describe.each<[Engine, string, string, string, string]>([
     expect(portBox().placeholder).toBe(port);
     expect((screen.getByLabelText("Database") as HTMLInputElement).placeholder).toBe(dbPlaceholder);
     expect(screen.queryByText("Delete")).toBeNull();
-    expect(screen.getByText("No environment")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: /^(Local|Dev|Test|Staging|Prod \(Production\))$/ }).filter((b) => b.getAttribute("aria-pressed") === "true")).toEqual([]);
     if (engine === "mySql") {
       expect(screen.queryByRole("combobox", { name: "Sign in" })).toBeNull();
       expect(document.querySelector('[id$="-auth"]')!.textContent).toBe("Password");
@@ -297,10 +313,14 @@ describe.each<[Engine, string, string, string, string]>([
     render(<ProfileEditor preset={engine} onClose={() => {}} />);
     const pw = () => screen.getByLabelText("Password") as HTMLInputElement;
     expect(pw().type).toBe("password");
-    await userEvent.click(screen.getByLabelText("Show password"));
+    const eye = screen.getByRole("button", { name: "Show password" });
+    await userEvent.click(eye);
     expect(pw().type).toBe("text");
-    await userEvent.click(screen.getByLabelText("Hide password"));
+    // One fixed name; the pressed state says it is shown.
+    expect(eye.getAttribute("aria-pressed")).toBe("true");
+    await userEvent.click(screen.getByRole("button", { name: "Show password" }));
     expect(pw().type).toBe("password");
+    expect(eye.getAttribute("aria-pressed")).toBe("false");
   });
 
   it("the folded Encryption row says what the default does", () => {
@@ -372,10 +392,12 @@ describe("ProfileEditor encryption per engine", () => {
     await userEvent.click(screen.getByRole("checkbox", { name: /Trust server certificate/ }));
     expect(screen.getByRole("button", { name: /^Encryption/ }).textContent).toContain("⚠ Encrypted · certificate not checked");
     expect(screen.getByText(/server certificate is not validated/)).toBeTruthy();
-    await openRow(/^Timeouts/);
+    // Failover and read-only intent live under Availability, not Timeouts.
+    await openRow(/^Availability/);
     await userEvent.click(screen.getByRole("checkbox", { name: /Multi-subnet failover/ }));
     await userEvent.click(screen.getByRole("checkbox", { name: /Read-only intent/ }));
-    expect(screen.getByRole("button", { name: /^Timeouts/ }).textContent).toContain("multi-subnet failover · read-only intent");
+    expect(screen.getByRole("button", { name: /^Availability/ }).textContent).toContain("Read-only intent · multi-subnet failover");
+    expect(screen.getByRole("button", { name: /^Timeouts/ }).textContent).not.toContain("failover");
     await userEvent.click(saveBtn());
     await waitFor(() => expect(saveSpy).toHaveBeenCalled());
     const p = saveSpy.mock.calls[0][0] as Profile;
@@ -394,6 +416,7 @@ describe("ProfileEditor encryption per engine", () => {
     expect(screen.getByRole("button", { name: /^Encryption/ }).textContent).toContain("Encrypted · certificate checked");
     await userEvent.type(screen.getByPlaceholderText("/etc/ssl/certs/root.crt"), "/ca.pem");
     await openRow(/^Timeouts/);
+    expect(screen.queryByRole("button", { name: /^Availability/ })).toBeNull();
     expect(screen.queryByRole("checkbox", { name: /Multi-subnet failover/ })).toBeNull();
     await userEvent.click(saveBtn());
     await waitFor(() => expect(saveSpy).toHaveBeenCalled());
@@ -424,7 +447,7 @@ describe("ProfileEditor Production safety", () => {
   it("choosing Prod paints the dialog and says what Prod does", async () => {
     render(<ProfileEditor preset="pg" onClose={() => {}} />);
     await pickEnv("Prod");
-    expect(env("Prod").checked).toBe(true);
+    expect((env("Prod").getAttribute("aria-pressed") === "true")).toBe(true);
     expect(screen.getByText(/tabs and the status bar are painted/)).toBeTruthy();
     expect(screen.queryByText("No environment")).toBeNull();
   });
@@ -454,7 +477,8 @@ describe("ProfileEditor Production safety", () => {
     render(<ProfileEditor preset="pg" onClose={() => {}} />);
     await pickEnv("Dev");
     expect(screen.getByRole("button", { name: /^Encryption/ }).getAttribute("aria-expanded")).toBe("false");
-    expect(screen.getByRole("button", { name: /^Encryption/ }).textContent).not.toContain("⚠");
+    // Shown in warning colour on every environment, but it opens and asks only on Prod.
+    expect(screen.getByRole("button", { name: /^Encryption/ }).textContent).toContain("⚠");
     await pickEnv("Prod");
     await waitFor(() => expect(screen.getByRole("button", { name: /^Encryption/ }).getAttribute("aria-expanded")).toBe("true"));
     expect(screen.getByRole("button", { name: /^Encryption/ }).textContent).toContain("⚠");
@@ -499,12 +523,12 @@ describe("ProfileEditor Production safety", () => {
     await userEvent.clear(hostBox());
     await userEvent.type(hostBox(), "db-prod-01.corp");
     expect(screen.getByText(/contains “prod”. Is this Production/)).toBeTruthy();
-    expect(screen.getAllByRole("radio").filter((r) => (r as HTMLInputElement).checked && /Local|Dev|Test|Staging|Prod/.test(r.getAttribute("aria-label") ?? ""))).toEqual([]);
+    expect(screen.getAllByRole("button", { name: /^(Local|Dev|Test|Staging|Prod \(Production\))$/ }).filter((r) => r.getAttribute("aria-pressed") === "true")).toEqual([]);
     await userEvent.click(screen.getByRole("button", { name: "It isn’t" }));
     expect(screen.queryByText(/Is this Production/)).toBeNull();
     await userEvent.type(hostBox(), "2");
     await userEvent.click(screen.getByRole("button", { name: "Mark as Production" }));
-    expect(env("Prod").checked).toBe(true);
+    expect((env("Prod").getAttribute("aria-pressed") === "true")).toBe(true);
     expect(screen.queryByText(/Is this Production/)).toBeNull();
   });
 
@@ -512,13 +536,13 @@ describe("ProfileEditor Production safety", () => {
     useProfiles.setState({ profiles: [base("a", "pg", { environment: "prod" })] });
     render(<ProfileEditor profileId="a" onClose={() => {}} />);
     await pickEnv("Dev");
-    expect(env("Prod").checked).toBe(true);
+    expect((env("Prod").getAttribute("aria-pressed") === "true")).toBe(true);
     expect(screen.getByText(/Lower this profile from Production to Dev/)).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "Keep Production" }));
-    expect(env("Prod").checked).toBe(true);
+    expect((env("Prod").getAttribute("aria-pressed") === "true")).toBe(true);
     await pickEnv("Staging");
     await userEvent.click(screen.getByRole("button", { name: "Lower it" }));
-    expect(env("Staging").checked).toBe(true);
+    expect((env("Staging").getAttribute("aria-pressed") === "true")).toBe(true);
     await userEvent.click(saveBtn());
     await waitFor(() => expect(saveSpy).toHaveBeenCalledWith(expect.objectContaining({ environment: "staging" }), null, ""));
   });
@@ -531,12 +555,12 @@ describe("ProfileEditor groups and environment", () => {
     live();
     render(<ProfileEditor preset="pg" onClose={() => {}} />);
     await userEvent.type(screen.getByLabelText("Group"), "Live");
-    expect(env("Prod").checked).toBe(true);
+    expect((env("Prod").getAttribute("aria-pressed") === "true")).toBe(true);
     expect(screen.getByText(/Set from group “Live”/)).toBeTruthy();
     // another group may replace what a group filled
     await userEvent.clear(screen.getByLabelText("Group"));
     await userEvent.type(screen.getByLabelText("Group"), "Lab");
-    expect(env("Test").checked).toBe(true);
+    expect((env("Test").getAttribute("aria-pressed") === "true")).toBe(true);
   });
 
   it("never overwrites an environment the user chose (regression: a Prod choice became the group's)", async () => {
@@ -544,7 +568,7 @@ describe("ProfileEditor groups and environment", () => {
     render(<ProfileEditor preset="pg" onClose={() => {}} />);
     await pickEnv("Dev");
     await userEvent.type(screen.getByLabelText("Group"), "Live");
-    expect(env("Dev").checked).toBe(true);
+    expect((env("Dev").getAttribute("aria-pressed") === "true")).toBe(true);
     expect(screen.queryByText(/Set from group/)).toBeNull();
   });
 
@@ -553,26 +577,47 @@ describe("ProfileEditor groups and environment", () => {
     useProfiles.setState({ profiles: [base("a", "pg", { environment: "dev" })] });
     render(<ProfileEditor profileId="a" onClose={() => {}} />);
     await userEvent.type(screen.getByLabelText("Group"), "Live");
-    expect(env("Dev").checked).toBe(true);
+    expect((env("Dev").getAttribute("aria-pressed") === "true")).toBe(true);
   });
 });
 
 describe("ProfileEditor switching the server type", () => {
-  it("resets sign-in and TLS, keeps the user, moves a default port along, and can be undone", async () => {
+  it("resets sign-in and TLS, gives an untouched default user the new engine's, moves a default port along, and can be undone", async () => {
     render(<ProfileEditor preset="mssql" onClose={() => {}} />);
     await userEvent.type(portBox(), "1433");
     await userEvent.click(combo());
     await userEvent.click(within(screen.getByRole("listbox")).getByText("PostgreSQL"));
     expect(combo().textContent).toContain("PostgreSQL");
-    expect((screen.getByLabelText("User name") as HTMLInputElement).value).toBe("sa");
+    // "sa" was SQL Server's default, never typed: it is not carried over as if it were the user's.
+    expect((screen.getByLabelText("User name") as HTMLInputElement).value).toBe("postgres");
     expect((screen.getByLabelText("Sign in") as HTMLSelectElement).value).toBe("password");
     expect(portBox().value).toBe("");
     expect(portBox().placeholder).toBe("5432");
-    expect(screen.getByText(/Switched to PostgreSQL: sign-in is Password \/ SCRAM; your host, user and database were kept/)).toBeTruthy();
+    expect(screen.getByText("Switched to PostgreSQL: sign-in is Password / SCRAM; user is postgres.")).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "Undo" }));
     expect(combo().textContent).toContain("Microsoft SQL Server");
     expect(portBox().value).toBe("1433");
-    expect((screen.getByLabelText("Sign in") as HTMLSelectElement).value).toBe("sql");
+    expect((screen.getByLabelText("User name") as HTMLInputElement).value).toBe("sa");
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  it("keeps a typed user and database across a switch and says so; untouched defaults follow the new engine (regression)", async () => {
+    render(<ProfileEditor preset="pg" onClose={() => {}} />);
+    expect((screen.getByLabelText("User name") as HTMLInputElement).value).toBe("postgres");
+    await userEvent.click(combo());
+    await userEvent.click(within(screen.getByRole("listbox")).getByText("Microsoft SQL Server"));
+    // PostgreSQL's defaults were never typed: SQL Server's take their place.
+    expect((screen.getByLabelText("User name") as HTMLInputElement).value).toBe("sa");
+    expect((screen.getByLabelText("Database") as HTMLInputElement).value).not.toBe("postgres");
+    await userEvent.clear(screen.getByLabelText("User name"));
+    await userEvent.type(screen.getByLabelText("User name"), "app_rw");
+    await userEvent.clear(screen.getByLabelText("Database"));
+    await userEvent.type(screen.getByLabelText("Database"), "billing");
+    await userEvent.click(combo());
+    await userEvent.click(within(screen.getByRole("listbox")).getByText("PostgreSQL"));
+    expect((screen.getByLabelText("User name") as HTMLInputElement).value).toBe("app_rw");
+    expect((screen.getByLabelText("Database") as HTMLInputElement).value).toBe("billing");
+    expect(screen.getByText(/your user and database were kept\./)).toBeTruthy();
   });
 
   it("a CA file chosen for one engine does not follow the profile to another", async () => {
@@ -656,8 +701,8 @@ describe("ProfileEditor server-type picker", () => {
     render(<ProfileEditor onClose={() => {}} />);
     await userEvent.click(combo());
     await waitFor(() => expect(optionNames()).toEqual(["Microsoft SQL Server", "PostgreSQL", "MySQL / MariaDB", "SQLite", "DuckDB"]));
-    expect(screen.getByText("On a server")).toBeTruthy();
-    expect(screen.getByText("File on this computer")).toBeTruthy();
+    expect(within(screen.getByRole("listbox")).getByRole("group", { name: "On a server" })).toBeTruthy();
+    expect(within(screen.getByRole("listbox")).getByRole("group", { name: "File on this computer" })).toBeTruthy();
     const search = screen.getByRole("combobox", { name: "Search server types" });
     await userEvent.type(search, "maria");
     expect(optionNames()).toEqual(["MySQL / MariaDB"]);
@@ -730,7 +775,7 @@ describe.each<Engine>(["mssql", "pg"])("ProfileEditor editing an existing %s pro
     expect(screen.getByText("Edit profile — Name-a")).toBeTruthy();
     expect(screen.getByText("Saved in the OS keyring")).toBeTruthy();
     expect(screen.queryByLabelText("Password")).toBeNull();
-    expect(env("Dev").checked).toBe(true);
+    expect((env("Dev").getAttribute("aria-pressed") === "true")).toBe(true);
   });
 
   it("saves without touching the keyring when no new password was typed", async () => {
@@ -987,7 +1032,9 @@ describe("ProfileEditor SSH tunnel", () => {
     await userEvent.type(screen.getByPlaceholderText("/home/me/.ssh/id_ed25519"), "/k");
     const port = screen.getByLabelText("SSH port") as HTMLInputElement;
     await userEvent.clear(port);
-    expect(port.value).toBe("22");
+    // An emptied number is a draft: flagged, never stored (it used to snap back to 22 or save as 0).
+    expect(port.getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByRole("button", { name: /^SSH tunnel/ }).textContent).toContain("Through jump.example.com");
     await userEvent.type(port, "2200");
     await userEvent.click(screen.getByRole("checkbox", { name: /Connect through an SSH bastion/ }));
     expect(screen.queryByPlaceholderText("bastion.example.com")).toBeNull();
@@ -998,17 +1045,17 @@ describe("ProfileEditor SSH tunnel", () => {
     await enable();
     const sel = screen.getByDisplayValue("Key file") as HTMLSelectElement;
     expect([...sel.options].map((o) => o.value)).toEqual(["privateKey", "password"]);
-    expect(screen.getByText("Passphrase", { selector: "span" })).toBeTruthy();
+    expect(screen.getByText("Passphrase", { selector: "label" })).toBeTruthy();
     await userEvent.selectOptions(sel, "password");
     expect(screen.queryByPlaceholderText("/home/me/.ssh/id_ed25519")).toBeNull();
-    expect(screen.getByText("Password", { selector: "label span" })).toBeTruthy();
+    expect(screen.getAllByText("Password", { selector: "label" })).toHaveLength(2); // the database's and the tunnel's
   });
 
   it("a profile that already uses the agent keeps it listed, with the warning", () => {
     useProfiles.setState({ profiles: [base("a", "pg", { ssh: { host: "b", port: 22, username: "u", auth: "agent", keyPath: null } })] });
     render(<ProfileEditor profileId="a" onClose={() => {}} />);
     expect(screen.getByText(/SSH agent sign-in is not supported yet/)).toBeTruthy();
-    expect(screen.queryByText("Passphrase", { selector: "span" })).toBeNull();
+    expect(screen.queryByText("Passphrase", { selector: "label" })).toBeNull();
   });
 
   it("Browse is offered only inside Tauri and fills in the chosen key path", async () => {
@@ -1032,7 +1079,7 @@ describe("ProfileEditor SSH tunnel", () => {
     await pickEnv();
     await enable();
     await fillTunnel();
-    const secret = screen.getByText("Passphrase", { selector: "span" }).closest("label")!.querySelector("input")!;
+    const secret = (screen.getByLabelText("Passphrase") as HTMLInputElement);
     await userEvent.type(secret, "phrase");
     await userEvent.click(saveBtn());
     await waitFor(() => expect(saveSpy).toHaveBeenCalled());
@@ -1185,7 +1232,7 @@ describe.each<[Engine, string]>([
     m.rpc.mockResolvedValue(result());
     render(<ProfileEditor preset={engine} onClose={() => {}} />);
     paste(hostBox(), cs);
-    expect(hostBox().value).toBe("localhost");
+    expect(hostBox().value).toBe("");
     expect(screen.getByText(/That looks like a connection string/)).toBeTruthy();
     expect(box().value).toBe(cs);
     expect(m.rpc).not.toHaveBeenCalledWith("profile.parseConnectionString", expect.anything());
@@ -1252,7 +1299,7 @@ describe("ProfileEditor timeouts and closing", () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByText("Discard your changes to this profile?")).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "Keep editing" }));
-    expect(hostBox().value).toBe("localhostx");
+    expect(hostBox().value).toBe("x");
     fireEvent.keyDown(hostBox(), { key: "Escape" });
     expect(screen.getByText("Discard your changes to this profile?")).toBeTruthy();
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
@@ -1273,8 +1320,8 @@ describe.each<[Engine, string]>([["sqlite", "SQLite"], ["duckDb", "DuckDB"]])("P
     render(<ProfileEditor onClose={() => {}} />);
     await chooseEngine(label);
     expect(combo().textContent).toContain("File on this computer");
-    expect((screen.getByRole("radio", { name: "Database file" }) as HTMLInputElement).checked).toBe(true);
-    expect(screen.getByRole("radio", { name: "In-memory database" })).toBeTruthy();
+    expect(screen.getByTestId("picked-file").textContent).toBe("No file picked");
+    expect(screen.getByRole("button", { name: "Use an in-memory database instead" })).toBeTruthy();
     expect(screen.queryByLabelText("Host")).toBeNull();
     expect(screen.queryByText("Sign in")).toBeNull();
     expect(screen.queryByRole("button", { name: /^Encryption/ })).toBeNull();
@@ -1313,7 +1360,8 @@ describe.each<[Engine, string]>([["sqlite", "SQLite"], ["duckDb", "DuckDB"]])("P
     await userEvent.click(saveBtn());
     expect(saveSpy).not.toHaveBeenCalled();
     const pick = screen.getByRole("button", { name: "Pick file…" });
-    expect(document.getElementById(pick.getAttribute("aria-describedby")!)!.textContent).toBe("Pick the database file first.");
+    // The button is described by the picked file's line and, after Save, by the message.
+    expect(pick.getAttribute("aria-describedby")!.split(" ").map((id) => document.getElementById(id)!.textContent)).toEqual(["No file picked", "Pick the database file first."]);
     expect(screen.getByRole("alert").textContent).toContain("Pick the database file first.");
     // the name comes from the file: no second message for it
     expect(screen.getByRole("alert").textContent).not.toContain("Give the profile a name.");
@@ -1330,16 +1378,30 @@ describe.each<[Engine, string]>([["sqlite", "SQLite"], ["duckDb", "DuckDB"]])("P
     await userEvent.click(screen.getByRole("button", { name: "Pick file…" }));
     await userEvent.click(screen.getByRole("button", { name: "Allow writes…" }));
     expect(screen.getByText("Writes allowed")).toBeTruthy();
-    await userEvent.click(screen.getByRole("radio", { name: "In-memory database" }));
-    await userEvent.click(screen.getByRole("radio", { name: "Database file" }));
+    await userEvent.click(screen.getByRole("button", { name: "Use an in-memory database instead" }));
+    await userEvent.click(screen.getByRole("button", { name: "Use a database file instead" }));
     expect(screen.getByTestId("picked-file").textContent).toBe("No file picked");
     expect(screen.queryByText("Writes allowed")).toBeNull();
+  });
+
+  it("Undo after a switch to the other file engine brings back the file and its access (regression)", async () => {
+    render(<ProfileEditor onClose={() => {}} />);
+    await chooseEngine(label);
+    await userEvent.click(screen.getByRole("button", { name: "Pick file…" }));
+    await userEvent.click(screen.getByRole("button", { name: "Allow writes…" }));
+    expect(screen.getByText("Writes allowed")).toBeTruthy();
+    await userEvent.click(combo());
+    await userEvent.click(within(screen.getByRole("listbox")).getByText(label === "SQLite" ? "DuckDB" : "SQLite"));
+    expect(screen.queryByText("Writes allowed")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(combo().textContent).toContain(label);
+    expect(screen.getByText("Writes allowed")).toBeTruthy();
   });
 
   it("an in-memory database needs no file and says each tab gets its own", async () => {
     render(<ProfileEditor onClose={() => {}} />);
     await chooseEngine(label);
-    await userEvent.click(screen.getByRole("radio", { name: "In-memory database" }));
+    await userEvent.click(screen.getByRole("button", { name: "Use an in-memory database instead" }));
     expect(screen.getByText(/Each tab gets its own empty database/)).toBeTruthy();
     expect(nameBox().value).toBe(`${label} (in-memory)`);
     await pickEnv("Local");
@@ -1363,11 +1425,12 @@ describe.each<[Engine, string]>([["sqlite", "SQLite"], ["duckDb", "DuckDB"]])("P
     await chooseEngine(label);
     await userEvent.click(screen.getByRole("button", { name: "Pick file…" }));
     await chooseEngine("PostgreSQL");
-    expect(hostBox().value).toBe("localhost");
+    expect(hostBox().value).toBe("");
+    expect(hostBox().placeholder).toBe("localhost");
     expect((screen.getByLabelText("User name") as HTMLInputElement).value).toBe("postgres");
     await pickEnv();
     await userEvent.click(saveBtn());
-    expect(saveSpy).toHaveBeenCalledWith(expect.objectContaining({ engine: "pg", location: null, file: null, host: "localhost", auth: "password", databaseDefault: "postgres" }), null, "");
+    expect(saveSpy).toHaveBeenCalledWith(expect.objectContaining({ engine: "pg", location: null, file: null, host: null, auth: "password", databaseDefault: "postgres" }), null, "");
   });
 
   it("a duplicate of a file profile drops the file grant (one grant binds one profile)", () => {
@@ -1376,7 +1439,7 @@ describe.each<[Engine, string]>([["sqlite", "SQLite"], ["duckDb", "DuckDB"]])("P
       groups: [], save: saveSpy as never,
     });
     render(<ProfileEditor copyOf="f1" onClose={() => {}} />);
-    expect(screen.getByText("New connection profile")).toBeTruthy();
+    expect(screen.getByText("New connection")).toBeTruthy();
     expect(nameBox().value).toBe("Sales file (copy)");
     expect(screen.getByTestId("picked-file").textContent).toBe("No file picked");
   });
@@ -1394,9 +1457,10 @@ describe.each<[Engine, string]>([["mssql", "1433"], ["pg", "5432"], ["mySql", "3
     m.engines = [info("mssql", true), info("pg", true), info("mySql", true)];
   });
 
-  it("labels Host and Port", () => {
+  it("labels Host and Port; Host starts empty with localhost as its placeholder (regression)", () => {
     render(<ProfileEditor preset={engine} onClose={() => {}} />);
-    expect(hostBox().value).toBe("localhost");
+    expect(hostBox().value).toBe("");
+    expect(hostBox().placeholder).toBe("localhost");
     expect(portBox().placeholder).toBe(dflt);
     expect(portBox().getAttribute("aria-invalid")).toBeNull();
   });
@@ -1532,5 +1596,58 @@ describe("withDefaultHost (W9)", () => {
       expect(profileFieldErrors({ ...local, file: null } as unknown as Profile).file).toBe("Pick the database file first.");
     }
     expect(profileFieldErrors({ engine: "pg", host: null, name: "x" } as unknown as Profile)).toEqual({});
+  });
+});
+
+describe("ProfileEditor redesign regressions (2026-11-14)", () => {
+  it("an emptied connect timeout is never saved as 0 (no connect limit); the last valid value is kept", async () => {
+    render(<ProfileEditor preset="pg" onClose={() => {}} />);
+    await pickEnv("Dev");
+    await userEvent.click(screen.getByRole("button", { name: /^Timeouts/ }));
+    const box = screen.getByLabelText("Connect timeout") as HTMLInputElement;
+    await userEvent.clear(box);
+    expect(box.getAttribute("aria-invalid")).toBe("true");
+    await userEvent.click(saveBtn());
+    await waitFor(() => expect(saveSpy).toHaveBeenCalled());
+    const saved = saveSpy.mock.calls[0][0] as Profile;
+    expect(saved.timeoutS).toBe(15);
+    expect(saved.commandTimeoutS).toBe(0);
+  });
+
+  it("arrow keys move focus between the environments but never choose one (no Prod by accident)", async () => {
+    render(<ProfileEditor preset="pg" onClose={() => {}} />);
+    env("Local").focus();
+    await userEvent.keyboard("{ArrowLeft}{End}");
+    expect(document.activeElement).toBe(env("Prod"));
+    expect(env("Prod").getAttribute("aria-pressed")).toBe("false");
+    expect(screen.queryByText(/tabs and the status bar are painted/)).toBeNull();
+    await userEvent.keyboard("{Enter}");
+    expect(env("Prod").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("a row's hint describes its field but is not part of the field's name", async () => {
+    render(<ProfileEditor preset="pg" onClose={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: /^SSH tunnel/ }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /Connect through an SSH bastion/ }));
+    const bastion = screen.getByRole("textbox", { name: "Bastion" });
+    expect(document.getElementById(bastion.getAttribute("aria-describedby")!)!.textContent).toContain("Host above is the address as the bastion sees it");
+  });
+
+  it("a folded row's button is named by its title only; its state is the description, and it controls a panel only while open", async () => {
+    render(<ProfileEditor preset="pg" onClose={() => {}} />);
+    const row = screen.getByRole("button", { name: "Timeouts" });
+    expect(row.getAttribute("aria-controls")).toBeNull();
+    expect(document.getElementById(row.getAttribute("aria-describedby")!)!.textContent).toBe("Connect 15 s · queries no limit");
+    await userEvent.click(row);
+    expect(document.getElementById(row.getAttribute("aria-controls")!)).not.toBeNull();
+  });
+
+  it("the footer keeps one status region: what Save waits for replaces it, and a test result shows there", async () => {
+    render(<ProfileEditor preset="pg" onClose={() => {}} />);
+    expect(status().textContent).toBe("Not tested yet. You can save without testing.");
+    await userEvent.click(saveBtn());
+    expect(screen.getByRole("alert").textContent).toContain("1 thing needs attention: Choose the environment");
+    // Said in the footer only: the alert sits inside the footer's status line, not above the form.
+    expect(screen.getByRole("alert").closest("[role=status]")).not.toBeNull();
   });
 });

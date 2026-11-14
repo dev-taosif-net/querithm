@@ -25,14 +25,14 @@ export function LoadingStatus({ label, startedAt }: { label: string; startedAt?:
   );
 }
 
-/** Both labels contribute to width, so an in-flight action cannot shift its neighbours. */
+/**
+ * Both labels contribute to width (the busy one with its spinner), so an in-flight action cannot shift its neighbours,
+ * and an idle label is centred with no empty spinner slot beside it.
+ */
 export function BusyButtonContent({ busy, label, busyLabel }: { busy: boolean; label: string; busyLabel: string }) {
   return (
-    <span className="inline-flex items-center justify-center gap-1.5">
-      <span className="inline-flex w-[13px] shrink-0">{busy && <BusySpinner />}</span>
-      <span className="q-busy-button-label" data-label={label} data-busy-label={busyLabel}>
-        <span>{busy ? busyLabel : label}</span>
-      </span>
+    <span className="q-busy-button-label" data-label={label} data-busy-label={busyLabel}>
+      <span className="inline-flex items-center gap-1.5">{busy && <BusySpinner />}{busy ? busyLabel : label}</span>
     </span>
   );
 }

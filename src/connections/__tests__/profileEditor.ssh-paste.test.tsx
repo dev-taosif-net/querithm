@@ -51,7 +51,7 @@ const hostBox = () => screen.getByLabelText("Host") as HTMLInputElement;
 const testBtn = () => screen.getByRole("button", { name: "Test connection" });
 const saveBtn = () => screen.getByRole("button", { name: "Save" });
 const status = () => screen.getByRole("status");
-const pickEnv = () => userEvent.click(screen.getByRole("radio", { name: "Dev" }));
+const pickEnv = () => userEvent.click(screen.getByRole("button", { name: "Dev" }));
 const sshRow = () => screen.getByRole("button", { name: /^SSH tunnel/ });
 const enableSsh = async () => {
   if (sshRow().getAttribute("aria-expanded") !== "true") await userEvent.click(sshRow());
@@ -65,8 +65,8 @@ const fillTunnel = async (host = "jump.example.test", user = "ops") => {
 const sshAuth = () => screen.getByRole("combobox", { name: /Sign in with/ }) as HTMLSelectElement;
 /** The SSH password / passphrase box (its Row label names it). */
 const sshSecretBox = () => {
-  const label = screen.queryByText("Passphrase", { selector: "span" }) ?? screen.getAllByText("Password", { selector: "label span" })[0];
-  return label.closest("label")!.querySelector("input")! as HTMLInputElement;
+  // The tunnel's box comes after the database password, so it is the last "Password".
+  return (screen.queryByLabelText("Passphrase") ?? screen.getAllByLabelText("Password").at(-1)!) as HTMLInputElement;
 };
 const paste = (el: HTMLElement, text: string) => fireEvent.paste(el, { clipboardData: { getData: () => text } });
 const lastDialog = () => useUi.getState().dialogs.at(-1) as unknown as { kind: string; hostKey: unknown; resolve: (v: boolean) => void };
@@ -194,8 +194,9 @@ describe.each(SERVER)("SSH tunnel sign-in (%s)", (engine) => {
     render(<ProfileEditor preset={engine} onClose={() => {}} />);
     await enableSsh();
     expect(screen.getByText(/Host above is the address as the bastion sees it/)).toBeTruthy();
-    // The editor never rewrites Host for the tunnel: localhost stays localhost (the bastion's own loopback).
-    expect(hostBox().value).toBe("localhost");
+    // The editor never rewrites Host for the tunnel: an empty Host stays empty (localhost: the bastion's own loopback).
+    expect(hostBox().value).toBe("");
+    expect(hostBox().placeholder).toBe("localhost");
   });
 
   it("a profile that uses the agent keeps it listed with a warning, asks for no secret, and clears the SSH slot on Save", async () => {
@@ -204,7 +205,7 @@ describe.each(SERVER)("SSH tunnel sign-in (%s)", (engine) => {
     expect([...sshAuth().options].map((o) => o.value)).toEqual(["privateKey", "password", "agent"]);
     expect(sshAuth().value).toBe("agent");
     expect(screen.getByText(/SSH agent sign-in is not supported yet/).className).toContain("text-warn");
-    expect(screen.queryByText("Passphrase", { selector: "span" })).toBeNull();
+    expect(screen.queryByText("Passphrase", { selector: "label" })).toBeNull();
     await userEvent.click(saveBtn());
     await waitFor(() => expect(saveSpy).toHaveBeenCalled());
     expect(saved()[2]).toBe("");
@@ -502,7 +503,7 @@ describe.each(SERVER)("connection-string paste (%s)", (engine) => {
     paste(box(), "Server=h;Password='unterminated");
     await waitFor(() => expect(status().textContent).toContain("Not a valid connection string"));
     expect(box().value).toBe("Server=h;Password='unterminated");
-    expect(hostBox().value).toBe("localhost");
+    expect(hostBox().value).toBe("");
     expect(screen.queryByText(/Read as/)).toBeNull();
   });
 
@@ -545,12 +546,12 @@ describe.each(SERVER)("connection-string paste (%s)", (engine) => {
     m.rpc.mockResolvedValue(result());
     render(<ProfileEditor preset={engine} onClose={() => {}} />);
     paste(hostBox(), cs);
-    expect(hostBox().value).toBe("localhost");
+    expect(hostBox().value).toBe("");
     expect(box().type).toBe("password");
     expect(box().value).toBe(cs);
     expect(screen.getByText(/so it went here instead of into Host/)).toBeTruthy();
     expect(parseCalls()).toHaveLength(0);
-    expect(hostBox().getAttribute("value")).toBe("localhost");
+    expect(hostBox().getAttribute("value")).toBe("");
     await userEvent.click(screen.getByRole("button", { name: "Fill fields" }));
     await waitFor(() => expect(hostBox().value).toBe("parsed.example.test"));
     expect(screen.queryByText(/so it went here instead of into Host/)).toBeNull();

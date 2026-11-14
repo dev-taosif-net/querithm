@@ -27,7 +27,7 @@ export function PasswordRetention({ profile, onChange, compact = false }: { prof
       else onChange({ passwordRetentionMinutes: Number(v) });
     };
     return <div className="flex flex-wrap items-center gap-1.5 min-w-0">
-      <select className="q-input h-8 flex-1 min-w-[120px]" aria-label="Remember password" title={explain(policy)} aria-description={explain(policy)} value={policy}
+      <select className="q-input q-select h-8 flex-1 min-w-[120px]" aria-label="Remember password" title={explain(policy)} aria-description={explain(policy)} value={policy}
         onChange={(e) => onChange({ passwordRetention: e.target.value, passwordRetentionMinutes: minutes })}>
         <option value="once">Until disconnected</option>
         <option value="session">Until app closes</option>
@@ -35,14 +35,14 @@ export function PasswordRetention({ profile, onChange, compact = false }: { prof
         <option value="forever">Always remember</option>
       </select>
       {policy === "duration" && <>
-        <select className="q-input h-8" aria-label="Duration" value={custom ? "custom" : minutes} onChange={(e) => pick(e.target.value)}>
+        <select className="q-input q-select h-8" aria-label="Duration" value={custom ? "custom" : minutes} onChange={(e) => pick(e.target.value)}>
           <option value={15}>15 minutes</option><option value={60}>1 hour</option><option value={480}>8 hours</option>
           <option value={1440}>1 day</option><option value={10080}>7 days</option><option value={43200}>30 days</option>
           <option value="custom">Custom duration</option>
         </select>
         {custom && <>
           <input className="q-input h-8 w-16" aria-label="Length" type="number" min={1} max={Math.floor(525600 / UNITS[unit])} step={1} value={minutes / UNITS[unit]} onChange={(e) => onChange({ passwordRetentionMinutes: Number(e.target.value) * UNITS[unit] })} />
-          <select className="q-input h-8" aria-label="Unit" value={unit} onChange={(e) => {
+          <select className="q-input q-select h-8" aria-label="Unit" value={unit} onChange={(e) => {
             const next = e.target.value as Unit;
             setUnit(next);
             onChange({ passwordRetentionMinutes: minutes / UNITS[unit] * UNITS[next] });

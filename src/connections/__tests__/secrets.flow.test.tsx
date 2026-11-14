@@ -55,7 +55,7 @@ const base = (id: string, engine: Engine, over: Partial<Profile> = {}): Profile 
 });
 const realSave = useProfiles.getState().save;
 const saveBtn = () => screen.getByRole("button", { name: "Save" });
-const pickEnv = (name = "Dev") => userEvent.click(screen.getByRole("radio", { name }));
+const pickEnv = (name = "Dev") => userEvent.click(screen.getByRole("button", { name }));
 const savedProfiles = () => m.rpc.mock.calls.filter((c) => c[0] === "profile.save").map((c) => c[1] as Profile);
 const SECRET_KEY = /pass(word|phrase)?$|secret|pwd|token/i;
 /** Every key path in an object whose name looks like it holds a secret (passwordRetention* is a policy, not a secret). */
@@ -301,7 +301,7 @@ describe("the editor: what reaches the keyring for each engine, sign-in and rete
     await userEvent.type(screen.getByPlaceholderText("bastion.example.com"), "bastion");
     await userEvent.type(screen.getByPlaceholderText("deploy"), "deploy");
     await userEvent.type(screen.getByPlaceholderText("/home/me/.ssh/id_ed25519"), "/k");
-    const phrase = screen.getByText("Passphrase", { selector: "span" }).closest("label")!.querySelector("input")!;
+    const phrase = (screen.getByLabelText("Passphrase") as HTMLInputElement);
     await userEvent.type(phrase, "ssh-pw");
     await userEvent.click(saveBtn());
     await waitFor(() => expect(m.secretSet).toHaveBeenCalledTimes(2));
