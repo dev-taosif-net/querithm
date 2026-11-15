@@ -79,11 +79,20 @@ public class EngineRegistryTests
             Assert.All(engines, e => Assert.True(e.Exposed, $"{e.Engine} hidden"));
             var oracle = engines.Single(e => e.Engine == Engine.Oracle);
             Assert.Equal((Dialect.Oracle, 2484), (oracle.Dialect, oracle.DefaultPort));
-            var saved = await rpc.ProfileSave(new Profile
+            var profile = new Profile
             {
                 Id = "", Name = "ora", Engine = Engine.Oracle, Host = "db.example.test", Port = 2484, Auth = AuthKind.Password, Username = "app", DatabaseDefault = "FREEPDB1",
-            });
-            Assert.Null(Assert.Single(await rpc.ProfileList(), x => x.Id == saved.Id).Unsupported);
+            };
+            // Intel macOS (O6): listed, but disabled with the driver's reason, and a profile is refused with it.
+            var refusal = OracleProvider.PlatformRefusal(OperatingSystem.IsMacOS(), System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture);
+            Assert.Equal(refusal, oracle.Unavailable);
+            if (refusal != null)
+                Assert.Contains("Intel Macs", (await Assert.ThrowsAsync<QuerithmException>(() => rpc.ProfileSave(profile))).Message);
+            else
+            {
+                var saved = await rpc.ProfileSave(profile);
+                Assert.Null(Assert.Single(await rpc.ProfileList(), x => x.Id == saved.Id).Unsupported);
+            }
             var basis = new Profile { Id = "", Name = "", Engine = Engine.Mssql, Auth = AuthKind.Sql };
             var r = await rpc.ProfileParseConnectionString(new ParseConnectionStringParams { Profile = basis, ConnectionString = "Data Source=//db.example.test:1521/FREEPDB1;User Id=scott;Password=pw" });
             Assert.Equal((Engine.Oracle, "db.example.test", 1521, "FREEPDB1", "scott", "pw"),

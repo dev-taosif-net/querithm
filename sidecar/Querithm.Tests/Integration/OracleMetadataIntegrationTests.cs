@@ -113,6 +113,17 @@ public sealed class OracleMetadataIntegrationTests
         await SchemaAsync();
         await using var c = await OpenAsync();
         var meta = new OracleMetadata();
+        // The stamp query itself lists each object once (the sidecar's re-read only guards against it): every column of an
+        // id listed twice, so a failure names the object and the join that repeated it (CI runs 43606347729, 43686890433).
+        await using (var raw = c.CreateCommand())
+        {
+            raw.CommandText = meta.StampSql(new HashSet<OracleMetadata.Piece>());
+            var rows = new List<object[]>();
+            await using (var r = await raw.ExecuteReaderAsync(Timeout()))
+                while (await r.ReadAsync()) { var v = new object[r.FieldCount]; r.GetValues(v); rows.Add(v); }
+            Assert.Empty(rows.GroupBy(x => Convert.ToInt64(x[0], System.Globalization.CultureInfo.InvariantCulture)).Where(g => g.Count() > 1)
+                .SelectMany(g => g).Select(x => string.Join(" | ", x.Select(v => v is DBNull ? "null" : Convert.ToString(v, System.Globalization.CultureInfo.InvariantCulture)))));
+        }
         var stamps = await meta.GetStampsAsync(c, Timeout());
         Assert.Empty(meta.Notes(c));
 
