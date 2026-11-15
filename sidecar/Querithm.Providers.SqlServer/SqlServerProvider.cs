@@ -121,6 +121,9 @@ public sealed partial class SqlServerProvider : IDbProvider
     public ConnectionStringAffinity ConnectionStringAffinity(IReadOnlyDictionary<string, string> keywords)
     {
         var distinctive = ConnectionStringKeywords.CountKeys(keywords, OwnSpellings);
+        // Data Source is SQL Server's spelling but Oracle's too: a value with "/" (Easy Connect "//host:port/service", a
+        // file path) or a "(DESCRIPTION=…)" descriptor is no SQL Server address (host, host\instance, host,port, tcp:/np:/lpc:).
+        if (keywords.TryGetValue("Data Source", out var ds) && (ds.Contains('/') || ds.TrimStart().StartsWith('('))) distinctive--;
         // "host,port", "tcp:host", "host\instance": the server's address in SQL Server's own form (no driver of the others
         // reads a port or a protocol there).
         foreach (var key in new[] { "Server", "Data Source", "Address", "Addr", "Network Address" })

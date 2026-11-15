@@ -4,6 +4,7 @@ using Querithm.Core;
 using Querithm.Core.Logging;
 using Querithm.Providers.DuckDb;
 using Querithm.Providers.MySql;
+using Querithm.Providers.Oracle;
 using Querithm.Providers.Postgres;
 using Querithm.Providers.Sqlite;
 using Querithm.Providers.SqlServer;
@@ -13,7 +14,8 @@ namespace Querithm.Tests;
 /// <summary>
 /// profile.parseConnectionString through the RPC with every engine registered: per-engine round trips (host, port,
 /// database, user, secret, TLS keywords), detection from a new profile's placeholder engine, and refusal of junk input
-/// (§13 rule: validate untrusted RPC input). SQLite and DuckDB never read a connection string.
+/// (§13 rule: validate untrusted RPC input). SQLite and DuckDB never read a connection string. Oracle joined on 2026-11-15
+/// (out of the hidden-engine flag): its Easy Connect and descriptor strings are Oracle's, and the others' stay theirs.
 /// </summary>
 public sealed class ConnectionStringPasteMatrixTests : IAsyncDisposable
 {
@@ -21,7 +23,7 @@ public sealed class ConnectionStringPasteMatrixTests : IAsyncDisposable
     readonly TestHost _host;
 
     public ConnectionStringPasteMatrixTests() =>
-        _host = new TestHost(new SqlServerProvider(), new PostgresProvider(), new MySqlProvider(), new SqliteProvider(), new DuckDbProvider(_dir));
+        _host = new TestHost(new SqlServerProvider(), new PostgresProvider(), new MySqlProvider(), new SqliteProvider(), new DuckDbProvider(_dir), new OracleProvider(_dir));
 
     public async ValueTask DisposeAsync()
     {
@@ -32,7 +34,7 @@ public sealed class ConnectionStringPasteMatrixTests : IAsyncDisposable
     static Profile Basis(Engine engine) => new()
     {
         Id = "", Name = "", Engine = engine, Host = "localhost",
-        Auth = engine switch { Engine.Mssql => AuthKind.Sql, Engine.Pg or Engine.MySql => AuthKind.Password, _ => AuthKind.None },
+        Auth = engine switch { Engine.Mssql => AuthKind.Sql, Engine.Pg or Engine.MySql or Engine.Oracle => AuthKind.Password, _ => AuthKind.None },
         Username = null, Environment = EnvironmentKind.Dev, TimeoutS = 15,
     };
 
@@ -189,7 +191,7 @@ public sealed class ConnectionStringPasteMatrixTests : IAsyncDisposable
 
     // ---- regressions: engine detection when several drivers read every keyword ----
 
-    public static TheoryData<Engine> EveryBasis => new() { Engine.Mssql, Engine.Pg, Engine.MySql, Engine.Sqlite, Engine.DuckDb };
+    public static TheoryData<Engine> EveryBasis => new() { Engine.Mssql, Engine.Pg, Engine.MySql, Engine.Sqlite, Engine.DuckDb, Engine.Oracle };
 
     // Npgsql reads Server / Port / User ID / Password / Database too: before the fix this tied at 0 unknown and
     // PostgreSQL won by registration order from a new profile's placeholder (SQL Server) basis.
@@ -246,6 +248,45 @@ public sealed class ConnectionStringPasteMatrixTests : IAsyncDisposable
             Assert.True(r.Profile.Engine == Engine.Mssql, $"{editor}: '{cs}' read as {r.Profile.Engine}");
             Assert.Equal("pw", r.Secret);
         }
+    }
+
+    [Theory]
+    [MemberData(nameof(EveryBasis))]
+    public async Task Typical_oracle_strings_are_oracle_from_every_basis(Engine editor)
+    {
+        // A port that is the transport's default (TCPS 2484) is left empty, as the profile dialog leaves it.
+        foreach (var (cs, host, port, service) in new (string, string, int?, string)[]
+        {
+            ("Data Source=//db.example.test:1521/FREEPDB1;User Id=scott;Password=pw", "db.example.test", 1521, "FREEPDB1"),
+            ("Data Source=db.example.test:1521/FREEPDB1;User Id=scott;Password=pw", "db.example.test", 1521, "FREEPDB1"),
+            ("User Id=scott;Password=pw;Data Source=(DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(HOST=db.example.test)(PORT=2484))(CONNECT_DATA=(SERVICE_NAME=ORCLPDB1)))",
+                "db.example.test", null, "ORCLPDB1"),
+        })
+        {
+            var r = await Parse(cs, editor);
+            Assert.True(r.Profile.Engine == Engine.Oracle, $"{editor}: '{cs}' read as {r.Profile.Engine}");
+            Assert.Equal((host, port, service, "scott", "pw"), (r.Profile.Host, r.Profile.Port, r.Profile.DatabaseDefault, r.Profile.Username, r.Secret));
+        }
+    }
+
+    // SQL Server and Oracle share Data Source / User Id / Password: a plain host stays SQL Server's (a TNS alias is refused by Oracle).
+    [Theory]
+    [MemberData(nameof(EveryBasis))]
+    public async Task A_plain_host_in_data_source_stays_sql_server_with_oracle_registered(Engine editor)
+    {
+        var r = await Parse("Data Source=sqlhost;User Id=sa;Password=pw", editor);
+        Assert.True(r.Profile.Engine == Engine.Mssql, $"{editor}: read as {r.Profile.Engine}");
+    }
+
+    [Theory]
+    [InlineData(Engine.Mssql)]
+    [InlineData(Engine.Oracle)]
+    public async Task Oracle_secret_never_appears_in_unknown_notApplied_or_notes(Engine editor)
+    {
+        var r = await Parse("Data Source=//h:1521/S;User Id=u;Password=s3cret;Proxy Password=s3cret", editor);
+        Assert.Equal(Engine.Oracle, r.Profile.Engine);
+        Assert.Equal("s3cret", r.Secret);
+        Assert.DoesNotContain(r.Unknown.Concat(r.NotApplied).Concat(r.Notes), x => x.Contains("s3cret", StringComparison.Ordinal));
     }
 
     // A string every driver reads alike keeps the editor's engine (the only tie-break left).

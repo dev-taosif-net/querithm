@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // UI smoke test: built webview + dev bridge + real sidecar + docker fixture, driven by headless Chrome.
 // Captures console errors and screenshots of the main screens.  node scripts/bench/smoke-ui.mjs <out-dir> [--oracle]
-// --oracle (Phase D4): only the Oracle workflow, with the hidden engine exposed, on the Oracle Free fixture alone.
+// --oracle (Phase D4): only the Oracle workflow, on the Oracle Free fixture alone (a default build: Oracle left the
+// hidden-engine flag on 2026-11-15).
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -34,9 +35,9 @@ if (!process.argv.includes("--no-build") || !existsSync(path.join(root, "dist", 
 
 const bridge = spawn(process.execPath, [path.join(root, "scripts", "dev-bridge.mjs")], {
   // QUERITHM_FAKE_UPDATE: the bridge offers a fake release whose install fails (see dev-bridge.mjs). No QUERITHM_DEV_ENGINES:
-  // the engine picker must offer SQLite, MySQL and DuckDB in a default build (they left the hidden-engine flag in 0.2.0), and
-  // not Oracle (Phase D4, hidden); --oracle exposes it.
-  env: { ...process.env, QUERITHM_BENCH: "1", QUERITHM_FAKE_UPDATE: "9.9.9", QUERITHM_DEV_ENGINES: oracleOnly ? "oracle" : "", QUERITHM_DATA_DIR: mkdtempSync(path.join(os.tmpdir(), "qsmoke-")) }, stdio: ["ignore", "inherit", "inherit"],
+  // the engine picker must offer SQLite, MySQL and DuckDB (they left the hidden-engine flag in 0.2.0) and Oracle (it left
+  // it on 2026-11-15) in a default build, --oracle included.
+  env: { ...process.env, QUERITHM_BENCH: "1", QUERITHM_FAKE_UPDATE: "9.9.9", QUERITHM_DEV_ENGINES: "", QUERITHM_DATA_DIR: mkdtempSync(path.join(os.tmpdir(), "qsmoke-")) }, stdio: ["ignore", "inherit", "inherit"],
 });
 const preview = spawn(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.resolve("vite/package.json"))), "bin", "vite.js"), "preview", "--port", String(uiPort), "--strictPort", "--host", "127.0.0.1"], { cwd: root, stdio: "ignore" });
 const errors = [];
@@ -224,8 +225,8 @@ try {
     }
   };
   const clickButton = (label) => page.evaluate((l) => [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === l || b.getAttribute("aria-label") === l)?.click(), label);
-  // Phase D4 (--oracle): the hidden engine behind the dev flag, on the Oracle Free fixture (docker compose --profile oracle
-  // up -d --wait oracle) and nothing else: flag on → the picker offers Oracle → a profile made in the dialog (plain TCP,
+  // Phase D4 (--oracle): Oracle in a default build, on the Oracle Free fixture (docker compose --profile oracle
+  // up -d --wait oracle) and nothing else: no dev flag → the picker offers Oracle → a profile made in the dialog (plain TCP,
   // the warned downgrade) → a PL/SQL block with DBMS_OUTPUT and an ad-hoc :bind → result + message → a compile error that
   // jumps to its line and column → Cancel of a DBMS_SESSION.SLEEP → the session runs the next statement → the explorer.
   if (oracleOnly) {
@@ -275,7 +276,7 @@ try {
     await sleep(800); // system.engines answers: the picker then offers the exposed engines
     await page.click('[role="dialog"] button[role="combobox"][aria-label="Server type"]');
     const offered = await page.waitForFunction(() => [...document.querySelectorAll('[role="option"]')].some((o) => o.textContent?.trim().startsWith("Oracle Database")), { timeout: 5_000 }).then(() => true, () => false);
-    if (!offered) errors.push(`oracle: the picker does not offer Oracle with the dev flag on: ${await page.evaluate(() => [...document.querySelectorAll('[role="option"]')].map((o) => o.textContent?.trim()).join(", "))}`);
+    if (!offered) errors.push(`oracle: the picker does not offer Oracle in a default build: ${await page.evaluate(() => [...document.querySelectorAll('[role="option"]')].map((o) => o.textContent?.trim()).join(", "))}`);
     await page.evaluate(() => [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent?.trim().startsWith("Oracle Database"))?.click());
     await page.waitForFunction(() => [...document.querySelectorAll('[role="dialog"] label')].some((l) => l.textContent?.trim() === "Service name"), { timeout: 5_000 })
       .catch(() => errors.push("oracle: the Service name field did not appear"));
@@ -1290,7 +1291,7 @@ try {
     await page.click('[role="dialog"] button[role="combobox"][aria-label="Server type"]');
     const offered = await page.waitForFunction((label) => [...document.querySelectorAll('[role="option"]')].some((o) => o.textContent?.trim() === label), { timeout: 5_000 }, e.label).then(() => true, () => false);
     if (!offered) errors.push(`${e.key}: the engine picker does not offer ${e.label} in a default build: ${await page.evaluate(() => [...document.querySelectorAll('[role="option"]')].map((o) => o.textContent?.trim()).join(", "))}`);
-    if (await page.evaluate(() => [...document.querySelectorAll('[role="option"]')].some((o) => o.textContent?.includes("Oracle")))) errors.push(`${e.key}: the picker offers the hidden Oracle engine in a default build`);
+    if (!(await page.evaluate(() => [...document.querySelectorAll('[role="option"]')].some((o) => o.textContent?.trim().startsWith("Oracle Database"))))) errors.push(`${e.key}: the picker does not offer Oracle in a default build`);
     await page.evaluate((label) => [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent?.trim() === label)?.click(), e.label);
     await page.waitForFunction(() => [...document.querySelectorAll('[role="dialog"] button')].some((b) => b.textContent === "Pick file…"), { timeout: 5_000 })
       .catch(() => errors.push(`${e.key}: the file section did not appear`));

@@ -39,9 +39,9 @@ public class EngineRegistryTests
         Assert.Equal(stillHidden, ProviderRegistry.HiddenEngines([Engine.Pg], setting));
 
     [Fact]
-    public void The_shipped_build_keeps_Oracle_behind_the_flag_and_every_other_engine_exposed()
+    public void The_shipped_build_exposes_every_engine_and_the_flag_still_hides_one_named_behind_it()
     {
-        Assert.Equal([Engine.Oracle], EngineSetup.BehindFlag);
+        Assert.Empty(EngineSetup.BehindFlag); // Oracle left it on 2026-11-15 (D4 S13-a)
         var dir = Directory.CreateTempSubdirectory("qreg-").FullName;
         try
         {
@@ -49,30 +49,61 @@ public class EngineRegistryTests
             // One provider per engine, and every engine of the contract has one.
             Assert.Equal(Enum.GetValues<Engine>().Order(), shipped.Select(p => p.Engine).Order());
             var registry = new ProviderRegistry(shipped, ProviderRegistry.HiddenEngines(EngineSetup.BehindFlag, null));
-            Assert.Null(registry.TryGet(Engine.Oracle));
-            Assert.Null(registry.ForDialect(Dialect.Oracle));
-            Assert.Equal(Engine.Oracle, Assert.Single(registry.Hidden).Engine);
-            Assert.DoesNotContain(registry.All, p => p.Engine == Engine.Oracle);
-            Assert.Equal(5, registry.All.Count());
-            // The dev setting exposes it.
-            var exposed = new ProviderRegistry(shipped, ProviderRegistry.HiddenEngines(EngineSetup.BehindFlag, "oracle"));
+            Assert.Empty(registry.Hidden);
+            Assert.Equal(Enum.GetValues<Engine>().Length, registry.All.Count());
+            Assert.NotNull(registry.TryGet(Engine.Oracle));
+            Assert.NotNull(registry.ForDialect(Dialect.Oracle));
+            // The mechanism stays for the next engine: one named behind the flag is hidden until the dev setting exposes it.
+            var behind = new ProviderRegistry(shipped, ProviderRegistry.HiddenEngines([Engine.Oracle], null));
+            Assert.Null(behind.TryGet(Engine.Oracle));
+            Assert.Null(behind.ForDialect(Dialect.Oracle));
+            Assert.Equal(Engine.Oracle, Assert.Single(behind.Hidden).Engine);
+            Assert.Equal(Enum.GetValues<Engine>().Length - 1, behind.All.Count());
+            var exposed = new ProviderRegistry(shipped, ProviderRegistry.HiddenEngines([Engine.Oracle], "oracle"));
             Assert.IsType<OracleProvider>(exposed.TryGet(Engine.Oracle));
             Assert.Empty(exposed.Hidden);
         }
         finally { Directory.Delete(dir, true); }
     }
 
+    [Fact]
+    public async Task The_shipped_build_lists_Oracle_exposed_saves_its_profiles_and_reads_its_pasted_strings()
+    {
+        var dir = Directory.CreateTempSubdirectory("qship-").FullName;
+        var registry = new ProviderRegistry(EngineSetup.Providers(dir), ProviderRegistry.HiddenEngines(EngineSetup.BehindFlag, null));
+        var services = Services.Create(LocalStore.InMemory(), new CapturingFrames(), new CapturingNotifier(), NullLoggerFactory.Instance, registry, dir);
+        await using (services)
+        {
+            var rpc = new RpcServer(services, () => { });
+            var engines = await rpc.Engines();
+            Assert.All(engines, e => Assert.True(e.Exposed, $"{e.Engine} hidden"));
+            var oracle = engines.Single(e => e.Engine == Engine.Oracle);
+            Assert.Equal((Dialect.Oracle, 2484), (oracle.Dialect, oracle.DefaultPort));
+            var saved = await rpc.ProfileSave(new Profile
+            {
+                Id = "", Name = "ora", Engine = Engine.Oracle, Host = "db.example.test", Port = 2484, Auth = AuthKind.Password, Username = "app", DatabaseDefault = "FREEPDB1",
+            });
+            Assert.Null(Assert.Single(await rpc.ProfileList(), x => x.Id == saved.Id).Unsupported);
+            var basis = new Profile { Id = "", Name = "", Engine = Engine.Mssql, Auth = AuthKind.Sql };
+            var r = await rpc.ProfileParseConnectionString(new ParseConnectionStringParams { Profile = basis, ConnectionString = "Data Source=//db.example.test:1521/FREEPDB1;User Id=scott;Password=pw" });
+            Assert.Equal((Engine.Oracle, "db.example.test", 1521, "FREEPDB1", "scott", "pw"),
+                (r.Profile.Engine, r.Profile.Host, r.Profile.Port, r.Profile.DatabaseDefault, r.Profile.Username, r.Secret));
+        }
+        Directory.Delete(dir, true);
+    }
+
+    /// <summary>The shipped providers with Oracle named behind the flag, as it shipped until 2026-11-15.</summary>
     static async Task<(Services Services, RpcServer Rpc, string Dir)> HostWithHiddenOracle()
     {
         var dir = Directory.CreateTempSubdirectory("qhide-").FullName;
-        var registry = new ProviderRegistry(EngineSetup.Providers(dir), ProviderRegistry.HiddenEngines(EngineSetup.BehindFlag, null));
+        var registry = new ProviderRegistry(EngineSetup.Providers(dir), ProviderRegistry.HiddenEngines([Engine.Oracle], null));
         var services = Services.Create(LocalStore.InMemory(), new CapturingFrames(), new CapturingNotifier(), NullLoggerFactory.Instance, registry, dir);
         await Task.CompletedTask;
         return (services, new RpcServer(services, () => { }), dir);
     }
 
     [Fact]
-    public async Task Oracle_is_listed_hidden_and_its_profiles_never_open()
+    public async Task An_engine_behind_the_flag_is_listed_hidden_and_its_profiles_never_open()
     {
         var (services, rpc, dir) = await HostWithHiddenOracle();
         await using var _ = services;
@@ -90,7 +121,7 @@ public class EngineRegistryTests
     [Theory]
     [InlineData("Data Source=//db.example:1521/FREEPDB1;User Id=scott")]
     [InlineData("User Id=scott;Data Source=(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=db.example)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=FREEPDB1)))")]
-    public async Task Oracle_never_reads_a_pasted_connection_string_while_hidden(string connectionString)
+    public async Task An_engine_behind_the_flag_never_reads_a_pasted_connection_string(string connectionString)
     {
         var (services, rpc, dir) = await HostWithHiddenOracle();
         await using var _ = services;

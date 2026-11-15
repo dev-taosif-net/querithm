@@ -2,8 +2,9 @@
 
 <p align="center"><img src="docs/brand/querithm-wordmark.svg" alt="Querithm — Database &amp; SQL Development IDE" width="480"></p>
 
-A cross-platform SQL IDE for **SQL Server**, **PostgreSQL**, **MySQL / MariaDB**, **SQLite** and **DuckDB**: Tauri v2 shell,
-.NET 10 engine (ScriptDom, Microsoft.Data.SqlClient, Npgsql, MySqlConnector, Microsoft.Data.Sqlite, DuckDB.NET),
+A cross-platform SQL IDE for **SQL Server**, **PostgreSQL**, **MySQL / MariaDB**, **Oracle Database**, **SQLite** and **DuckDB**:
+Tauri v2 shell, .NET 10 engine (ScriptDom, Microsoft.Data.SqlClient, Npgsql, MySqlConnector, ODP.NET Core,
+Microsoft.Data.Sqlite, DuckDB.NET),
 React + Monaco + Glide Data Grid, Apache Arrow over IPC.
 The architecture and every decision live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -15,8 +16,9 @@ Free code signing provided by [SignPath.io](https://about.signpath.io), certific
 
 ## What it does
 
-- Engines: SQL Server, PostgreSQL and MySQL / MariaDB servers; SQLite and DuckDB files (read-only until you allow writes)
-  or in-memory databases. A feature an engine lacks stays in place and says why.
+- Engines: SQL Server, PostgreSQL, MySQL / MariaDB and Oracle Database servers; SQLite and DuckDB files (read-only until
+  you allow writes) or in-memory databases. A feature an engine lacks stays in place and says why. Oracle connects over
+  TCPS by default with a password; its driver has no Intel macOS build, so there it is listed but disabled with the reason.
 - Multi-tab SQL editor (Monaco): T-SQL and PostgreSQL highlighting, folding from the AST, diagnostics, formatting.
 - Two-tier autocomplete: a tolerant tokenizer answers in ~1–3 ms from the cached schema; ScriptDom refines
   (CTE/derived-table columns, temp tables, table variables, OUTPUT, MERGE, EXEC parameters, signatures).
@@ -73,7 +75,7 @@ images). Afterwards `QUERITHM_OFFLINE=1 pnpm build` builds with no network. Taur
 ```
 src-tauri/   Rust shell: window, keyring, sidecar supervision, IPC relay (no SQL)
 src/         React webview: editor, completion (tier 1), results, explorer, plans, trace, debugger
-sidecar/     .NET 10 engine: contract, host, core, providers (SQL Server, PostgreSQL, MySQL, SQLite, DuckDB), intelligence
+sidecar/     .NET 10 engine: contract, host, core, providers (SQL Server, PostgreSQL, MySQL, Oracle, SQLite, DuckDB), intelligence
 scripts/     build, contract generation, dev bridge, bench, notices
 docs/        ARCHITECTURE.md (the spec)
 ```

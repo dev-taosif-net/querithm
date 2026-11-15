@@ -3,7 +3,7 @@
 Update at the end of every session. Statuses: *not started* · *in progress* · *done* (code + tests passed in that
 session) · *partial* (what is left is in "Open").
 
-Last updated: 2026-11-12 — S01 done (fixture verified in S03, after fixing its start scripts); S02 done (keyword check against the fixture closed in S08); S03 done; S04 done; S05 done; S06 done (D4a milestone reached — pause for the owner to try a hidden Oracle profile before D4b). S07 done. S08 done (O3 default taken). S09 done. S10 done. S11 done. Cross-check of S01–S11: six defects fixed (see below). S12 done (O4 default taken; feature matrix has no gap). S13 done: every release gate green (local gates, CI run 43208727206 on every OS and RID); owner kept Oracle hidden for now.
+Last updated: 2026-11-15 — S01 done (fixture verified in S03, after fixing its start scripts); S02 done (keyword check against the fixture closed in S08); S03 done; S04 done; S05 done; S06 done (D4a milestone reached — pause for the owner to try a hidden Oracle profile before D4b). S07 done. S08 done (O3 default taken). S09 done. S10 done. S11 done. Cross-check of S01–S11: six defects fixed (see below). S12 done (O4 default taken; feature matrix has no gap). S13 done: every release gate green (local gates, CI run 43208727206 on every OS and RID); owner kept Oracle hidden for now. 2026-11-15: repeated-id guard, #22 check and the 21 / 22 profiles done (below); owner decided to un-hide, prepared for the next release.
 
 ## Sessions
 
@@ -154,7 +154,7 @@ there are no notes, so a repeat that the second read does not clear still fails 
 | O6 | Default taken: Intel macOS shows Oracle disabled with the driver's reason (`EngineInfo.Unavailable`); profiles refuse with it | 2026-11-10 |
 | O3 | Default taken: implement S08 (packages browse and script as whole objects) | 2026-11-11 |
 | O4 | Default taken: the activity monitor is implemented where the account may read V$SESSION (and kills where it holds ALTER SYSTEM); every pane or action it may not use is degraded with the grant it needs, and without V$SESSION the monitor stops naming it | 2026-11-12 |
-| S13-a | Un-hide Oracle? **Keep hidden for now** (owner); revisit after CI release-smoke passes on every RID | 2026-11-12 |
+| S13-a | Un-hide Oracle? **Keep hidden for now** (owner, 2026-11-12); revisit after CI release-smoke passes on every RID. **Un-hide** (owner, 2026-11-15), prepared for the next release and not published: `EngineSetup.BehindFlag` empty, README / CLAUDE.md engine lists, the SQL Server `Data Source` affinity fix, the paste matrix with Oracle, and both smoke runs expecting Oracle in a default build (ARCHITECTURE §16 "Oracle out of the hidden-engine flag") | 2026-11-15 |
 | S13-b | 21.oracle / 22.oracle over target: owner left it to the implementer → taken as measured baselines (§16 "Oracle bench baselines"), profiling a follow-up | 2026-11-12 |
 | O2 | Default taken: TCPS with the image's self-signed certificate generated at first start (`ENABLE_TCPS`), TLS tests required | 2026-11-10 |
 
