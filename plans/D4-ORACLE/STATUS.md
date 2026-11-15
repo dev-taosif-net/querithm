@@ -133,6 +133,18 @@ makes the next refresh read it again, and notes how many objects (no names). The
 repeated objects (`schema.name (kind) xN`), so the next failure points at the join. That integration test also asserts
 there are no notes, so a repeat that the second read does not clear still fails it.
 
+**Pre-un-hide checks, 2026-11-15:**
+- #22 open check (back-to-back `pnpm bench -- --engine`, i5-1335U, Docker Desktop; `QUERITHM_IT_MSSQL_HOST` /
+  `QUERITHM_IT_PG_HOST=127.0.0.1` were needed, because `localhost` timed out against the fixture's 127.0.0.1-only port).
+  Alternating 2ab36b1, fdabec4, 2ab36b1, fdabec4 gave #22 = 1,019 / 1,221 / 1,500 / 1,264 ms, plus fdabec4 alone at
+  1,412 ms. No regression: the swing between runs is larger than any gap between the two commits. In every run of both
+  commits, #23 (1,767–2,225 ms) was near or over its 2,000 ms target, and the SQLite section stopped at "The database file
+  grant is not valid". Both are already present at 2ab36b1; neither belongs to Oracle.
+- 21.oracle / 22.oracle profiled (§16 "Oracle bench baselines"). 21 is bound by server CPU in the `ALL_*` reads.
+  22 runs in about 1.0 s in-process (`OracleComparePerfProbe`), with about 150 ms of server time per side. Two Oracle bench
+  runs: every Oracle metric passed in the second (21 = 1,209, 22 = 1,270 ms); in the first, 22 = 1,844 ms.
+  Results: `bench/results/2026-11-15-05-15-00`, `05-20-36-windows.json`.
+
 ## Decisions taken (owner answers to README "Open decisions")
 
 | # | Answer | Date |
