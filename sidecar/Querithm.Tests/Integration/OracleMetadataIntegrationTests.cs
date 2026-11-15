@@ -390,6 +390,59 @@ public sealed class OracleMetadataIntegrationTests
         Assert.Empty(meta.Notes(c));
     }
 
+    /// <summary>
+    /// ALL_ARGUMENTS and ALL_PROCEDURES are not keyed by OBJECT_ID alone: Oracle-supplied routines (Database Vault's DVF.F$…
+    /// functions on the Free image, ids 73149–73168) carry ids that a new database gives to the user's own objects. CI runs
+    /// 43686890433 / 43701917547 saw it: a package member with a foreign "RETURN VARCHAR2", and three functions listed twice
+    /// (regression). The views here add such a foreign row on the fixture objects' very ids.
+    /// </summary>
+    [IntegrationFact]
+    public async Task Arguments_and_members_of_another_owners_routine_with_the_same_object_id_are_not_read()
+    {
+        await using var c = await OpenAsync();
+        foreach (var (kind, name) in new[] { ("VIEW", "Q_FK_ARGS"), ("VIEW", "Q_FK_PROCS"), ("FUNCTION", "Q_FK_FN"), ("PACKAGE", "Q_FK_PKG") }) await DropAsync(c, kind, name);
+        try
+        {
+            await ExecAsync(c, "CREATE FUNCTION q_fk_fn (x NUMBER) RETURN NUMBER AS BEGIN RETURN x; END;");
+            await ExecAsync(c, "CREATE PACKAGE q_fk_pkg AS PROCEDURE p(a NUMBER); END;");
+            async Task<long> Id(string name)
+            {
+                await using var cmd = c.CreateCommand();
+                cmd.CommandText = $"SELECT object_id FROM user_objects WHERE object_name = '{name}' AND object_type IN ('FUNCTION', 'PACKAGE')";
+                return Convert.ToInt64(await cmd.ExecuteScalarAsync(Timeout()), System.Globalization.CultureInfo.InvariantCulture);
+            }
+            var (fn, pkg) = (await Id("Q_FK_FN"), await Id("Q_FK_PKG"));
+            const string ArgCols = "owner, object_name, package_name, object_id, overload, subprogram_id, argument_name, position, sequence, data_level, data_type, defaulted, in_out, data_length, type_owner, type_name, type_subname";
+            await ExecAsync(c, $"""
+                CREATE VIEW q_fk_args AS SELECT {ArgCols} FROM ALL_ARGUMENTS
+                UNION ALL SELECT 'DVF', 'F$Q_FK', NULL, {fn}, NULL, 1, NULL, 0, 1, 0, 'VARCHAR2', 'N', 'OUT', NULL, NULL, NULL, NULL FROM dual
+                UNION ALL SELECT 'DVF', 'F$Q_FK', NULL, {fn}, NULL, 1, 'GHOST_ARG', 1, 2, 0, 'DATE', 'N', 'IN', NULL, NULL, NULL, NULL FROM dual
+                UNION ALL SELECT 'DVF', 'F$Q_FK', NULL, {pkg}, NULL, 1, NULL, 0, 1, 0, 'VARCHAR2', 'N', 'OUT', NULL, NULL, NULL, NULL FROM dual
+                """);
+            await ExecAsync(c, """
+                CREATE VIEW q_fk_procs AS SELECT owner, object_name, procedure_name, object_id, subprogram_id, overload, object_type FROM ALL_PROCEDURES
+                """ + $" UNION ALL SELECT 'SYS', 'DBMS_GHOST', 'GHOST', {pkg}, 9, NULL, 'PACKAGE' FROM dual");
+            string View(string v) => v switch { "ALL_ARGUMENTS" => "QUERITHM_APP.Q_FK_ARGS", "ALL_PROCEDURES" => "QUERITHM_APP.Q_FK_PROCS", _ => v };
+            var meta = new OracleMetadata(View);
+
+            var stamps = await meta.GetStampsAsync(c, Timeout());
+            Assert.Empty(meta.Notes(c)); // no id listed twice, so no re-read note
+            var f = One(stamps, AppSchema, "Q_FK_FN");
+            Assert.Equal("NUMBER", f.ReturnType);
+            var details = await meta.GetDetailsAsync(c, [fn, pkg], Timeout());
+            Assert.Equal(["X"], details.Params.Where(p => p.ObjectId == fn).Select(p => p.Name));
+            Assert.Equal(["P(A IN NUMBER)"], details.Members.Where(m => m.ObjectId == pkg).Select(m => m.Text));
+
+            // The Execute dialog's arguments (OracleScripter) read the routine's own rows only.
+            var args = await OracleScripter.ArgumentsAsync(c, new ObjectRef { Schema = AppSchema, Name = "Q_FK_FN", Kind = ObjectKind.Func }, Timeout(), View);
+            Assert.Equal([(0, (string?)null, "NUMBER"), (1, "X", "NUMBER")], args.Select(a => (a.Position, a.Name, a.DataType)));
+        }
+        finally
+        {
+            foreach (var (kind, name) in new[] { ("VIEW", "Q_FK_ARGS"), ("VIEW", "Q_FK_PROCS"), ("FUNCTION", "Q_FK_FN"), ("PACKAGE", "Q_FK_PKG") }) await DropAsync(c, kind, name);
+        }
+    }
+
     [IntegrationFact]
     public async Task Without_ALL_OBJECTS_there_is_no_catalog_and_the_refresh_fails()
     {

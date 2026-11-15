@@ -119,7 +119,7 @@ on 2ab36b1 and 7f00b20 was not run; it is the open check for #22. Local: `dotnet
 `CancelRecoveryTests` frame-cancel flake in an earlier run, 5 / 5 alone — the known one); `QUERITHM_IT=1` Oracle suite
 979 / 0.
 
-**Seen 2026-11-14, dev CI run 43606347729, the 0.1.3 release prep — guarded 2026-11-15, root cause still open:**
+**Seen 2026-11-14, dev CI run 43606347729, the 0.1.3 release prep — guarded and root cause fixed 2026-11-15:**
 `OracleMetadataIntegrationTests.The_snapshot_lists_every_object_kind_the_fixture_made_with_exact_names_and_notes` failed
 once at its id-uniqueness check (`stamps.Count` 91, distinct ids 88: three objects listed twice). The same sidecar code
 passed in run 43603961716 an hour earlier. Oracle stays hidden in 0.1.3.
@@ -132,6 +132,12 @@ returning wrong results is possible but not shown. Guard (§16 "Oracle stamp rea
 makes the next refresh read it again, and notes how many objects (no names). The integration assertion now names the
 repeated objects (`schema.name (kind) xN`), so the next failure points at the join. That integration test also asserts
 there are no notes, so a repeat that the second read does not clear still fails it.
+Root cause (2026-11-15). The release CI (main run 43686890433) failed four Oracle metadata tests on the re-read note, and a dev
+run failed with a package member `P(A IN NUMBER) RETURN VARCHAR2`. A CI probe beside the suite (run 43701917547) caught it:
+ALL_ARGUMENTS listed `F$NETWORK_PROTOCOL` (Database Vault, owner DVF) under object id 73159, the id of `Q_S04_SP`. Oracle-supplied
+routines in ALL_ARGUMENTS / ALL_PROCEDURES carry ids from another numbering (73149–73168 for the 20 DVF.F$ functions on the
+fixture), and a fresh database gives those ids to the user's objects, so only CI hit it. Fixed by matching owner and names in
+every join on those views (§16 row). Regression test: `Arguments_and_members_of_another_owners_routine_with_the_same_object_id_are_not_read`.
 
 **Pre-un-hide checks, 2026-11-15:**
 - #22 open check (back-to-back `pnpm bench -- --engine`, i5-1335U, Docker Desktop; `QUERITHM_IT_MSSQL_HOST` /

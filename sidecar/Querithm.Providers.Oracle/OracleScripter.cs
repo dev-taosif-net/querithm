@@ -380,11 +380,15 @@ public sealed class OracleScripter : IObjectScripter
     }
 
     /// <summary>The routine's top-level arguments (DATA_LEVEL 0), in position order; position 0 is a function's result.</summary>
-    static async Task<IReadOnlyList<OracleArgument>> ArgumentsAsync(DbConnection c, ObjectRef o, CancellationToken ct)
+    static Task<IReadOnlyList<OracleArgument>> ArgumentsAsync(DbConnection c, ObjectRef o, CancellationToken ct) => ArgumentsAsync(c, o, ct, null);
+
+    /// <param name="view">Tests: renames a dictionary view (OracleMetadata's hook).</param>
+    internal static async Task<IReadOnlyList<OracleArgument>> ArgumentsAsync(DbConnection c, ObjectRef o, CancellationToken ct, Func<string, string>? view)
     {
+        view ??= v => v;
         await using var cmd = Command(c, $"""
             SELECT {OracleMetadata.NoFeedback} a.position, a.argument_name, a.data_type, a.in_out, a.defaulted, a.type_owner, a.type_name, a.type_subname
-            FROM ALL_OBJECTS o JOIN ALL_ARGUMENTS a ON a.object_id = o.object_id
+            FROM {view("ALL_OBJECTS")} o JOIN {view("ALL_ARGUMENTS")} a ON a.object_id = o.object_id AND {OracleMetadata.OwnArguments("a", "o")}
             WHERE o.owner = :owner AND o.object_name = :name AND o.object_type IN ('PROCEDURE', 'FUNCTION') AND a.package_name IS NULL AND a.data_level = 0
             ORDER BY a.position
             """);

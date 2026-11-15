@@ -100,6 +100,14 @@ public sealed class OracleMetadata : IMetadataProvider
     internal const string NoFeedback = "/*+ OPT_PARAM('_optimizer_use_feedback' 'false') */";
 
     /// <summary>
+    /// The join condition that keeps a standalone routine's ALL_ARGUMENTS rows to that routine. OBJECT_ID alone is not a key
+    /// there (nor in ALL_PROCEDURES): Oracle-supplied routines carry ids from another numbering (Database Vault's DVF.F$…
+    /// functions on the Free image, 73149–73168), which a new database also gives to the user's objects (CI runs 43686890433,
+    /// 43701917547: a member with a foreign return type, functions listed twice).
+    /// </summary>
+    internal static string OwnArguments(string a, string o) => $"{a}.owner = {o}.owner AND {a}.object_name = {o}.object_name";
+
+    /// <summary>
     /// The one marker query (§8): a row per object — id, owner, name, ALL_OBJECTS type, marker, return type, parent id, status,
     /// flag (X external table; O an object table, M an XMLType table; R a synonym across a database link; U a package
     /// specification the login's own user owns, whose body it always sees). Each view in <paramref name="missing"/> is left out, with what depends on it.
@@ -160,7 +168,7 @@ public sealed class OracleMetadata : IMetadataProvider
         Join(Piece.Sequences, $"LEFT JOIN {V("ALL_SEQUENCES")} q ON o.object_type = 'SEQUENCE' AND q.sequence_owner = o.owner AND q.sequence_name = o.object_name");
         Join(Piece.Synonyms, "LEFT JOIN y ON o.object_type = 'SYNONYM' AND y.owner = o.owner AND y.synonym_name = o.object_name");
         Join(Piece.Arguments, $"""
-            LEFT JOIN {V("ALL_ARGUMENTS")} a ON o.object_type = 'FUNCTION' AND a.object_id = o.object_id AND a.package_name IS NULL AND a.position = 0 AND a.data_level = 0
+            LEFT JOIN {V("ALL_ARGUMENTS")} a ON o.object_type = 'FUNCTION' AND a.object_id = o.object_id AND {OwnArguments("a", "o")} AND a.package_name IS NULL AND a.position = 0 AND a.data_level = 0
             """);
 
         // Without a view, what it would have hashed is replaced by the object's DDL time, so a change is still seen.
@@ -397,9 +405,9 @@ public sealed class OracleMetadata : IMetadataProvider
     }
 
     /// <summary>
-    /// The stamp rows with each object id once. One row per object is what the query is written to return, yet a CI run saw
-    /// three ids listed twice (dev run 43606347729, not reproduced: neither the Oracle suite nor stamp reads under concurrent
-    /// DDL repeated one), so a read that repeats an id is not trusted: it is read once more. When that read repeats ids too,
+    /// The stamp rows with each object id once. CI saw ids listed twice (runs 43606347729, 43686890433): ALL_ARGUMENTS was
+    /// joined on OBJECT_ID alone, which Oracle-supplied routines share with user objects (<see cref="OwnArguments"/>, fixed).
+    /// A read that still repeats an id is not trusted: it is read once more. When that read repeats ids too,
     /// each is kept once (first seen) with a marker neither copy has, so the next refresh reads its details again, and a note
     /// says how many objects (never which: names are schema contents, §13).
     /// </summary>
@@ -495,10 +503,10 @@ public sealed class OracleMetadata : IMetadataProvider
                     IntOrNull(r, 6), IntOrNull(r, 7), Str(r, 8), IntOrNull(r, 9), IntOrNull(r, 10), Str(r, 11) != "N", Str(r, 12) == "YES", Str(r, 13) == "YES",
                     Str(r, 14) == "YES", Str(r, 15)))), ct).ConfigureAwait(false);
             await ReadAsync(connection, $"""
-                SELECT {NoFeedback} a.object_id, a.position, a.argument_name, a.data_type, a.type_owner, a.type_name, a.data_length, a.in_out, a.defaulted
-                FROM {_view("ALL_ARGUMENTS")} a
-                WHERE a.object_id IN ({ids}) AND a.package_name IS NULL AND a.data_level = 0 AND a.position > 0 AND a.argument_name IS NOT NULL
-                ORDER BY a.object_id, a.position
+                SELECT {NoFeedback} o.object_id, a.position, a.argument_name, a.data_type, a.type_owner, a.type_name, a.data_length, a.in_out, a.defaulted
+                FROM {_view("ALL_OBJECTS")} o JOIN {_view("ALL_ARGUMENTS")} a ON a.object_id = o.object_id AND {OwnArguments("a", "o")}
+                WHERE o.object_id IN ({ids}) AND a.package_name IS NULL AND a.data_level = 0 AND a.position > 0 AND a.argument_name IS NOT NULL
+                ORDER BY o.object_id, a.position
                 """, bind, Piece.Arguments, "ALL_ARGUMENTS", r => parms.Add(new ParamRow(Long(r, 0), (int)Long(r, 1), r.GetString(2),
                     TypeName(Str(r, 3), Str(r, 4), Str(r, 5), null, null, null, null, null), IntOrNull(r, 6), Output: Str(r, 7) is "OUT" or "IN/OUT",
                     HasDefault: Str(r, 8) == "Y")), ct).ConfigureAwait(false);
@@ -535,11 +543,13 @@ public sealed class OracleMetadata : IMetadataProvider
                 """, bind, Piece.Constraints, "ALL_CONSTRAINTS or ALL_CONS_COLUMNS", r => fks.Add(new FkColumnRow(Long(r, 0), r.GetString(1), r.GetString(2), r.GetString(3), Long(r, 4))), ct).ConfigureAwait(false);
             // Package members (D4 S08), display only: each subprogram of a specification with its arguments, overloads apart.
             await ReadAsync(connection, $"""
-                SELECT {NoFeedback} p.object_id, p.subprogram_id, p.procedure_name, a.position, a.argument_name, a.data_type, a.type_owner, a.type_name, a.in_out
-                FROM {_view("ALL_PROCEDURES")} p
-                LEFT JOIN {_view("ALL_ARGUMENTS")} a ON a.object_id = p.object_id AND a.subprogram_id = p.subprogram_id AND a.data_level = 0
-                WHERE p.object_id IN ({ids}) AND p.object_type = 'PACKAGE' AND p.procedure_name IS NOT NULL
-                ORDER BY p.object_id, p.subprogram_id, a.position
+                SELECT {NoFeedback} o.object_id, p.subprogram_id, p.procedure_name, a.position, a.argument_name, a.data_type, a.type_owner, a.type_name, a.in_out
+                FROM {_view("ALL_OBJECTS")} o
+                JOIN {_view("ALL_PROCEDURES")} p ON p.object_id = o.object_id AND p.owner = o.owner AND p.object_name = o.object_name
+                LEFT JOIN {_view("ALL_ARGUMENTS")} a ON a.object_id = p.object_id AND a.owner = p.owner AND a.package_name = p.object_name
+                  AND a.object_name = p.procedure_name AND a.subprogram_id = p.subprogram_id AND a.data_level = 0
+                WHERE o.object_id IN ({ids}) AND o.object_type = 'PACKAGE' AND p.procedure_name IS NOT NULL
+                ORDER BY o.object_id, p.subprogram_id, a.position
                 """, bind, Piece.Procedures, "ALL_PROCEDURES or ALL_ARGUMENTS", r => members.Add(new MemberArg(Long(r, 0), (int)Long(r, 1), r.GetString(2), IntOrNull(r, 3),
                     Str(r, 4), Str(r, 5), Str(r, 6), Str(r, 7), Str(r, 8))), ct).ConfigureAwait(false);
         }
