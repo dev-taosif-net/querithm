@@ -378,19 +378,61 @@ public sealed class OracleMetadata : IMetadataProvider
     public async Task<IReadOnlyList<ObjectStamp>> GetStampsAsync(DbConnection connection, CancellationToken ct)
     {
         NotesByConnection.AddOrUpdate(connection, []);
+        IReadOnlySet<Piece> missing = new HashSet<Piece>();
         List<StampRow> rows;
         try
         {
-            rows = await ReadStampsAsync(connection, new HashSet<Piece>(), ct).ConfigureAwait(false);
+            rows = await ReadStampsAsync(connection, missing, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (IsDenied(ex))
         {
             var denied = await ProbeAsync(connection, ct).ConfigureAwait(false);
             if (denied.Count == 0) throw; // ALL_OBJECTS or ALL_USERS itself: there is no catalog to show
             foreach (var (piece, why) in denied) Note(connection, DeniedNote(Pieces[piece].Effect, Pieces[piece].View, why));
-            rows = await ReadStampsAsync(connection, denied.Keys.ToHashSet(), ct).ConfigureAwait(false);
+            missing = denied.Keys.ToHashSet();
+            rows = await ReadStampsAsync(connection, missing, ct).ConfigureAwait(false);
         }
+        rows = await ReadWithoutRepeatsAsync(rows, c => ReadStampsAsync(connection, missing, c), note => Note(connection, note), ct).ConfigureAwait(false);
         return Assemble(rows);
+    }
+
+    /// <summary>
+    /// The stamp rows with each object id once. One row per object is what the query is written to return, yet a CI run saw
+    /// three ids listed twice (dev run 43606347729, not reproduced: neither the Oracle suite nor stamp reads under concurrent
+    /// DDL repeated one), so a read that repeats an id is not trusted: it is read once more. When that read repeats ids too,
+    /// each is kept once (first seen) with a marker neither copy has, so the next refresh reads its details again, and a note
+    /// says how many objects (never which: names are schema contents, §13).
+    /// </summary>
+    internal static async Task<List<StampRow>> ReadWithoutRepeatsAsync(List<StampRow> rows, Func<CancellationToken, Task<List<StampRow>>> reread, Action<string> note,
+        CancellationToken ct)
+    {
+        if (!HasRepeats(rows)) return rows;
+        ct.ThrowIfCancellationRequested();
+        rows = await reread(ct).ConfigureAwait(false);
+        if (!HasRepeats(rows)) return rows;
+
+        var kept = new List<StampRow>();
+        var at = new Dictionary<long, int>();
+        var repeated = new HashSet<long>();
+        foreach (var r in rows)
+        {
+            if (!at.TryGetValue(r.Id, out var i)) { at[r.Id] = kept.Count; kept.Add(r); continue; }
+            // The first copy's marker mixed with every other copy's and a constant: never a marker one consistent read gives.
+            var m = repeated.Add(r.Id) ? Mix(kept[i].Marker, RepeatedSeed) : kept[i].Marker;
+            kept[i] = kept[i] with { Marker = Mix(m, r.Marker) };
+        }
+        note(string.Create(CultureInfo.InvariantCulture,
+            $"The catalog listed {repeated.Count} objects more than once in two reads; each is shown once and read again at the next refresh."));
+        return kept;
+    }
+
+    const long RepeatedSeed = 0x5EED_0F_D0B1E;
+
+    static bool HasRepeats(List<StampRow> rows)
+    {
+        var seen = new HashSet<long>();
+        foreach (var r in rows) if (!seen.Add(r.Id)) return true;
+        return false;
     }
 
     // ------------------------------------------------------------------------------------------ details

@@ -140,7 +140,7 @@ public sealed class OracleMetadataIntegrationTests
         Assert.Equal(ObjectKind.View, One(stamps, Own, "SHARED_V").Kind);
         Assert.Equal(ObjectKind.Proc, One(stamps, Own, "SHARED_P").Kind);
         Assert.DoesNotContain(stamps, s => s.Schema is "SYS" or "SYSTEM" or "XDB" or "MDSYS" or "PUBLIC");
-        Assert.Equal(stamps.Count, stamps.Select(s => s.Id).Distinct().Count());
+        Assert.Empty(stamps.GroupBy(s => s.Id).Where(g => g.Count() > 1).Select(g => $"{g.First().Schema}.{g.First().Name} ({g.First().Kind}) x{g.Count()}"));
 
         var details = await meta.GetDetailsAsync(c, stamps.Select(s => s.Id).ToList(), Timeout());
         Assert.Empty(meta.Notes(c));

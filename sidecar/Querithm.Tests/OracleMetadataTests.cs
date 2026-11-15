@@ -41,6 +41,77 @@ public class OracleMetadataTests
         Assert.All(stamps, s => Assert.Equal("APP", s.Schema));
     }
 
+    /// <summary>Canned stamp reads, in order (the first is the snapshot's own read); counts the calls.</summary>
+    sealed class Reads(params List<StampRow>[] results)
+    {
+        public int Calls;
+        public Task<List<StampRow>> Next(CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(results[Calls++]);
+        }
+    }
+
+    [Fact]
+    public async Task A_snapshot_without_a_repeated_id_is_read_once_with_no_note()
+    {
+        var reads = new Reads([Row(1, "TABLE"), Row(2, "VIEW")]);
+        var notes = new List<string>();
+        var rows = await ReadWithoutRepeatsAsync(await reads.Next(default), reads.Next, notes.Add, CancellationToken.None);
+        Assert.Equal([1L, 2L], rows.Select(r => r.Id));
+        Assert.Equal(1, reads.Calls);
+        Assert.Empty(notes);
+    }
+
+    [Fact]
+    public async Task A_snapshot_that_lists_an_id_twice_is_read_once_more_and_the_clean_read_is_kept()
+    {
+        // Seen once on CI (dev run 43606347729): 91 rows, 88 distinct ids.
+        var reads = new Reads([Row(1, "TABLE"), Row(2, "VIEW"), Row(2, "VIEW") with { Marker = 99 }], [Row(1, "TABLE"), Row(2, "VIEW")]);
+        var notes = new List<string>();
+        var rows = await ReadWithoutRepeatsAsync(await reads.Next(default), reads.Next, notes.Add, CancellationToken.None);
+        Assert.Equal([1L, 2L], rows.Select(r => r.Id));
+        Assert.Equal(20, rows[1].Marker);
+        Assert.Equal(2, reads.Calls);
+        Assert.Empty(notes);
+    }
+
+    [Fact]
+    public async Task Ids_repeated_in_both_reads_are_kept_once_with_a_marker_that_rereads_them_and_a_note_without_names()
+    {
+        List<StampRow> Repeating() => [Row(1, "TABLE", "SECRET_T"), Row(2, "VIEW", "SECRET_V"), Row(1, "TABLE", "SECRET_T") with { Marker = 77 }, Row(2, "VIEW", "SECRET_V"), Row(3, "SEQUENCE")];
+        var reads = new Reads(Repeating(), Repeating());
+        var notes = new List<string>();
+        var rows = await ReadWithoutRepeatsAsync(await reads.Next(default), reads.Next, notes.Add, CancellationToken.None);
+        Assert.Equal([1L, 2L, 3L], rows.Select(r => r.Id)); // first-seen order
+        Assert.Equal(2, reads.Calls);
+        // The kept row's marker matches neither copy (nor a clean read's), so the next refresh reads its details again.
+        Assert.DoesNotContain(rows[0].Marker, new long[] { 10, 77 });
+        Assert.NotEqual(20, rows[1].Marker); // identical copies too
+        Assert.InRange(rows[0].Marker, 0, 0x0FFF_FFFF_FFFF_FFFFL);
+        Assert.Equal(30, rows[2].Marker); // an id listed once is untouched
+        var note = Assert.Single(notes);
+        Assert.Contains("2 objects", note);
+        Assert.DoesNotContain("SECRET", note); // schema contents stay out of notes (§13)
+        Assert.Single(Assemble(rows), s => s.Id == 1);
+    }
+
+    [Fact]
+    public async Task A_cancel_during_the_second_read_ends_the_snapshot()
+    {
+        using var cts = new CancellationTokenSource();
+        var calls = 0;
+        Task<List<StampRow>> Read(CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (++calls == 1) { cts.Cancel(); return Task.FromResult<List<StampRow>>([Row(1, "TABLE"), Row(1, "TABLE")]); }
+            return Task.FromResult<List<StampRow>>([Row(1, "TABLE")]);
+        }
+        var first = await Read(cts.Token);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => ReadWithoutRepeatsAsync(first, Read, _ => { }, cts.Token));
+        Assert.Equal(1, calls);
+    }
+
     [Fact]
     public void A_synonym_names_its_listed_target_and_the_target_is_part_of_its_marker()
     {

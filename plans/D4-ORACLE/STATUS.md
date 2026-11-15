@@ -119,12 +119,19 @@ on 2ab36b1 and 7f00b20 was not run; it is the open check for #22. Local: `dotnet
 `CancelRecoveryTests` frame-cancel flake in an earlier run, 5 / 5 alone — the known one); `QUERITHM_IT=1` Oracle suite
 979 / 0.
 
-**Open (seen 2026-11-14, dev CI run 43606347729, the 0.1.3 release prep):**
+**Seen 2026-11-14, dev CI run 43606347729, the 0.1.3 release prep — guarded 2026-11-15, root cause still open:**
 `OracleMetadataIntegrationTests.The_snapshot_lists_every_object_kind_the_fixture_made_with_exact_names_and_notes` failed
 once at its id-uniqueness check (`stamps.Count` 91, distinct ids 88: three objects listed twice). The same sidecar code
-passed in run 43603961716 an hour earlier, so it depends on timing — probably DDL from another Oracle test class running
-during the snapshot read, making one of the stamp query's LEFT JOINs match twice. Not reproduced or fixed yet; Oracle
-stays hidden in 0.1.3.
+passed in run 43603961716 an hour earlier. Oracle stays hidden in 0.1.3.
+2026-11-15: not reproduced. Three local runs of the Oracle integration classes passed it, and a throwaway test ran 126
+stamp reads while a second session created, altered and dropped a table, view, trigger, synonym, function, sequence and
+MV. None of those reads repeated an id. On the fixture, no join key of the joined `ALL_*` views repeats. In CI the test
+ran for 1 s with no Oracle DDL test logged near it, so "another class's DDL" is less likely than first thought. A plan
+returning wrong results is possible but not shown. Guard (§16 "Oracle stamp read with a repeated object id"):
+`OracleMetadata.ReadWithoutRepeatsAsync` reads once more; on a second repeat it keeps each id once, with a marker that
+makes the next refresh read it again, and notes how many objects (no names). The integration assertion now names the
+repeated objects (`schema.name (kind) xN`), so the next failure points at the join. That integration test also asserts
+there are no notes, so a repeat that the second read does not clear still fails it.
 
 ## Decisions taken (owner answers to README "Open decisions")
 
