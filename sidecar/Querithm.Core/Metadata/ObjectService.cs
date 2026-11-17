@@ -183,7 +183,17 @@ public sealed class LanguageService(ProviderRegistry providers, ISchemaSource sc
     /// <summary>Phase D0d: completion sees the tab's own view (an in-memory database, temporary tables).</summary>
     ISchemaSource For(string? sessionId) => sessionId != null && schema is SchemaCache cache ? new ScopedSchemaSource(cache, sessionId) : schema;
 
-    public Task<CompletionItem[]> CompleteAsync(CompleteParams p) => Task.Run(() => For(p.Dialect).Complete(p, For(p.SessionId)));
+    public Task<CompletionItem[]> CompleteAsync(CompleteParams p)
+    {
+        // RPC boundary (§13 rule 7): the document id keys the parse caches and the text is parsed on every request.
+        if (string.IsNullOrEmpty(p.DocId) || p.DocId.Length > MaxDocIdLength) throw QuerithmException.Invalid($"docId must be 1–{MaxDocIdLength} characters.");
+        if (p.Text is null || p.Text.Length > MaxCompletionText) throw QuerithmException.Invalid($"Completion reads documents of up to {MaxCompletionText:N0} characters.");
+        if (p.Offset < 0 || p.Offset > p.Text.Length) throw QuerithmException.Invalid("The cursor offset is outside the document.");
+        return Task.Run(() => For(p.Dialect).Complete(p, For(p.SessionId)));
+    }
+
+    /// <summary>The largest document completion parses (16 million UTF-16 characters, beyond any script an editor tab holds).</summary>
+    public const int MaxCompletionText = 16_000_000;
     public Task<Diagnostic[]> DiagnosticsAsync(DiagnosticsParams p) => Task.Run(() => For(p.Dialect).Diagnostics(p));
     public Task<FormatResult> FormatAsync(FormatParams p) => Task.Run(() => For(p.Dialect).Format(p));
     public Task<SignatureHelp> SignatureAsync(SignatureParams p) => Task.Run(() => For(p.Dialect).Signature(p, For(p.SessionId)));

@@ -19,6 +19,12 @@ export interface TableInScope {
   /** The name / schema was written quoted: exact, never folded (D4 S12, dialects that fold unquoted names). */
   quoted?: boolean;
   schemaQuoted?: boolean;
+  /** The alias was written quoted. */
+  aliasQuoted?: boolean;
+  /** A derived table or CTE whose select list is `*`: the tables its query reads (their columns are its columns). */
+  starSources?: TableInScope[];
+  /** How deeply nested the query level that names it is (0: the statement's own); an inner name hides an outer one. */
+  depth?: number;
 }
 
 export interface CursorContext {
@@ -27,7 +33,7 @@ export interface CursorContext {
   statementStart: number;
   statementEnd: number;
   tablesInScope: TableInScope[];
-  ctes: { name: string; columns?: string[] }[];
+  ctes: { name: string; columns?: string[]; quoted?: boolean }[];
   /** DECLARE @x and proc params seen above the cursor (T-SQL), plpgsql DECLARE vars (pg). */
   variables: { name: string; type?: string; kind?: "variable" | "parameter" }[];
   /** Text before the last '.', e.g. 'o' in 'o.Ord'; 'dbo' in 'dbo.Ord'; 'SalesDB.dbo' in 'SalesDB.dbo.Ord'. */
@@ -52,6 +58,8 @@ export interface CursorContext {
   slot?: "afterReference" | "alias" | "name" | "argValue";
   /** Explicit INSERT column list, when present. */
   insertColumnList?: string[];
+  /** Aliases the select list defines, for ORDER BY (and GROUP BY where the engine allows them). */
+  selectAliases?: string[];
   /** Non-aggregated columns extracted from SELECT projection for GROUP BY. */
   nonAggregatedColumns?: string[];
 }

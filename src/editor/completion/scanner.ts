@@ -49,6 +49,23 @@ export function lastStartingBefore(arr: Token[], pos: number): number {
   return lo - 1;
 }
 
+/**
+ * Words that continue a FROM clause and are never an alias written without AS. Most are reserved in every dialect, but
+ * not all: Oracle's reserved list (V$RESERVED_WORDS) has no JOIN, LEFT, USING, … so the lexer reads them as names.
+ */
+const NEVER_ALIAS = new Set([
+  "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "OUTER", "CROSS", "NATURAL", "POSITIONAL", "ASOF", "ANTI", "SEMI", "USING", "ON",
+  "WHERE", "GROUP", "ORDER", "HAVING", "WINDOW", "QUALIFY", "UNION", "EXCEPT", "MINUS", "INTERSECT", "LIMIT", "OFFSET",
+  "FETCH", "RETURNING", "LATERAL", "APPLY", "CONNECT", "START", "PIVOT", "UNPIVOT", "TABLESAMPLE",
+  "SET", "VALUES", "WHEN", "FOR", "OUTPUT", "OPTION", "INTO", "PARTITION",
+]);
+
+/** Words between INSERT and INTO (MySQL), or after INSERT OR (SQLite conflict resolution). */
+const INSERT_MODIFIERS = new Set(["IGNORE", "LOW_PRIORITY", "DELAYED", "HIGH_PRIORITY", "ABORT", "FAIL", "ROLLBACK"]);
+
+/** Engines whose GROUP BY may name a select-list alias. */
+const GROUP_BY_ALIASES: Record<Dialect, boolean> = { tsql: false, oracle: false, pg: true, mySql: true, sqlite: true, duckDb: true };
+
 const TABLE_CLAUSES = new Set<Clause>(["from", "join", "update", "insertInto", "delete"]);
 const PROC_WORDS = new Set(["PROC", "PROCEDURE", "FUNCTION", "TRIGGER"]);
 const BEGIN_TX = new Set(["TRAN", "TRANSACTION", "DISTRIBUTED", "DIALOG", "CONVERSATION", "WORK", "ISOLATION", "ATOMIC"]);
@@ -114,7 +131,8 @@ export class Splitter {
       case "WITH": this.withPending = true; break;
       case "EXPLAIN": this.explainPending = true; break;
       case "FROM": this.fromFirst = true; break;
-      case "MERGE": this.merge = this.tsql; break;
+      // MERGE runs to its `;` on every engine: its WHEN … THEN never ends it (PL/pgSQL's THEN rule would).
+      case "MERGE": this.merge = true; break;
       case "CREATE":
       case "ALTER": {
         let j = i + 1;
@@ -190,7 +208,7 @@ export class Splitter {
         this.withPending = false;
         if (u === "INSERT") this.insertPending = true;
         else if (u === "UPDATE") this.updateSetPending = true;
-        else if (u === "MERGE") this.merge = this.tsql;
+        else if (u === "MERGE") this.merge = true;
       }
     }
     if (u === "UPDATE" && W(T[i + 1]) === "SET") this.updateSetPending = true;
@@ -533,7 +551,18 @@ interface Ref extends TableInScope {
   offset: number;
   role?: "update" | "delete" | "insert" | "merge" | "into";
   endIdx: number;
+  /** The query level the reference belongs to: its enclosing "(" (the statement's root: a - 1) and set-operation branch. */
+  scopeOpen?: number;
+  scopeBranch?: number;
+  /** A derived table whose select list is `*`: the "(" of its query, whose own tables give its columns. */
+  starOpen?: number;
 }
+
+/** Clauses whose cursor is in an expression over the statement's sources. */
+const EXPRESSION_CLAUSES = new Set<Clause>(["select", "where", "groupBy", "having", "orderBy", "on"]);
+
+/** Words that start the next branch of a compound query. */
+const SET_OPERATORS = new Set(["UNION", "EXCEPT", "INTERSECT", "MINUS"]);
 
 interface InsertInfo {
   kw: number;
@@ -551,11 +580,15 @@ interface WFrame { clause: Clause; fn: FrameFn; open: number; execKw: number; ca
 
 class Analyzer {
   readonly pm: Int32Array;
-  readonly ctes: { name: string; columns?: string[] }[] = [];
+  readonly ctes: { name: string; columns?: string[]; quoted?: boolean }[] = [];
+  /** CTE name (lower case) → the "(" of its body, for a body whose select list is `*`. */
+  private readonly cteStar = new Map<string, number>();
   readonly refs: Ref[] = [];
   insert?: InsertInfo;
   mergeTarget?: Ref;
   private skipUntil = -1;
+  /** While collectRefs walks: each enclosing level's "(" and its set-operation branch (root first). */
+  private scopes: { open: number; branch: number }[] = [];
   readonly pg: boolean;
 
   constructor(
@@ -655,6 +688,41 @@ class Analyzer {
     return null;
   }
 
+  /**
+   * Aliases the select list of the cursor's query block defines (`expr AS a`, `expr a`): ORDER BY may name them, and
+   * GROUP BY too on PostgreSQL, MySQL, SQLite and DuckDB.
+   */
+  selectAliases(open: number, cursor: number): string[] {
+    const T = this.T;
+    let s = -1;
+    for (let i = Math.max(this.a, open + 1); i <= cursor; i++) {
+      if (isPunct(T[i], "(")) { const end = this.match(i); if (end > i) { i = end; continue; } }
+      if (W(T[i]) === "SELECT") s = i;
+    }
+    if (s < 0) return [];
+    const out: string[] = [];
+    let itemStart = s + 1;
+    const flush = (y: number) => {
+      const x = itemStart;
+      if (y - x < 2) return;
+      const last = T[y - 1];
+      const p = T[y - 2];
+      if (!isNameTok(last)) return;
+      // `expr AS a` or `expr a` (a name right after an expression, not after a dot or an operator).
+      if (W(p) === "AS" || (!isPunct(p, ".") && p.kind !== "operator" && !isPunct(p, ",") && y - x >= 2 && !(y - x === 2 && W(T[x]) === "DISTINCT"))) {
+        if (!out.includes(last.value)) out.push(last.value);
+      }
+    };
+    for (let i = s + 1; i <= this.b && i < T.length; i++) {
+      const t = T[i];
+      if (isPunct(t, "(")) { const m = this.match(i); if (m < 0) break; i = m; continue; }
+      if (t.kind === "keyword" && PROJECTION_END.has(t.upper)) { flush(i); return out; }
+      if (isPunct(t, ",")) { flush(i); itemStart = i + 1; }
+    }
+    flush(Math.min(this.b + 1, T.length));
+    return out;
+  }
+
   nonAggregatedProjections(open: number, cursor: number): string[] {
     const T = this.T;
     let s = -1;
@@ -710,6 +778,7 @@ class Analyzer {
       const nameTok = this.tok(i);
       if (!isNameTok(nameTok)) return;
       const name = nameTok!.value;
+      const quoted = nameTok!.kind === "qident";
       i++;
       let cols: string[] | undefined;
       if (isPunct(T[i], "(")) {
@@ -719,20 +788,24 @@ class Analyzer {
         for (let x = i + 1; x < e; x++) if (isNameTok(T[x]) && x !== this.skip) cols.push(T[x].value);
         i = e + 1;
       }
-      if (W(T[i]) !== "AS") { this.ctes.push({ name, columns: cols }); return; }
+      if (W(T[i]) !== "AS") { this.ctes.push({ name, columns: cols, ...(quoted ? { quoted } : {}) }); return; }
       i++;
       if (W(T[i]) === "NOT") i++;
       if (W(T[i]) === "MATERIALIZED") i++;
-      if (!isPunct(T[i], "(")) { this.ctes.push({ name, columns: cols }); return; }
+      if (!isPunct(T[i], "(")) { this.ctes.push({ name, columns: cols, ...(quoted ? { quoted } : {}) }); return; }
       const m = this.match(i);
       const e = m < 0 ? this.b + 1 : m;
       if (!cols) {
         for (let x = i + 1; x < e; x++) {
           if (isPunct(T[x], "(")) { const mm = this.match(x); if (mm < 0) break; x = mm; continue; }
-          if (W(T[x]) === "SELECT") { cols = this.projection(x, e); break; }
+          if (W(T[x]) === "SELECT") {
+            cols = this.projection(x, e);
+            if (!cols) this.cteStar.set(name.toLowerCase(), i);
+            break;
+          }
         }
       }
-      this.ctes.push({ name, columns: cols });
+      this.ctes.push({ name, columns: cols, ...(quoted ? { quoted } : {}) });
       if (m < 0) return;
       i = m + 1;
       if (!isPunct(T[i], ",")) return;
@@ -752,14 +825,30 @@ class Analyzer {
     return j;
   }
 
-  private parseAlias(n: number): { alias?: string; cols?: string[]; next: number } {
+  /** INSERT / REPLACE at token `i`: its target and column list. */
+  private collectInsert(i: number): void {
+    const T = this.T;
+    let j = this.skipTop(i + 1);
+    // SQLite INSERT OR REPLACE / IGNORE / … INTO; MySQL INSERT IGNORE / LOW_PRIORITY / … INTO.
+    if (W(T[j]) === "OR") j += 2;
+    while (INSERT_MODIFIERS.has(W(T[j]))) j++;
+    if (W(T[j]) === "INTO") j++;
+    const ref = this.parseRef(j, "insert", true);
+    const targetEnd = ref ? ref.endIdx : -1;
+    const colsOpen = ref && isPunct(T[targetEnd + 1], "(") && W(T[targetEnd + 2]) !== "SELECT" ? targetEnd + 1 : -1;
+    this.setInsert(i, ref ? { name: ref.name, schema: ref.schema } : undefined, targetEnd, colsOpen);
+  }
+
+  private parseAlias(n: number): { alias?: string; aliasQuoted?: boolean; cols?: string[]; next: number } {
     const T = this.T;
     let x = n;
     let viaAs = false;
     if (W(this.tok(x)) === "AS") { x++; viaAs = true; }
     const t = this.tok(x);
     if (!t || x > this.b || !(isNameTok(t) || (viaAs && t.kind === "keyword"))) return { next: n };
+    if (!viaAs && t.kind === "ident" && NEVER_ALIAS.has(t.upper)) return { next: n };
     const alias = t.value;
+    const aliasQuoted = t.kind === "qident";
     x++;
     let cols: string[] | undefined;
     if (isPunct(T[x], "(") && x <= this.b) {
@@ -769,7 +858,7 @@ class Analyzer {
       for (let y = x + 1; y < e; y++) if (isNameTok(T[y]) && y !== this.skip) cols.push(T[y].value);
       x = e + 1;
     }
-    return { alias, cols, next: x };
+    return { alias, ...(aliasQuoted ? { aliasQuoted } : {}), cols, next: x };
   }
 
   private isHintList(open: number, close: number): boolean {
@@ -814,6 +903,9 @@ class Analyzer {
         name: al.alias, alias: al.alias, isCte: false, isDerived: true, columns: al.cols ?? cols,
         offset: first.start, endIdx: al.next - 1, role,
       };
+      if (al.aliasQuoted) { ref.aliasQuoted = true; ref.quoted = true; }
+      if (inner === "SELECT" && !cols && !al.cols) ref.starOpen = j;
+      this.tagScope(ref);
       this.refs.push(ref);
       return ref;
     }
@@ -842,7 +934,7 @@ class Analyzer {
       n = m + 1;
     }
     if (!this.pg && W(T[n]) === "WITH" && isPunct(T[n + 1], "(")) { const m = this.match(n + 1); n = m < 0 ? n + 2 : m + 1; }
-    const al = noCall && role === "insert" ? { next: n } as { alias?: string; cols?: string[]; next: number } : this.parseAlias(n);
+    const al = noCall && role === "insert" ? { next: n } as { alias?: string; aliasQuoted?: boolean; cols?: string[]; next: number } : this.parseAlias(n);
     let end = al.next - 1;
     if (!this.pg && W(T[al.next]) === "WITH" && isPunct(T[al.next + 1], "(")) {
       const m = this.match(al.next + 1);
@@ -861,8 +953,10 @@ class Analyzer {
       role,
     };
     if (al.cols) ref.columns = al.cols;
+    if (al.aliasQuoted) ref.aliasQuoted = true;
     if (quoted[parts.length - 1]) ref.quoted = true;
     if (parts.length >= 2 && quoted[parts.length - 2]) ref.schemaQuoted = true;
+    this.tagScope(ref);
     this.refs.push(ref);
     this.skipUntil = Math.max(this.skipUntil, ref.endIdx);
     return ref;
@@ -904,6 +998,7 @@ class Analyzer {
   collectRefs(): void {
     const T = this.T;
     const frames: ("from" | "other" | "call")[] = ["other"];
+    this.scopes = [{ open: this.a - 1, branch: 0 }];
     for (let i = this.a; i <= this.b; i++) {
       if (i === this.skip) continue;
       const t = T[i];
@@ -911,13 +1006,18 @@ class Analyzer {
         if (t.value === "(") {
           const prev = T[i - 1];
           frames.push(i > this.a && !this.opensQuery(i) && (isNameTok(prev) || FUNC_KEYWORDS.has(W(prev))) ? "call" : "other");
-        } else if (t.value === ")") { if (frames.length > 1) frames.pop(); }
+          this.scopes.push({ open: i, branch: 0 });
+        } else if (t.value === ")") {
+          if (frames.length > 1) frames.pop();
+          if (this.scopes.length > 1) this.scopes.pop();
+        }
         else if (t.value === "," && frames[frames.length - 1] === "from") this.parseRefWithHints(i + 1);
         continue;
       }
       const u = W(t);
       if (!u) continue;
       const top = frames.length - 1;
+      if (SET_OPERATORS.has(u)) this.scopes[this.scopes.length - 1].branch++;
       if (i <= this.skipUntil && u !== "SELECT" && u !== "VALUES") continue;
       switch (u) {
         case "FROM":
@@ -946,23 +1046,22 @@ class Analyzer {
           if (W(T[j]) !== "FROM") this.parseRef(j, "delete");
           break;
         }
+        case "REPLACE":
+          // MySQL / SQLite `REPLACE INTO t (…)`: an insert. `REPLACE(…)` is the string function.
+          if (W(T[i + 1]) === "INTO" && !CONTINUATION_PREV.has(W(T[i - 1])) && W(T[i - 1]) !== "OR") this.collectInsert(i);
+          break;
         case "INSERT": {
           if (this.mergeTarget) {
             const colsOpen = isPunct(T[i + 1], "(") ? i + 1 : -1;
             this.setInsert(i, { name: this.mergeTarget.name, schema: this.mergeTarget.schema }, i, colsOpen);
             break;
           }
-          let j = this.skipTop(i + 1);
-          if (W(T[j]) === "INTO") j++;
-          const ref = this.parseRef(j, "insert", true);
-          const targetEnd = ref ? ref.endIdx : -1;
-          const colsOpen = ref && isPunct(T[targetEnd + 1], "(") && W(T[targetEnd + 2]) !== "SELECT" ? targetEnd + 1 : -1;
-          this.setInsert(i, ref ? { name: ref.name, schema: ref.schema } : undefined, targetEnd, colsOpen);
+          this.collectInsert(i);
           break;
         }
         case "INTO": {
           const pu = W(T[i - 1]);
-          if (pu === "INSERT" || pu === "MERGE") break;
+          if (pu === "INSERT" || pu === "MERGE" || pu === "REPLACE" || INSERT_MODIFIERS.has(pu) || W(T[i - 2]) === "OR") break;
           this.parseRef(i + 1, "into", true);
           break;
         }
@@ -1002,8 +1101,42 @@ class Analyzer {
     this.insert = { kw, target, targetEnd, colsOpen, colsClose, cols, source: -1 };
   }
 
-  tables(): TableInScope[] {
-    const refs = this.refs;
+  private tagScope(ref: Ref): void {
+    const s = this.scopes[this.scopes.length - 1];
+    ref.scopeOpen = s ? s.open : this.a - 1;
+    ref.scopeBranch = s ? s.branch : 0;
+  }
+
+  /**
+   * The query levels the cursor (after token `k`) can see: its own and every enclosing one, each in the set-operation
+   * branch the cursor is in. A subquery sees the outer query's tables (correlation); the outer query never sees a
+   * subquery's, a CTE body's or another UNION branch's.
+   */
+  private visibleScopes(k: number): Map<number, number> {
+    const T = this.T;
+    const stack: { open: number; branch: number }[] = [{ open: this.a - 1, branch: 0 }];
+    for (let i = this.a; i <= Math.min(k, this.b); i++) {
+      if (i === this.skip) continue;
+      const t = T[i];
+      if (isPunct(t, "(")) stack.push({ open: i, branch: 0 });
+      else if (isPunct(t, ")")) { if (stack.length > 1) stack.pop(); }
+      else if (SET_OPERATORS.has(W(t))) stack[stack.length - 1].branch++;
+    }
+    return new Map(stack.map((s) => [s.open, s.branch]));
+  }
+
+  /**
+   * Tables the cursor (after token `k`) can refer to. `exprClause`: the cursor is in an expression, where an INSERT /
+   * SELECT INTO target is not a source (`INSERT INTO t (…) SELECT | FROM s` reads s).
+   */
+  tables(k = this.b, exprClause = false): TableInScope[] {
+    const visible = this.visibleScopes(k);
+    const depth = new Map([...visible.keys()].map((open, i) => [open, i]));
+    const refs = this.refs.filter((r) => {
+      if (r.scopeOpen !== undefined && visible.get(r.scopeOpen) !== r.scopeBranch) return false;
+      if (exprClause && (r.role === "into" || (r.role === "insert" && this.insert && this.insert.source >= 0 && k >= this.insert.source))) return false;
+      return true;
+    });
     const aliasSet = new Set<string>();
     for (const r of refs) if (r.alias) aliasSet.add(r.alias.toLowerCase());
     const out: TableInScope[] = [];
@@ -1014,12 +1147,28 @@ class Analyzer {
       if (seen.has(key)) continue;
       seen.add(key);
       const t: TableInScope = { name: r.name, isCte: r.isCte, isDerived: r.isDerived, offset: r.offset };
+      if (r.scopeOpen !== undefined) t.depth = depth.get(r.scopeOpen) ?? 0;
       if (r.schema !== undefined) t.schema = r.schema;
       if (r.database !== undefined) t.database = r.database;
       if (r.alias !== undefined) t.alias = r.alias;
       if (r.columns !== undefined) t.columns = r.columns;
       if (r.quoted) t.quoted = true;
       if (r.schemaQuoted) t.schemaQuoted = true;
+      if (r.aliasQuoted) t.aliasQuoted = true;
+      // `SELECT *` in a derived table or CTE body: its columns are those of the tables that query reads.
+      const star = r.starOpen ?? (r.isCte && !r.columns ? this.cteStar.get(r.name.toLowerCase()) : undefined);
+      if (star !== undefined) {
+        const sources = this.refs.filter((x) => x.scopeOpen === star && x !== r).map((x) => {
+          const s: TableInScope = { name: x.name, isCte: x.isCte, isDerived: x.isDerived };
+          if (x.schema !== undefined) s.schema = x.schema;
+          if (x.database !== undefined) s.database = x.database;
+          if (x.columns) s.columns = x.columns;
+          if (x.quoted) s.quoted = true;
+          if (x.schemaQuoted) s.schemaQuoted = true;
+          return s;
+        });
+        if (sources.length) t.starSources = sources;
+      }
       out.push(t);
     }
     return out;
@@ -1052,6 +1201,8 @@ class Analyzer {
           else if (top.clause === "values" && top.fn !== "values" && (pu === "VALUES" || isPunct(prev, ","))) { f.fn = "values"; f.clause = "values"; }
           else if (top.clause === "exec" && top.execKw >= 0 && this.pg) { f.fn = "execCall"; f.clause = "execArgs"; f.execKw = top.execKw; }
           else if (pu === "TABLE" || (createTable && st.length === 1 && !rootParenSeen)) { f.fn = "colDefs"; f.clause = "unknown"; }
+          // ON CONFLICT (…): the insert target's columns (it is in scope, like ON DUPLICATE KEY UPDATE).
+          else if (pu === "CONFLICT") { f.fn = "sub"; f.clause = "set"; }
           else if (prev && !this.opensQuery(i) && (isNameTok(prev) || FUNC_KEYWORDS.has(pu))) {
             f.fn = "call";
             if (TABLE_CLAUSES.has(top.clause)) f.clause = "select";
@@ -1065,6 +1216,8 @@ class Analyzer {
           }
         } else if (t.value === ",") {
           if (top.fn === "convert") top.clause = "select";
+          // `JOIN t ON a = b, |`: the comma ends the join condition and lists the next table.
+          else if (top.clause === "on" && !merge && (top.fn === "" || top.fn === "sub") && st.length === 1) top.clause = "from";
           else if (st.length === 1 && stmtKind === "DECLARE") top.clause = "declare";
         }
         continue;
@@ -1105,6 +1258,7 @@ class Analyzer {
           break;
         case "SET": top.clause = "set"; break;
         case "INSERT": top.clause = "insertInto"; break;
+        case "REPLACE": if (W(next) === "INTO" && W(T[i - 1]) !== "OR") top.clause = "insertInto"; break;
         case "INTO": top.clause = W(T[i - 1]) === "MERGE" ? "from" : "insertInto"; break;
         case "VALUES": top.clause = "values"; break;
         case "DELETE": if (this.updateOk(i)) top.clause = "delete"; break;
@@ -1252,7 +1406,7 @@ function scanImpl(text: string, offset: number, dialect: Dialect, depth: number)
   an.parseCtes();
   an.collectRefs();
   ctx.ctes = an.ctes;
-  ctx.tablesInScope = an.tables();
+  ctx.tablesInScope = an.tables(k);
   const ins = an.insert;
   if (ins?.target) {
     ctx.insertTarget = ins.target.schema !== undefined ? { name: ins.target.name, schema: ins.target.schema } : { name: ins.target.name };
@@ -1342,15 +1496,23 @@ function scanImpl(text: string, offset: number, dialect: Dialect, depth: number)
   // Table-reference positions: object, alias (after AS) or after a complete reference
   if (TABLE_CLAUSES.has(clause) && qualifier === undefined && slot === undefined) {
     if (pu === "AS") slot = "alias";
-    else if (isNameTok(prev) || prev.kind === "variable" || isPunct(prev, ")")) slot = "afterReference";
+    // A clause word the lexer reads as a name (Oracle: JOIN, LEFT, USING are not reserved there) starts the next
+    // reference; it never completes one.
+    else if ((isNameTok(prev) && !(prev.kind === "ident" && NEVER_ALIAS.has(prev.upper))) || prev.kind === "variable" || isPunct(prev, ")")) slot = "afterReference";
   } else if (qualifier === undefined && slot === undefined && pu === "AS" && frame.fn !== "cast" &&
     (clause === "select" || clause === "where" || clause === "on" || clause === "groupBy" || clause === "orderBy" || clause === "having")) {
     slot = "alias";
   }
 
   ctx.clause = clause;
+  // In an expression an INSERT / SELECT INTO target is not a source of rows.
+  if (EXPRESSION_CLAUSES.has(clause)) ctx.tablesInScope = an.tables(k, true);
   if (clause === "groupBy") {
     ctx.nonAggregatedColumns = an.nonAggregatedProjections(frame.open, k);
+  }
+  if ((clause === "orderBy" || (clause === "groupBy" && GROUP_BY_ALIASES[dialect])) && qualifier === undefined) {
+    const aliases = an.selectAliases(frame.open, k);
+    if (aliases.length) ctx.selectAliases = aliases;
   }
   if (slot) ctx.slot = slot;
   return ctx;

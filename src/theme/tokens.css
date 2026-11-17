@@ -1295,23 +1295,24 @@ select {
   .q-skeleton, [data-q-exiting] .q-modal-backdrop, [data-q-exiting] .q-modal-dialog { animation: none; }
 }
 
-/* Editor hover (providers.ts provideHover): a table's columns as a readable grid. Markdown only (no HTML, L10), so the
-   cells are styled by position: name (mono; a key column bold in the key tone), type (code), nullability (muted when
-   nullable). Monaco's own hover rules are overridden by the extra .monaco-editor scope. */
-.monaco-editor .monaco-hover .markdown-hover { font-size: 12px; line-height: 1.45; }
-.monaco-editor .monaco-hover .markdown-hover strong { color: var(--q-fg); font-weight: 600; }
-.monaco-editor .monaco-hover .markdown-hover p > em { color: var(--q-muted); font-style: normal; }
-.monaco-editor .monaco-hover .markdown-hover table { border-collapse: collapse; margin: 2px 0; min-width: 100%; }
-.monaco-editor .monaco-hover .markdown-hover th {
+/* Editor hover (providers.ts provideHover) and the completion details pane (complete.ts documentation): a table's
+   columns as a readable grid. Markdown only (no HTML, L10), so the cells are styled by position: name (mono; a key
+   column bold in the key tone), type (code), nullability (muted when nullable). Monaco's own hover rules are overridden
+   by the extra .monaco-editor scope. */
+.monaco-editor :is(.monaco-hover .markdown-hover, .suggest-details .docs) { font-size: 12px; line-height: 1.45; }
+.monaco-editor :is(.monaco-hover .markdown-hover, .suggest-details .docs) strong { color: var(--q-fg); font-weight: 600; }
+.monaco-editor :is(.monaco-hover .markdown-hover, .suggest-details .docs) p > em { color: var(--q-muted); font-style: normal; }
+.monaco-editor :is(.monaco-hover .markdown-hover, .suggest-details .docs) table { border-collapse: collapse; margin: 2px 0; min-width: 100%; }
+.monaco-editor :is(.monaco-hover .markdown-hover, .suggest-details .docs) th {
   padding: 3px 12px 4px 6px; text-align: left; font-weight: 600; font-size: 10.5px; letter-spacing: 0.04em;
   text-transform: uppercase; color: var(--q-muted); border-bottom: 1px solid var(--q-line); white-space: nowrap;
 }
-.monaco-editor .monaco-hover .markdown-hover td { padding: 2px 12px 2px 6px; border: none; white-space: nowrap; vertical-align: baseline; }
-.monaco-editor .monaco-hover .markdown-hover tbody tr:nth-child(even) td { background: var(--q-panel-2); }
-.monaco-editor .monaco-hover .markdown-hover td:first-child { font-family: var(--font-mono); color: var(--q-ident); }
-.monaco-editor .monaco-hover .markdown-hover td:first-child strong { color: var(--q-warn); }
-.monaco-editor .monaco-hover .markdown-hover td code {
+.monaco-editor :is(.monaco-hover .markdown-hover, .suggest-details .docs) td { padding: 2px 12px 2px 6px; border: none; white-space: nowrap; vertical-align: baseline; }
+.monaco-editor :is(.monaco-hover .markdown-hover, .suggest-details .docs) tbody tr:nth-child(even) td { background: var(--q-panel-2); }
+.monaco-editor :is(.monaco-hover .markdown-hover, .suggest-details .docs) td:first-child { font-family: var(--font-mono); color: var(--q-ident); }
+.monaco-editor :is(.monaco-hover .markdown-hover, .suggest-details .docs) td:first-child strong { color: var(--q-warn); }
+.monaco-editor :is(.monaco-hover .markdown-hover, .suggest-details .docs) td code {
   background: none; padding: 0; font-family: var(--font-mono); font-size: 11.5px; color: var(--q-obj-table);
 }
-.monaco-editor .monaco-hover .markdown-hover td:last-child { color: var(--q-fg); font-size: 11px; }
-.monaco-editor .monaco-hover .markdown-hover td:last-child em { color: var(--q-muted); }
+.monaco-editor :is(.monaco-hover .markdown-hover, .suggest-details .docs) td:last-child { color: var(--q-fg); font-size: 11px; }
+.monaco-editor :is(.monaco-hover .markdown-hover, .suggest-details .docs) td:last-child em { color: var(--q-muted); }

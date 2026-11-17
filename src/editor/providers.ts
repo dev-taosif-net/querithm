@@ -4,6 +4,7 @@ import { rpc } from "../ipc/client";
 import { applyKeywordCase, complete, keywordCaseEdit, resolveObjectAt } from "./completion";
 import type { SchemaIndex, Tier1Item } from "./completion/types";
 import { sqlRegionAtOffset } from "./completion/sqlRegion";
+import { closeQuoteOf, monacoFilterText, openQuoteAt } from "./completion/complete";
 import { getStream } from "./completion/lexer";
 import { lastStartingBefore } from "./completion/scanner";
 import { expandWildcardAtOffset } from "./expandWildcard";
@@ -15,13 +16,14 @@ import { monaco } from "./monaco";
 import { modelOwner, onEditorCreated, onModelContent, onModelDisposed, tabIdOfModel } from "./editors";
 import { useTabs } from "../store/tabs";
 import { useProfiles } from "../store/profiles";
-import { ensureTabSnapshot, loginSchemaOf, tabScope, tabSnapshot } from "../store/snapshots";
+import { ensureTabSnapshot, loginSchemaOf, tabScope, tabSnapshot, useSnapshots } from "../store/snapshots";
 import { isDisconnected } from "../store/connections";
 import { useSettings } from "../store/settings";
 import { snippetsFor, useSnippets } from "../snippets/snippetStore";
 import { assertNever, DEFAULT_DIALECT, DIALECT_LIST, DIALECTS, dialectForLanguage, dialectOf, dialectOfLanguage, foldIdentifier } from "../engines";
 import { formatOracleScript } from "./oracleFormat";
-import { mdCell, mdCode, mdFence, mdText, oneLine } from "./hoverMarkdown";
+import { columnLines, columnsTable, mdCode, mdFence, objectHeader, oneLine } from "./hoverMarkdown";
+import { fkReference } from "./completion/schemaIndex";
 
 export interface DocContext {
   tabId: string;
@@ -32,6 +34,8 @@ export interface DocContext {
   database?: string;
   /** A session-owned engine's tab (SQLite): its session, whose own view completion and signature help read (Phase D0d). */
   sessionId?: string;
+  /** The schema snapshot's version: a refresh at the same text asks tier 2 again. */
+  snapVersion?: number;
   schema: SchemaIndex | null;
 }
 
@@ -51,7 +55,7 @@ export function docContext(model: monaco.editor.ITextModel): DocContext | null {
   if (isDisconnected(tab?.profileId)) return { tabId, ...(docId ? { docId } : {}), dialect, schema: null };
   const snap = tabSnapshot(tab);
   const sessionId = tabScope(tab)?.sessionId;
-  return { tabId, ...(docId ? { docId } : {}), dialect, profileId: tab?.profileId, database: tab?.database, ...(sessionId ? { sessionId } : {}), schema: snap?.index ?? null };
+  return { tabId, ...(docId ? { docId } : {}), dialect, profileId: tab?.profileId, database: tab?.database, ...(sessionId ? { sessionId } : {}), ...(snap ? { snapVersion: snap.version } : {}), schema: snap?.index ?? null };
 }
 
 const kindMap: Record<CompletionKind, monaco.languages.CompletionItemKind> = {
@@ -89,10 +93,20 @@ export function schemaParam(profileId: string | null | undefined): { schema?: st
   return schema ? { schema } : {};
 }
 
-// ---- tier 2 cache: (model version, offset) → items ----
+// ---- tier 2 cache: the word being typed → items ----
+/**
+ * Keyed by the word, not the keystroke: the model, the connection (profile, database, session), the schema snapshot's
+ * version, the dialect, where the word starts and the text before it. Extending the word keeps tier 2's items (Monaco
+ * filters them) instead of dropping them for ~120 ms on every key and re-opening the list; a database switch or a
+ * schema refresh at the same text asks again.
+ */
 const tier2Cache = new Map<string, CompletionItem[]>();
-let tier2Timer: ReturnType<typeof setTimeout> | undefined;
-let tier2Pending: string | undefined;
+const TIER2_CACHE_MAX = 8;
+/** Per model: its debounce timer, the key in flight, and the newest request (an older answer is never cached over it). */
+const tier2Timers = new Map<string, ReturnType<typeof setTimeout>>();
+const tier2Pending = new Map<string, string>();
+const tier2Latest = new Map<string, number>();
+let tier2Seq = 0;
 let lastTier1Ms = 0;
 export const completionStats = { tier1: [] as number[], tier2: [] as number[] };
 
@@ -101,17 +115,48 @@ function pushStat(arr: number[], v: number) {
   arr.push(v);
 }
 
+/** FNV-1a over a string: identifies the text before the word without keeping it. */
+function textHash(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(36) + ":" + s.length;
+}
+
+export function tier2Key(model: monaco.editor.ITextModel, ctx: DocContext, text: string, wordStart: number): string {
+  return [String(model.uri), ctx.profileId ?? "", ctx.database ?? "", ctx.sessionId ?? "", ctx.snapVersion ?? 0, ctx.dialect, wordStart, textHash(text.slice(0, wordStart))].join("|");
+}
+
+function cacheTier2(key: string, items: CompletionItem[]) {
+  tier2Cache.delete(key);
+  tier2Cache.set(key, items);
+  while (tier2Cache.size > TIER2_CACHE_MAX) tier2Cache.delete(tier2Cache.keys().next().value!);
+}
+
+/** Drops a model's pending tier-2 request (its model went away), or every model's without a key. */
+export function cancelTier2(modelKey?: string) {
+  for (const k of modelKey === undefined ? [...tier2Timers.keys()] : [modelKey]) {
+    clearTimeout(tier2Timers.get(k));
+    tier2Timers.delete(k);
+    tier2Pending.delete(k);
+    tier2Latest.delete(k);
+  }
+}
+
 function findEditor(model: monaco.editor.ITextModel) {
   return monaco.editor.getEditors().find((e) => e.getModel() === model);
 }
 
-function scheduleTier2(model: monaco.editor.ITextModel, ctx: DocContext, offset: number, key: string, tier1Labels: Set<string>) {
+function scheduleTier2(model: monaco.editor.ITextModel, ctx: DocContext, offset: number, key: string, tier1Labels: Set<string>, wordStart = offset) {
   if (!useSettings.getState().tier2) return;
-  if (tier2Pending === key) return;
-  tier2Pending = key;
-  clearTimeout(tier2Timer);
-  const version = model.getVersionId();
-  tier2Timer = setTimeout(async () => {
+  const m = ctx.docId ?? ctx.tabId; // the model key (a notebook cell's own)
+  if (tier2Pending.get(m) === key) return;
+  tier2Pending.set(m, key);
+  clearTimeout(tier2Timers.get(m));
+  const before = textHash(model.getValue().slice(0, wordStart));
+  tier2Timers.set(m, setTimeout(async () => {
+    tier2Timers.delete(m);
+    const seq = ++tier2Seq;
+    tier2Latest.set(m, seq);
     const t0 = performance.now();
     try {
       const items = await rpc("lang.complete", {
@@ -119,21 +164,23 @@ function scheduleTier2(model: monaco.editor.ITextModel, ctx: DocContext, offset:
         ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}), ...schemaParam(ctx.profileId),
       });
       pushStat(completionStats.tier2, performance.now() - t0);
-      tier2Cache.clear();
-      tier2Cache.set(key, items);
+      // A slower, older request finishing after a newer one never replaces it.
+      if (tier2Latest.get(m) !== seq || model.isDisposed()) return;
+      cacheTier2(key, items);
       const editor = findEditor(model);
-      const changed = items.some((i) => !tier1Labels.has(i.label.toLowerCase()) || i.detail);
-      // Replace the open popup's items in place (§9): re-trigger only while it is still open on the same text — or,
-      // when tier 1 had nothing to show (so no popup opened), open it with tier 2's items while the user still types there.
-      if (editor && changed && model.getVersionId() === version && (suggestWidgetVisible(editor) || (tier1Labels.size === 0 && items.length > 0 && editor.hasTextFocus()))) {
+      const changed = items.some((i) => !tier1Labels.has(mergeKey(i.kind, i.label)) || i.detail);
+      // Replace the open popup's items in place (§9): re-trigger only while the user is still on the same word (the text
+      // before it unchanged) — or, when tier 1 had nothing to show (so no popup opened), open it with tier 2's items.
+      const sameWord = textHash(model.getValue().slice(0, wordStart)) === before;
+      if (editor && changed && sameWord && (suggestWidgetVisible(editor) || (tier1Labels.size === 0 && items.length > 0 && editor.hasTextFocus()))) {
         editor.trigger("tier2", "editor.action.triggerSuggest", {});
       }
     } catch {
       /* tier 2 is best effort */
     } finally {
-      if (tier2Pending === key) tier2Pending = undefined;
+      if (tier2Pending.get(m) === key) tier2Pending.delete(m);
     }
-  }, 120); // debounced 120 ms (§9)
+  }, 120)); // debounced 120 ms (§9)
 }
 
 function keywordText(label: string): string {
@@ -171,7 +218,7 @@ function installKeywordCaseOnType(editor: monaco.editor.ICodeEditor) {
   });
 }
 
-function toMonaco(item: Tier1Item | CompletionItem, range: monaco.IRange, tier: 1 | 2): monaco.languages.CompletionItem {
+function toMonaco(item: Tier1Item | CompletionItem, range: monaco.IRange | monaco.languages.CompletionItemRanges, tier: 1 | 2): monaco.languages.CompletionItem {
   return {
     label: { label: item.label, description: item.detail ?? undefined },
     kind: kindMap[item.kind] ?? monaco.languages.CompletionItemKind.Text,
@@ -186,7 +233,47 @@ function toMonaco(item: Tier1Item | CompletionItem, range: monaco.IRange, tier: 
   };
 }
 
-function provideCompletion(model: monaco.editor.ITextModel, position: monaco.Position): monaco.languages.CompletionList {
+/** Clauses whose next word is an object name: a list opened by typing a space there is wanted (`FROM |`). */
+const SPACE_TRIGGER_CLAUSES = new Set(["from", "join", "update", "insertInto", "delete", "exec", "use"]);
+
+/**
+ * A list opened by a typed space or comma with nothing typed yet is shown only where an object name comes next.
+ * Anywhere else (`FROM t o |`, `WHERE a = 1 AND |`, `SELECT a, |`) Enter must start a new line, not accept the first
+ * keyword or column; Ctrl+Space and typing a letter still open the list there.
+ */
+function wantsList(trigger: monaco.languages.CompletionContext | undefined, ctx: { clause: string; slot?: string; prefix: string; qualifier?: string }): boolean {
+  if (!trigger || trigger.triggerKind !== monaco.languages.CompletionTriggerKind.TriggerCharacter) return true;
+  if (trigger.triggerCharacter !== " " && trigger.triggerCharacter !== ",") return true;
+  if (ctx.prefix || ctx.qualifier !== undefined) return true;
+  return trigger.triggerCharacter === " " && SPACE_TRIGGER_CLAUSES.has(ctx.clause) && ctx.slot === undefined;
+}
+
+/** Merge key: one entry per name and kind family, so a column `Count` and the function COUNT both stay (§9). */
+function mergeKey(kind: CompletionKind, label: string): string {
+  const family = kind === "table" || kind === "view" || kind === "cte" || kind === "tempTable" ? "rel" : kind === "proc" || kind === "func" ? "call" : kind;
+  return `${family}|${label.toLowerCase()}`;
+}
+
+/**
+ * End of the name the cursor is in, so accepting replaces all of it (`Cust|omerId` → `CustomerId`, not
+ * `CustomerIdomerId`). Inside an opened quote (`open` = `[`, `"` or a backtick) the name runs to its closing quote on
+ * the same line, which is replaced too; without one, to the end of the word.
+ */
+export function wordEndAt(text: string, offset: number, open = ""): number {
+  if (open) {
+    const close = closeQuoteOf(open);
+    for (let e = offset; e < text.length && e - offset < 256; e++) {
+      const c = text[e];
+      if (c === "\n" || c === "\r") break;
+      if (c === close) return e + 1;
+    }
+  }
+  let end = offset;
+  while (end < text.length && /[\p{L}\p{N}_$#@]/u.test(text[end])) end++;
+  return end;
+}
+
+function provideCompletion(model: monaco.editor.ITextModel, position: monaco.Position, trigger?: monaco.languages.CompletionContext): monaco.languages.CompletionList {
   const ctx = docContext(model);
   if (!ctx) return { suggestions: [] };
   // No schema cached for a connected tab (never loaded, or the load failed): load it now, so the next request —
@@ -201,33 +288,72 @@ function provideCompletion(model: monaco.editor.ITextModel, position: monaco.Pos
   if (result.context.inStringOrComment) {
     return inDollarBody(text, offset, ctx.dialect) ? dollarBodyCompletion(model, ctx, text, offset, position) : { suggestions: [] };
   }
+  if (!wantsList(trigger, result.context)) return { suggestions: [], incomplete: true };
   // In a routine body tier 2 answers `$1` and `"Quoted"`: the range must cover a typed `$` or opening `"` too.
   const bodyStart = dollarBodyStart(text, offset, ctx.dialect);
-  const start = model.getPositionAt(bodyStart >= 0 ? Math.min(result.context.prefixStart, dollarWordStart(text, offset, bodyStart)) : result.context.prefixStart);
-  const range = new monaco.Range(start.lineNumber, start.column, position.lineNumber, position.column);
-  const key = `${model.uri}|${model.getVersionId()}|${offset}`;
+  // An opened quote (`[Ord|`, `"Ord|`) is replaced with the item's fully quoted name, its closing quote included.
+  const open = bodyStart >= 0 ? "" : openQuoteAt(text, result.context.prefixStart, ctx.dialect);
+  const startOffset = open ? result.context.prefixStart - 1
+    : bodyStart >= 0 ? Math.min(result.context.prefixStart, dollarWordStart(text, offset, bodyStart)) : result.context.prefixStart;
+  const start = model.getPositionAt(startOffset);
+  const end = model.getPositionAt(wordEndAt(text, offset, open));
+  const insert = new monaco.Range(start.lineNumber, start.column, position.lineNumber, position.column);
+  const range = { insert, replace: new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column) };
+  const key = tier2Key(model, ctx, text, startOffset);
   const merged = new Map<string, monaco.languages.CompletionItem>();
-  const aliased = new Set<string>();
+  // Tier 1 already matched (prefix, camel hump, substring) and ranked these items. Monaco sorts by its own fuzzy score
+  // first and uses sortText only for ties, which put `ORDER BY` above `OrderId` for `ORD` and dropped `tblmenu` for
+  // `menu`. A filter text that starts with what was typed gives every tier-1 item the same score, so tier 1's order
+  // holds. (The text typed includes an opened quote: the range starts there.)
+  const typed = text.slice(startOffset, offset);
   for (const i of result.items) {
-    merged.set(i.label.toLowerCase(), toMonaco(i, range, 1));
-    if (i.alias) aliased.add(i.label.toLowerCase());
+    const item = toMonaco(i, range, 1);
+    if (typed) item.filterText = monacoFilterText(typed, i);
+    merged.set(mergeKey(i.kind, i.label), item);
   }
   const t2 = tier2Cache.get(key);
   if (t2) {
-    // Merge by label, keeping tier-2 detail text (§9).
+    // Merge by name and kind (§9). A name tier 1 already offers keeps tier 1's insert text, which follows the
+    // dialect's quoting rules (a reserved word delimited, an alias as written); tier 2 refines the detail.
     for (const i of t2) {
-      const k = i.label.toLowerCase();
+      const k = mergeKey(i.kind, i.label);
       const prev = merged.get(k);
       const next = toMonaco(i, range, 2);
-      // A tier-1 auto-aliased reference keeps its insert text; tier 2 only refines the detail.
-      if (prev && aliased.has(k)) { merged.set(k, { ...prev, detail: next.detail ?? prev.detail }); continue; }
-      merged.set(k, prev ? { ...prev, detail: next.detail ?? prev.detail, label: { label: i.label, description: i.detail ?? (prev.label as monaco.languages.CompletionItemLabel).description }, insertText: next.insertText, insertTextRules: next.insertTextRules ?? prev.insertTextRules } : next);
+      if (open) next.filterText = open + (next.filterText ?? i.label);
+      merged.set(k, prev ? { ...prev, detail: next.detail ?? prev.detail, label: { label: (prev.label as monaco.languages.CompletionItemLabel).label, description: i.detail ?? (prev.label as monaco.languages.CompletionItemLabel).description } } : next);
     }
   } else {
-    scheduleTier2(model, ctx, offset, key, new Set(merged.keys()));
+    scheduleTier2(model, ctx, offset, key, new Set(merged.keys()), startOffset);
   }
-  for (const item of snippetSuggestions(ctx.dialect, text, result.context.prefixStart, offset, range)) merged.set(`snippet:${item.filterText}`, item);
+  for (const item of snippetSuggestions(ctx.dialect, text, result.context.prefixStart, offset, insert)) merged.set(`snippet:${item.filterText}`, item);
+  const status = schemaStatusItem(ctx, result.context, text.slice(startOffset, offset), insert);
+  if (status) merged.set("status:", status);
   return { suggestions: [...merged.values()], incomplete: true };
+}
+
+const NAME_CLAUSES = new Set(["from", "join", "update", "insertInto", "delete", "exec", "insertColumns", "select", "where", "on", "set", "groupBy", "orderBy", "having"]);
+
+/**
+ * Why no table or column is listed, as the list's first row: the schema is still loading, failed to load, or the
+ * server is disconnected. Accepting it changes nothing (it re-inserts what was typed). Shown only where names belong.
+ */
+function schemaStatusItem(ctx: DocContext, c: { clause: string; slot?: string }, typed: string, range: monaco.IRange): monaco.languages.CompletionItem | null {
+  if (ctx.schema || !NAME_CLAUSES.has(c.clause) || c.slot === "alias" || c.slot === "name") return null;
+  const tab = useTabs.getState().tabs[ctx.tabId];
+  if (!tab?.profileId) return null;
+  let label: string;
+  let detail: string;
+  if (isDisconnected(tab.profileId)) { label = "Not connected"; detail = "connect to list tables and columns"; }
+  else {
+    const entry = tabSnapshot(tab);
+    if (!tabScope(tab)) return null; // no database picked: nothing to load
+    if (entry && entry.status !== "loading" && entry.failedAt) { label = "Schema not loaded"; detail = "the load failed; retrying"; }
+    else { label = "Loading schema…"; detail = "tables and columns appear when it arrives"; }
+  }
+  return {
+    label: { label, description: detail }, kind: monaco.languages.CompletionItemKind.Text, detail,
+    insertText: typed, filterText: typed || label, sortText: "!", range,
+  };
 }
 
 /** The cursor is inside a `$tag$ … $tag$` body: the only string a PL/pgSQL tier 2 can answer for ('…' and comments never). */
@@ -252,10 +378,10 @@ function dollarBodyCompletion(model: monaco.editor.ITextModel, ctx: DocContext, 
   const start = dollarWordStart(text, offset, Math.max(0, dollarBodyStart(text, offset, ctx.dialect)));
   const from = model.getPositionAt(start);
   const range = new monaco.Range(from.lineNumber, from.column, position.lineNumber, position.column);
-  const key = `${model.uri}|${model.getVersionId()}|${offset}`;
+  const key = tier2Key(model, ctx, text, start);
   const t2 = tier2Cache.get(key);
   if (t2) return { suggestions: t2.map((i) => toMonaco(i, range, 2)), incomplete: true };
-  scheduleTier2(model, ctx, offset, key, new Set());
+  scheduleTier2(model, ctx, offset, key, new Set(), start);
   return { suggestions: [], incomplete: true };
 }
 
@@ -311,13 +437,11 @@ function provideHover(model: monaco.editor.ITextModel, position: monaco.Position
   if (r.column) {
     const col = r.column.table.columns?.find((c) => c.name.toLowerCase() === r.column!.name.toLowerCase());
     if (!col) return null;
-    lines.push(`**${mdText(`${r.column.table.schema}.${r.column.table.name}.${col.name}`)}**`);
-    lines.push(`${mdCode(col.type)} ${col.nullable ? "NULL" : "NOT NULL"}${col.pk ? " · PK" : ""}${col.identity ? " · IDENTITY" : ""}${col.computed ? " · computed" : ""}`);
-    if (col.default) lines.push(`default ${mdCode(col.default)}`);
+    const t = r.column.table;
+    lines.push(...columnLines(`${t.schema}.${t.name}.${col.name}`, col, fkReference(ctx.schema, t.id, col.name)));
   } else if (r.object) {
     const o = r.object;
-    const count = o.columns?.length ? ` · ${o.columns.length} ${o.columns.length === 1 ? "column" : "columns"}` : "";
-    lines.push(`**${mdText(`${o.schema}.${o.name}`)}** · *${mdText(o.kind)}${count}*`);
+    lines.push(objectHeader(o));
     if (o.params?.length) {
       lines.push(
         mdFence(
@@ -327,17 +451,7 @@ function provideHover(model: monaco.editor.ITextModel, position: monaco.Position
         ),
       );
     } else if (o.returnType) lines.push(`returns ${mdCode(o.returnType)}`);
-    if (o.columns?.length) {
-      // Styled by `.markdown-hover table` in tokens.css: the name column in mono (a key column bold and tinted), the
-      // type as code, nullable cells italic and muted so a required column reads at a glance.
-      const shown = o.columns.slice(0, 25).map((c) => {
-        const name = c.pk ? `**🔑 ${mdCell(c.name)}**` : mdCell(c.name);
-        const flags = [c.nullable ? "*null*" : "not null", c.identity ? "identity" : "", c.computed ? "computed" : ""].filter(Boolean).join(" · ");
-        return `| ${name} | ${mdCell(c.type, true)} | ${flags} |`;
-      });
-      lines.push(`| Column | Type | Nullability |\n|:---|:---|:---|\n${shown.join("\n")}`);
-      if (o.columns.length > 25) lines.push(`*…and ${o.columns.length - 25} more columns*`);
-    }
+    if (o.columns?.length) lines.push(...columnsTable(o.columns));
   } else if (r.variable) {
     return null;
   }
@@ -421,10 +535,17 @@ export function installProviders() {
   if (installed) return;
   installed = true;
   monaco.editor.registerCommand("querithm.noteUsage", (_accessor, label: string) => noteUsage(label));
+  // A schema that arrives (or fails) while the list is open replaces the "Loading schema…" row with the real names.
+  useSnapshots.subscribe((s, prev) => {
+    if (s.entries === prev.entries) return;
+    for (const editor of monaco.editor.getEditors()) {
+      if (suggestWidgetVisible(editor)) editor.trigger("schema", "editor.action.triggerSuggest", {});
+    }
+  });
   for (const lang of DIALECT_LIST.map((d) => DIALECTS[d].language)) {
     monaco.languages.registerCompletionItemProvider(lang, {
       triggerCharacters: [".", " ", "@", "(", ",", "["],
-      provideCompletionItems: (model, position) => provideCompletion(model, position),
+      provideCompletionItems: (model, position, context) => provideCompletion(model, position, context),
     });
     monaco.languages.registerHoverProvider(lang, { provideHover: (model, position) => provideHover(model, position) });
     monaco.languages.registerFoldingRangeProvider(lang, {
@@ -596,6 +717,7 @@ export function installProviders() {
   onModelDisposed((key) => {
     clearTimeout(diagTimers.get(key));
     diagTimers.delete(key);
+    cancelTier2(key);
     rpc("lang.forget", { docId: key }).catch(() => {});
   });
   onEditorCreated((editor) => {

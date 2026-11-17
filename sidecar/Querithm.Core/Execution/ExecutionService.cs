@@ -635,7 +635,9 @@ public sealed class ExecutionService : IAsyncDisposable
                     AddHistory(session, exec.Sql, sw.Elapsed.TotalMilliseconds, affected, EnumText.Of(exec.State), firstError?.Message);
                 }
                 catch (Exception ex) { _log.LogWarning("History write failed: {Message}", ex.Message); }
-            if (classification.HasDdl && !cancelled) DdlExecuted?.Invoke(session);
+            // A run that started may have committed DDL before a cancel (auto-commit engines, earlier batches), so the
+            // schema is read again then too; only a run that never ran (still queued when cancelled) changed nothing.
+            if (classification.HasDdl && lockTaken) DdlExecuted?.Invoke(session);
         }
     }
 

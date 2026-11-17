@@ -199,7 +199,9 @@ describe("scanner: statements and batches", () => {
   });
   it("UNION ALL keeps one statement", () => {
     const c = ctxOf("SELECT CustomerId FROM dbo.Orders\nUNION ALL\nSELECT | FROM dbo.Customers");
-    expect(names(c)).toEqual(["Orders", "Customers"]);
+    expect(c.statementStart).toBe(0);
+    // One statement, but each branch is its own query: the second sees only its own FROM.
+    expect(names(c)).toEqual(["Customers"]);
   });
   it("IF / BEGIN / END boundaries", () => {
     const sql = "IF @x = 1\nBEGIN\n  UPDATE dbo.Orders SET Status = 'a' WHERE |\nEND";

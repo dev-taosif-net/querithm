@@ -90,9 +90,29 @@ export function resolveTable(idx: SchemaIndex | null, t: TableInScope): SnapObje
   return findObject(idx, t.name, t.schema);
 }
 
+/** A synonym's target object when the snapshot has it (its columns are the synonym's), else the object itself. */
+export function synonymTarget(idx: SchemaIndex | null, o: SnapObject): SnapObject {
+  if (!idx || o.kind !== "synonym" || o.targetObjectId == null) return o;
+  return idx.byId.get(o.targetObjectId) ?? o;
+}
+
 export function isDefaultSchema(idx: SchemaIndex, schema: string): boolean {
   return eq(schema, idx.defaultSchema);
 }
 
 export const ALL_KINDS: ReadonlySet<ObjectKind> = new Set<ObjectKind>(["table", "view", "proc", "func", "tvf", "type", "sequence", "synonym"]);
 export { RELATION_KINDS };
+
+/** What a column references through a foreign key: `schema.table.column`, or undefined when it is not an FK column. */
+export function fkReference(idx: SchemaIndex | null, objectId: number, column: string): string | undefined {
+  if (!idx) return undefined;
+  const lower = column.toLowerCase();
+  for (const fk of idx.fks) {
+    if (fk.parent !== objectId) continue;
+    const pair = fk.columns?.find((p) => p.parent.toLowerCase() === lower);
+    if (!pair) continue;
+    const ref = idx.byId.get(fk.referenced);
+    return ref ? `${ref.schema}.${ref.name}.${pair.referenced}` : undefined;
+  }
+  return undefined;
+}

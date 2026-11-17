@@ -403,6 +403,25 @@ public class CancelRecoveryTests
     // ------------------------------------------------------------------ server ignores the cancel
 
     [Fact]
+    public async Task A_cancelled_run_whose_earlier_batch_ran_DDL_still_refreshes_the_schema()
+    {
+        // Regression: the refresh ran only when the run was not cancelled, so a CREATE TABLE committed by an earlier batch
+        // stayed missing from completion until a manual refresh.
+        await using var rig = new Rig();
+        var refreshed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.Executions.DdlExecuted += _ => refreshed.TrySetResult();
+        rig.StuckOn("WAITFOR", (cmd, _) => UntilClosed(cmd));
+        var s = rig.Open();
+
+        var run = rig.Run(s, "CREATE TABLE dbo.t (a int);\nGO\n" + Stuck);
+        await rig.Entered.Task.WaitAsync(Wait);
+        rig.Executions.Cancel(run);
+
+        Assert.Equal(ExecState.Cancelled, (await rig.Done(run)).State);
+        await refreshed.Task.WaitAsync(Wait);
+    }
+
+    [Fact]
     public async Task A_server_that_ignores_cancel_gets_its_connection_closed_and_the_tab_is_free_again()
     {
         await using var rig = new Rig();

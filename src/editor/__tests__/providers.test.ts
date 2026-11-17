@@ -48,6 +48,7 @@ const pos = (model: FakeModel, off: number) => model.getPositionAt(off);
 
 beforeAll(() => P.installProviders());
 beforeEach(() => {
+  P.cancelTier2(); // a real 120 ms timer left by an earlier test would call rpc inside a later one
   rpc.mockReset();
   toast.mockClear();
   useConnections.setState({ disconnected: {} });
@@ -314,7 +315,7 @@ describe("completion provider", () => {
     const v = second.suggestions.find((s: any) => s.label.label === "v_smoke_total");
     expect(v.detail).toBe("numeric");
     // The replaced range is the word being typed (v_smoke), not the whole line.
-    expect(v.range).toMatchObject({ startColumn: text.length - "v_smoke".length + 1, endColumn: text.length + 1 });
+    expect(v.range.replace ?? v.range).toMatchObject({ startColumn: text.length - "v_smoke".length + 1, endColumn: text.length + 1 });
     fake.created.length = 0;
   });
 
@@ -335,7 +336,8 @@ describe("completion provider", () => {
       const r = completion("pgsql").provideCompletionItems(m, pos(m, text.length));
       const item = r.suggestions.find((x: any) => x.label.label === label || x.label === label);
       if (!item) { expect(label).toBe("x"); continue; } // right after an opening tag there is nothing to replace
-      const replaced = text.slice(0, item.range.startColumn - 1) + item.insertText + text.slice(item.range.endColumn - 1);
+      const range = item.range.replace ?? item.range;
+      const replaced = text.slice(0, range.startColumn - 1) + item.insertText + text.slice(range.endColumn - 1);
       expect(replaced).toBe(text.slice(0, text.length - typed.length) + label);
     }
   });
@@ -873,5 +875,167 @@ describe("snippet completion (Phase A3)", () => {
     expect(rpc).toHaveBeenCalledWith("snippet.list");
     await vi.advanceTimersByTimeAsync(0);
     expect(snippetLabels(completion("tsql").provideCompletionItems(m, pos(m, 3)))).toEqual(["selany", "selt"]);
+  });
+});
+
+describe("completion provider: merge, quoting, trigger and range (review regressions)", () => {
+  // dbo.Events has columns named like a function (Count) and a reserved word (User).
+  const EVENTS = { id: 950, schema: "dbo", name: "Events", kind: "table", columns: [
+    { name: "Count", type: "int", nullable: false, identity: false, computed: false, pk: false, ordinal: 1 },
+    { name: "User", type: "nvarchar(50)", nullable: true, identity: false, computed: false, pk: false, ordinal: 2 },
+  ] };
+  let version = 100;
+  function eventsDoc(text: string) {
+    const m = doc("tsql", text);
+    const idx = { ...IDX, objects: [...IDX.objects, EVENTS as never], byName: new Map(IDX.byName), byQualified: new Map(IDX.byQualified), byId: new Map(IDX.byId) };
+    idx.byName.set("events", [EVENTS as never]); idx.byQualified.set("dbo.events", EVENTS as never); idx.byId.set(950, EVENTS as never);
+    useSnapshots.setState({ entries: { [snapKey("p1", "SalesDB")]: { key: snapKey("p1", "SalesDB"), profileId: "p1", database: "SalesDB", status: "fresh", index: idx as never, version: ++version } } });
+    return m;
+  }
+  const labelOf = (s: any) => (typeof s.label === "string" ? s.label : s.label.label);
+
+  it("keeps a column and a function of the same name (Count and COUNT) as two items", () => {
+    vi.useFakeTimers();
+    const text = "SELECT Cou FROM dbo.Events";
+    const m = eventsDoc(text);
+    const r = completion("tsql").provideCompletionItems(m, pos(m, "SELECT Cou".length));
+    const count = r.suggestions.filter((s: any) => labelOf(s).toLowerCase() === "count");
+    expect(count.map((s: any) => s.kind).sort()).toEqual([4, 6]); // Field and Function
+  });
+
+  it("a tier-2 answer never drops tier 1's quoting of a reserved-word column", async () => {
+    vi.useFakeTimers();
+    const text = "SELECT Us FROM dbo.Events";
+    const m = eventsDoc(text);
+    const at = pos(m, "SELECT Us".length);
+    const first = completion("tsql").provideCompletionItems(m, at).suggestions.find((s: any) => labelOf(s) === "User");
+    expect(first.insertText).toBe("[User]");
+    rpc.mockResolvedValue([{ label: "User", kind: "column", detail: "nvarchar(50) NULL", isSnippet: false }]);
+    await vi.advanceTimersByTimeAsync(130);
+    const after = completion("tsql").provideCompletionItems(m, at).suggestions.find((s: any) => labelOf(s) === "User");
+    expect(after.insertText).toBe("[User]");
+    expect(after.detail).toBe("nvarchar(50) NULL");
+  });
+
+  it("a typed space opens the list only where an object name comes next, so Enter still starts a new line", () => {
+    vi.useFakeTimers();
+    const space = { triggerKind: 1, triggerCharacter: " " };
+    const comma = { triggerKind: 1, triggerCharacter: "," };
+    const cases: [string, any, boolean][] = [
+      ["select * from ", space, true],
+      ["select * from dbo.Orders o join ", space, true],
+      ["select * from dbo.Orders o ", space, false],
+      ["select * from dbo.Orders o where o.OrderId = 1 and ", space, false],
+      ["select o.OrderId, ", comma, false],
+      ["select * from dbo.Orders o ", { triggerKind: 0 }, true], // Ctrl+Space
+    ];
+    for (const [text, trigger, shown] of cases) {
+      const m = doc("tsql", text);
+      const r = completion("tsql").provideCompletionItems(m, pos(m, text.length), trigger);
+      expect(r.suggestions.length > 0, `${text} ${JSON.stringify(trigger)}`).toBe(shown);
+    }
+  });
+
+  it("accepting inside a word replaces the whole word", () => {
+    vi.useFakeTimers();
+    const text = "select * from dbo.Orders o where o.Cust";
+    const m = doc("tsql", text + "omerId = 1");
+    const r = completion("tsql").provideCompletionItems(m, pos(m, text.length));
+    const item = r.suggestions.find((s: any) => labelOf(s) === "CustomerId");
+    const full = text + "omerId = 1";
+    const out = full.slice(0, item.range.replace.startColumn - 1) + item.insertText + full.slice(item.range.replace.endColumn - 1);
+    expect(out).toBe("select * from dbo.Orders o where o.CustomerId = 1");
+    expect(item.range.insert.endColumn).toBe(text.length + 1);
+  });
+
+  it("an opened bracket is replaced, closing bracket included, by the bracketed name", () => {
+    vi.useFakeTimers();
+    for (const text of ["select * from [Order D", "select * from [Order D]"]) {
+      const m = doc("tsql", text);
+      const caret = "select * from [Order D".length;
+      const item = completion("tsql").provideCompletionItems(m, pos(m, caret)).suggestions.find((s: any) => labelOf(s) === "Order Details");
+      const out = text.slice(0, item.range.replace.startColumn - 1) + item.insertText + text.slice(item.range.replace.endColumn - 1);
+      expect(out.startsWith("select * from [Order Details]")).toBe(true);
+      expect(out).not.toContain("]]");
+      expect(item.filterText.startsWith("[")).toBe(true);
+    }
+  });
+});
+
+describe("tier 2 cache: keyed by the word, the connection and the schema version", () => {
+  const labelOf = (s: any) => (typeof s.label === "string" ? s.label : s.label.label);
+
+  it("keeps tier 2's items while the word is extended, without asking again", async () => {
+    vi.useFakeTimers();
+    const m = doc("tsql", "select * from Or");
+    rpc.mockResolvedValue([{ label: "OnlyTier2", kind: "table", detail: "t2", isSnippet: false }]);
+    completion("tsql").provideCompletionItems(m, pos(m, 16));
+    await vi.advanceTimersByTimeAsync(130);
+    expect(rpc).toHaveBeenCalledTimes(1);
+    m.setValue("select * from Ord");
+    const r = completion("tsql").provideCompletionItems(m, pos(m, 17));
+    expect(r.suggestions.some((s: any) => labelOf(s) === "OnlyTier2")).toBe(true);
+    await vi.advanceTimersByTimeAsync(130);
+    expect(rpc).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks again at the same text after a schema refresh (a new snapshot version)", async () => {
+    vi.useFakeTimers();
+    const m = doc("tsql", "select * from Or");
+    rpc.mockResolvedValue([{ label: "OnlyTier2", kind: "table", isSnippet: false }]);
+    completion("tsql").provideCompletionItems(m, pos(m, 16));
+    await vi.advanceTimersByTimeAsync(130);
+    const e = useSnapshots.getState().entries[snapKey("p1", "SalesDB")];
+    useSnapshots.setState({ entries: { ...useSnapshots.getState().entries, [snapKey("p1", "SalesDB")]: { ...e, version: e.version + 1 } } });
+    completion("tsql").provideCompletionItems(m, pos(m, 16));
+    await vi.advanceTimersByTimeAsync(130);
+    expect(rpc).toHaveBeenCalledTimes(2);
+  });
+
+  it("an older answer that arrives after a newer one is not cached over it", async () => {
+    vi.useFakeTimers();
+    const m = doc("tsql", "select * from Or");
+    let resolveOld!: (v: unknown) => void;
+    rpc.mockImplementationOnce(() => new Promise((r) => { resolveOld = r; }));
+    completion("tsql").provideCompletionItems(m, pos(m, 16));
+    await vi.advanceTimersByTimeAsync(130); // old request in flight
+    m.setValue("select * from Orders o where o.");
+    rpc.mockResolvedValueOnce([{ label: "Newer", kind: "column", isSnippet: false }]);
+    const at = pos(m, m.getValue().length);
+    completion("tsql").provideCompletionItems(m, at);
+    await vi.advanceTimersByTimeAsync(130);
+    resolveOld([{ label: "Older", kind: "table", isSnippet: false }]);
+    await vi.advanceTimersByTimeAsync(0);
+    const r = completion("tsql").provideCompletionItems(m, at);
+    expect(r.suggestions.some((s: any) => labelOf(s) === "Newer")).toBe(true);
+  });
+});
+
+describe("completion provider: schema status row", () => {
+  const labelOf = (s: any) => (typeof s.label === "string" ? s.label : s.label.label);
+  const statusOf = (r: any) => r.suggestions.find((s: any) => s.sortText === "!");
+
+  it("says the schema is loading, and accepting it changes nothing", () => {
+    vi.useFakeTimers();
+    const m = doc("tsql", "select * from Ord");
+    useSnapshots.setState({ entries: { [snapKey("p1", "SalesDB")]: { key: snapKey("p1", "SalesDB"), profileId: "p1", database: "SalesDB", status: "loading", version: 1 } } });
+    const row = statusOf(completion("tsql").provideCompletionItems(m, pos(m, 17)));
+    expect(labelOf(row)).toBe("Loading schema…");
+    expect(row.insertText).toBe("Ord");
+  });
+
+  it("says the load failed, or the server is disconnected", () => {
+    vi.useFakeTimers();
+    const m = doc("tsql", "select * from Ord");
+    useSnapshots.setState({ entries: { [snapKey("p1", "SalesDB")]: { key: snapKey("p1", "SalesDB"), profileId: "p1", database: "SalesDB", status: "error" as never, version: 1, failedAt: Date.now(), error: "x" } } });
+    expect(labelOf(statusOf(completion("tsql").provideCompletionItems(m, pos(m, 17))))).toBe("Schema not loaded");
+    useConnections.setState({ disconnected: { p1: true } as never });
+    expect(labelOf(statusOf(completion("tsql").provideCompletionItems(m, pos(m, 17))))).toBe("Not connected");
+  });
+
+  it("is not shown once the schema is there", () => {
+    vi.useFakeTimers();
+    const m = doc("tsql", "select * from Ord");
+    expect(statusOf(completion("tsql").provideCompletionItems(m, pos(m, 17)))).toBeUndefined();
   });
 });

@@ -106,6 +106,19 @@ public class DocumentCacheTests
     }
 
     [Fact]
+    public async Task Lang_complete_refuses_a_bad_doc_id_an_oversized_text_or_an_offset_outside_it()
+    {
+        await using var host = AllEngines();
+        Task Complete(string docId, string text, int offset) => host.Rpc.LangComplete(new CompleteParams { DocId = docId, Text = text, Offset = offset, Dialect = Dialect.Tsql });
+        await Assert.ThrowsAsync<QuerithmException>(() => Complete("", "SELECT 1", 0));
+        await Assert.ThrowsAsync<QuerithmException>(() => Complete(new string('x', 600), "SELECT 1", 0));
+        await Assert.ThrowsAsync<QuerithmException>(() => Complete("d", "SELECT 1", -1));
+        await Assert.ThrowsAsync<QuerithmException>(() => Complete("d", "SELECT 1", 9));
+        await Assert.ThrowsAsync<QuerithmException>(() => Complete("d", new string(' ', Querithm.Core.Metadata.LanguageService.MaxCompletionText + 1), 0));
+        await Complete("d", "SELECT 1", 8); // the end of the document is a valid cursor
+    }
+
+    [Fact]
     public async Task Lang_forget_of_an_unknown_document_is_harmless()
     {
         await using var host = AllEngines();

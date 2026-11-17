@@ -1,6 +1,7 @@
 // Markdown for the editor's hover (L10): object, column, type and default names come from the server (or a schema file),
 // so none of them may add markup — a link, an image, emphasis, a table cell or a code fence of their own. Monaco renders
 // hover markdown untrusted (no command links, no HTML); these helpers keep the names themselves inert as well.
+import type { SnapColumn, SnapObject } from "../ipc/contract";
 
 /** One line: line breaks (CR, LF, NEL, U+2028/2029) become spaces, so a name cannot start a block of its own. */
 export function oneLine(s: string): string {
@@ -34,4 +35,41 @@ export function mdFence(lang: string, content: string): string {
   const longest = Math.max(0, ...(content.match(/`+/g) ?? []).map((r) => r.length));
   const fence = "`".repeat(Math.max(3, longest + 1));
   return `${fence}${lang}\n${content}\n${fence}`;
+}
+
+// ---- object and column summaries: the hover and the completion details pane show the same text ----
+
+/** `schema.name` · *kind · N columns* */
+export function objectHeader(o: Pick<SnapObject, "schema" | "name" | "kind" | "columns">): string {
+  const n = o.columns?.length ?? 0;
+  const count = n ? ` · ${n} ${n === 1 ? "column" : "columns"}` : "";
+  return `**${mdText(`${o.schema}.${o.name}`)}** · *${mdText(o.kind)}${count}*`;
+}
+
+/**
+ * A table's columns as a markdown table (first `max`), plus a "…and N more" line. Styled by `.markdown-hover table` /
+ * `.suggest-details table` in tokens.css: the name column in mono (a key column bold and tinted), the type as code,
+ * nullable cells italic and muted so a required column reads at a glance.
+ */
+export function columnsTable(columns: readonly SnapColumn[], max = 25): string[] {
+  if (!columns.length) return [];
+  const shown = columns.slice(0, max).map((c) => {
+    const name = c.pk ? `**🔑 ${mdCell(c.name)}**` : mdCell(c.name);
+    const flags = [c.nullable ? "*null*" : "not null", c.identity ? "identity" : "", c.computed ? "computed" : ""].filter(Boolean).join(" · ");
+    return `| ${name} | ${mdCell(c.type, true)} | ${flags} |`;
+  });
+  const out = [`| Column | Type | Nullability |\n|:---|:---|:---|\n${shown.join("\n")}`];
+  if (columns.length > max) out.push(`*…and ${columns.length - max} more columns*`);
+  return out;
+}
+
+/** One column: its qualified name, type and flags, the row it references (a foreign key) and its default. */
+export function columnLines(qualified: string, c: SnapColumn, references?: string): string[] {
+  const lines = [
+    `**${mdText(qualified)}**`,
+    `${mdCode(c.type)} ${c.nullable ? "NULL" : "NOT NULL"}${c.pk ? " · PK" : ""}${c.identity ? " · IDENTITY" : ""}${c.computed ? " · computed" : ""}`,
+  ];
+  if (references) lines.push(`references ${mdCode(references)}`);
+  if (c.default) lines.push(`default ${mdCode(c.default)}`);
+  return lines;
 }

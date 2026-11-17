@@ -9,33 +9,42 @@ const colLabels = (sql: string, dialect: "tsql" | "pg" = "tsql") => labels(items
 const firstIndex = (items: ReturnType<typeof itemsOf>, pred: (l: string) => boolean) => items.findIndex((i) => pred(i.label));
 
 describe("complete: qualifier contexts", () => {
+  // The select list also gets one "(all columns)" item after a qualifier; these compare the columns themselves.
+  const colsOnly = (sql: string) => itemsOf(sql).filter((i) => i.label !== "(all columns)");
   it("alias qualifier → that table's columns only", () => {
-    const items = itemsOf("SELECT o.| FROM dbo.Orders o");
+    const items = colsOnly("SELECT o.| FROM dbo.Orders o");
     expect(new Set(labels(items))).toEqual(new Set(["OrderId", "CustomerId", "OrderDate", "TotalAmount", "Status"]));
     expect(items.every((i) => i.kind === "column")).toBe(true);
     expect(byLabel(items, "TotalAmount")?.detail).toBe("decimal(18,2) NOT NULL");
     expect(byLabel(items, "OrderId")?.detail).toContain("PK");
     expect(byLabel(items, "Status")?.detail).toBe("nvarchar(20) NULL");
   });
+  it("alias qualifier in the select list → one item inserting all columns", () => {
+    expect(byLabel(itemsOf("SELECT o.| FROM dbo.Orders o"), "(all columns)")?.insertText).toBe("OrderId, o.CustomerId, o.OrderDate, o.TotalAmount, o.Status");
+    expect(byLabel(itemsOf("SELECT * FROM dbo.Orders o WHERE o.|"), "(all columns)")).toBeUndefined();
+    expect(byLabel(itemsOf("SELECT | FROM dbo.Orders o"), "(all columns of o)")?.insertText).toBe("OrderId, CustomerId, OrderDate, TotalAmount, Status");
+    expect(byLabel(itemsOf("SELECT | FROM dbo.Orders o JOIN dbo.Customers c ON 1 = 1"), "(all columns of c)")?.insertText).toBe("c.CustomerId, c.FullName, c.Email");
+  });
   it("CTE qualifier → CTE columns", () => {
-    expect(labels(itemsOf("WITH recent (Id, Total) AS (SELECT OrderId, TotalAmount FROM dbo.Orders) SELECT r.| FROM recent r"))).toEqual(["Id", "Total"]);
+    expect(labels(colsOnly("WITH recent (Id, Total) AS (SELECT OrderId, TotalAmount FROM dbo.Orders) SELECT r.| FROM recent r"))).toEqual(["Id", "Total"]);
   });
   it("derived-table qualifier → projected columns", () => {
-    expect(labels(itemsOf("SELECT d.| FROM (SELECT CustomerId, COUNT(*) AS Cnt FROM dbo.Orders GROUP BY CustomerId) d"))).toEqual(["Cnt", "CustomerId"]);
+    expect(labels(colsOnly("SELECT d.| FROM (SELECT CustomerId, COUNT(*) AS Cnt FROM dbo.Orders GROUP BY CustomerId) d"))).toEqual(["Cnt", "CustomerId"]);
   });
   it("TVF alias → TVF columns", () => {
-    expect(new Set(labels(itemsOf("SELECT t.| FROM dbo.ufn_CustomerOrders(1) AS t")))).toEqual(new Set(["OrderId", "OrderDate", "TotalAmount"]));
+    expect(new Set(labels(colsOnly("SELECT t.| FROM dbo.ufn_CustomerOrders(1) AS t")))).toEqual(new Set(["OrderId", "OrderDate", "TotalAmount"]));
   });
   it("schema qualifier in FROM → that schema's objects, unqualified", () => {
     const items = itemsOf("SELECT * FROM sales.|");
     expect(labels(items)).toEqual(["Products"]);
   });
-  it("bracketed schema qualifier with open bracket prefix inserts raw names", () => {
+  it("bracketed schema qualifier with open bracket prefix inserts the bracketed name (the range starts at the bracket)", () => {
     const items = itemsOf("SELECT * FROM [dbo].[Ord|");
-    const o = byLabel(items, "Orders")!;
-    expect(o).toBeDefined();
-    expect(o.insertText).toBeUndefined();
-    expect(byLabel(items, "Order Details")?.insertText).toBeUndefined();
+    expect(byLabel(items, "Orders")?.insertText).toBe("[Orders]");
+    expect(byLabel(items, "Order Details")?.insertText).toBe("[Order Details]");
+  });
+  it("an opened bracket on an object of another schema quotes each part, never one identifier", () => {
+    expect(byLabel(itemsOf("SELECT * FROM [Prod|"), "sales.Products")?.insertText).toBe("[sales].[Products]");
   });
   it("database qualifier → schemas of the current database", () => {
     expect(new Set(labels(itemsOf("SELECT * FROM SalesDB.|")))).toEqual(new Set(["dbo", "sales"]));
@@ -140,7 +149,7 @@ describe("complete: table contexts", () => {
     const l = labels(items);
     for (const x of ["Orders", "Customers", "OrderItems", "sales.Products", "vCustomerOrders", "ufn_CustomerOrders", "sales"]) expect(l).toContain(x);
     expect(byLabel(items, "vCustomerOrders")?.kind).toBe("view");
-    expect(byLabel(items, "sales.Products")?.detail).toBe("table · sales");
+    expect(byLabel(items, "sales.Products")?.detail).toBe("table · sales · 3 cols");
     expect(byLabel(items, "ufn_CustomerOrders")?.insertText).toBe("ufn_CustomerOrders(${1:@CustomerId}) uc");
     expect(l).not.toContain("usp_GetCustomerOrders");
   });

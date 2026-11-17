@@ -284,7 +284,8 @@ describe.each(ENGINES)("completion matrix: %s", (d) => {
 });
 
 // ---------------------------------------------------------------------------------------------------------------
-// Engine-specific identifier quoting: an opened quote still offers the tables, inserted without doubling it.
+// Engine-specific identifier quoting: an opened quote still offers the tables, inserted fully quoted in the style the
+// user opened (the editor's replace range starts at that quote, so it is never doubled).
 // ---------------------------------------------------------------------------------------------------------------
 describe("completion matrix: quoted identifiers", () => {
   const OPEN: Record<Engine, string[]> = { tsql: ["["], pg: ['"'], mySql: ["`"], sqlite: ['"', "[", "`"], duckDb: ['"'] };
@@ -295,7 +296,9 @@ describe("completion matrix: quoted identifiers", () => {
         const items = run(`SELECT * FROM ${q}cus|`, d);
         expect(tablesOf(items)).toContain("customers");
         const c = items.find((i) => i.label === "customers")!;
-        expect((c.insertText ?? c.label).startsWith(q)).toBe(false);
+        const close = q === "[" ? "]" : q;
+        expect(c.insertText).toBe(`${q}customers${close}`);
+        expect(items.some((i) => i.kind === "keyword")).toBe(false);
       });
       it(`${d}: JOIN ${q}| offers tables in a large script`, () => {
         expect(tablesOf(run(`${BIG};\nSELECT * FROM orders o JOIN ${q}|`, d))).toContain("customers");

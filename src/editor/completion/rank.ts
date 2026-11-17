@@ -96,11 +96,13 @@ export interface RankKey {
   usage: number;
   /** Secondary order inside a group (e.g. parameter ordinal). */
   order: number;
+  /** Characters the label has beyond the typed prefix (0 without one): `Order` lists Orders before Order Details. */
+  rest?: number;
   label: string;
 }
 
 /** Lexicographic sort key; zero-padded so string order equals numeric order. */
 export function sortText(k: RankKey): string {
   const usage = Math.max(0, Math.min(999999, Math.floor(k.usage)));
-  return `${k.tier}${k.match}${pad(k.group, 2)}${pad(999999 - usage, 6)}${pad(k.order, 4)}${k.label.toLowerCase()}`;
+  return `${k.tier}${k.match}${pad(k.group, 2)}${pad(999999 - usage, 6)}${pad(k.order, 4)}${pad(k.rest ?? 0, 3)}${k.label.toLowerCase()}`;
 }

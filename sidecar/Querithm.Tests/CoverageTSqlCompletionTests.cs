@@ -102,7 +102,7 @@ public class TSqlCompletionInferenceTests(ITestOutputHelper output)
     public void Pivot_and_unpivot_expose_generated_columns()
     {
         var p = Types("SELECT pv.| FROM (SELECT CustomerId, Status, TotalAmount FROM dbo.Orders) AS src PIVOT (SUM(TotalAmount) FOR Status IN ([Open], [Closed])) AS pv");
-        Assert.Contains("Open", p.Keys);
+        Assert.Contains("[Open]", p.Keys); // OPEN is reserved: inserted bracketed
         Assert.Contains("Closed", p.Keys);
         Assert.Contains("CustomerId", p.Keys);
         var u = Types("SELECT up.| FROM (SELECT CustomerId, OrderId, TotalAmount FROM dbo.Orders) AS src UNPIVOT (Val FOR Kind IN (OrderId, TotalAmount)) AS up");

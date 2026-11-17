@@ -117,6 +117,34 @@ public class Tier2CompletionTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void Reserved_word_names_are_bracketed_unreserved_ones_are_not()
+    {
+        // Regression: Quote checked characters only, so a column `User` came back bare and `SELECT User` returned the login.
+        var snap = new SchemaSnapshot
+        {
+            ProfileId = "p1", Database = "SalesDB", Status = SnapshotStatus.Fresh, Fks = [],
+            Objects =
+            [
+                new SnapObject
+                {
+                    Id = 1, Schema = "dbo", Name = "Events", Kind = ObjectKind.Table,
+                    Columns = [new SnapColumn { Name = "User", Type = "nvarchar(50)" }, new SnapColumn { Name = "Count", Type = "int" }, new SnapColumn { Name = "Order", Type = "int" }],
+                },
+                new SnapObject { Id = 2, Schema = "dbo", Name = "User", Kind = ObjectKind.Table, Columns = [new SnapColumn { Name = "Id", Type = "int" }] },
+            ],
+        };
+        var schema = new FakeSchema(snap, "SalesDB");
+        var cols = Complete("SELECT e.| FROM dbo.Events e", schema);
+        Assert.Equal(CompletionKind.Column, Item(cols, "[User]").Kind);
+        Assert.Equal(CompletionKind.Column, Item(cols, "[Order]").Kind);
+        Assert.Equal(CompletionKind.Column, Item(cols, "Count").Kind);
+        Assert.DoesNotContain(cols, i => i.Label == "User" || i.Label == "Order");
+        var tables = Complete("SELECT * FROM |", schema);
+        Assert.Contains(tables, i => i.Label == "[User]");
+        Assert.Contains(tables, i => i.Label == "Events");
+    }
+
+    [Fact]
     public void Cte_projection_columns_with_inferred_types_via_alias()
     {
         var items = Complete("""
@@ -368,7 +396,7 @@ public class Tier2CompletionTests(ITestOutputHelper output)
     {
         var pivot = Complete("SELECT p.| FROM (SELECT CustomerId, Status, TotalAmount FROM dbo.Orders) src PIVOT (SUM(TotalAmount) FOR Status IN ([Open], [Closed])) AS p");
         HasColumn(pivot, "CustomerId", "int");
-        HasColumn(pivot, "Open", "decimal(18,2)");
+        HasColumn(pivot, "[Open]", "decimal(18,2)"); // OPEN is reserved: bare `p.Open` does not parse
         Assert.DoesNotContain(pivot, i => i.Label == "Status");
         var unpivot = Complete("SELECT u.| FROM (SELECT OrderId, CAST(1 AS int) AS A, CAST(2 AS int) AS B FROM dbo.Orders) s UNPIVOT (Val FOR Col IN (A, B)) AS u");
         HasColumn(unpivot, "Val", "int");

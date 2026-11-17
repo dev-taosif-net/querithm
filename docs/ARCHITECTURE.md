@@ -1003,7 +1003,16 @@ SQLite and DuckDB) keep their bounds. When the webview disposes a model (a close
 if not, tier 2 parses only the enclosing batch.
 
 **Monaco wiring.** Completion provider (trigger chars `. @ ( ,` and space) returns tier 1
-synchronously with `incomplete: true`, then re-triggers when tier 2 items differ; signature help →
+synchronously with `incomplete: true`, then re-triggers when tier 2 items differ. A list opened by a typed space or comma
+with nothing typed yet is shown only where an object name comes next (`FROM |`, `JOIN |`), so Enter after `FROM t o ` or
+`a, ` starts a new line instead of accepting a keyword. Items merge by name and kind family (a column `Count` and the
+function COUNT stay two items); where tier 1 has the item its insert text wins (the dialect's quoting: a reserved word
+delimited, an alias as written) and tier 2 refines the detail. Tier 2's answer is cached per word (model, profile,
+database, session, snapshot version, word start and the text before it), so extending the word keeps its items and a
+schema refresh asks again; an older answer never replaces a newer one. Each tier-1 item's filter text starts with what
+was typed, so Monaco's fuzzy score is equal and tier 1's ranking decides the order. The range replaces the whole word
+under the cursor and an opened quote with its closing one (the item is inserted fully quoted in the style opened). While
+the schema loads, fails or the server is disconnected, the list's first row says so; signature help →
 `lang.signature`; definition → read-only tab from `meta.definition`; hover from the snapshot;
 diagnostics via `setModelMarkers` debounced 300 ms; Monarch tokenizer per dialect; folding from
 tier 2's AST.

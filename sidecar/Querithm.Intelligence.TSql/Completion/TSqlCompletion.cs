@@ -739,10 +739,33 @@ sealed class ItemBuilder(DocModel doc, CursorInfo cur, Env env, Resolver resolve
         $"{o.Schema}.{o.Name}(" + string.Join(", ", (o.Params ?? []).Where(p => p.Ordinal > 0).OrderBy(p => p.Ordinal).Select(p => $"{p.Name} {p.Type}")) + ")"
         + (o.ReturnType != null ? " → " + o.ReturnType : o.Kind == ObjectKind.Tvf ? " → TABLE" : "");
 
+    /// <summary>
+    /// A name as inserted: bracketed unless it is a regular identifier that is not a reserved word. A reserved word
+    /// (USER, ORDER, …) must be bracketed even when its characters are plain: bare `SELECT User` calls the USER function
+    /// and silently returns the login instead of the column. Tier 1 quotes the same way (complete.ts needsQuote).
+    /// </summary>
     internal static string Quote(string name)
     {
         if (name.Length == 0) return name;
         var ok = (char.IsLetter(name[0]) || name[0] is '_' or '#' or '@') && name.All(ch => char.IsLetterOrDigit(ch) || ch is '_' or '#' or '@' or '$');
-        return ok ? name : "[" + name.Replace("]", "]]") + "]";
+        return ok && !IsReserved(name) ? name : "[" + name.Replace("]", "]]") + "]";
+    }
+
+    static readonly ThreadLocal<TSqlParser> QuoteParsers = new(TSqlParsing.NewParser);
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> ReservedCache = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// ScriptDom's lexer reads a reserved keyword as its own token type and an unreserved word (NAME, COUNT) as an
+    /// Identifier (the same test as TSqlReferenceFinder.Bare). Cached per name: schema names repeat on every request.
+    /// </summary>
+    static bool IsReserved(string name)
+    {
+        if (name[0] is '#' or '@') return false;
+        if (ReservedCache.TryGetValue(name, out var r)) return r;
+        var tokens = QuoteParsers.Value!.GetTokenStream(new StringReader(name), out var errors);
+        r = !(errors.Count == 0 && tokens.Count(t => t.TokenType != TSqlTokenType.EndOfFile) == 1 && tokens[0].TokenType == TSqlTokenType.Identifier);
+        if (ReservedCache.Count > 100_000) ReservedCache.Clear(); // bounded: names come from snapshots
+        ReservedCache[name] = r;
+        return r;
     }
 }

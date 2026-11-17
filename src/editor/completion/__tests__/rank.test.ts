@@ -90,7 +90,9 @@ describe("rank: best match", () => {
 
 describe("rank: sortText", () => {
   it("encodes fields as fixed-width zero-padded segments", () => {
-    expect(sortText(key({ tier: 0, match: 1, group: 3, usage: 5, order: 2, label: "Foo" }))).toBe("0103999994" + "0002foo");
+    expect(sortText(key({ tier: 0, match: 1, group: 3, usage: 5, order: 2, label: "Foo" }))).toBe("0103999994" + "0002" + "000" + "foo");
+    // Characters beyond the typed prefix: the shorter name first (Orders before Order Details).
+    expect(sortText(key({ tier: 0, match: 0, group: 2, usage: 0, order: 0, rest: 1, label: "Orders" })) < sortText(key({ tier: 0, match: 0, group: 2, usage: 0, order: 0, rest: 8, label: "Order Details" }))).toBe(true);
   });
   it("label is lowercased so ties break case-insensitively", () => {
     expect(sortText(key({ label: "ABC" }))).toBe(sortText(key({ label: "abc" })));
