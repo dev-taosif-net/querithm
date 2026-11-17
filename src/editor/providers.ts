@@ -106,13 +106,19 @@ export function schemaParam(profileId: string | null | undefined): { schema?: st
  * filters them) instead of dropping them for ~120 ms on every key and re-opening the list; a database switch or a
  * schema refresh at the same text asks again.
  */
-const tier2Cache = new Map<string, CompletionItem[]>();
+/**
+ * The sidecar answers only the items matching the word typed when it was asked (CompletionFilter), so an entry also keeps
+ * that word: it serves a word that extends it (matching is monotone — a name matching `ord` matches `or`), never another
+ * word at the same place (`x` then backspace and `o`). An answer that hit the cap serves only its own word.
+ */
+interface Tier2Entry { base: string; typed: string; items: CompletionItem[] }
+const tier2Cache = new Map<string, Tier2Entry>();
 const TIER2_CACHE_MAX = 8;
 /** The sidecar's cap on one answer (CompletionFilter.MaxItems). */
 const TIER2_CAP = 500;
-/** Per model: its debounce timer, the key in flight, and the newest request (an older answer is never cached over it). */
+/** Per model: its debounce timer, the request in flight, and the newest request (an older answer is never cached over it). */
 const tier2Timers = new Map<string, ReturnType<typeof setTimeout>>();
-const tier2Pending = new Map<string, string>();
+const tier2Pending = new Map<string, { base: string; typed: string }>();
 const tier2Latest = new Map<string, number>();
 let tier2Seq = 0;
 let lastTier1Ms = 0;
@@ -134,10 +140,34 @@ export function tier2Key(model: monaco.editor.ITextModel, ctx: DocContext, text:
   return [String(model.uri), ctx.profileId ?? "", ctx.database ?? "", ctx.sessionId ?? "", ctx.snapVersion ?? 0, ctx.dialect, wordStart, textHash(text.slice(0, wordStart))].join("|");
 }
 
-function cacheTier2(key: string, items: CompletionItem[]) {
-  tier2Cache.delete(key);
-  tier2Cache.set(key, items);
+const covers = (askedFor: string, items: CompletionItem[], typed: string) =>
+  askedFor === typed || (items.length < TIER2_CAP && typed.startsWith(askedFor));
+
+function cacheTier2(base: string, typed: string, items: CompletionItem[]) {
+  const k = `${base}\u001f${typed}`;
+  tier2Cache.delete(k);
+  tier2Cache.set(k, { base, typed, items });
   while (tier2Cache.size > TIER2_CACHE_MAX) tier2Cache.delete(tier2Cache.keys().next().value!);
+}
+
+/**
+ * Tier 2's answer for the word `typed` (lower case) at `base`: `exact` when an entry covers it (no request needed), else
+ * the newest entry at the same place, shown meanwhile (Monaco filters it) while the word is asked for.
+ */
+export function lookupTier2(base: string, typed: string): { exact?: CompletionItem[]; stale?: CompletionItem[] } {
+  let exact: Tier2Entry | undefined;
+  let stale: Tier2Entry | undefined;
+  for (const e of tier2Cache.values()) {
+    if (e.base !== base) continue;
+    stale = e; // insertion order: the last one is the newest
+    if (covers(e.typed, e.items, typed) && (!exact || e.typed.length > exact.typed.length)) exact = e;
+  }
+  return exact ? { exact: exact.items } : { stale: stale?.items };
+}
+
+/** Tests only. */
+export function resetTier2Cache() {
+  tier2Cache.clear();
 }
 
 /** Drops a model's pending tier-2 request (its model went away), or every model's without a key. */
@@ -154,13 +184,20 @@ function findEditor(model: monaco.editor.ITextModel) {
   return monaco.editor.getEditors().find((e) => e.getModel() === model);
 }
 
-function scheduleTier2(model: monaco.editor.ITextModel, ctx: DocContext, offset: number, key: string, tier1Labels: Set<string>, wordStart = offset) {
+function scheduleTier2(model: monaco.editor.ITextModel, ctx: DocContext, offset: number, base: string, tier1Labels: Set<string>, wordStart = offset) {
   if (!useSettings.getState().tier2) return;
   const m = ctx.docId ?? ctx.tabId; // the model key (a notebook cell's own)
-  if (tier2Pending.get(m) === key) return;
-  tier2Pending.set(m, key);
+  // The text and the offset are sent as they are now, together: the word the sidecar filters on is the word the entry is
+  // cached under (an offset from now with the text 120 ms later could point past a shortened document).
+  const text = model.getValue();
+  const typed = text.slice(wordStart, offset).toLowerCase();
+  const inFlight = tier2Pending.get(m);
+  // A request for a shorter form of this word covers it (unless its answer hits the cap: then the next keystroke asks).
+  if (inFlight && inFlight.base === base && typed.startsWith(inFlight.typed)) return;
+  const pending = { base, typed };
+  tier2Pending.set(m, pending);
   clearTimeout(tier2Timers.get(m));
-  const before = textHash(model.getValue().slice(0, wordStart));
+  const before = textHash(text.slice(0, wordStart));
   tier2Timers.set(m, setTimeout(async () => {
     tier2Timers.delete(m);
     const seq = ++tier2Seq;
@@ -168,15 +205,18 @@ function scheduleTier2(model: monaco.editor.ITextModel, ctx: DocContext, offset:
     const t0 = performance.now();
     try {
       const items = await rpc("lang.complete", {
-        docId: ctx.docId ?? ctx.tabId, text: model.getValue(), offset, dialect: ctx.dialect, profileId: ctx.profileId ?? null, database: ctx.database ?? null,
+        docId: ctx.docId ?? ctx.tabId, text, offset, dialect: ctx.dialect, profileId: ctx.profileId ?? null, database: ctx.database ?? null,
         ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}), ...schemaParam(ctx.profileId),
       });
       pushStat(completionStats.tier2, performance.now() - t0);
       // A slower, older request finishing after a newer one never replaces it.
       if (tier2Latest.get(m) !== seq || model.isDisposed()) return;
-      cacheTier2(key, items);
+      cacheTier2(base, typed, items);
+      // Done before re-triggering, so the list it opens can ask for a longer word this capped answer does not cover.
+      if (tier2Pending.get(m) === pending) tier2Pending.delete(m);
       const editor = findEditor(model);
-      const changed = items.some((i) => !tier1Labels.has(mergeKey(i.kind, i.label)) || i.detail);
+      // A capped answer re-triggers too: the word typed meanwhile may need its own request.
+      const changed = items.length >= TIER2_CAP || items.some((i) => !tier1Labels.has(mergeKey(i.kind, i.label)) || i.detail);
       // Replace the open popup's items in place (§9): re-trigger only while the user is still on the same word (the text
       // before it unchanged) — or, when tier 1 had nothing to show (so no popup opened), open it with tier 2's items.
       const sameWord = textHash(model.getValue().slice(0, wordStart)) === before;
@@ -186,7 +226,7 @@ function scheduleTier2(model: monaco.editor.ITextModel, ctx: DocContext, offset:
     } catch {
       /* tier 2 is best effort */
     } finally {
-      if (tier2Pending.get(m) === key) tier2Pending.delete(m);
+      if (tier2Pending.get(m) === pending) tier2Pending.delete(m);
     }
   }, 120)); // debounced 120 ms (§9)
 }
@@ -323,12 +363,10 @@ function provideCompletion(model: monaco.editor.ITextModel, position: monaco.Pos
     if (typed) item.filterText = monacoFilterText(typed, i);
     merged.set(mergeKey(i.kind, i.label), item);
   }
-  // The sidecar sends at most TIER2_CAP items, those matching the word (CompletionFilter): an answer that hit the cap may
-  // lack names a longer word matches, so that word asks again (and shows the shorter word's answer meanwhile).
-  const base = tier2Cache.get(baseKey);
-  const key = base && base.length >= TIER2_CAP && typed ? `${baseKey}|${typed.toLowerCase()}` : baseKey;
-  const exact = tier2Cache.get(key);
-  const t2 = exact ?? base;
+  // The sidecar sends at most TIER2_CAP items, those matching the word (CompletionFilter): a word no cached answer covers
+  // asks again, and the newest answer at this place is shown meanwhile (lookupTier2).
+  const { exact, stale } = lookupTier2(baseKey, typed.toLowerCase());
+  const t2 = exact ?? stale;
   if (t2) {
     // Merge by name and kind (§9). A name tier 1 already offers keeps tier 1's insert text, which follows the
     // dialect's quoting rules (a reserved word delimited, an alias as written); tier 2 refines the detail.
@@ -340,7 +378,7 @@ function provideCompletion(model: monaco.editor.ITextModel, position: monaco.Pos
       merged.set(k, prev ? { ...prev, detail: next.detail ?? prev.detail, label: { label: (prev.label as monaco.languages.CompletionItemLabel).label, description: i.detail ?? (prev.label as monaco.languages.CompletionItemLabel).description } } : next);
     }
   }
-  if (!exact) scheduleTier2(model, ctx, offset, key, new Set(merged.keys()), startOffset);
+  if (!exact) scheduleTier2(model, ctx, offset, baseKey, new Set(merged.keys()), startOffset);
   for (const item of snippetSuggestions(ctx.dialect, text, result.context.prefixStart, offset, insert)) merged.set(`snippet:${item.filterText}`, item);
   const status = schemaStatusItem(ctx, result.context, text.slice(startOffset, offset), insert);
   if (status) merged.set("status:", status);
@@ -395,10 +433,10 @@ function dollarBodyCompletion(model: monaco.editor.ITextModel, ctx: DocContext, 
   const from = model.getPositionAt(start);
   const range = new monaco.Range(from.lineNumber, from.column, position.lineNumber, position.column);
   const key = tier2Key(model, ctx, text, start);
-  const t2 = tier2Cache.get(key);
-  if (t2) return { suggestions: t2.map((i) => toMonaco(i, range, 2)), incomplete: true };
-  scheduleTier2(model, ctx, offset, key, new Set(), start);
-  return { suggestions: [], incomplete: true };
+  const { exact, stale } = lookupTier2(key, text.slice(start, offset).toLowerCase());
+  if (!exact) scheduleTier2(model, ctx, offset, key, new Set(), start);
+  const t2 = exact ?? stale;
+  return { suggestions: t2 ? t2.map((i) => toMonaco(i, range, 2)) : [], incomplete: true };
 }
 
 /**

@@ -202,11 +202,6 @@ public sealed class SettingsStore(LocalStore store)
 }
 
 /// <summary>
-/// Query history (§8). L17: list and search send previews (the stored <c>preview</c> column, or the first
-/// <see cref="HistoryLimits.PreviewChars"/> characters of a row an older build wrote), history.get the whole text; a
-/// retention pass deletes entries past the age and count limits in short batches, off the RPC and run paths.
-/// </summary>
-/// <summary>
 /// Accepted completion items per (profile, database), for ranking (§9: "then usage count"): uses and the last use, so the
 /// webview can rank by both. Bounded: the least recently used rows beyond <see cref="MaxPerDatabase"/> are dropped.
 /// </summary>
@@ -251,6 +246,11 @@ public sealed class CompletionUsageStore(LocalStore store)
     }
 }
 
+/// <summary>
+/// Query history (§8). L17: list and search send previews (the stored <c>preview</c> column, or the first
+/// <see cref="HistoryLimits.PreviewChars"/> characters of a row an older build wrote), history.get the whole text; a
+/// retention pass deletes entries past the age and count limits in short batches, off the RPC and run paths.
+/// </summary>
 public sealed class HistoryStore(LocalStore store, ILogger? log = null)
 {
     const string RetentionKey = "history.retention";

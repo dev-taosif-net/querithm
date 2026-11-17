@@ -28,7 +28,8 @@ export default defineConfig({
     environment: "node",
     // UI component tests opt in per file with `// @vitest-environment jsdom`.
     // Slow runners (QUERITHM_TEST_TIME_SCALE, ci.yml): test and async-wait limits scale with it.
-    setupFiles: ["src/testing/timeScale.setup.ts"],
+    // webStorage: jsdom's localStorage under Node 25+, whose own (undefined without --localstorage-file) shadows it.
+    setupFiles: ["src/testing/webStorage.setup.ts", "src/testing/timeScale.setup.ts"],
     testTimeout: 5_000 * Math.max(1, Number(process.env.QUERITHM_TEST_TIME_SCALE) || 1),
     coverage: {
       provider: "v8",

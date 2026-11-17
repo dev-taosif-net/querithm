@@ -1009,8 +1009,9 @@ with nothing typed yet is shown only where an object name comes next (`FROM |`, 
 `a, ` starts a new line instead of accepting a keyword. Items merge by name and kind family (a column `Count` and the
 function COUNT stay two items); where tier 1 has the item its insert text wins (the dialect's quoting: a reserved word
 delimited, an alias as written) and tier 2 refines the detail. Tier 2's answer is cached per word (model, profile,
-database, session, snapshot version, word start and the text before it), so extending the word keeps its items and a
-schema refresh asks again; an older answer never replaces a newer one. Each tier-1 item's filter text starts with what
+database, session, snapshot version, word start, the text before it, and the word it was asked with — the request sends
+the text and offset of that moment), so extending the word keeps its items, another word at the same place (typed after
+a backspace) asks again, and a schema refresh asks again; an older answer never replaces a newer one. Each tier-1 item's filter text starts with what
 was typed, so Monaco's fuzzy score is equal and tier 1's ranking decides the order. The range replaces the whole word
 under the cursor and an opened quote with its closing one (the item is inserted fully quoted in the style opened). While
 the schema loads, fails or the server is disconnected, the list's first row says so. Tier 2 sends only the items whose
@@ -1018,7 +1019,8 @@ name matches the word being typed (prefix, camel hump or substring, as tier 1), 
 (`CompletionFilter`, all engines); an answer that hit the cap is asked again as the word grows (§14 #5b). Ranking uses
 accepted items per database (`lang.usage.record` / `lang.usage.list`, the `completion_usage` table): uses halved every two
 weeks since the last use; a JOIN item counts for the table it joins. Table items show their row count from catalog
-statistics (`meta.rowCounts`, loaded once per snapshot version in the background, schemas up to 5,000 tables; "rows n/a"
+statistics (`meta.rowCounts`, loaded once per snapshot version in the background through a session already open — a
+keystroke never connects a server — and tried again 30 s after a failure, schemas up to 5,000 tables; "rows n/a"
 where the engine has none, SQLite before ANALYZE). Synonyms, temporary tables and table functions have their own kinds and
 icons. T-SQL temporary tables and table variables get their columns from the batch above the cursor (CREATE TABLE,
 DECLARE … TABLE, SELECT … INTO); PIVOT / UNPIVOT results and FOR SYSTEM_TIME references keep their alias. Column and

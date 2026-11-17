@@ -10,7 +10,10 @@ export type { RowInfo };
 /** Schemas with more tables than this are not counted: one catalog query, but the answer would be large. */
 const MAX_TABLES = 5000;
 
-interface Entry { key: string; counts?: Map<number, RowInfo>; loading: boolean }
+/** After a failed load, the next keystroke past this delay tries again (not every keystroke: a failure may persist). */
+const RETRY_MS = 30_000;
+
+interface Entry { key: string; counts?: Map<number, RowInfo>; loading: boolean; retryAt?: number }
 const entries = new Map<string, Entry>();
 const listeners = new Set<() => void>();
 
@@ -22,21 +25,24 @@ export function onRowCounts(fn: () => void): () => void {
 
 /**
  * The counts for this schema version, or undefined while they load (the first call starts the load). `sessionId`: a
- * session-owned tab's own session (an in-memory database); otherwise the profile's explorer session.
+ * session-owned tab's own session (an in-memory database); otherwise the profile's explorer session — only one that is
+ * already open: a keystroke never connects a server (a snapshot cached in store.db can outlive the connection), so
+ * without one the counts wait for the next call after it connects.
  */
-export function rowCountsFor(idx: SchemaIndex | null, version: number | undefined, profileId?: string, database?: string, sessionId?: string): Map<number, RowInfo> | undefined {
+export function rowCountsFor(idx: SchemaIndex | null, version: number | undefined, profileId?: string, database?: string, sessionId?: string, now = Date.now()): Map<number, RowInfo> | undefined {
   if (!idx || !profileId || !database) return undefined;
   const scope = `${profileId}\u001f${database}\u001f${sessionId ?? ""}`;
   const key = `${scope}\u001f${version ?? 0}`;
   const e = entries.get(scope);
-  if (e && e.key === key) return e.counts;
+  if (e && e.key === key && (e.loading || e.retryAt === undefined || now < e.retryAt)) return e.counts;
   const tables = idx.objects.filter((o) => o.kind === "table").map((o) => o.id);
   if (!tables.length || tables.length > MAX_TABLES) return undefined;
+  const sid = sessionId ?? useConnections.getState().servers[profileId]?.sessionId;
+  if (!sid) return e?.counts;
   const entry: Entry = { key, loading: true, counts: e?.counts }; // the previous version's counts meanwhile
   entries.set(scope, entry);
   void (async () => {
     try {
-      const sid = sessionId ?? (await useConnections.getState().sessionFor(profileId));
       const list = await rpc("meta.rowCounts", { sessionId: sid, database, objectIds: tables });
       const m = new Map<number, RowInfo>();
       for (const id of tables) m.set(id, { rows: null, estimated: true });
@@ -45,7 +51,8 @@ export function rowCountsFor(idx: SchemaIndex | null, version: number | undefine
       entry.counts = m;
       for (const fn of listeners) fn();
     } catch {
-      /* best effort: items without counts */
+      // Best effort: items keep what they had (none, or the previous version's) and a later call tries again.
+      if (entries.get(scope) === entry) entry.retryAt = Date.now() + RETRY_MS;
     } finally {
       entry.loading = false;
     }

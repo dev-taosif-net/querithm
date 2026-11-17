@@ -1065,6 +1065,49 @@ describe("tier 2 cache: a capped answer", () => {
     const r = completion("tsql").provideCompletionItems(m, pos(m, 16));
     expect(r.suggestions.some((s: any) => s.label.label === "OrdersOnlyHere")).toBe(true);
   });
+
+  it("asks again for another word at the same place: the sidecar answered only the first word's matches", async () => {
+    // Regression: the cache was keyed by where the word starts, not by the word, so `x` then backspace and `o` reused
+    // x's filtered answer and never showed tier-2-only names starting with `o`.
+    vi.useFakeTimers();
+    const m = doc("tsql", "select * from x");
+    rpc.mockResolvedValue([{ label: "xOnly", kind: "tempTable", isSnippet: false }]);
+    completion("tsql").provideCompletionItems(m, pos(m, 15));
+    await vi.advanceTimersByTimeAsync(130);
+    m.setValue("select * from o");
+    rpc.mockResolvedValue([{ label: "oTier2Only", kind: "tempTable", isSnippet: false }]);
+    completion("tsql").provideCompletionItems(m, pos(m, 15));
+    await vi.advanceTimersByTimeAsync(130);
+    expect(rpc).toHaveBeenCalledTimes(2);
+    const r = completion("tsql").provideCompletionItems(m, pos(m, 15));
+    expect(r.suggestions.some((s: any) => s.label.label === "oTier2Only")).toBe(true);
+  });
+
+  it("keeps an uncapped answer while the word grows, without asking again", async () => {
+    vi.useFakeTimers();
+    const m = doc("tsql", "select * from o");
+    rpc.mockResolvedValue([{ label: "oTier2Only", kind: "tempTable", isSnippet: false }]);
+    completion("tsql").provideCompletionItems(m, pos(m, 15));
+    await vi.advanceTimersByTimeAsync(130);
+    m.setValue("select * from oT");
+    const r = completion("tsql").provideCompletionItems(m, pos(m, 16));
+    await vi.advanceTimersByTimeAsync(130);
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(r.suggestions.some((s: any) => s.label.label === "oTier2Only")).toBe(true);
+  });
+
+  it("sends the text as it was when the request was scheduled, so its offset is inside it", async () => {
+    // Regression: the offset was taken at schedule time and the text 120 ms later; a shortened document put the offset
+    // past its end and the sidecar refused the request.
+    vi.useFakeTimers();
+    const text = "select * from Orders";
+    const m = doc("tsql", text);
+    rpc.mockResolvedValue([]);
+    completion("tsql").provideCompletionItems(m, pos(m, text.length));
+    m.setValue("select");
+    await vi.advanceTimersByTimeAsync(130);
+    expect(rpc).toHaveBeenCalledWith("lang.complete", expect.objectContaining({ text, offset: text.length }));
+  });
 });
 
 describe("completion provider: icons", () => {
