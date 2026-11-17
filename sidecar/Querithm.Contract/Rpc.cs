@@ -98,6 +98,8 @@ public interface IQuerithmRpc
     [RpcMethod("lang.folding")] Task<FoldingRange[]> LangFolding(FoldingParams p);
     [RpcMethod("lang.classify")] Task<Classification> LangClassify(ClassifyParams p);
     [RpcMethod("lang.forget")] Task LangForget(LangForgetParams p);
+    [RpcMethod("lang.usage.record")] Task LangUsageRecord(UsageRecordParams p);
+    [RpcMethod("lang.usage.list")] Task<CompletionUsage[]> LangUsageList(UsageListParams p);
 
     [RpcMethod("plan.get")] Task<QueryExecuteResult> PlanGet(PlanParams p);
     [RpcMethod("plan.parse")] Task<PlanParseResult> PlanParse(PlanParseParams p);

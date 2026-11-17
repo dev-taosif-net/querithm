@@ -94,7 +94,7 @@ public sealed class ProfileStore(LocalStore store)
         foreach (var table in new[] { "profile" })
             c.Cmd($"DELETE FROM {table} WHERE id = $id", tx, ("$id", id)).ExecuteNonQuery();
         // Everything recorded for the profile goes with it: metadata cache, query history (FTS rows via trigger), script bindings.
-        foreach (var table in new[] { "schema_snapshot", "obj", "col", "param", "fk", "idx", "definition_cache", "history", "script" })
+        foreach (var table in new[] { "schema_snapshot", "obj", "col", "param", "fk", "idx", "definition_cache", "history", "script", "completion_usage" })
             c.Cmd($"DELETE FROM {table} WHERE profile_id = $id", tx, ("$id", id)).ExecuteNonQuery();
         tx.Commit();
         Changed?.Invoke(id);
@@ -206,6 +206,51 @@ public sealed class SettingsStore(LocalStore store)
 /// <see cref="HistoryLimits.PreviewChars"/> characters of a row an older build wrote), history.get the whole text; a
 /// retention pass deletes entries past the age and count limits in short batches, off the RPC and run paths.
 /// </summary>
+/// <summary>
+/// Accepted completion items per (profile, database), for ranking (§9: "then usage count"): uses and the last use, so the
+/// webview can rank by both. Bounded: the least recently used rows beyond <see cref="MaxPerDatabase"/> are dropped.
+/// </summary>
+public sealed class CompletionUsageStore(LocalStore store)
+{
+    public const int MaxPerDatabase = 2000;
+    public const int MaxItemsPerCall = 64;
+    public const int MaxItemLength = 512;
+
+    /// <summary>Test seam: the clock uses are stamped with.</summary>
+    internal Func<long> Now { get; set; } = Time.NowMs;
+
+    public void Record(string profileId, string database, IReadOnlyList<string> items)
+    {
+        if (items.Count == 0) return;
+        var now = Now();
+        using var c = store.Open();
+        using var tx = c.BeginTransaction();
+        foreach (var item in items.Distinct(StringComparer.Ordinal))
+        {
+            c.Cmd("""
+                INSERT INTO completion_usage (profile_id, database, item, uses, last_used_at) VALUES ($p, $d, $i, 1, $t)
+                ON CONFLICT (profile_id, database, item) DO UPDATE SET uses = uses + 1, last_used_at = $t;
+                """, tx, ("$p", profileId), ("$d", database), ("$i", item), ("$t", now)).ExecuteNonQuery();
+        }
+        c.Cmd("""
+            DELETE FROM completion_usage WHERE profile_id = $p AND database = $d AND item NOT IN (
+              SELECT item FROM completion_usage WHERE profile_id = $p AND database = $d ORDER BY last_used_at DESC LIMIT $max);
+            """, tx, ("$p", profileId), ("$d", database), ("$max", (long)MaxPerDatabase)).ExecuteNonQuery();
+        tx.Commit();
+    }
+
+    public CompletionUsage[] List(string profileId, string database)
+    {
+        using var c = store.Open();
+        using var cmd = c.Cmd("SELECT item, uses, last_used_at FROM completion_usage WHERE profile_id = $p AND database = $d ORDER BY last_used_at DESC LIMIT $max;",
+            null, ("$p", profileId), ("$d", database), ("$max", (long)MaxPerDatabase));
+        using var r = cmd.ExecuteReader();
+        var list = new List<CompletionUsage>();
+        while (r.Read()) list.Add(new CompletionUsage { Item = r.GetString(0), Uses = r.GetInt64(1), LastUsedAt = r.GetInt64(2) });
+        return [.. list];
+    }
+}
+
 public sealed class HistoryStore(LocalStore store, ILogger? log = null)
 {
     const string RetentionKey = "history.retention";

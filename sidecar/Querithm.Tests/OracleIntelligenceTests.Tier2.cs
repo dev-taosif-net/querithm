@@ -105,7 +105,7 @@ public partial class OracleIntelligenceTests
         Assert.DoesNotContain("RAISE_SAL", labels);
         Assert.DoesNotContain("PKG", labels);
         Assert.DoesNotContain("UTIL", labels); // a synonym of a package
-        Assert.Equal(CompletionKind.Table, items.Single(i => i.Label == "SYN_T").Kind);
+        Assert.Equal(CompletionKind.Synonym, items.Single(i => i.Label == "SYN_T").Kind); // its own icon
         var own = Labels("SELECT * FROM own.|");
         Assert.Contains("SHARED_T", own);
         Assert.Contains("EMP", own);

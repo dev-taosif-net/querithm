@@ -3,7 +3,11 @@ namespace Querithm.Contract;
 public enum CompletionKind
 {
     Keyword, Table, View, Column, Proc, Func, Variable, Parameter, Schema, Database, Alias, Cte,
-    Snippet, Type, TempTable, Cursor
+    Snippet, Type, TempTable, Cursor,
+    /// <summary>A synonym of a table or view (SQL Server, Oracle): its own icon, the target's columns.</summary>
+    Synonym,
+    /// <summary>A table-valued (set-returning) function used as a row source.</summary>
+    TableFunction,
 }
 
 public sealed record CompleteParams
@@ -22,6 +26,29 @@ public sealed record CompleteParams
     /// (Oracle: the signed-in user's schema, in dictionary spelling); null for the other engines. Only compared with names.
     /// </summary>
     public string? Schema { get; init; }
+}
+
+/// <summary>lang.usage.record: completion items the user accepted (lower-case names), for ranking.</summary>
+public sealed record UsageRecordParams
+{
+    public required string ProfileId { get; init; }
+    public required string Database { get; init; }
+    public required string[] Items { get; init; }
+}
+
+/// <summary>lang.usage.list: what was accepted in a database, most recent first.</summary>
+public sealed record UsageListParams
+{
+    public required string ProfileId { get; init; }
+    public required string Database { get; init; }
+}
+
+public sealed record CompletionUsage
+{
+    public required string Item { get; init; }
+    public long Uses { get; init; }
+    /// <summary>Unix milliseconds.</summary>
+    public long LastUsedAt { get; init; }
 }
 
 public sealed record CompletionItem

@@ -1,6 +1,6 @@
 // Tier-1 completion (§9 context table). Synchronous, from the cached SchemaIndex; never throws.
 import type { CompletionKind, Dialect, ObjectKind, SnapColumn, SnapObject } from "../../ipc/contract";
-import type { CompletionRequest, CompletionResult, CursorContext, SchemaIndex, TableInScope, Tier1Item } from "./types";
+import type { CompletionRequest, CompletionResult, CursorContext, RowInfo, SchemaIndex, TableInScope, Tier1Item } from "./types";
 import { scan } from "./scanner";
 import { findObject, fkReference, isDefaultSchema, resolveTable, synonymTarget } from "./schemaIndex";
 import { columnLines, columnsTable, mdCode, mdText, objectHeader } from "../hoverMarkdown";
@@ -140,7 +140,7 @@ export function complete(req: CompletionRequest): CompletionResult {
   if (ctx.inStringOrComment) return { context: ctx, items: [] };
   let items: Tier1Item[] = [];
   try {
-    items = new Builder(ctx, req.schema ?? null, dialect, text, req.usage, req.autoAlias !== false ? offset : -1).build();
+    items = new Builder(ctx, req.schema ?? null, dialect, text, req.usage, req.autoAlias !== false ? offset : -1, req.rowCounts).build();
   } catch {
     items = [];
   }
@@ -163,6 +163,14 @@ export function openQuoteAt(text: string, prefixStart: number, dialect: Dialect)
  */
 export function monacoFilterText(typed: string, item: Pick<Tier1Item, "label" | "filterText">): string {
   return typed + (item.filterText ?? item.label);
+}
+
+/** A row count for an item's description: `1234` → `1.2k`, `5600000` → `5.6M`. */
+export function formatRows(n: number): string {
+  for (const [v, u] of [[1e9, "B"], [1e6, "M"], [1e3, "k"]] as const) {
+    if (n >= v) { const x = n / v; return `${x < 10 ? x.toFixed(1).replace(/\.0$/, "") : Math.round(x)}${u}`; }
+  }
+  return String(n);
 }
 
 /** The closing quote matching `open`. */
@@ -316,6 +324,7 @@ class Builder {
     text: string,
     private readonly usage?: Map<string, number>,
     aliasOffset = -1,
+    private readonly rowCounts?: Map<number, RowInfo>,
   ) {
     this.openQuote = openQuoteAt(text, ctx.prefixStart, dialect);
     this.typedOpenQuote = this.openQuote !== "";
@@ -468,12 +477,16 @@ class Builder {
   private objectDetail(o: SnapObject): string {
     const k = o.kind === "tvf" ? "table function" : o.kind === "func" ? "function" : o.kind === "proc" ? "procedure" : o.kind;
     const n = o.columns?.length && (o.kind === "table" || o.kind === "view" || o.kind === "synonym") ? ` · ${o.columns.length} cols` : "";
-    return o.returnType ? `${k} · ${o.schema} → ${o.returnType}` : `${k} · ${o.schema}${n}`;
+    const rc = o.kind === "table" ? this.rowCounts?.get(o.id) : undefined;
+    const rows = !rc ? "" : rc.rows == null ? " · rows n/a" : ` · ${rc.estimated ? "~" : ""}${formatRows(rc.rows)} rows`;
+    return o.returnType ? `${k} · ${o.schema} → ${o.returnType}` : `${k} · ${o.schema}${n}${rows}`;
   }
 
   private objectKind(o: SnapObject): CompletionKind {
     switch (o.kind) {
-      case "table": case "synonym": return "table";
+      case "table": return "table";
+      case "synonym": return "synonym";
+      case "tvf": return "tableFunction";
       case "view": return "view";
       case "proc": return "proc";
       case "type": return "type";
@@ -711,6 +724,8 @@ class Builder {
         label, kind: "snippet", detail: joined ? `JOIN · ${why} · already joined` : `JOIN · ${why}`,
         insertText: `${escSnippet(target)} ${ph} ON ${snippetCond}`, isSnippet: true,
         group: joined ? 4 : group, match: [other.name, `${other.schema}.${other.name}`, label],
+        // Accepting it counts for the joined table, which ranks it (and the table itself) higher next time.
+        usageKeys: [other.name.toLowerCase(), `${other.schema}.${other.name}`.toLowerCase()],
       });
     };
 
@@ -1068,6 +1083,8 @@ class Builder {
       if (c.insertText !== undefined) item.insertText = c.insertText;
       if (c.isSnippet) item.isSnippet = true;
       if (c.alias !== undefined) item.alias = c.alias;
+      const uk = c.usageKeys?.[0];
+      if (uk !== undefined && uk !== c.label.toLowerCase()) item.usageKey = uk;
       if (c.filterText !== undefined) item.filterText = c.filterText;
       if (c.documentation !== undefined) item.documentation = c.documentation;
       scored.push({ item, key: st });

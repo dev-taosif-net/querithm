@@ -842,10 +842,11 @@ One SQLite database at the OS app-data path (`%APPDATA%/querithm/store.db`,
 mode, owned by the sidecar. Autocomplete and the explorer read only this file; they never wait on
 a server. The schema is in `sidecar/Querithm.Core/Store/Schema.sql` and matches the original
 spec's tables: `profile` (no password column, ever), `schema_snapshot`, `obj`, `col`, `param`,
-`fk`, `idx`, `definition_cache`, `history` + `history_fts` (FTS5), `script`, `setting`, and `snippet`
-(the snippet library, user data never logged).
+`fk`, `idx`, `definition_cache`, `history` + `history_fts` (FTS5), `script`, `setting`, `snippet`
+(the snippet library, user data never logged), and `completion_usage` (accepted completion items per database for ranking:
+uses and the last use, at most 2,000 rows per database, deleted with the profile, never logged).
 
-**Schema versions.** `PRAGMA user_version` is `LocalStore.Version` (8). Opening a file written by an
+**Schema versions.** `PRAGMA user_version` is `LocalStore.Version` (11). Opening a file written by an
 older build runs the migration steps first (v1 → v2: `obj.parent_object_id` added and every
 `schema_snapshot` marked `stale`, so the next refresh lists triggers; v2 → v3: the `snippet` table; v3 → v4:
 `profile.location` and `profile.file_grant_id`, NULL — a server — for every existing profile, Phase D0a; v4 → v5:
@@ -854,7 +855,7 @@ older build runs the migration steps first (v1 → v2: `obj.parent_object_id` ad
 `obj.note` and `schema_snapshot.notes`, D4 S05; v7 → v8: `obj.spec_object_id` and `obj.members` for Oracle packages, and every
 fresh Oracle `schema_snapshot` marked `stale` so its next refresh lists them, D4 S08; v8 → v9: `obj.target_object_id`, an
 Oracle synonym's target, and every Oracle `schema_snapshot` not in error marked `empty` so its next refresh is a full one that
-fills it, D4 S09), then
+fills it, D4 S09; v9 → v10: `obj.row_address`, D4 S10; v10 → v11: the `completion_usage` table, created by Schema.sql), then
 `Schema.sql`, all in one transaction: a crash mid-migration leaves the file at its old version and the
 next open runs the steps again. A file from a newer build keeps its version, and an `obj` row whose kind this build does not
 know is left out of the snapshot and of search, never read as another kind (D4 S08).
@@ -1012,7 +1013,16 @@ database, session, snapshot version, word start and the text before it), so exte
 schema refresh asks again; an older answer never replaces a newer one. Each tier-1 item's filter text starts with what
 was typed, so Monaco's fuzzy score is equal and tier 1's ranking decides the order. The range replaces the whole word
 under the cursor and an opened quote with its closing one (the item is inserted fully quoted in the style opened). While
-the schema loads, fails or the server is disconnected, the list's first row says so; signature help →
+the schema loads, fails or the server is disconnected, the list's first row says so. Tier 2 sends only the items whose
+name matches the word being typed (prefix, camel hump or substring, as tier 1), at most 500 in rank order
+(`CompletionFilter`, all engines); an answer that hit the cap is asked again as the word grows (§14 #5b). Ranking uses
+accepted items per database (`lang.usage.record` / `lang.usage.list`, the `completion_usage` table): uses halved every two
+weeks since the last use; a JOIN item counts for the table it joins. Table items show their row count from catalog
+statistics (`meta.rowCounts`, loaded once per snapshot version in the background, schemas up to 5,000 tables; "rows n/a"
+where the engine has none, SQLite before ANALYZE). Synonyms, temporary tables and table functions have their own kinds and
+icons. T-SQL temporary tables and table variables get their columns from the batch above the cursor (CREATE TABLE,
+DECLARE … TABLE, SELECT … INTO); PIVOT / UNPIVOT results and FOR SYSTEM_TIME references keep their alias. Column and
+table comments are not shown: no engine's catalog query reads them yet; signature help →
 `lang.signature`; definition → read-only tab from `meta.definition`; hover from the snapshot;
 diagnostics via `setModelMarkers` debounced 300 ms; Monarch tokenizer per dialect; folding from
 tier 2's AST.
@@ -1799,6 +1809,7 @@ record loops, a temp table); a 1,000,000-row, 40-column result query. 5 runs, me
 | 3 | Typing latency in the 12k-line proc | onDidChangeModelContent → next paint | p95 ≤ 16 ms |
 | 4 | Tier-1 completion latency | keystroke → popup items ready | p95 ≤ 5 ms |
 | 5 | Tier-2 completion latency | `lang.complete` roundtrip, 12k-line proc | p95 ≤ 150 ms |
+| 5b | Tier-2 answer on a 10,000-table schema (30 columns each), `FROM Table01` | `CompletionFilterTests.On_10000_tables…` (xUnit, `Category=Measure`): T-SQL tier 2 + `CompletionFilter` + JSON serialization, 20 runs. Measured 2026-11-17 on this machine: 10,001 items / 1,817 KiB → 500 items / 91 KiB; p95 192–245 ms unfiltered, 128–172 ms filtered (two runs) | ≤ 500 items (tier 1's cap); payload ≤ 1/10 of unfiltered |
 | 6 | Full parse of 12k-line proc | `lang.diagnostics` | ≤ 100 ms |
 | 7 | Tab switch between connected sessions | click → editor + results painted | p95 ≤ 50 ms |
 | 7b | Tab switch with 30 tabs open | `pnpm bench` metric `7b`: the first ↔ the last tab of the strip, 50 samples, click → editor + results painted | p95 ≤ 50 ms |

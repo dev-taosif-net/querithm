@@ -86,6 +86,14 @@ CREATE TABLE IF NOT EXISTS script (
 
 CREATE TABLE IF NOT EXISTS setting (key TEXT PRIMARY KEY, value_json TEXT);
 
+-- Completion usage (v11): how often and how lately an editor item was accepted, per database, to rank completion.
+-- User data (object names): local only, never logged; deleted with its profile; at most 2,000 rows per database.
+CREATE TABLE IF NOT EXISTS completion_usage (
+  profile_id TEXT NOT NULL, database TEXT NOT NULL, item TEXT NOT NULL,
+  uses INTEGER NOT NULL, last_used_at INTEGER NOT NULL,
+  PRIMARY KEY (profile_id, database, item)
+);
+
 -- Snippet library (v3). User data: bodies are never logged.
 CREATE TABLE IF NOT EXISTS snippet (
   id TEXT PRIMARY KEY, title TEXT NOT NULL, prefix TEXT NOT NULL, body TEXT NOT NULL,

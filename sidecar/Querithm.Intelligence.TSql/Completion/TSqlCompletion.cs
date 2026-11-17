@@ -549,8 +549,8 @@ sealed class ItemBuilder(DocModel doc, CursorInfo cur, Env env, Resolver resolve
         var (kind, word, group) = o.Kind switch
         {
             ObjectKind.View => (CompletionKind.View, "view", "3"),
-            ObjectKind.Tvf => (CompletionKind.Func, "table-valued function", "4"),
-            ObjectKind.Synonym => (CompletionKind.Table, "synonym", "4"),
+            ObjectKind.Tvf => (CompletionKind.TableFunction, "table-valued function", "4"),
+            ObjectKind.Synonym => (CompletionKind.Synonym, "synonym", "4"),
             _ => (CompletionKind.Table, "table", "2"),
         };
         var detail = $"{word} {o.Schema}.{o.Name}";

@@ -72,13 +72,21 @@ public sealed class SchemaCache(MetadataStore store, MetadataStore? ephemeral = 
         if (profileId == null || database == null) return null;
         if (sessionId == null || !_scopes.TryGetValue(sessionId, out var scope) || scope.ProfileId != profileId) return Get(profileId, database);
         var own = SessionView(profileId, database, sessionId);
-        if (scope.InMemory) return own with { Database = database, SessionId = sessionId };
-        var shared = Get(profileId, database)!;
-        return own.Objects.Length == 0 ? shared : shared with
-        {
-            Objects = [.. shared.Objects, .. own.Objects], Fks = [.. shared.Fks, .. own.Fks], SessionId = sessionId,
-        };
+        var shared = scope.InMemory ? null : Get(profileId, database)!;
+        if (shared != null && own.Objects.Length == 0) return shared;
+        // The same instance while neither input changed: tier 2 caches its schema index per snapshot instance
+        // (PgSchema.For), so a new record per request rebuilt the index on every keystroke for SQLite / DuckDB tabs.
+        var key = Key(profileId, SessionDatabase(database, sessionId));
+        if (_merged.TryGetValue(key, out var m) && ReferenceEquals(m.Own, own) && ReferenceEquals(m.Shared, shared)) return m.Merged;
+        var merged = shared == null
+            ? own with { Database = database, SessionId = sessionId }
+            : shared with { Objects = [.. shared.Objects, .. own.Objects], Fks = [.. shared.Fks, .. own.Fks], SessionId = sessionId };
+        _merged[key] = (shared, own, merged);
+        return merged;
     }
+
+    /// <summary>A session's merged view, kept while the shared snapshot and the session's own are the same instances.</summary>
+    readonly ConcurrentDictionary<string, (SchemaSnapshot? Shared, SchemaSnapshot Own, SchemaSnapshot Merged)> _merged = new();
 
     public SchemaSnapshot SessionView(string profileId, string database, string sessionId)
     {
@@ -105,6 +113,8 @@ public sealed class SchemaCache(MetadataStore store, MetadataStore? ephemeral = 
         {
             foreach (var key in _session.Keys.Where(k => k.StartsWith(profileId + "|", StringComparison.Ordinal) && k.EndsWith(marker, StringComparison.Ordinal)).ToList())
                 _session.TryRemove(key, out _);
+            foreach (var key in _merged.Keys.Where(k => k.StartsWith(profileId + "|", StringComparison.Ordinal) && k.EndsWith(marker, StringComparison.Ordinal)).ToList())
+                _merged.TryRemove(key, out _);
         });
         foreach (var db in Ephemeral.KnownDatabases(profileId).Where(d => d.EndsWith(marker, StringComparison.Ordinal))) Ephemeral.Forget(profileId, db);
     }
@@ -119,6 +129,7 @@ public sealed class SchemaCache(MetadataStore store, MetadataStore? ephemeral = 
     {
         foreach (var key in _snapshots.Keys.Where(k => k.StartsWith(profileId + "|", StringComparison.Ordinal)).ToList()) _snapshots.TryRemove(key, out _);
         foreach (var key in _session.Keys.Where(k => k.StartsWith(profileId + "|", StringComparison.Ordinal)).ToList()) _session.TryRemove(key, out _);
+        foreach (var key in _merged.Keys.Where(k => k.StartsWith(profileId + "|", StringComparison.Ordinal)).ToList()) _merged.TryRemove(key, out _);
     });
 }
 

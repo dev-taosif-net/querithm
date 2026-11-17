@@ -9,8 +9,8 @@ export type CompareClass = "identical" | "different" | "sourceOnly" | "targetOnl
 export const CompareClassValues = ["identical", "different", "sourceOnly", "targetOnly"] as const;
 export type CompareObjectKind = "schema" | "extension" | "type" | "sequence" | "table" | "view" | "function" | "procedure" | "trigger";
 export const CompareObjectKindValues = ["schema", "extension", "type", "sequence", "table", "view", "function", "procedure", "trigger"] as const;
-export type CompletionKind = "keyword" | "table" | "view" | "column" | "proc" | "func" | "variable" | "parameter" | "schema" | "database" | "alias" | "cte" | "snippet" | "type" | "tempTable" | "cursor";
-export const CompletionKindValues = ["keyword", "table", "view", "column", "proc", "func", "variable", "parameter", "schema", "database", "alias", "cte", "snippet", "type", "tempTable", "cursor"] as const;
+export type CompletionKind = "keyword" | "table" | "view" | "column" | "proc" | "func" | "variable" | "parameter" | "schema" | "database" | "alias" | "cte" | "snippet" | "type" | "tempTable" | "cursor" | "synonym" | "tableFunction";
+export const CompletionKindValues = ["keyword", "table", "view", "column", "proc", "func", "variable", "parameter", "schema", "database", "alias", "cte", "snippet", "type", "tempTable", "cursor", "synonym", "tableFunction"] as const;
 export type DebugEventKind = "attached" | "paused" | "running" | "finished" | "error";
 export const DebugEventKindValues = ["attached", "paused", "running", "finished", "error"] as const;
 export type DebugStepKind = "over" | "into" | "continue";
@@ -261,6 +261,11 @@ export interface CompletionItem {
   isSnippet: boolean;
   sortText?: string | null;
   documentation?: string | null;
+}
+export interface CompletionUsage {
+  item: string;
+  uses: number;
+  lastUsedAt: number;
 }
 export interface DataCompareOptions {
   floatEpsilon: number;
@@ -1716,6 +1721,15 @@ export interface UsageHit {
   reason?: string | null;
   definition: boolean;
 }
+export interface UsageListParams {
+  profileId: string;
+  database: string;
+}
+export interface UsageRecordParams {
+  profileId: string;
+  database: string;
+  items: string[];
+}
 export interface WaitCoverage {
   source: string;
   periodMs: number;
@@ -1805,6 +1819,8 @@ export interface RpcMap {
   "lang.folding": { params: FoldingParams; result: FoldingRange[] };
   "lang.classify": { params: ClassifyParams; result: Classification };
   "lang.forget": { params: LangForgetParams; result: void };
+  "lang.usage.record": { params: UsageRecordParams; result: void };
+  "lang.usage.list": { params: UsageListParams; result: CompletionUsage[] };
   "plan.get": { params: PlanParams; result: QueryExecuteResult };
   "plan.parse": { params: PlanParseParams; result: PlanParseResult };
   "trace.start": { params: TraceStartParams; result: TraceRef };

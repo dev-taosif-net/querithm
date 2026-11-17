@@ -1,5 +1,5 @@
 {
-  "date": "2026-11-17T08:41:39.953Z",
+  "date": "2026-11-17T09:54:21.333Z",
   "os": "Windows_NT 10.0.26300",
   "cpu": "13th Gen Intel(R) Core(TM) i5-1335U",
   "cores": 12,
@@ -9,54 +9,54 @@
       "metric": "Oracle: execute → first batch on a cold pool connection (TCP, login, product + identity read, SELECT 1 FROM dual, median)",
       "unit": "ms",
       "target": 300,
-      "value": 140.78,
+      "value": 44.13,
       "pass": true,
       "samples": [
-        3489.6,
-        179.5,
-        133.8,
-        154.2,
-        151.6,
-        120.7,
-        174,
-        136.3,
-        135.5,
-        164.8,
-        134.4,
-        146.1,
-        140.8,
-        138.3,
-        130.8
+        562.5,
+        55.6,
+        45.1,
+        40.1,
+        44.4,
+        44.1,
+        43.9,
+        40,
+        40.5,
+        47.9,
+        39.4,
+        47.9,
+        46.9,
+        41.4,
+        43.4
       ]
     },
     "15.oracle": {
       "metric": "Oracle: cancel latency (OracleCommand.Cancel of a running SELECT)",
       "unit": "ms",
       "target": 500,
-      "value": 14.8,
+      "value": 7,
       "pass": true,
       "samples": [
-        30.3,
-        13.9,
-        14.8,
-        18,
-        13.9
+        9,
+        5.7,
+        6.3,
+        7.2,
+        7
       ],
-      "plsqlLoopMedianMs": 17.7,
+      "plsqlLoopMedianMs": 6.9,
       "plsqlLoopSamples": [
-        24.7,
-        17.7,
-        22.6,
-        14.6,
-        16.7
+        8,
+        5,
+        6.3,
+        6.9,
+        7.9
       ],
-      "dbmsSessionSleepMedianMs": 2818.2,
+      "dbmsSessionSleepMedianMs": 2810.3,
       "dbmsSessionSleepSamples": [
-        2867.9,
-        2818.2,
-        2822.8,
-        2814.1,
-        2814.6
+        2812.5,
+        2810.3,
+        2810.1,
+        2808.9,
+        2811.2
       ]
     },
     "8.oracle": {
@@ -71,15 +71,15 @@
       "metric": "Oracle: metadata snapshot load from SQLite (600 tables, 150 views, 200 triggers)",
       "unit": "ms",
       "target": 80,
-      "value": 41.76,
+      "value": 8.16,
       "pass": true,
       "objects": 1048,
       "samples": [
-        405.7210999999952,
-        38.650500000003376,
-        41.75930000000517,
-        42.03720000000612,
-        35.8240000000078
+        60.76190000000497,
+        8.192999999999302,
+        8.16189999999915,
+        7.0887000000002445,
+        7.155500000000757
       ],
       "statuses": [
         "fresh",
@@ -93,23 +93,23 @@
       "metric": "Oracle: incremental refresh with 10 changed objects (least-privileged user, ALL_* views)",
       "unit": "ms",
       "target": 2000,
-      "value": 1839.06,
+      "value": 1474.51,
       "pass": true,
       "samples": [
-        3943,
-        1680,
-        1839,
-        1938,
-        1763
+        2527,
+        1241,
+        1475,
+        1799,
+        1399
       ]
     },
     "5.oracle": {
       "metric": "Oracle: tier-2 completion latency, 10k-line script on the 600-table fixture (p95)",
       "unit": "ms",
       "target": 150,
-      "value": 100.63,
+      "value": 28.74,
       "pass": true,
-      "p95": 100.63369999999122,
+      "p95": 28.740599999997357,
       "lines": 10000,
       "itemsPerCall": 15,
       "samples": 60
@@ -118,7 +118,7 @@
       "metric": "Oracle: tier-2 completion latency in a 10k-line PL/SQL package body (cursor queries, SELECT INTO, UPDATE; p95)",
       "unit": "ms",
       "target": 150,
-      "value": 23.13,
+      "value": 8.51,
       "pass": true,
       "lines": 10003,
       "samples": 60,
@@ -128,83 +128,83 @@
       "metric": "Oracle: grid edits, DML preview for 100 staged cells",
       "unit": "ms",
       "target": 15,
-      "value": 11.56,
+      "value": 2.44,
       "pass": true,
       "samples": [
-        118.45759999999427,
-        13.391599999988102,
-        11.557300000000396,
-        11.228799999997136,
-        11.472200000003795,
-        18.03959999998915,
-        12.05130000000645
+        21.10399999999936,
+        3.022899999996298,
+        5.521999999997206,
+        2.3351000000038766,
+        3.4305999999996857,
+        2.147899999996298,
+        2.435299999997369
       ]
     },
     "23.oracle": {
       "metric": "Oracle: import 100k × 10 CSV into a new table (array binding, median of 3)",
       "unit": "ms",
       "target": 2000,
-      "value": 3968.26,
-      "pass": false,
+      "value": 1286.79,
+      "pass": true,
       "rows": 100000,
       "samples": [
-        4631,
-        3968,
-        3711
+        2874,
+        1243,
+        1287
       ]
     },
     "21.oracle": {
       "metric": "Oracle: schema compare of the app user's schema with itself (600 tables, 150 views, 200 triggers)",
       "unit": "ms",
       "target": 2000,
-      "value": 1902.52,
+      "value": 1281.91,
       "pass": true,
       "objects": 1022,
       "samples": [
-        2195,
-        1903,
-        1851
+        1788,
+        1282,
+        1212
       ]
     },
     "22.oracle": {
       "metric": "Oracle: data compare 100k × 10 against a copy with 1,000 changed rows",
       "unit": "ms",
       "target": 1500,
-      "value": 3649.45,
-      "pass": false,
+      "value": 1377.24,
+      "pass": true,
       "differences": 1000,
-      "memoryDeltaMb": 5,
+      "memoryDeltaMb": 6,
       "memoryGatePass": true,
       "samples": [
-        4657,
-        3649,
-        3465
+        1987,
+        1377,
+        1149
       ]
     },
     "24.oracle": {
       "metric": "Oracle: find usages of a column a view reads + 5 open tabs (definitions cached)",
       "unit": "ms",
       "target": 120,
-      "value": 42.33,
+      "value": 15.17,
       "pass": true,
       "objectsScanned": 1,
       "hits": 127,
       "samples": [
-        69.1,
-        39.6,
-        42.3,
-        68.4,
-        40.3,
-        41.4,
-        71.6
+        16.4,
+        13.8,
+        19.1,
+        15.2,
+        13,
+        21.3,
+        12.3
       ]
     },
     "4.oracle": {
       "metric": "Oracle: tier-1 completion latency in a 12k-line PL/SQL package body (p95)",
       "unit": "ms",
       "target": 5,
-      "value": 6.9,
-      "pass": false,
+      "value": 1.2,
+      "pass": true,
       "samples": 300,
       "schemaObjects": 92
     },
@@ -212,10 +212,10 @@
       "metric": "Oracle: typing latency in a 12k-line PL/SQL package body (p95)",
       "unit": "ms",
       "target": 16,
-      "value": 11.1,
+      "value": 3.5,
       "pass": true,
       "samples": 200,
-      "toPaintP95IncludingVsync": 18.8
+      "toPaintP95IncludingVsync": 17.5
     }
   }
 }

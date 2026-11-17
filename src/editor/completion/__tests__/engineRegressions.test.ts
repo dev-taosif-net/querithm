@@ -309,3 +309,54 @@ describe("completion: built-in row sources", () => {
     expect(item?.insertText ?? item?.label).toBe("temp.logs");
   });
 });
+
+describe("completion: usage ranking", () => {
+  for (const d of ENGINES) {
+    it(`${d}: a used table ranks first, and a JOIN item counts for the table it joins`, () => {
+      const text = "SELECT * FROM ";
+      const usage = new Map([[N(d, "customers").toLowerCase(), 50]]);
+      const items = complete({ text, offset: text.length, dialect: d, schema: IDX[d], usage, autoAlias: false }).items.filter((i) => i.kind === "table");
+      expect(items[0].label).toBe(N(d, "customers"));
+      const join = run("SELECT * FROM orders o JOIN |", d).find((i) => i.kind === "snippet" && i.label.startsWith(N(d, "customers")));
+      expect(join?.usageKey).toBe(N(d, "customers").toLowerCase());
+    });
+  }
+});
+
+describe("completion: T-SQL temp tables and table variables", () => {
+  const cols = (items: Tier1Item[]) => items.filter((i) => i.kind === "column").map((i) => i.label);
+  it("CREATE TABLE #t (…) gives #t its columns, constraints left out", () => {
+    const sql = "CREATE TABLE #t (a int NOT NULL, b varchar(10), CONSTRAINT pk PRIMARY KEY (a));\nSELECT t.| FROM #t t";
+    expect(cols(run(sql, "tsql"))).toEqual(expect.arrayContaining(["a", "b"]));
+    expect(cols(run(sql, "tsql"))).not.toContain("CONSTRAINT");
+  });
+  it("DECLARE @t TABLE (…) gives @t its columns, also after another variable", () => {
+    expect(cols(run("DECLARE @n int, @t TABLE (id int, name nvarchar(50));\nSELECT x.| FROM @t x", "tsql"))).toEqual(expect.arrayContaining(["id", "name"]));
+  });
+  it("SELECT … INTO #t gives #t the select list's columns", () => {
+    expect(cols(run("SELECT order_id, total AS amount INTO #t FROM orders;\nSELECT x.| FROM #t x", "tsql"))).toEqual(expect.arrayContaining(["order_id", "amount"]));
+  });
+  it("a definition in an earlier batch (before GO) does not count", () => {
+    expect(cols(run("CREATE TABLE #t (a int);\nGO\nSELECT t.| FROM #t t", "tsql"))).toEqual([]);
+  });
+});
+
+describe("completion: T-SQL PIVOT and temporal tables", () => {
+  const cols = (items: Tier1Item[]) => items.filter((i) => i.kind === "column").map((i) => i.label);
+  it("p.| after PIVOT lists the kept and pivoted columns, not the pivoted-away ones", () => {
+    const c = cols(run("SELECT p.| FROM (SELECT customer_id, status, total FROM orders) src PIVOT (SUM(total) FOR status IN ([Open], [Closed])) AS p", "tsql"));
+    expect(c).toEqual(expect.arrayContaining(["customer_id", "Open", "Closed"]));
+    expect(c).not.toContain("status");
+    expect(c).not.toContain("total");
+  });
+  it("u.| after UNPIVOT lists the kept columns plus the value and name columns", () => {
+    const c = cols(run("SELECT u.| FROM (SELECT order_id, 1 AS a, 2 AS b FROM orders) s UNPIVOT (val FOR col IN (a, b)) AS u", "tsql"));
+    expect(c).toEqual(expect.arrayContaining(["order_id", "val", "col"]));
+    expect(c).not.toContain("a");
+  });
+  it("FOR SYSTEM_TIME … keeps the alias after it", () => {
+    for (const clause of ["AS OF '2024-01-01'", "ALL", "FROM @a TO @b", "BETWEEN '2024-01-01' AND SYSUTCDATETIME()", "CONTAINED IN (@a, @b)"]) {
+      expect(cols(run(`SELECT o.| FROM orders FOR SYSTEM_TIME ${clause} o`, "tsql")), clause).toContain("total");
+    }
+  });
+});

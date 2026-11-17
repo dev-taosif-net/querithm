@@ -24,6 +24,8 @@ import { assertNever, DEFAULT_DIALECT, DIALECT_LIST, DIALECTS, dialectForLanguag
 import { formatOracleScript } from "./oracleFormat";
 import { columnLines, columnsTable, mdCode, mdFence, objectHeader, oneLine } from "./hoverMarkdown";
 import { fkReference } from "./completion/schemaIndex";
+import { flushUsage, recordUsage, usageScores } from "./usage";
+import { onRowCounts, rowCountsFor } from "./rowCounts";
 
 export interface DocContext {
   tabId: string;
@@ -73,15 +75,19 @@ const kindMap: Record<CompletionKind, monaco.languages.CompletionItemKind> = {
   cte: monaco.languages.CompletionItemKind.Class,
   snippet: monaco.languages.CompletionItemKind.Snippet,
   type: monaco.languages.CompletionItemKind.TypeParameter,
-  tempTable: monaco.languages.CompletionItemKind.Struct,
+  // Each its own icon: a temp table, a synonym and a table function are not plain tables.
+  tempTable: monaco.languages.CompletionItemKind.Value,
   cursor: monaco.languages.CompletionItemKind.Event,
+  synonym: monaco.languages.CompletionItemKind.EnumMember,
+  tableFunction: monaco.languages.CompletionItemKind.Constructor,
 };
 
-/** Usage counts (accepted completions), feeding the "then usage count" ranking rule of §9. */
-const usage = new Map<string, number>();
-export function noteUsage(label: string) {
-  const k = label.toLowerCase();
-  usage.set(k, (usage.get(k) ?? 0) + 1);
+/**
+ * An accepted completion item, for the "then usage count" ranking rule of §9: per (profile, database), kept in store.db
+ * (usage.ts). `item` is the item's usage key (a JOIN item counts for the table it joins).
+ */
+export function noteUsage(item: string, profileId?: string, database?: string) {
+  recordUsage(item, profileId, database);
 }
 
 /**
@@ -102,6 +108,8 @@ export function schemaParam(profileId: string | null | undefined): { schema?: st
  */
 const tier2Cache = new Map<string, CompletionItem[]>();
 const TIER2_CACHE_MAX = 8;
+/** The sidecar's cap on one answer (CompletionFilter.MaxItems). */
+const TIER2_CAP = 500;
 /** Per model: its debounce timer, the key in flight, and the newest request (an older answer is never cached over it). */
 const tier2Timers = new Map<string, ReturnType<typeof setTimeout>>();
 const tier2Pending = new Map<string, string>();
@@ -218,7 +226,7 @@ function installKeywordCaseOnType(editor: monaco.editor.ICodeEditor) {
   });
 }
 
-function toMonaco(item: Tier1Item | CompletionItem, range: monaco.IRange | monaco.languages.CompletionItemRanges, tier: 1 | 2): monaco.languages.CompletionItem {
+function toMonaco(item: Tier1Item | CompletionItem, range: monaco.IRange | monaco.languages.CompletionItemRanges, tier: 1 | 2, usageScope?: [string, string]): monaco.languages.CompletionItem {
   return {
     label: { label: item.label, description: item.detail ?? undefined },
     kind: kindMap[item.kind] ?? monaco.languages.CompletionItemKind.Text,
@@ -229,7 +237,7 @@ function toMonaco(item: Tier1Item | CompletionItem, range: monaco.IRange | monac
     sortText: item.sortText ?? (tier === 2 ? `5${item.label}` : undefined),
     filterText: "filterText" in item ? (item.filterText ?? undefined) : undefined,
     range,
-    command: { id: "querithm.noteUsage", title: "", arguments: [item.label] },
+    command: { id: "querithm.noteUsage", title: "", arguments: ["usageKey" in item && item.usageKey ? item.usageKey : item.label, ...(usageScope ?? [])] },
   };
 }
 
@@ -250,7 +258,8 @@ function wantsList(trigger: monaco.languages.CompletionContext | undefined, ctx:
 
 /** Merge key: one entry per name and kind family, so a column `Count` and the function COUNT both stay (§9). */
 function mergeKey(kind: CompletionKind, label: string): string {
-  const family = kind === "table" || kind === "view" || kind === "cte" || kind === "tempTable" ? "rel" : kind === "proc" || kind === "func" ? "call" : kind;
+  const family = kind === "table" || kind === "view" || kind === "cte" || kind === "tempTable" || kind === "synonym" || kind === "tableFunction" ? "rel"
+    : kind === "proc" || kind === "func" ? "call" : kind;
   return `${family}|${label.toLowerCase()}`;
 }
 
@@ -282,7 +291,10 @@ function provideCompletion(model: monaco.editor.ITextModel, position: monaco.Pos
   const t0 = performance.now();
   const offset = model.getOffsetAt(position);
   const text = model.getValue();
-  const result = complete({ text, offset, dialect: ctx.dialect, schema: ctx.schema, usage, autoAlias: useSettings.getState().autoAlias });
+  const usage = usageScores(ctx.profileId, ctx.database);
+  const scope: [string, string] | undefined = ctx.profileId && ctx.database ? [ctx.profileId, ctx.database] : undefined;
+  const rowCounts = rowCountsFor(ctx.schema, ctx.snapVersion, ctx.profileId, ctx.database, ctx.sessionId);
+  const result = complete({ text, offset, dialect: ctx.dialect, schema: ctx.schema, usage, autoAlias: useSettings.getState().autoAlias, rowCounts });
   lastTier1Ms = performance.now() - t0;
   pushStat(completionStats.tier1, lastTier1Ms);
   if (result.context.inStringOrComment) {
@@ -299,7 +311,7 @@ function provideCompletion(model: monaco.editor.ITextModel, position: monaco.Pos
   const end = model.getPositionAt(wordEndAt(text, offset, open));
   const insert = new monaco.Range(start.lineNumber, start.column, position.lineNumber, position.column);
   const range = { insert, replace: new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column) };
-  const key = tier2Key(model, ctx, text, startOffset);
+  const baseKey = tier2Key(model, ctx, text, startOffset);
   const merged = new Map<string, monaco.languages.CompletionItem>();
   // Tier 1 already matched (prefix, camel hump, substring) and ranked these items. Monaco sorts by its own fuzzy score
   // first and uses sortText only for ties, which put `ORDER BY` above `OrderId` for `ORD` and dropped `tblmenu` for
@@ -307,24 +319,28 @@ function provideCompletion(model: monaco.editor.ITextModel, position: monaco.Pos
   // holds. (The text typed includes an opened quote: the range starts there.)
   const typed = text.slice(startOffset, offset);
   for (const i of result.items) {
-    const item = toMonaco(i, range, 1);
+    const item = toMonaco(i, range, 1, scope);
     if (typed) item.filterText = monacoFilterText(typed, i);
     merged.set(mergeKey(i.kind, i.label), item);
   }
-  const t2 = tier2Cache.get(key);
+  // The sidecar sends at most TIER2_CAP items, those matching the word (CompletionFilter): an answer that hit the cap may
+  // lack names a longer word matches, so that word asks again (and shows the shorter word's answer meanwhile).
+  const base = tier2Cache.get(baseKey);
+  const key = base && base.length >= TIER2_CAP && typed ? `${baseKey}|${typed.toLowerCase()}` : baseKey;
+  const exact = tier2Cache.get(key);
+  const t2 = exact ?? base;
   if (t2) {
     // Merge by name and kind (§9). A name tier 1 already offers keeps tier 1's insert text, which follows the
     // dialect's quoting rules (a reserved word delimited, an alias as written); tier 2 refines the detail.
     for (const i of t2) {
       const k = mergeKey(i.kind, i.label);
       const prev = merged.get(k);
-      const next = toMonaco(i, range, 2);
+      const next = toMonaco(i, range, 2, scope);
       if (open) next.filterText = open + (next.filterText ?? i.label);
       merged.set(k, prev ? { ...prev, detail: next.detail ?? prev.detail, label: { label: (prev.label as monaco.languages.CompletionItemLabel).label, description: i.detail ?? (prev.label as monaco.languages.CompletionItemLabel).description } } : next);
     }
-  } else {
-    scheduleTier2(model, ctx, offset, key, new Set(merged.keys()), startOffset);
   }
+  if (!exact) scheduleTier2(model, ctx, offset, key, new Set(merged.keys()), startOffset);
   for (const item of snippetSuggestions(ctx.dialect, text, result.context.prefixStart, offset, insert)) merged.set(`snippet:${item.filterText}`, item);
   const status = schemaStatusItem(ctx, result.context, text.slice(startOffset, offset), insert);
   if (status) merged.set("status:", status);
@@ -534,14 +550,18 @@ let installed = false;
 export function installProviders() {
   if (installed) return;
   installed = true;
-  monaco.editor.registerCommand("querithm.noteUsage", (_accessor, label: string) => noteUsage(label));
-  // A schema that arrives (or fails) while the list is open replaces the "Loading schema…" row with the real names.
-  useSnapshots.subscribe((s, prev) => {
-    if (s.entries === prev.entries) return;
+  monaco.editor.registerCommand("querithm.noteUsage", (_accessor, item: string, profileId?: string, database?: string) => noteUsage(item, profileId, database));
+  // Uses still waiting for their batch are written before the window goes.
+  if (typeof window !== "undefined") window.addEventListener("beforeunload", () => void flushUsage());
+  // A schema that arrives (or fails) while the list is open replaces the "Loading schema…" row with the real names;
+  // row counts arriving add themselves to the open list's table items.
+  const refreshOpenLists = () => {
     for (const editor of monaco.editor.getEditors()) {
       if (suggestWidgetVisible(editor)) editor.trigger("schema", "editor.action.triggerSuggest", {});
     }
-  });
+  };
+  useSnapshots.subscribe((s, prev) => { if (s.entries !== prev.entries) refreshOpenLists(); });
+  onRowCounts(refreshOpenLists);
   for (const lang of DIALECT_LIST.map((d) => DIALECTS[d].language)) {
     monaco.languages.registerCompletionItemProvider(lang, {
       triggerCharacters: [".", " ", "@", "(", ",", "["],

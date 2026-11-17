@@ -144,8 +144,8 @@ public static class PgTier2Completion
 
     static CompletionKind Kind(SnapObject o) => o.Kind switch
     {
-        ObjectKind.Table or ObjectKind.Synonym => CompletionKind.Table, ObjectKind.View => CompletionKind.View, ObjectKind.Proc => CompletionKind.Proc,
-        ObjectKind.Type => CompletionKind.Type, _ => CompletionKind.Func,
+        ObjectKind.Table => CompletionKind.Table, ObjectKind.Synonym => CompletionKind.Synonym, ObjectKind.View => CompletionKind.View,
+        ObjectKind.Proc => CompletionKind.Proc, ObjectKind.Type => CompletionKind.Type, ObjectKind.Tvf => CompletionKind.TableFunction, _ => CompletionKind.Func,
     };
 
     static string KindText(SnapObject o) => o.Kind.ToString().ToLowerInvariant();

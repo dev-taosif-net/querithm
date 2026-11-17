@@ -37,6 +37,28 @@ public class SchemaCacheRaceTests
     }
 
     [Fact]
+    public void A_session_view_is_the_same_instance_until_its_shared_or_own_snapshot_changes()
+    {
+        // Regression: every request built a new merged record, so tier 2's per-snapshot schema index was rebuilt on each
+        // keystroke in SQLite / DuckDB tabs.
+        var shared = new MetadataStore(LocalStore.InMemory());
+        var cache = new SchemaCache(shared);
+        Apply(shared, "main");
+        cache.AddScope("s1", "p", inMemory: false);
+        cache.Ephemeral.ApplyRefresh("p", SchemaCache.SessionDatabase("main", "s1"), true, [new ObjectStamp(2, "temp", "tmp", ObjectKind.Table, 1, null)], [], new MetadataBundle([], [], [], []), "1");
+        var first = cache.Get("p", "main", "s1")!;
+        Assert.Same(first, cache.Get("p", "main", "s1"));
+        Assert.Equal(["t", "tmp"], first.Objects.Select(o => o.Name));
+        cache.Invalidate("p", "main");
+        Assert.NotSame(first, cache.Get("p", "main", "s1"));
+        cache.AddScope("s2", "p", inMemory: true);
+        var mem = cache.Get("p", "main", "s2")!;
+        Assert.Same(mem, cache.Get("p", "main", "s2"));
+        cache.RemoveScope("s1", "p");
+        Assert.Equal(["t"], cache.Get("p", "main", "s1")!.Objects.Select(o => o.Name));
+    }
+
+    [Fact]
     public void A_shared_snapshot_loaded_before_a_refresh_is_not_cached_over_it()
     {
         var shared = new MetadataStore(LocalStore.InMemory());

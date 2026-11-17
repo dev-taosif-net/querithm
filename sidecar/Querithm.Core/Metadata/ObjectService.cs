@@ -189,7 +189,7 @@ public sealed class LanguageService(ProviderRegistry providers, ISchemaSource sc
         if (string.IsNullOrEmpty(p.DocId) || p.DocId.Length > MaxDocIdLength) throw QuerithmException.Invalid($"docId must be 1–{MaxDocIdLength} characters.");
         if (p.Text is null || p.Text.Length > MaxCompletionText) throw QuerithmException.Invalid($"Completion reads documents of up to {MaxCompletionText:N0} characters.");
         if (p.Offset < 0 || p.Offset > p.Text.Length) throw QuerithmException.Invalid("The cursor offset is outside the document.");
-        return Task.Run(() => For(p.Dialect).Complete(p, For(p.SessionId)));
+        return Task.Run(() => CompletionFilter.Apply(For(p.Dialect).Complete(p, For(p.SessionId)), p.Text, p.Offset));
     }
 
     /// <summary>The largest document completion parses (16 million UTF-16 characters, beyond any script an editor tab holds).</summary>

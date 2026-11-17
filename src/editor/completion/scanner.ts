@@ -861,6 +861,77 @@ class Analyzer {
     return { alias, ...(aliasQuoted ? { aliasQuoted } : {}), cols, next: x };
   }
 
+  /** One value of a temporal clause (`'2024-01-01'`, `@d`, `SYSUTCDATETIME()`): the index after it. */
+  private skipValue(i: number): number {
+    if (isPunct(this.T[i + 1], "(")) { const m = this.match(i + 1); return m < 0 ? i + 2 : m + 1; }
+    return i + 1;
+  }
+
+  /**
+   * T-SQL `FOR SYSTEM_TIME AS OF v | FROM v TO v | BETWEEN v AND v | CONTAINED IN (v, v) | ALL` after a temporal table,
+   * starting after SYSTEM_TIME: the index after the clause, where the alias is.
+   */
+  private skipSystemTime(i: number): number {
+    const T = this.T;
+    switch (W(T[i])) {
+      case "ALL": return i + 1;
+      case "AS": return W(T[i + 1]) === "OF" ? this.skipValue(i + 2) : i;
+      case "FROM": case "BETWEEN": {
+        const a = this.skipValue(i + 1);
+        return W(T[a]) === "TO" || W(T[a]) === "AND" ? this.skipValue(a + 1) : a;
+      }
+      case "CONTAINED": {
+        if (W(T[i + 1]) !== "IN" || !isPunct(T[i + 2], "(")) return i;
+        const m = this.match(i + 2);
+        return m < 0 ? i + 3 : m + 1;
+      }
+      default: return i;
+    }
+  }
+
+  /**
+   * T-SQL `src PIVOT (agg(v) FOR c IN ([a], [b])) AS p` / `src UNPIVOT (v FOR c IN (a, b)) AS u` at token `i`: the result
+   * replaces its source in scope, with the source's known columns less the pivoted ones, plus the new ones.
+   */
+  private parsePivot(i: number): void {
+    const T = this.T;
+    const open = i + 1;
+    if (!isPunct(T[open], "(")) return;
+    const close = this.match(open);
+    if (close < 0) return;
+    const unpivot = W(T[i]) === "UNPIVOT";
+    let forAt = -1;
+    for (let x = open + 1; x < close; x++) {
+      if (isPunct(T[x], "(")) { const m = this.match(x); if (m > x) x = m; continue; }
+      if (W(T[x]) === "FOR") { forAt = x; break; }
+    }
+    if (forAt < 0 || !isNameTok(T[forAt + 1]) || W(T[forAt + 2]) !== "IN" || !isPunct(T[forAt + 3], "(")) return;
+    const inClose = this.match(forAt + 3);
+    const inList: string[] = [];
+    for (let x = forAt + 4; x < (inClose < 0 ? close : inClose); x++) if (isNameTok(T[x])) inList.push(T[x].value);
+    const forCol = T[forAt + 1].value;
+    // PIVOT: the aggregate's argument columns; UNPIVOT: the value column.
+    const used: string[] = [];
+    for (let x = open + 1; x < forAt; x++) if (isNameTok(T[x]) && !isPunct(T[x + 1], "(")) used.push(T[x].value);
+    const al = this.parseAlias(close + 1);
+    if (!al.alias) return;
+    const scope = this.scopes[this.scopes.length - 1];
+    let src: Ref | undefined;
+    for (let r = this.refs.length - 1; r >= 0; r--) {
+      const x = this.refs[r];
+      if (x.scopeOpen === scope?.open && x.scopeBranch === scope?.branch && x.endIdx < i) { src = x; break; }
+    }
+    const known = src?.columns ?? [];
+    const drop = new Set((unpivot ? inList : [...used, forCol]).map((c) => c.toLowerCase()));
+    const columns = [...known.filter((c) => !drop.has(c.toLowerCase())), ...(unpivot ? [...used, forCol] : inList)];
+    if (src) this.refs.splice(this.refs.indexOf(src), 1);
+    const ref: Ref = { name: al.alias, alias: al.alias, isCte: false, isDerived: true, columns, offset: T[i].start, endIdx: al.next - 1 };
+    if (al.aliasQuoted) { ref.aliasQuoted = true; ref.quoted = true; }
+    this.tagScope(ref);
+    this.refs.push(ref);
+    this.skipUntil = Math.max(this.skipUntil, ref.endIdx);
+  }
+
   private isHintList(open: number, close: number): boolean {
     const T = this.T;
     if (close <= open + 1) return false;
@@ -934,6 +1005,7 @@ class Analyzer {
       n = m + 1;
     }
     if (!this.pg && W(T[n]) === "WITH" && isPunct(T[n + 1], "(")) { const m = this.match(n + 1); n = m < 0 ? n + 2 : m + 1; }
+    if (!this.pg && W(T[n]) === "FOR" && W(T[n + 1]) === "SYSTEM_TIME") n = this.skipSystemTime(n + 2);
     const al = noCall && role === "insert" ? { next: n } as { alias?: string; aliasQuoted?: boolean; cols?: string[]; next: number } : this.parseAlias(n);
     let end = al.next - 1;
     if (!this.pg && W(T[al.next]) === "WITH" && isPunct(T[al.next + 1], "(")) {
@@ -1028,6 +1100,9 @@ class Analyzer {
         case "JOIN": case "APPLY":
           frames[top] = "from";
           this.parseRefWithHints(i + 1);
+          break;
+        case "PIVOT": case "UNPIVOT":
+          if (!this.pg && frames[top] === "from") this.parsePivot(i);
           break;
         case "WHERE": case "GROUP": case "ORDER": case "HAVING": case "SET": case "WINDOW": case "UNION":
         case "EXCEPT": case "INTERSECT": case "LIMIT": case "RETURNING": case "OUTPUT": case "WHEN":
@@ -1515,7 +1590,91 @@ function scanImpl(text: string, offset: number, dialect: Dialect, depth: number)
     if (aliases.length) ctx.selectAliases = aliases;
   }
   if (slot) ctx.slot = slot;
+  if (dialect === "tsql") attachTempColumns(ctx.tablesInScope, text, T, k, dialect, stream.marks);
   return ctx;
+}
+
+/** Words that start a table constraint or index in a column list, not a column. */
+const NOT_A_COLUMN = new Set(["CONSTRAINT", "PRIMARY", "UNIQUE", "INDEX", "CHECK", "FOREIGN", "PERIOD"]);
+
+/** Column names of a `( … )` column-definition list opening at `open`: the first name of each top-level item. */
+function columnDefNames(T: Token[], open: number): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let itemStart = true;
+  for (let i = open + 1; i < T.length; i++) {
+    const t = T[i];
+    if (isPunct(t, "(")) { depth++; itemStart = false; continue; }
+    if (isPunct(t, ")")) { if (depth === 0) break; depth--; continue; }
+    if (t.kind === "go" || isPunct(t, ";")) break;
+    if (depth === 0 && isPunct(t, ",")) { itemStart = true; continue; }
+    if (itemStart && depth === 0) {
+      if (isNameTok(t) && !NOT_A_COLUMN.has(t.upper)) out.push(t.value);
+      itemStart = false;
+    }
+  }
+  return out;
+}
+
+/**
+ * T-SQL temporary tables and table variables have no catalog entry the snapshot holds: their columns come from the batch
+ * above the cursor — `CREATE TABLE #t (…)`, `DECLARE @t TABLE (…)` (found through the DECLARE / CREATE marks), then, for
+ * a name still without columns, `SELECT … INTO #t` (a backward walk over the batch, only in that case).
+ */
+function attachTempColumns(tables: TableInScope[], text: string, T: Token[], k: number, dialect: Dialect, marks: Token[]): void {
+  const want = tables.filter((t) => !t.columns?.length && (t.name.startsWith("#") || t.name.startsWith("@")));
+  if (!want.length || k < 0) return;
+  const defs = new Map<string, string[]>();
+  const kStart = T[k].start;
+  for (let m = lastStartingBefore(marks, kStart + 1); m >= 0; m--) {
+    const t = marks[m];
+    if (t.kind === "go") break;
+    const j = lastStartingBefore(T, t.start + 1);
+    if (j < 0 || T[j] !== t) continue;
+    if (t.upper === "CREATE" && W(T[j + 1]) === "TABLE" && isNameTok(T[j + 2]) && isPunct(T[j + 3], "(")) {
+      const name = T[j + 2].value.toLowerCase();
+      if (!defs.has(name)) defs.set(name, columnDefNames(T, j + 3));
+    } else if (t.upper === "DECLARE") {
+      // DECLARE @a int, @t TABLE (…), @u AS TABLE (…)
+      for (let x = j + 1; x < T.length && x <= k; x++) {
+        const v = T[x];
+        if (v.kind === "go" || isPunct(v, ";") || (v.kind === "keyword" && v.upper !== "TABLE" && v.upper !== "AS" && x > j + 1 && isPunct(T[x - 1], ")"))) break;
+        if (v.kind !== "variable") continue;
+        let y = x + 1;
+        if (W(T[y]) === "AS") y++;
+        if (W(T[y]) === "TABLE" && isPunct(T[y + 1], "(")) {
+          const name = v.value.toLowerCase();
+          if (!defs.has(name)) defs.set(name, columnDefNames(T, y + 1));
+        }
+      }
+    }
+  }
+  if (want.some((t) => !defs.has(t.name.toLowerCase()))) {
+    // SELECT … INTO #t FROM …: the select list names the columns.
+    for (let j = k; j >= 0; j--) {
+      const t = T[j];
+      if (t.kind === "go") break;
+      if (W(t) !== "INTO" || !isNameTok(T[j + 1]) || !T[j + 1].value.startsWith("#")) continue;
+      const name = T[j + 1].value.toLowerCase();
+      if (defs.has(name)) continue;
+      let depth = 0;
+      let sel = -1;
+      for (let x = j - 1; x >= 0 && j - x < 20000; x--) {
+        const u = T[x];
+        if (isPunct(u, ")")) depth++;
+        else if (isPunct(u, "(")) { if (depth === 0) break; depth--; }
+        else if (depth === 0 && W(u) === "SELECT") { sel = x; break; }
+        else if (u.kind === "go" || isPunct(u, ";")) break;
+      }
+      if (sel < 0) continue;
+      const cols = new Analyzer(text, T, sel, j, -1, dialect).projection(sel, j);
+      if (cols?.length) defs.set(name, cols);
+    }
+  }
+  for (const t of want) {
+    const cols = defs.get(t.name.toLowerCase());
+    if (cols?.length) t.columns = cols;
+  }
 }
 
 function inPgDeclareSection(T: Token[], s: number): boolean {

@@ -320,6 +320,26 @@ public class StoreMigrationTests : IDisposable
     }
 
     [Fact]
+    public void A_v10_file_gains_the_completion_usage_table_and_keeps_everything_else()
+    {
+        var path = Path.Combine(_dir, "v10.db");
+        _ = new LocalStore(path);
+        Exec(path, """
+            DROP TABLE completion_usage;
+            INSERT INTO profile (id, name, engine) VALUES ('pg', 'p', 'pg');
+            INSERT INTO schema_snapshot (profile_id, database, refreshed_at, server_version, status, error) VALUES ('pg', 'db', 1000, '16', 'fresh', NULL);
+            PRAGMA user_version = 10;
+            """);
+        SqliteConnection.ClearAllPools();
+        var store = new LocalStore(path);
+        Assert.Equal((long)LocalStore.Version, Scalar(path, "PRAGMA user_version"));
+        Assert.Equal("fresh", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'pg'"));
+        var usage = new CompletionUsageStore(store);
+        usage.Record("pg", "db", ["orders"]);
+        Assert.Single(usage.List("pg", "db"));
+    }
+
+    [Fact]
     public void A_v9_file_gains_the_row_address_column_and_its_Oracle_snapshots_are_read_again_in_full()
     {
         // D4 S10: obj.row_address (heap / iot / moves) for the grid's ROWID fallback key. The table markers now cover row
@@ -338,7 +358,7 @@ public class StoreMigrationTests : IDisposable
             """);
         SqliteConnection.ClearAllPools();
         var store = new LocalStore(path);
-        Assert.Equal(10L, Scalar(path, "PRAGMA user_version"));
+        Assert.Equal((long)LocalStore.Version, Scalar(path, "PRAGMA user_version"));
         Assert.True(HasColumn(path, "obj", "row_address"));
         Assert.Equal("empty", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'ora' AND database = 'FREEPDB1'"));
         Assert.Equal("error", Scalar(path, "SELECT status FROM schema_snapshot WHERE profile_id = 'ora' AND database = 'OTHER'"));

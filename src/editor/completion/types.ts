@@ -93,11 +93,16 @@ export interface Tier1Item {
   isSnippet?: boolean;
   /** Alias appended to insertText for a FROM/JOIN reference (auto-alias). */
   alias?: string;
+  /** What accepting it counts as for usage ranking (lower case): a JOIN item counts for the table it joins. */
+  usageKey?: string;
   /** Lexicographic rank key; lower sorts first (§9 Ranking). */
   sortText: string;
   filterText?: string;
   documentation?: string;
 }
+
+/** A table's row count from catalog statistics (meta.rowCounts); null rows: the engine has none (SQLite before ANALYZE). */
+export interface RowInfo { rows: number | null; estimated: boolean }
 
 export interface CompletionRequest {
   text: string;
@@ -108,6 +113,8 @@ export interface CompletionRequest {
   usage?: Map<string, number>;
   /** Append a generated alias to tables accepted in FROM/JOIN (default true). */
   autoAlias?: boolean;
+  /** Row counts by object id, once loaded (table items show them; "rows n/a" where the engine has none). */
+  rowCounts?: Map<number, RowInfo>;
 }
 
 export interface CompletionResult {

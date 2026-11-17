@@ -104,7 +104,7 @@ export function makeFakeMonaco() {
       remeasureFonts: vi.fn(),
     },
     languages: {
-      CompletionItemKind: { Keyword: 1, Struct: 2, Interface: 3, Field: 4, Method: 5, Function: 6, Variable: 7, Property: 8, Module: 9, Folder: 10, Reference: 11, Class: 12, Snippet: 13, TypeParameter: 14, Event: 15, Text: 0 },
+      CompletionItemKind: { Keyword: 1, Struct: 2, Interface: 3, Field: 4, Method: 5, Function: 6, Variable: 7, Property: 8, Module: 9, Folder: 10, Reference: 11, Class: 12, Snippet: 13, TypeParameter: 14, Event: 15, Value: 16, EnumMember: 17, Constructor: 18, Text: 0 },
       CompletionItemInsertTextRule: { InsertAsSnippet: 4 },
       CompletionTriggerKind: { Invoke: 0, TriggerCharacter: 1, TriggerForIncompleteCompletions: 2 },
       FoldingRangeKind: { Comment: "comment", Region: "region" },

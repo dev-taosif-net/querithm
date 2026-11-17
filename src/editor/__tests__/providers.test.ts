@@ -27,6 +27,15 @@ vi.mock("../editors", () => ({
 }));
 vi.mock("../../ipc/client", () => ({ rpc: (...a: unknown[]) => rpc(...a), onNotify: () => () => {}, shell: {}, RpcError: class extends Error {} }));
 vi.mock("../../store/ui", () => ({ toast }));
+// Usage history (store.db through lang.usage.*) has its own tests (usage.test.ts); here it is this session's counts.
+const usageCounts = new Map<string, number>();
+vi.mock("../usage", () => ({
+  usageScores: () => usageCounts,
+  recordUsage: (item: string) => usageCounts.set(item.toLowerCase(), (usageCounts.get(item.toLowerCase()) ?? 0) + 1),
+  flushUsage: async () => {},
+}));
+// Row counts load in the background through meta.rowCounts (rowCounts.test.ts); none here.
+vi.mock("../rowCounts", () => ({ rowCountsFor: () => undefined, onRowCounts: () => () => {} }));
 
 const P = await import("../providers");
 
@@ -1037,5 +1046,35 @@ describe("completion provider: schema status row", () => {
     vi.useFakeTimers();
     const m = doc("tsql", "select * from Ord");
     expect(statusOf(completion("tsql").provideCompletionItems(m, pos(m, 17)))).toBeUndefined();
+  });
+});
+
+describe("tier 2 cache: a capped answer", () => {
+  it("asks again when the word grows after an answer that hit the sidecar's 500-item cap", async () => {
+    vi.useFakeTimers();
+    const m = doc("tsql", "select * from O");
+    rpc.mockResolvedValue(Array.from({ length: 500 }, (_, i) => ({ label: `O${i}`, kind: "table", isSnippet: false })));
+    completion("tsql").provideCompletionItems(m, pos(m, 15));
+    await vi.advanceTimersByTimeAsync(130);
+    m.setValue("select * from Or");
+    rpc.mockResolvedValue([{ label: "OrdersOnlyHere", kind: "table", isSnippet: false }]);
+    const meanwhile = completion("tsql").provideCompletionItems(m, pos(m, 16));
+    expect(meanwhile.suggestions.some((s: any) => s.label.label === "O1")).toBe(true); // the shorter word's answer meanwhile
+    await vi.advanceTimersByTimeAsync(130);
+    expect(rpc).toHaveBeenCalledTimes(2);
+    const r = completion("tsql").provideCompletionItems(m, pos(m, 16));
+    expect(r.suggestions.some((s: any) => s.label.label === "OrdersOnlyHere")).toBe(true);
+  });
+});
+
+describe("completion provider: icons", () => {
+  it("a table function and a table get different icons", () => {
+    vi.useFakeTimers();
+    const m = doc("tsql", "select * from ufn");
+    const items = completion("tsql").provideCompletionItems(m, pos(m, 17)).suggestions;
+    const tvf = items.find((s: any) => (s.label.label ?? s.label).includes("ufn_CustomerOrders"));
+    expect(tvf.kind).toBe(fake.monaco.languages.CompletionItemKind.Constructor);
+    const t = completion("tsql").provideCompletionItems(doc("tsql", "select * from Ord"), { lineNumber: 1, column: 18 } as never).suggestions.find((s: any) => s.label.label === "Orders");
+    expect(t.kind).toBe(fake.monaco.languages.CompletionItemKind.Struct);
   });
 });

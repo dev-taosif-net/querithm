@@ -176,7 +176,7 @@ public sealed class LocalStore
     }
 
     /// <summary>The schema version Schema.sql describes (PRAGMA user_version).</summary>
-    public const int Version = 10;
+    public const int Version = 11;
 
     /// <summary>
     /// Steps from version N-1 to N for files written by older builds, run before Schema.sql so its CREATE … IF NOT
@@ -275,6 +275,9 @@ public sealed class LocalStore
             if (HasTable(c, tx, "schema_snapshot") && HasTable(c, tx, "profile"))
                 c.Cmd("UPDATE schema_snapshot SET status = 'empty' WHERE status <> 'error' AND profile_id IN (SELECT id FROM profile WHERE engine = 'oracle');", tx).ExecuteNonQuery();
         }),
+        // Completion usage ranking: the completion_usage table, created by Schema.sql's CREATE TABLE IF NOT EXISTS in the same
+        // transaction. Additive: an older build ignores the table.
+        (11, (_, _, _) => { }),
     ];
 
     static bool HasTable(SqliteConnection c, SqliteTransaction tx, string table)

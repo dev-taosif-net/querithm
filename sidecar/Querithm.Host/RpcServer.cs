@@ -18,6 +18,7 @@ public sealed class Services : IAsyncDisposable
     public required SettingsStore Settings { get; init; }
     public required HistoryStore History { get; init; }
     public required SnippetStore Snippets { get; init; }
+    public required CompletionUsageStore Usage { get; init; }
     public required SessionManager Sessions { get; init; }
     public required ExecutionService Executions { get; init; }
     public required MetadataService Metadata { get; init; }
@@ -87,7 +88,7 @@ public sealed class Services : IAsyncDisposable
         };
         return new Services
         {
-            Store = store, Profiles = profiles, Settings = new SettingsStore(store), History = history, Snippets = new SnippetStore(store), Sessions = sessions,
+            Store = store, Profiles = profiles, Settings = new SettingsStore(store), History = history, Snippets = new SnippetStore(store), Usage = new CompletionUsageStore(store), Sessions = sessions,
             Executions = executions, Metadata = metadata, Objects = objects,
             Language = new LanguageService(providers, cache),
             Trace = new TraceService(sessions, notifier, logs.CreateLogger("trace")),
@@ -644,6 +645,27 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
     public Task<SignatureHelp> LangSignature(SignatureParams p) => s.Language.SignatureAsync(p);
     public Task<FoldingRange[]> LangFolding(FoldingParams p) => s.Language.FoldingAsync(p);
     public Task<Classification> LangClassify(ClassifyParams p) => s.Language.ClassifyAsync(p);
+    /// <summary>RPC boundary (§13): a known profile, bounded names; the names are user data and never logged.</summary>
+    public Task LangUsageRecord(UsageRecordParams p)
+    {
+        ValidateUsageScope(p.ProfileId, p.Database);
+        if (p.Items is null || p.Items.Length > CompletionUsageStore.MaxItemsPerCall || p.Items.Any(i => string.IsNullOrEmpty(i) || i.Length > CompletionUsageStore.MaxItemLength))
+            throw QuerithmException.Invalid($"Up to {CompletionUsageStore.MaxItemsPerCall} items of 1–{CompletionUsageStore.MaxItemLength} characters.");
+        return Task.Run(() => s.Usage.Record(p.ProfileId, p.Database, p.Items));
+    }
+
+    public Task<CompletionUsage[]> LangUsageList(UsageListParams p)
+    {
+        ValidateUsageScope(p.ProfileId, p.Database);
+        return Task.Run(() => s.Usage.List(p.ProfileId, p.Database));
+    }
+
+    void ValidateUsageScope(string profileId, string database)
+    {
+        if (string.IsNullOrEmpty(profileId) || s.Profiles.Get(profileId) is null) throw QuerithmException.Invalid("Unknown profile.");
+        if (string.IsNullOrEmpty(database) || database.Length > CompletionUsageStore.MaxItemLength) throw QuerithmException.Invalid("database must be 1–512 characters.");
+    }
+
     public Task LangForget(LangForgetParams p)
     {
         s.Language.Forget(p.DocId);
