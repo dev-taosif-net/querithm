@@ -316,7 +316,8 @@ function provideHover(model: monaco.editor.ITextModel, position: monaco.Position
     if (col.default) lines.push(`default ${mdCode(col.default)}`);
   } else if (r.object) {
     const o = r.object;
-    lines.push(`**${mdText(`${o.schema}.${o.name}`)}** — ${mdText(o.kind)}`);
+    const count = o.columns?.length ? ` · ${o.columns.length} ${o.columns.length === 1 ? "column" : "columns"}` : "";
+    lines.push(`**${mdText(`${o.schema}.${o.name}`)}** · *${mdText(o.kind)}${count}*`);
     if (o.params?.length) {
       lines.push(
         mdFence(
@@ -327,8 +328,15 @@ function provideHover(model: monaco.editor.ITextModel, position: monaco.Position
       );
     } else if (o.returnType) lines.push(`returns ${mdCode(o.returnType)}`);
     if (o.columns?.length) {
-      const shown = o.columns.slice(0, 25).map((c) => `| ${c.pk ? "🔑 " : ""}${mdCell(c.name)} | ${mdCell(c.type, true)} | ${c.nullable ? "NULL" : "NOT NULL"} |`);
-      lines.push(`| column | type | |\n|---|---|---|\n${shown.join("\n")}${o.columns.length > 25 ? `\n\n…and ${o.columns.length - 25} more` : ""}`);
+      // Styled by `.markdown-hover table` in tokens.css: the name column in mono (a key column bold and tinted), the
+      // type as code, nullable cells italic and muted so a required column reads at a glance.
+      const shown = o.columns.slice(0, 25).map((c) => {
+        const name = c.pk ? `**🔑 ${mdCell(c.name)}**` : mdCell(c.name);
+        const flags = [c.nullable ? "*null*" : "not null", c.identity ? "identity" : "", c.computed ? "computed" : ""].filter(Boolean).join(" · ");
+        return `| ${name} | ${mdCell(c.type, true)} | ${flags} |`;
+      });
+      lines.push(`| Column | Type | Nullability |\n|:---|:---|:---|\n${shown.join("\n")}`);
+      if (o.columns.length > 25) lines.push(`*…and ${o.columns.length - 25} more columns*`);
     }
   } else if (r.variable) {
     return null;

@@ -451,8 +451,13 @@ describe("hover provider", () => {
     let text = "select * from dbo.Customers";
     let m = doc("tsql", text);
     let h = md(hover("tsql")(m, pos(m, text.indexOf("Customers") + 2)));
-    expect(h).toContain("**dbo.Customers** — table");
-    expect(h).toContain("| 🔑 CustomerId | `int` | NOT NULL |");
+    expect(h).toMatch(/\*\*dbo\.Customers\*\* · \*table · \d+ columns\*/);
+    expect(h).toContain("| Column | Type | Nullability |");
+    expect(h).toContain("| **🔑 CustomerId** | `int` | not null |");
+    expect(h).toContain("| Email | `nvarchar(320)` | *null* |");
+    const ot = "select * from dbo.Orders";
+    const om = doc("tsql", ot);
+    expect(md(hover("tsql")(om, pos(om, ot.indexOf("Orders") + 2)))).toContain("| **🔑 OrderId** | `bigint` | not null · identity |");
     text = "exec dbo.usp_GetCustomerOrders";
     m = doc("tsql", text);
     h = md(hover("tsql")(m, pos(m, text.indexOf("usp_") + 2)));
@@ -474,7 +479,8 @@ describe("hover provider", () => {
     idx.byName.set("fn_now", [fn as never]); idx.byQualified.set("dbo.fn_now", fn as never);
     const m = doc("tsql", "select * from dbo.Wide");
     useSnapshots.setState({ entries: { [snapKey("p1", "SalesDB")]: { key: snapKey("p1", "SalesDB"), profileId: "p1", database: "SalesDB", status: "fresh", index: idx as never, version: 2 } } });
-    expect(md(hover("tsql")(m, pos(m, 19)))).toContain("…and 5 more");
+    expect(md(hover("tsql")(m, pos(m, 19)))).toContain("*…and 5 more columns*");
+    expect(md(hover("tsql")(m, pos(m, 19)))).toContain("| c0 | `int` | *null* |");
     const t = "select dbo.fn_Now()";
     const m2 = doc("tsql", t);
     useSnapshots.setState({ entries: { [snapKey("p1", "SalesDB")]: { key: snapKey("p1", "SalesDB"), profileId: "p1", database: "SalesDB", status: "fresh", index: idx as never, version: 3 } } });
