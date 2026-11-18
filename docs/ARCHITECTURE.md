@@ -1757,7 +1757,8 @@ Build-time rules that must not be relaxed; each has a test in `Querithm.Tests/Se
    `query.execute`, `plan.get` and `debug.attach` carry `confirmedDestructive: true` (and `confirmedProd`) only after
    the user confirmed; the sidecar re-classifies with one guard for all three and refuses if the flag is missing on a
    Prod profile — Prod as the profile is stored now (or as the tab opened it, whichever is Prod). Dynamic SQL and MERGE
-   deletes count as destructive (§6).
+   deletes count as destructive (§6). The user can turn the Prod confirmations off in Settings; the sidecar reads that
+   setting itself and refusals still hold (§16 "Prod confirmations setting").
 8. **Timeouts:** connect 15 s default, command unlimited by default; both per profile. Interactive RPCs that wait on a
    server have a deadline instead (60 s; schema compare, find usages, rename preview 30 min; COMMIT / ROLLBACK none — 30 min
    and the tab's close, since a deadline-cut COMMIT has an unknown outcome, §5), and cleanup after a cancel a 60 s bound
@@ -1943,6 +1944,7 @@ without a UI stall.
 |---|---|---|---|
 | Name | SqlForge / `sqlforge` | Querithm / `querithm` | Product name chosen by the owner |
 | Loading feedback (2026-11-06) | Run timing only in the status bar | Results waiting state also shows elapsed seconds; shared spinners appear after 180 ms, busy buttons reserve their width, and imports show indeterminate progress when no total is known | Owner requested loading feedback across startup, execution, import, ERD and cell values, and quieter tab entry; reduced motion keeps status text and disables spinning, travel and width transitions |
+| Prod confirmations setting (2026-11-18) | §13 rule 7: every Prod target asks for the first run, destructive statements and Querithm-generated writes, always | Settings › Query execution › "Confirm before running on production", on by default. Off, `QueryGuard.Check` and `QueryGuard.Tool` treat a Prod target like any other (no `ProdFirstRun`, `Destructive` or `ProdWrite` block); refusals (file and configuration policy) still hold. The sidecar owns and enforces it: store.db key `guard.prodConfirmations`, read at start and changed only through `settings.set`, which accepts exactly `true` / `false`; anything else stored, or nothing, counts as on. The webview never writes it into `ui.settings`. The monitor's kill confirm (`KillGuard`) is not covered | Owner request: many users found the Prod confirmations a nuisance, others rely on them. Kept in the sidecar so turning it off is a setting the guard reads, never a UI that skips the guard. Tests: `Security/ProdConfirmationsSettingTests` |
 | Sidecar spawn | tauri-plugin-shell | `std::process` from Rust (no shell plugin, no `shell:*` capability) | Needs the raw child handle for the Job Object and main-thread spawn for PDEATHSIG; smaller capability surface (§15 rule 10) |
 | Package pins | SqlClient 5.2+, ScriptDom 161+, SMO 170+ | 6.1.x, 180.x, 181.x | Current releases satisfying the original minimums |
 | Data-plane payload | Arrow stream | each `0x01`/`0x02` payload is a self-contained Arrow IPC stream | Frames decode independently; schema bytes are negligible |

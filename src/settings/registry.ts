@@ -164,15 +164,24 @@ export const settingDefs: SettingDef[] = [
     keywords: ["multiple result sets", "layout", "ssms", "stacked", "side by side", "tabs", "grid"],
   },
   {
+    id: "prodConfirmations", keys: ["prodConfirmations"], page: "execution", group: "Production safety", label: "Confirm before running on production",
+    description: "On a production connection, asks before the first query, before destructive statements (DROP, TRUNCATE, DELETE or UPDATE without WHERE) and before grid edits or imports.",
+    control: { kind: "switch" }, keywords: ["production", "prod", "warning", "confirm", "guard", "destructive", "safety", "drop", "delete"],
+    warning: (s) =>
+      s.prodConfirmations
+        ? null
+        : "Queries, destructive statements, grid edits and imports run on production with no confirmation. A mistake there cannot be undone.",
+  },
+  {
     id: "statisticsTime", keys: ["statisticsTime"], page: "execution", group: "Server statistics", label: "Server CPU and elapsed time",
     description: "Runs SET STATISTICS TIME ON, so the status bar and Messages show the time the server spent.",
-    control: { kind: "switch" }, engine: { only: "mssql", other: "PostgreSQL: use Explain ▸ Actual plan for server timings." },
+    control: { kind: "switch" }, engine: { only: "mssql", other: "PostgreSQL: use Plan ▸ Actual plan for server timings." },
     keywords: ["set statistics time", "timing", "cpu"],
   },
   {
     id: "statisticsIo", keys: ["statisticsIo"], page: "execution", group: "Server statistics", label: "Reads per table",
     description: "Runs SET STATISTICS IO ON, so Messages show logical and physical reads for every table.",
-    control: { kind: "switch" }, engine: { only: "mssql", other: "PostgreSQL: use Explain ▸ Actual plan (buffers) for reads." },
+    control: { kind: "switch" }, engine: { only: "mssql", other: "PostgreSQL: use Plan ▸ Actual plan (buffers) for reads." },
     keywords: ["set statistics io", "reads", "logical reads"],
   },
   {

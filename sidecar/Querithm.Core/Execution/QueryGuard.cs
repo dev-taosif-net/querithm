@@ -11,6 +11,30 @@ namespace Querithm.Core.Execution;
 public sealed class QueryGuard(SessionManager sessions)
 {
     /// <summary>
+    /// The store.db setting behind Settings › Query execution › "Confirm before running on production" (§16, 2026-11-18).
+    /// Only <c>false</c> turns the confirmations off; anything else, or nothing stored, keeps them on.
+    /// </summary>
+    public const string SettingKey = "guard.prodConfirmations";
+
+    volatile bool _prodConfirmations = true;
+
+    /// <summary>
+    /// On (the default): a Prod target asks for the first run, destructive statements and Querithm-generated writes.
+    /// Off: a Prod target runs like any other. Refusals hold either way. Set by the composition root from store.db at
+    /// start and by settings.set.
+    /// </summary>
+    public bool ProdConfirmations
+    {
+        get => _prodConfirmations;
+        set => _prodConfirmations = value;
+    }
+
+    /// <summary>The stored value as the guard reads it: only the JSON literal <c>false</c> is off.</summary>
+    public static bool ParseSetting(string? valueJson) => valueJson?.Trim() != "false";
+
+    bool Confirms(Session session) => _prodConfirmations && sessions.IsProd(session);
+
+    /// <summary>
     /// Refusal (Phase D0c: a hard error no confirmation lifts), then on Prod the first-run confirm and the destructive
     /// confirm — text the classifier could not parse counts as destructive. Null when the text may run; the first-run
     /// confirm is recorded only then.
@@ -18,7 +42,7 @@ public sealed class QueryGuard(SessionManager sessions)
     public GuardBlock? Check(Session session, Classification classification, bool confirmedProd, bool confirmedDestructive)
     {
         if (classification.Refusal is { } refusal) throw new QuerithmException("refused", refusal);
-        if (!sessions.IsProd(session)) return null;
+        if (!Confirms(session)) return null;
         if (!sessions.IsProdConfirmed(session) && !confirmedProd) return Block(session, GuardReason.ProdFirstRun, []);
         var findings = classification.Destructive.ToList();
         if (classification.ParseErrors.Length > 0 && findings.Count == 0)
@@ -38,7 +62,7 @@ public sealed class QueryGuard(SessionManager sessions)
     /// </summary>
     public GuardBlock? Tool(Session session, bool confirmedProd, bool confirmedDestructive, DestructiveFinding[] findings, DestructiveFinding[] destructive)
     {
-        if (!sessions.IsProd(session)) return null;
+        if (!Confirms(session)) return null;
         if (!confirmedProd) return Block(session, GuardReason.ProdWrite, findings);
         if (destructive.Length > 0 && !confirmedDestructive) return Block(session, GuardReason.Destructive, destructive);
         sessions.ConfirmProd(session);

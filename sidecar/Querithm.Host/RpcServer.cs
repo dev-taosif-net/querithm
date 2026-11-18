@@ -50,6 +50,10 @@ public sealed class Services : IAsyncDisposable
         var cache = new SchemaCache(metaStore);
         var metadata = new MetadataService(sessions, metaStore, cache, notifier, logs.CreateLogger("metadata"));
         var executions = new ExecutionService(sessions, frames, notifier, history, logs.CreateLogger("execution"), cache);
+        var settings = new SettingsStore(store);
+        // §13 rule 7: the Prod confirmations setting as stored; an unreadable store leaves them on.
+        try { executions.Guard.ProdConfirmations = QueryGuard.ParseSetting(settings.Get([QueryGuard.SettingKey]).FirstOrDefault()?.ValueJson); }
+        catch (Exception e) when (e is not OutOfMemoryException) { executions.Guard.ProdConfirmations = true; }
         var dataEditor = new DataEditorService(sessions, executions, metaStore, cache, logs.CreateLogger("dataedit"));
         executions.Editability = dataEditor.Decide;
         executions.DdlExecuted += s =>
@@ -88,7 +92,7 @@ public sealed class Services : IAsyncDisposable
         };
         return new Services
         {
-            Store = store, Profiles = profiles, Settings = new SettingsStore(store), History = history, Snippets = new SnippetStore(store), Usage = new CompletionUsageStore(store), Sessions = sessions,
+            Store = store, Profiles = profiles, Settings = settings, History = history, Snippets = new SnippetStore(store), Usage = new CompletionUsageStore(store), Sessions = sessions,
             Executions = executions, Metadata = metadata, Objects = objects,
             Language = new LanguageService(providers, cache),
             Trace = new TraceService(sessions, notifier, logs.CreateLogger("trace")),
@@ -696,6 +700,19 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
 
     public Task SettingsSet(SettingEntry p)
     {
+        if (p.Key == QueryGuard.SettingKey)
+        {
+            // §13 rule 7: the Prod confirmations switch takes exactly true or false; it is stored first, then applied.
+            var on = p.ValueJson?.Trim() switch
+            {
+                "true" => true,
+                "false" => false,
+                _ => throw QuerithmException.Invalid("The production confirmation setting must be true or false."),
+            };
+            s.Settings.Set(p.Key, on ? "true" : "false");
+            s.Executions.Guard.ProdConfirmations = on;
+            return Task.CompletedTask;
+        }
         s.Settings.Set(p.Key, p.ValueJson);
         return Task.CompletedTask;
     }

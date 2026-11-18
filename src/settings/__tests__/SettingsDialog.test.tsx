@@ -174,7 +174,7 @@ describe("Settings: rows", () => {
     open({ page: "execution" });
     const row = screen.getByRole("switch", { name: "Reads per table" }).closest("[data-setting]") as HTMLElement;
     expect(within(row).getByText("SQL Server")).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "Reads per table" })).toHaveAccessibleDescription(/PostgreSQL: use Explain/);
+    expect(screen.getByRole("switch", { name: "Reads per table" })).toHaveAccessibleDescription(/PostgreSQL: use Plan/);
   });
 
   it("a dependent row stays focusable, says why it is off, and ignores changes", async () => {

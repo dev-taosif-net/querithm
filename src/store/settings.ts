@@ -64,7 +64,16 @@ export interface Settings {
   resultLayout: "tabs" | "stacked" | "side";
   /** Interface scale in percent (L26): the webview's page zoom, so text, the grid and the editor grow together (src/app/uiScale.ts). */
   uiScale: number;
+  /**
+   * Confirm before running on production (§13 rule 7, §16 2026-11-18): the first run, destructive statements and grid
+   * edits / imports on a Prod target ask first. The sidecar enforces it and owns the value (store.db key
+   * `guard.prodConfirmations`, PROD_GUARD_KEY), so it is not part of ui.settings.
+   */
+  prodConfirmations: boolean;
 }
+
+/** The sidecar's own key for `prodConfirmations` (QueryGuard.SettingKey). */
+export const PROD_GUARD_KEY = "guard.prodConfirmations";
 
 export const schemaGroupKey = (profileId: string, database: string) => `${profileId}|${database}`;
 
@@ -103,6 +112,7 @@ export const defaultSettings: Settings = {
   panelDock: "bottom",
   resultLayout: "tabs",
   uiScale: 100,
+  prodConfirmations: true,
 };
 
 /** Numeric ranges: the store clamps to them on load and on every change, and the Settings page shows them. */
@@ -146,7 +156,10 @@ function clean<K extends keyof Settings>(key: K, v: unknown): Settings[K] | unde
   return (typeof v === typeof d ? v : undefined) as Settings[K] | undefined;
 }
 
-const settingKeys = Object.keys(defaultSettings) as (keyof Settings)[];
+/** Settings whose value the sidecar owns under its own key; never written into ui.settings. */
+const sidecarOwned: (keyof Settings)[] = ["prodConfirmations"];
+
+const settingKeys = (Object.keys(defaultSettings) as (keyof Settings)[]).filter((k) => !sidecarOwned.includes(k));
 
 /** Saved settings are untrusted: wrong types and unknown choices fall back to defaults, numbers are clamped. */
 export function sanitizeSettings(raw: unknown): { values: Partial<Settings>; extra: Record<string, unknown> } {
@@ -154,6 +167,7 @@ export function sanitizeSettings(raw: unknown): { values: Partial<Settings>; ext
   const extra: Record<string, unknown> = {};
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { values, extra };
   for (const [k, v] of Object.entries(raw)) {
+    if (sidecarOwned.includes(k as keyof Settings)) continue; // read from the sidecar's key, never from ui.settings
     if (!(k in defaultSettings)) {
       extra[k] = v;
       continue;
@@ -189,9 +203,12 @@ const changedUnread = new Set<keyof Settings>();
 let warned = false;
 
 async function readSaved(): Promise<Partial<Settings>> {
-  const entries = await rpc("settings.get", { keys: [KEY] });
+  const entries = await rpc("settings.get", { keys: [KEY, PROD_GUARD_KEY] });
+  // As the sidecar reads it (QueryGuard.ParseSetting): only false is off.
+  const guard = entries.find((e) => e.key === PROD_GUARD_KEY);
+  const owned: Partial<Settings> = guard ? { prodConfirmations: guard.valueJson.trim() !== "false" } : {};
   const saved = entries.find((e) => e.key === KEY);
-  if (!saved) return {};
+  if (!saved) return owned;
   let raw: unknown;
   try {
     raw = JSON.parse(saved.valueJson);
@@ -200,7 +217,21 @@ async function readSaved(): Promise<Partial<Settings>> {
   }
   const r = sanitizeSettings(raw);
   extra = r.extra;
-  return r.values;
+  return { ...r.values, ...owned };
+}
+
+/**
+ * Writes the Prod confirmations switch to the sidecar at once (no debounce: the guard follows it). If the sidecar does
+ * not take it, the switch goes back to what the sidecar still enforces and the user is told.
+ */
+async function writeProdConfirmations(on: boolean, before: boolean): Promise<void> {
+  try {
+    await rpc("settings.set", { key: PROD_GUARD_KEY, valueJson: on ? "true" : "false" });
+  } catch (e) {
+    if (useSettings.getState().prodConfirmations === on) useSettings.setState({ prodConfirmations: before });
+    const error = e instanceof Error ? e.message : String(e);
+    toast("error", `The production confirmation setting could not be saved: ${error}. It is still ${before ? "on" : "off"}.`);
+  }
 }
 
 function persisted(s: Settings): Settings {
@@ -269,6 +300,7 @@ export const useSettings = create<SettingsStore>((set) => ({
     }
   },
   set(patch) {
+    const prodBefore = useSettings.getState().prodConfirmations;
     const clean_: Partial<Settings> = {};
     for (const [k, v] of Object.entries(patch)) {
       const c = clean(k as keyof Settings, v);
@@ -277,6 +309,7 @@ export const useSettings = create<SettingsStore>((set) => ({
       if (useSettingsStatus.getState().loadFailed) changedUnread.add(k as keyof Settings);
     }
     set(clean_);
+    if (clean_.prodConfirmations !== undefined && clean_.prodConfirmations !== prodBefore) void writeProdConfirmations(clean_.prodConfirmations, prodBefore);
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => void persist(), 400);
     if (useSettingsStatus.getState().save !== "failed") useSettingsStatus.setState({ save: "pending" });

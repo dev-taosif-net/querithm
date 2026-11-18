@@ -110,6 +110,44 @@ describe("settings store", () => {
     expect(useSettings.getState()).toMatchObject({ theme: "light", editorFontSize: 20, minimap: true, loaded: true });
   });
 
+  describe("production confirmations (sidecar-owned, guard.prodConfirmations)", () => {
+    it("is on by default and is read from the sidecar's key, never from ui.settings", async () => {
+      expect(defaultSettings.prodConfirmations).toBe(true);
+      rpc.mockResolvedValueOnce([{ key: "ui.settings", valueJson: JSON.stringify({ prodConfirmations: false }) }]);
+      await useSettings.getState().load();
+      expect(rpc).toHaveBeenCalledWith("settings.get", { keys: ["ui.settings", "guard.prodConfirmations"] });
+      expect(useSettings.getState().prodConfirmations).toBe(true);
+      useSettings.setState({ loaded: false });
+      rpc.mockResolvedValueOnce([{ key: "guard.prodConfirmations", valueJson: "false" }]);
+      await useSettings.getState().load();
+      expect(useSettings.getState().prodConfirmations).toBe(false);
+    });
+
+    it("anything stored but false reads as on, as the sidecar reads it", async () => {
+      rpc.mockResolvedValueOnce([{ key: "guard.prodConfirmations", valueJson: "\"off\"" }]);
+      await useSettings.getState().load();
+      expect(useSettings.getState().prodConfirmations).toBe(true);
+    });
+
+    it("turning it off writes the sidecar's key at once, and ui.settings never carries it", async () => {
+      useSettings.getState().set({ prodConfirmations: false });
+      expect(rpc).toHaveBeenCalledWith("settings.set", { key: "guard.prodConfirmations", valueJson: "false" });
+      await vi.advanceTimersByTimeAsync(400);
+      const blob = rpc.mock.calls.find(([m, a]) => m === "settings.set" && a.key === "ui.settings")![1];
+      expect(JSON.parse(blob.valueJson)).not.toHaveProperty("prodConfirmations");
+    });
+
+    it("when the sidecar does not take the change, the switch goes back to what it still enforces and says so", async () => {
+      rpc.mockImplementation(async (m: string, a: { key: string }) => {
+        if (m === "settings.set" && a.key === "guard.prodConfirmations") throw new Error("engine down");
+      });
+      useSettings.getState().set({ prodConfirmations: false });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(useSettings.getState().prodConfirmations).toBe(true);
+      expect(useUi.getState().toasts.at(-1)?.text).toMatch(/production confirmation setting could not be saved: engine down\. It is still on/);
+    });
+  });
+
   it("load without saved entry or on failure still marks loaded", async () => {
     rpc.mockResolvedValueOnce([]);
     await useSettings.getState().load();
