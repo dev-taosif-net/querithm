@@ -230,20 +230,19 @@ function LaunchStrip({ tab }: { tab: TabState | undefined }) {
                 often and is the one people misread), but neither takes more than its own text (flex-grow + max-content), so a
                 short name shows in full and hands what it doesn't use to the long one; when both are long each ends in an
                 ellipsis. The names are 11 px (the rest of the bar is 12 px) so more of a long name fits. The server button's
-                basis is what it holds beside its name (PROD badge, logo, gaps): 56 px, 74 px with the logo. The database
+                basis is what it holds beside its name (the 44 px environment badge, logo, gaps): 48 px, 66 px with the logo. The database
                 button has no chevron: that space goes to the name (the whole button opens the databases palette, Ctrl+U).
                 Floors: 3ch of server name, 52 px for the database button; the tooltips carry the full names. Below 1100 px the
                 engine logo steps aside so both fit the strip with a PROD badge. */}
             <button
               type="button"
-              className="q-tb !h-[22px] !px-1 !gap-1 !min-w-0 flex-[1_1_56px] min-[1100px]:flex-[1_1_74px] max-w-max text-muted"
+              className="q-tb !h-[22px] !px-1 !gap-1 !min-w-0 flex-[1_1_48px] min-[1100px]:flex-[1_1_66px] max-w-max text-muted"
               onClick={() => useUi.getState().setPalette({ mode: "connections" })}
               title={tip(`Change connection: ${profile.name}`, "palette.connections")}
               aria-label={`Change connection, now ${env} ${profile.name}${disconnected ? ", disconnected" : lost ? ", connection lost" : ""}`}
             >
               {prod ? (
-                <span className="h-[18px] px-1.5 rounded flex items-center gap-1 text-[10px] font-bold tracking-wide text-white shrink-0" style={{ background: fillForWhite(color) }}>
-                  <Icon name="shield" size={10} strokeWidth={2.5} />
+                <span className={`${ENV_BADGE} text-white`} style={{ background: fillForWhite(color) }}>
                   PROD
                 </span>
               ) : (
@@ -338,11 +337,17 @@ function LaunchStrip({ tab }: { tab: TabState | undefined }) {
   );
 }
 
+/**
+ * Every environment badge has one width (the widest label, LOCAL, is 32 px at 10 px bold), so switching between Prod,
+ * Dev, Local, Test and Stage changes only its color and text: the names beside it never move.
+ */
+const ENV_BADGE = "h-[18px] w-[44px] rounded flex items-center justify-center text-[10px] font-bold tracking-wide shrink-0";
+
 /** A non-prod environment: an outlined text label (the color alone never carries it), readable on the strip. */
 function EnvPill({ color, label }: { color: string; label: string }) {
   const c = readableOnSurface(color, "var(--q-bg)") ?? color;
   return (
-    <span className="h-[18px] px-1.5 rounded border flex items-center text-[10px] font-bold tracking-wide shrink-0" style={{ color: c, borderColor: c }}>
+    <span className={`${ENV_BADGE} border`} style={{ color: c, borderColor: c }}>
       {label}
     </span>
   );

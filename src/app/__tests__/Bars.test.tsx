@@ -157,6 +157,19 @@ describe("TopBar: launch strip", () => {
     expect(dev.style.borderColor).not.toBe("");
   });
 
+  it("every environment badge has one fixed width and PROD carries no icon, so switching environments never moves the names", () => {
+    setTab({ profileId: "pg1" });
+    const { unmount } = render(<TopBar />);
+    const prodBadge = screen.getByText("PROD");
+    expect(prodBadge.querySelector("svg")).toBeNull();
+    const prodWidth = prodBadge.className.match(/\bw-\[\d+px\]/)?.[0];
+    expect(prodWidth).toBe("w-[44px]");
+    unmount();
+    setTab({ profileId: "ms1" });
+    render(<TopBar />);
+    expect(screen.getByText("DEV").className).toMatch(/\bw-\[44px\]/);
+  });
+
   it("connection and database are two buttons: the connections palette and the databases palette", async () => {
     const user = userEvent.setup();
     render(<TopBar />);
