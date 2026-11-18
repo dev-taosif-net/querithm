@@ -119,7 +119,7 @@ export function misestimate(n: PlanNode): string | undefined {
 export function PlanView({ tab }: { tab: TabState }) {
   const view = useExecutions((s) => (tab.activeExecutionId ? s.views[tab.activeExecutionId] : undefined));
   if (!view || view.plans.length === 0) {
-    return <Empty text={view && ["running", "streaming", "queued"].includes(view.state) ? "Waiting for the plan…" : "No plan yet. Estimated plan: Ctrl+L. Actual plan: Explain ▾ › Actual plan (Ctrl+M includes it on every run)."} />;
+    return <Empty text={view && ["running", "streaming", "queued"].includes(view.state) ? "Waiting for the plan…" : "No plan yet. Estimated plan: Ctrl+L. Actual plan: Plan ▾ › Actual plan (Ctrl+M includes it on every run)."} />;
   }
   return <PlanDiagram plans={view.plans} />;
 }

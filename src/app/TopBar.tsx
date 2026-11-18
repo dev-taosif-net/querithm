@@ -1,9 +1,8 @@
-// Top bar (§12). Left: the launch strip (environment · connection › database joined to Run ▾), Explain ▾ and the
+// Top bar (§12). Left: the launch strip (environment · connection › database joined to Run ▾), Plan ▾ and the
 // transaction; right: search, history, settings, update. Each state is loud in one place and that place is here:
 // where a query will run, what Run will do (actual plan, debugger), and how long a transaction has been open. The
 // status bar keeps the quiet detail. Below 1440 px labels drop, never functions; state (environment, Run/Cancel,
 // transaction) never collapses.
-import { BusySpinner } from "./LoadingStatus";
 import { useEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { useActiveTab, useTabs, type TabState } from "../store/tabs";
 import { useUi } from "../store/ui";
@@ -142,7 +141,11 @@ function NavButtons() {
 
 function NewButton() {
   return (
+    // A bordered button (no plus icon): it reads as a button at rest, not only on hover. With no icon to fall back on,
+    // the label shortens to "New" below 1440 px instead of disappearing.
     <SplitButton
+      className="h-[28px] rounded-md border border-line-strong"
+      caretClass="!h-auto border-l border-line-strong text-muted"
       caretLabel="More ways to open a query"
       menuLabel="Open a query"
       items={() => [
@@ -156,9 +159,9 @@ function NewButton() {
         { label: "Reopen closed tab", hint: keyOf("tab.reopenClosed"), run: () => runCommand("tab.reopenClosed") },
       ]}
       face={
-        <button type="button" className="q-tb rounded-r-none" onClick={() => void newQueryTab()} title={tip("New query on the same connection", "tab.new")} aria-label="New query">
-          <Icon name="plus" strokeWidth={2} className="text-accent" />
+        <button type="button" className="q-tb !h-auto rounded-r-none font-semibold" onClick={() => void newQueryTab()} title={tip("New query on the same connection", "tab.new")} aria-label="New query">
           <span className="hidden min-[1440px]:inline">New query</span>
+          <span className="min-[1440px]:hidden">New</span>
         </button>
       }
     />
@@ -205,7 +208,8 @@ function LaunchStrip({ tab }: { tab: TabState | undefined }) {
 
   return (
     <div className={`flex items-stretch h-[28px] rounded-md border bg-bg ${!tab?.profileId ? "border-dashed border-line-strong" : lost ? "border-err" : "border-line-strong"}`}>
-      <div className="w-[180px] min-[1280px]:w-[240px] min-[1440px]:w-[280px] max-[1100px]:w-[160px] flex items-center gap-1 pl-1 pr-1 min-w-0">
+      {/* Widened by what the Run slot gave up (19 / 21 / 21 / 18 px), so the strip as a whole keeps its width. */}
+      <div className="w-[199px] min-[1280px]:w-[261px] min-[1440px]:w-[301px] max-[1100px]:w-[178px] flex items-center gap-1 pl-1 pr-1 min-w-0">
         {!profile ? (
           <button
             type="button"
@@ -222,11 +226,19 @@ function LaunchStrip({ tab }: { tab: TabState | undefined }) {
           </button>
         ) : (
           <>
+            {/* Server and database are always both on screen. Their NAMES split the strip 1 : 1.6 (the database changes more
+                often and is the one people misread), but neither takes more than its own text (flex-grow + max-content), so a
+                short name shows in full and hands what it doesn't use to the long one; when both are long each ends in an
+                ellipsis. The names are 11 px (the rest of the bar is 12 px) so more of a long name fits. The server button's
+                basis is what it holds beside its name (PROD badge, logo, gaps): 56 px, 74 px with the logo. The database
+                button has no chevron: that space goes to the name (the whole button opens the databases palette, Ctrl+U).
+                Floors: 3ch of server name, 52 px for the database button; the tooltips carry the full names. Below 1100 px the
+                engine logo steps aside so both fit the strip with a PROD badge. */}
             <button
               type="button"
-              className="q-tb !h-[22px] !px-1 !min-w-0 shrink min-w-0 text-muted"
+              className="q-tb !h-[22px] !px-1 !gap-1 !min-w-0 flex-[1_1_56px] min-[1100px]:flex-[1_1_74px] max-w-max text-muted"
               onClick={() => useUi.getState().setPalette({ mode: "connections" })}
-              title={tip("Change connection", "palette.connections")}
+              title={tip(`Change connection: ${profile.name}`, "palette.connections")}
               aria-label={`Change connection, now ${env} ${profile.name}${disconnected ? ", disconnected" : lost ? ", connection lost" : ""}`}
             >
               {prod ? (
@@ -237,28 +249,29 @@ function LaunchStrip({ tab }: { tab: TabState | undefined }) {
               ) : (
                 <EnvPill color={color} label={env} />
               )}
-              <EngineLogo engine={profile.engine} size={14} />
-              {/* The database keeps its width: it changes more often than the server, and the full name is in the tooltip. */}
-              <span className="hidden xl:inline truncate max-w-[110px]">{profile.name}</span>
+              {/* A lost connection's Reconnect takes the logo's place, so the names keep their room. */}
+              <span className={`flex shrink-0 max-[1100px]:hidden ${lost ? "hidden" : ""}`}>
+                <EngineLogo engine={profile.engine} size={14} />
+              </span>
+              <span data-testid="strip-server" className="truncate min-w-[3ch] text-[11px]">{profile.name}</span>
             </button>
-            <span aria-hidden className="hidden xl:inline text-muted">›</span>
+            <span aria-hidden className="text-muted shrink-0 text-[11px]">›</span>
             <button
               type="button"
-              className="q-tb !h-[22px] !px-1 !min-w-0 flex-1 min-w-0 justify-between font-semibold"
+              className="q-tb !h-[22px] !px-1 !min-w-[52px] flex-[1.6_1_0%] max-w-max justify-start font-semibold"
               onClick={() => useUi.getState().setPalette({ mode: "databases" })}
-              title={tip(disconnected ? "Change database. Disconnected: running asks before reconnecting" : "Change database", "palette.databases")}
+              title={tip(`Change database: ${tab?.database ?? "(default)"}${disconnected ? ". Disconnected: running asks before reconnecting" : ""}`, "palette.databases")}
               aria-label={`Change database, now ${tab?.database ?? "(default)"}`}
             >
               <span className="flex items-center gap-1.5 min-w-0">
                 {disconnected && <span aria-hidden className="w-2 h-2 rounded-full border border-fg shrink-0" />}
-                <span className="truncate">{tab?.database ?? "(default)"}</span>
+                <span data-testid="strip-database" className="truncate text-[11px]">{tab?.database ?? "(default)"}</span>
               </span>
-              <Icon name="chevron" size={12} strokeWidth={2} className="text-muted" />
             </button>
             {lost && (
               <button
                 type="button"
-                className="q-tb !h-[22px] !px-1 text-err font-semibold"
+                className="q-tb !h-[22px] !px-1 shrink-0 text-err font-semibold"
                 onClick={() => void useConnections.getState().connect(profile.id)}
                 title="Connection lost. Reconnect"
                 aria-label="Connection lost. Reconnect"
@@ -280,7 +293,10 @@ function LaunchStrip({ tab }: { tab: TabState | undefined }) {
         face={
           <button
             type="button"
-            className={`q-tb !h-auto rounded-none w-[96px] xl:w-[104px] max-[1100px]:w-[88px] font-semibold ${running ? "!gap-1 !px-1" : ""} ${tone}`}
+            // 20 % narrower than before (96/104/88 px), the width given to the database name. A minimum, not a width: Run,
+            // Run F5 and Cancel fit it (56/74/62 px measured), so Run ⇄ Cancel never changes the slot; the rarer
+            // Continue (debugger) and Run +plan widen it instead of clipping.
+            className={`q-tb !h-auto rounded-none !min-w-[77px] xl:!min-w-[83px] max-[1100px]:!min-w-[70px] font-semibold ${running ? "!gap-1 !px-1" : ""} ${tone}`}
             aria-disabled={!tab || undefined}
             aria-label={runLabel}
             aria-keyshortcuts={runKeys}
@@ -293,8 +309,9 @@ function LaunchStrip({ tab }: { tab: TabState | undefined }) {
           >
             {running ? (
               <>
+                {/* No spinner: the stop icon and the word say it, the tab's own spinner says it is running, and the pair
+                    fits the slot so Run and Cancel swap at one width. */}
                 <Icon name="stop" size={14} strokeWidth={2.5} />
-                <BusySpinner />
                 Cancel
               </>
             ) : debugging ? (
@@ -332,7 +349,7 @@ function EnvPill({ color, label }: { color: string; label: string }) {
 }
 
 /**
- * How Run ▾ and Explain ▾ name an engine's plans; no engine (no connection) reads as the default engine. `unavailable`
+ * How Run ▾ and Plan ▾ name an engine's plans; no engine (no connection) reads as the default engine. `unavailable`
  * says why an engine without actual plans greys those items out.
  */
 function planLabels(engine: Engine | undefined): {
@@ -370,7 +387,7 @@ function runMenu(tab: TabState | undefined, engine: Engine | undefined, scope: (
   ];
 }
 
-/** Explain ▾: the face shows the estimated plan (never runs); the menu holds the plans that run and the SQL Server toggle. */
+/** Plan ▾: the face shows the estimated plan (never runs); the menu holds the plans that run and the SQL Server toggle. */
 function PlanButton({ tab }: { tab: TabState | undefined }) {
   const engine = useProfiles((s) => s.profiles.find((p) => p.id === tab?.profileId)?.engine);
   const running = useRunning(tab);
@@ -397,17 +414,17 @@ function PlanButton({ tab }: { tab: TabState | undefined }) {
       face={
         <button
           type="button"
-          className="q-tb rounded-r-none"
+          className="q-tb rounded-r-none !pr-0.5"
           aria-disabled={off || undefined}
           onClick={guarded(off, () => void showPlan(id, "estimated"))}
           title={off ? why : tip(`${labels.estimated}, does not run the query${on ? ". Actual plan is included on every run" : ""}`, "query.estimatedPlan")}
-          aria-label={`Explain: estimated plan, does not run the query${on ? ". Actual plan on" : ""}`}
+          aria-label={`Plan: estimated plan, does not run the query${on ? ". Actual plan on" : ""}`}
         >
           <span className="relative flex text-muted">
             <Icon name="plan" />
             {on && <span aria-hidden className="absolute -right-0.5 -top-0.5 w-[7px] h-[7px] rounded-full bg-accent ring-[1.5px] ring-panel" />}
           </span>
-          <span className="hidden min-[1440px]:inline">Explain</span>
+          <span className="hidden min-[1440px]:inline">Plan</span>
         </button>
       }
     />
@@ -422,7 +439,7 @@ function fmtClock(ms: number) {
   return h ? `${h}:${String(m).padStart(2, "0")}:${String(ss).padStart(2, "0")}` : `${String(m).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
 }
 
-/** Begin Tx while none is open; while one is (or may be) open: its age and Commit / Rollback, which never collapse. */
+/** Tx (begin a transaction) while none is open; while one is (or may be) open: its age and Commit / Rollback, which never collapse. */
 function TxSlot({ tab }: { tab: TabState | undefined }) {
   const running = useRunning(tab);
   const offline = useConnections((s) => !!tab?.profileId && (!!s.disconnected[tab.profileId] || s.servers[tab.profileId]?.status === "error"));
@@ -435,10 +452,10 @@ function TxSlot({ tab }: { tab: TabState | undefined }) {
       aria-disabled={off || undefined}
       onClick={guarded(off, () => tab && void txAction(tab.id, "begin"))}
       title={!tab?.profileId ? "Connect to a server first" : running ? "Wait for the running query" : offline ? "Reconnect first" : "Begin transaction: pins a connection to this tab"}
-      aria-label="Begin transaction"
+      aria-label="Begin transaction (Tx)"
     >
       <Icon name="transaction" className="text-muted" />
-      <span className="hidden min-[1440px]:inline">Begin Tx</span>
+      <span className="hidden min-[1440px]:inline">Tx</span>
     </button>
   );
 }
@@ -511,8 +528,12 @@ export function TopBar() {
         <NavButtons />
         <NewButton />
         <LaunchStrip tab={tab} />
-        <PlanButton tab={tab} />
-        <TxSlot tab={tab} />
+        {/* Plan ▾ and Tx sit 4 px apart, not the toolbar's 12 px: with the caret's slack and Tx's own padding the full gap
+            read as an empty hole between two neighbours. */}
+        <div className="flex items-center gap-1">
+          <PlanButton tab={tab} />
+          <TxSlot tab={tab} />
+        </div>
       </div>
       <div ref={app} role="toolbar" aria-label="App" className="flex items-center justify-end gap-1 min-w-0" {...appNav}>
         <button

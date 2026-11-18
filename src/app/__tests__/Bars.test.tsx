@@ -111,6 +111,22 @@ describe("TopBar: brand and navigation", () => {
     expect(h.cmd["tab.reopenClosed"]).toHaveBeenCalledTimes(1);
   });
 
+  it("the plan button reads Plan and the begin-transaction button reads Tx; each accessible name contains its visible label", () => {
+    render(<TopBar />);
+    expect(btn(/^Plan:/)).toHaveTextContent(/^Plan$/);
+    expect(btn("Begin transaction (Tx)")).toHaveTextContent(/^Tx$/);
+    expect(screen.queryByText("Explain")).toBeNull();
+    expect(screen.queryByText("Begin Tx")).toBeNull();
+  });
+
+  it("New query is a bordered button with a text label and no plus icon", () => {
+    render(<TopBar />);
+    const face = btn("New query");
+    expect(face.querySelector("svg")).toBeNull();
+    expect(face).toHaveTextContent("New query");
+    expect(face.parentElement?.className).toMatch(/\bborder\b/);
+  });
+
   it("has no comment buttons (they are in the editor's right-click menu, on their shortcuts and in the palette)", () => {
     render(<TopBar />);
     expect(screen.queryByText(/Comment/)).toBeNull();
@@ -148,7 +164,44 @@ describe("TopBar: launch strip", () => {
     expect(useUi.getState().palette).toEqual({ mode: "connections" });
     await user.click(btn("Change database, now Sales"));
     expect(useUi.getState().palette).toEqual({ mode: "databases" });
-    expect(btn("Change database, now Sales")).toHaveAttribute("title", "Change database (Ctrl+U)");
+    expect(btn("Change database, now Sales")).toHaveAttribute("title", "Change database: Sales (Ctrl+U)");
+    expect(btn("Change connection, now DEV Sales")).toHaveAttribute("title", "Change connection: Sales (Ctrl+Shift+U)");
+  });
+
+  it("a long server name never hides the database: both names show at every width and each truncates on its own", () => {
+    const longServer = "reporting-warehouse-replica-eu-west-2";
+    const longDb = "customer_lifetime_value_snapshots_2026";
+    useProfiles.setState({ profiles: [{ ...ms, name: longServer }, pg], groups: [] });
+    setTab({ database: longDb });
+    render(<TopBar />);
+    const server = screen.getByTestId("strip-server");
+    const db = screen.getByTestId("strip-database");
+    expect(server).toHaveTextContent(longServer);
+    expect(db).toHaveTextContent(longDb);
+    // Never hidden at a breakpoint (the old `hidden xl:inline` dropped the server name below 1280 px).
+    for (const el of [server, db]) {
+      expect(el.className).not.toMatch(/(^|\s)hidden(\s|$)/);
+      expect(el.className).toMatch(/\btruncate\b/);
+    }
+    // The server name keeps a 3ch floor; the database button keeps its own floor, so neither name can take the other's slot.
+    expect(server.className).toMatch(/min-w-\[3ch\]/);
+    expect(btn(`Change database, now ${longDb}`).className).toMatch(/min-w-\[52px\]/);
+    // The database gets the larger share (1 : 1.6) and both names are set a size down so more of them fits.
+    expect(btn(`Change database, now ${longDb}`).className).toMatch(/flex-\[1\.6_1_0%\]/);
+    for (const el of [server, db]) expect(el.className).toMatch(/text-\[11px\]/);
+    // No chevron after the database name: that width goes to the name.
+    expect(btn(`Change database, now ${longDb}`).querySelector("svg")).toBeNull();
+    // Full names stay readable in the tooltips.
+    expect(btn(new RegExp(`Change connection, now DEV ${longServer}`))).toHaveAttribute("title", `Change connection: ${longServer} (Ctrl+Shift+U)`);
+    expect(btn(`Change database, now ${longDb}`)).toHaveAttribute("title", `Change database: ${longDb} (Ctrl+U)`);
+  });
+
+  it("a lost connection's Reconnect takes the engine logo's place, so both names keep their room", () => {
+    useConnections.setState({ servers: { ms1: { profileId: "ms1", status: "error", databases: [] } } } as any);
+    render(<TopBar />);
+    expect(screen.getByRole("img", { name: "Microsoft SQL Server" }).parentElement?.className).toMatch(/(^|\s)hidden(\s|$)/);
+    expect(screen.getByTestId("strip-server")).toHaveTextContent("Sales");
+    expect(screen.getByTestId("strip-database")).toHaveTextContent("Sales");
   });
 
   it("shows (default) for a tab without a database", () => {
@@ -172,7 +225,7 @@ describe("TopBar: launch strip", () => {
     const user = userEvent.setup();
     useTabs.setState({ tabs: {}, order: [], activeId: undefined });
     render(<TopBar />);
-    for (const el of [run(), btn(/^Explain/), btn("Begin transaction")]) {
+    for (const el of [run(), btn(/^Plan:/), btn("Begin transaction (Tx)")]) {
       unavailable(el);
       expect(el).not.toBeDisabled();
       await user.click(el);
@@ -187,7 +240,7 @@ describe("TopBar: launch strip", () => {
     render(<TopBar />);
     expect(btn(/Change connection, now DEV Sales, disconnected/)).toBeInTheDocument();
     expect(btn("Change database, now Sales").getAttribute("title")).toMatch(/Disconnected: running asks before reconnecting/);
-    unavailable(btn("Begin transaction"));
+    unavailable(btn("Begin transaction (Tx)"));
   });
 
   it("a lost connection offers Reconnect, which reconnects that server", async () => {
@@ -196,7 +249,7 @@ describe("TopBar: launch strip", () => {
     expect(btn(/connection lost/)).toBeInTheDocument();
     await userEvent.setup().click(btn("Connection lost. Reconnect"));
     expect(connect).toHaveBeenCalledWith("ms1");
-    unavailable(btn("Begin transaction"));
+    unavailable(btn("Begin transaction (Tx)"));
   });
 });
 
@@ -227,7 +280,7 @@ describe("TopBar: Run", () => {
     render(<TopBar />);
     expect(run()).toHaveTextContent(/^Cancel$/);
     unavailable(btn("More ways to run"));
-    unavailable(btn("Begin transaction"));
+    unavailable(btn("Begin transaction (Tx)"));
     await userEvent.setup().click(run());
     expect(h.a.cancelQuery).toHaveBeenCalledWith("t1");
   });
@@ -307,15 +360,15 @@ describe("TopBar: Explain", () => {
     for (const pid of ["ms1", "pg1"]) {
       setTab({ profileId: pid });
       const { unmount } = render(<TopBar />);
-      await user.click(btn(/^Explain/));
+      await user.click(btn(/^Plan:/));
       expect(h.a.showPlan).toHaveBeenLastCalledWith("t1", "estimated");
       unmount();
     }
     h.a.showPlan.mockClear();
     setTab({ profileId: undefined });
     render(<TopBar />);
-    unavailable(btn(/^Explain/));
-    await user.click(btn(/^Explain/));
+    unavailable(btn(/^Plan:/));
+    await user.click(btn(/^Plan:/));
     expect(h.a.showPlan).not.toHaveBeenCalled();
   });
 
@@ -329,7 +382,7 @@ describe("TopBar: Explain", () => {
     expect(useTabs.getState().tabs.t1.actualPlan).toBe(true);
     expect(run()).toHaveTextContent("+plan");
     expect(run()).toHaveAccessibleName(/with actual plan/);
-    expect(btn(/^Explain/)).toHaveAccessibleName(/Actual plan on/);
+    expect(btn(/^Plan:/)).toHaveAccessibleName(/Actual plan on/);
     await user.click(btn("Plan options"));
     await user.click(screen.getByRole("menuitem", { name: /Actual plan/ }));
     expect(h.a.showPlan).toHaveBeenCalledWith("t1", "actual");
@@ -374,7 +427,7 @@ describe.each<[string, string]>([["sqlite", "SQLite"], ["mySql", "MySQL"]])("Top
 describe("TopBar: transaction", () => {
   it("Begin Tx when none is open", async () => {
     render(<TopBar />);
-    await userEvent.setup().click(btn("Begin transaction"));
+    await userEvent.setup().click(btn("Begin transaction (Tx)"));
     expect(h.a.txAction).toHaveBeenCalledWith("t1", "begin");
   });
 
@@ -388,7 +441,7 @@ describe("TopBar: transaction", () => {
     act(() => { vi.advanceTimersByTime(3000); });
     expect(screen.getByRole("timer")).toHaveTextContent("01:08");
     expect(group.className).toContain("border-warn/45");
-    expect(screen.queryByRole("button", { name: "Begin transaction" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Begin transaction (Tx)" })).toBeNull();
     act(() => { vi.advanceTimersByTime(LONG_TX_MS); });
     expect(group.className).toMatch(/border-warn(\s|$)/);
     fireEvent.click(btn("Commit"));
@@ -403,7 +456,7 @@ describe("TopBar: transaction", () => {
     render(<TopBar />);
     expect(screen.getByRole("group", { name: "Transaction state unknown" })).toBeInTheDocument();
     expect(screen.getByRole("timer")).toHaveTextContent("?");
-    expect(screen.queryByRole("button", { name: "Begin transaction" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Begin transaction (Tx)" })).toBeNull();
     await user.click(btn("Rollback"));
     expect(h.a.txAction).toHaveBeenCalledWith("t1", "rollback");
   });

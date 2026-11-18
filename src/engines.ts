@@ -438,7 +438,7 @@ export function dialectForLanguage(languageId: string): Dialect {
   return dialectOfLanguage(languageId) ?? DEFAULT_DIALECT;
 }
 
-/** The actual plan comes back with the query's own run (SET STATISTICS XML), so a run can include it (Explain ▾). */
+/** The actual plan comes back with the query's own run (SET STATISTICS XML), so a run can include it (Plan ▾). */
 export function actualPlanWithRun(engine: Engine | null | undefined): boolean {
   const mode = engineTraits(engine).actualPlan;
   switch (mode) {

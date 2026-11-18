@@ -61,7 +61,7 @@ export function RuntimePanel({ tab }: { tab: TabState }) {
       <Card
         icon="unavailable"
         title={`Trace isn't available on ${traits.shortLabel}`}
-        text={`Trace uses SQL Server Extended Events, which ${traits.shortLabel} does not have.${traits.debugger ? " Debug steps through PL/pgSQL functions here." : traits.actualPlan !== "none" ? " Explain › Actual shows the time each operator took." : ""}`}
+        text={`Trace uses SQL Server Extended Events, which ${traits.shortLabel} does not have.${traits.debugger ? " Debug steps through PL/pgSQL functions here." : traits.actualPlan !== "none" ? " Plan › Actual shows the time each operator took." : ""}`}
         action={traits.debugger ? { label: "Switch to Debug", run: () => switchTo("debug") } : traits.actualPlan !== "none" ? { label: "Show the actual plan", run: () => void showPlan(tab.id, "actual") } : undefined}
       />
     );

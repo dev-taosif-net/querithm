@@ -145,7 +145,7 @@ describe("MessagesPanel", () => {
     expect(screen.queryByText("STATISTICS IO")).toBeNull();
     expect(screen.queryByText("STATISTICS TIME")).toBeNull();
     // The gap is said, with what PostgreSQL offers instead.
-    expect(document.querySelector("[data-q-capability='statistics']")?.textContent).toMatch(/SQL Server only.*on PostgreSQL, Explain › Actual/);
+    expect(document.querySelector("[data-q-capability='statistics']")?.textContent).toMatch(/SQL Server only.*on PostgreSQL, Plan › Actual/);
   });
 
   it("STATISTICS IO / TIME and Diagnostics collapse to one summary line each", () => {

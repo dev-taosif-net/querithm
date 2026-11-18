@@ -297,7 +297,7 @@ function RunSections({ tab, view, data }: { tab: TabState; view: ExecutionView; 
       )}
       {!traits.statisticsIo && !view.notRun && (
         <div className="px-3 py-0.5 font-sans text-[11.5px] text-muted" data-q-capability="statistics">
-          Read statistics are SQL Server only (STATISTICS IO / TIME); on {traits.shortLabel}, Explain › Actual shows the work per operator.
+          Read statistics are SQL Server only (STATISTICS IO / TIME); on {traits.shortLabel}, Plan › Actual shows the work per operator.
         </div>
       )}
       {sets.length > 0 && (
