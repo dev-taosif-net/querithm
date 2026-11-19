@@ -72,3 +72,46 @@ describe("password prompt: an empty box", () => {
     expect(h.shell.secretSet).toHaveBeenCalledWith("ms1", "");
   });
 });
+
+describe("password prompt: show password", () => {
+  it("hidden at first; the eye shows and hides it, with one name and a pressed state, and the caret stays in the box", async () => {
+    render(<Dialogs />);
+    show({ kind: "password", profileId: "ms1", resolve: vi.fn() });
+    const user = userEvent.setup();
+    const box = screen.getByLabelText("Password") as HTMLInputElement;
+    expect(box.type).toBe("password");
+    await user.type(box, "s3cret!");
+    const eye = screen.getByRole("button", { name: "Show password" });
+    expect(eye.getAttribute("aria-pressed")).toBe("false");
+    await user.click(eye);
+    expect(box.type).toBe("text");
+    expect(box.value).toBe("s3cret!");
+    expect(eye.getAttribute("aria-pressed")).toBe("true");
+    expect(document.activeElement).toBe(box);
+    // Shown or not, the typed value never becomes the input's value attribute (the page's HTML).
+    expect(box.getAttribute("value")).toBeNull();
+    expect(document.body.innerHTML).not.toContain("s3cret!");
+    await user.click(eye);
+    expect(box.type).toBe("password");
+    expect(eye.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("the eye never submits: nothing is saved or answered until Connect", async () => {
+    render(<Dialogs />);
+    const resolve = vi.fn();
+    show({ kind: "password", profileId: "ms1", resolve });
+    await userEvent.setup().click(screen.getByRole("button", { name: "Show password" }));
+    expect(h.shell.secretSet).not.toHaveBeenCalled();
+    expect(resolve).not.toHaveBeenCalled();
+    expect(screen.getByText("Connect")).toBeInTheDocument();
+  });
+
+  it.each([
+    [{ kind: "password", profileId: "pg1" }, "Show token"],
+    [{ kind: "password", profileId: "ms1", ssh: true }, "Show passphrase"],
+  ])("names what it shows (%o → %s)", (d, name) => {
+    render(<Dialogs />);
+    show({ ...d, resolve: vi.fn() });
+    expect(screen.getByRole("button", { name })).toBeInTheDocument();
+  });
+});

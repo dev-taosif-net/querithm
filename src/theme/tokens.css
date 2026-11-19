@@ -284,14 +284,17 @@ select {
   .q-btn[aria-disabled="true"] {
     opacity: 0.45;
   }
-  /* Hover darkens a solid fill: lightening it toward white drops the white label below 4.5:1. */
+  /* Hover darkens a solid fill: lightening it toward white drops the white label below 4.5:1.
+     Every variant that paints its own label color needs its own hover rule with the SAME selector chain as .q-btn:hover
+     above (`:hover:not(:disabled):not([aria-disabled="true"])`): a shorter chain has lower specificity, so .q-btn:hover
+     wins and paints --q-hover under the variant's label (white on near-white). contrast.test.ts enforces this. */
   .q-btn-primary {
     background: var(--q-accent-solid);
     border-color: var(--q-accent-solid);
     color: var(--q-accent-fg);
     font-weight: 600;
   }
-  .q-btn-primary:hover:not(:disabled) {
+  .q-btn-primary:hover:not(:disabled):not([aria-disabled="true"]) {
     background: color-mix(in srgb, var(--q-accent-solid) 85%, black);
   }
   .q-btn-danger {
@@ -320,7 +323,7 @@ select {
     color: var(--q-ok);
     font-weight: 600;
   }
-  .q-btn-run:hover:not(:disabled) {
+  .q-btn-run:hover:not(:disabled):not([aria-disabled="true"]) {
     background: color-mix(in srgb, var(--q-ok) 15%, transparent);
   }
   .q-btn-stop {
@@ -329,7 +332,7 @@ select {
     color: var(--q-err);
     font-weight: 600;
   }
-  .q-btn-stop:hover:not(:disabled) {
+  .q-btn-stop:hover:not(:disabled):not([aria-disabled="true"]) {
     background: color-mix(in srgb, var(--q-err) 15%, transparent);
   }
   .q-btn-ghost {

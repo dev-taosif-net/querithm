@@ -9,7 +9,7 @@ import { Field, Modal } from "./Modal";
 import { LoadingSkeleton } from "./LoadingStatus";
 import { lazyDialog } from "./LazyDialog";
 import { PresenceList } from "./Presence";
-import { SecretInput } from "./SecretInput";
+import { PasswordInput } from "./SecretInput";
 import { escapeForDisplay } from "../monitor/format";
 import { ServerChip } from "./EnvTag";
 import { txAgeLong } from "./txAge";
@@ -171,7 +171,10 @@ function PasswordDialog({ d }: { d: Extract<Dialog, { kind: "password" }> }) {
     >
       {d.error && <div className="mb-3 p-2 rounded bg-err/10 border border-err/40 text-err text-[11px]">{d.error}</div>}
       <Field label={d.ssh ? (profile?.ssh?.auth === "privateKey" ? "Key passphrase" : "SSH password") : profile?.auth === "entraToken" ? "Access token" : "Password"}>
-        <SecretInput className="q-input w-full" type="password" autoFocus value={value} onValue={setValue} />
+        <PasswordInput
+          className="q-input w-full" autoFocus value={value} onValue={setValue}
+          what={d.ssh ? (profile?.ssh?.auth === "privateKey" ? "passphrase" : "password") : profile?.auth === "entraToken" ? "token" : "password"}
+        />
       </Field>
       {d.ssh ? <label className="flex items-center gap-2 mt-3 text-fg">
         <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} /> Save in the OS keyring

@@ -30,6 +30,21 @@ const paths = {
   /** A crossed-out plug: a disconnected server (the hollow ring looked like the Prod shield at 10 px). */
   plugOff: <path d="M9 3v4M15 3v4M7 7h10v3a5 5 0 0 1-10 0zM12 15v6M4 4l16 16" />,
   lock: <path d="M7 11V8a5 5 0 0 1 10 0v3M5 11h14v10H5z" />,
+  /** Show / hide a password (PasswordInput). */
+  eye: (
+    <>
+      <path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0" />
+      <circle cx="12" cy="12" r="3" />
+    </>
+  ),
+  eyeOff: (
+    <>
+      <path d="M10.73 5.08a10.74 10.74 0 0 1 11.2 6.57 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-1.44 2.49" />
+      <path d="M14.08 14.16a3 3 0 0 1-4.24-4.24" />
+      <path d="M17.48 17.5a10.75 10.75 0 0 1-15.42-5.15 1 1 0 0 1 0-.7 10.75 10.75 0 0 1 4.45-5.14" />
+      <path d="M2 2l20 20" />
+    </>
+  ),
   bug: <path d="M8 9a4 4 0 0 1 8 0v5a4 4 0 0 1-8 0zM12 11v7M4 12h4M16 12h4M5 6l3 2.5M19 6l-3 2.5M5 19l3-2.5M19 19l-3-2.5" />,
   /** Tool tab kinds: ER diagram, activity monitor, schema compare, data compare. */
   erd: <path d="M3 4h7v6H3zM14 14h7v6h-7zM6.5 10v4h11" />,

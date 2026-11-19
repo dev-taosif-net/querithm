@@ -70,7 +70,8 @@ const rules = [...css.matchAll(/(\.q-btn[\w-]*)((?::[\w-]+(?:\([^)]*\))?)*)\s*\{
   cls: m[1],
   pseudo: m[2],
   order,
-  specificity: (`${m[1]}${m[2]}`.match(/[.:][\w-]+/g) ?? []).filter((s) => s !== ":not").length,
+  // Classes, pseudo-classes and attribute selectors all count (0,1,0); `:not()` itself counts only its argument.
+  specificity: (`${m[1]}${m[2]}`.match(/[.:][\w-]+|\[[^\]]*\]/g) ?? []).filter((s) => s !== ":not").length,
   decls: Object.fromEntries([...m[3].matchAll(/(?:^|;)\s*(background|color)\s*:\s*([^;]+)/g)].map((d) => [d[1], d[2].trim()])) as { background?: string; color?: string },
 }));
 const variants = [...new Set(rules.filter((r) => !r.pseudo && r.cls !== ".q-btn").map((r) => r.cls))];
@@ -96,6 +97,16 @@ describe("button contrast (tokens.css)", () => {
         if (w.value < MIN) failures.push(`${v ?? ".q-btn"} ${state} on ${w.on}: ${w.value.toFixed(2)}`);
       }
     expect(failures, theme).toEqual([]);
+  });
+
+  // Regression: .q-btn-primary:hover:not(:disabled) (0,3,0) lost to .q-btn:hover:not(:disabled):not([aria-disabled]) (0,4,0),
+  // so hovering "+ New Profile" painted --q-hover under its white label. A variant that colors its own label must own its hover.
+  it("every variant with its own label color has a hover rule that beats .q-btn:hover", () => {
+    const base = rules.find((r) => r.cls === ".q-btn" && r.pseudo.includes(":hover"))!;
+    const failures = variants
+      .filter((v) => rules.some((r) => r.cls === v && !r.pseudo && r.decls.color))
+      .filter((v) => !rules.some((r) => r.cls === v && r.pseudo.includes(":hover") && r.decls.background && (r.specificity > base.specificity || (r.specificity === base.specificity && r.order > base.order))));
+    expect(failures).toEqual([]);
   });
 
   it.each(Object.entries(themes))("%s: muted text in a highlighted row (.q-hl) is readable on every highlight", (theme, vars) => {
@@ -249,7 +260,7 @@ describe("disabled danger button (tokens.css)", () => {
     expect(decls).toMatchObject({ background: "var(--q-raised)", color: "var(--q-fg)", "border-color": "var(--q-line)" });
   });
   it("hover never repaints an aria-disabled button", () => {
-    for (const cls of [".q-btn", ".q-btn-danger"]) {
+    for (const cls of [".q-btn", ".q-btn-danger", ".q-btn-primary", ".q-btn-run", ".q-btn-stop"]) {
       const hover = new RegExp(`\\${cls}:hover([^{]*)\\{`).exec(css);
       expect(hover?.[1], cls).toContain(':not([aria-disabled="true"])');
     }
