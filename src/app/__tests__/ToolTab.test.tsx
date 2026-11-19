@@ -125,6 +125,9 @@ describe("ToolTabHeader", () => {
     const css = readFileSync(join(process.cwd(), "src/theme/tokens.css"), "utf8");
     const pair = css.slice(css.indexOf(".q-tab-l2.q-tab-tail[data-pair] {"));
     expect(pair.slice(0, pair.indexOf("}"))).toMatch(/flex: 0 1 auto;[\s\S]*min-width: 0;/);
+    // …and so does the name (flex: none on one-line tabs): at 120–140 px the pair alone could not make room.
+    const name = css.slice(css.indexOf(".q-tab:has(.q-tab-tail[data-pair]) .q-tab-l1 {"));
+    expect(name.slice(0, name.indexOf("}"))).toContain("flex: 0 1 auto;");
     b.unmount();
     useSettings.setState({ tabLayout: "guard" });
     const c = header();

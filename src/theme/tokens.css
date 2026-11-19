@@ -907,11 +907,15 @@ select {
   height: 16px;
   line-height: 16px;
 }
-/* A compare tab's "source → target" gives way instead (the tab stops at 240 px): both names are cut in the middle and
-   the arrow stays inside the tab. */
+/* A compare tab's "source → target" gives way instead, and so does its name: the tab has no min-width of its own (it
+   stops at 240 px and a full strip shrinks it to 120 px), so the name, both databases and the arrow must fit there.
+   Every part takes the middle cut, as in the two-line layouts; the arrow never leaves the tab. */
 .q-tab-l2.q-tab-tail[data-pair] {
   flex: 0 1 auto;
   min-width: 0;
+}
+.q-tab:has(.q-tab-tail[data-pair]) .q-tab-l1 {
+  flex: 0 1 auto;
 }
 /* The dot between name and database: 4 px, muted, so it never reads as the 8 px "modified" dot in the close slot. */
 .q-tab-l2.q-tab-tail::before {
