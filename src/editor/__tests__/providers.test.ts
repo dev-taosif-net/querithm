@@ -313,6 +313,7 @@ describe("completion provider", () => {
     editor.model = m;
     editor.suggestVisible = false;
     editor.focus = true;
+    editor.position = m.getPositionAt(text.length);
     fake.created.push(editor);
     rpc.mockResolvedValue([{ label: "v_smoke_total", kind: "variable", detail: "numeric", isSnippet: false }]);
     const first = completion("pgsql").provideCompletionItems(m, pos(m, text.length));
@@ -968,6 +969,91 @@ describe("completion provider: merge, quoting, trigger and range (review regress
       expect(out).not.toContain("]]");
       expect(item.filterText.startsWith("[")).toBe(true);
     }
+  });
+});
+
+// Regression: Enter in the editor did nothing. Monaco's Enter accepted a list item equal to what was typed (the
+// "Loading schema…" row, a keyword typed in full), and a late tier-2 answer re-opened the list after Escape or on the
+// next line, so the next Enter went to that list too.
+describe("Enter always reaches the editor: no list opened from code takes it", () => {
+  const DO = { pg: "DO $$ DECLARE v_enter_total numeric; BEGIN v_enter", item: { label: "v_enter_total", kind: "variable", detail: "numeric", isSnippet: false } };
+  function setup() {
+    vi.useFakeTimers();
+    const m = doc("pg", DO.pg);
+    const editor = new FakeEditor(null, {});
+    editor.model = m;
+    editor.focus = true;
+    editor.position = m.getPositionAt(DO.pg.length);
+    fake.created.push(editor);
+    hooks.created.forEach((l) => l(editor));
+    rpc.mockResolvedValue([DO.item]);
+    return { m, editor };
+  }
+  afterEach(() => { fake.created.length = 0; });
+
+  it("a list re-opened or refreshed from code is an auto list (smart Enter applies)", async () => {
+    const { m, editor } = setup();
+    completion("pgsql").provideCompletionItems(m, pos(m, DO.pg.length));
+    await vi.advanceTimersByTimeAsync(130);
+    expect(editor.triggered).toEqual(["tier2:editor.action.triggerSuggest"]);
+    expect(editor.triggerArgs).toEqual([{ auto: true }]);
+  });
+
+  it("a schema arriving refreshes an open list as an auto list", () => {
+    const { editor } = setup();
+    editor.suggestVisible = true;
+    useSnapshots.setState({ entries: { ...useSnapshots.getState().entries } });
+    expect(editor.triggered).toContain("schema:editor.action.triggerSuggest");
+    expect(editor.triggerArgs.every((a) => JSON.stringify(a) === JSON.stringify({ auto: true }))).toBe(true);
+  });
+
+  it("tier 2 does not open a list after the user pressed Escape", async () => {
+    const { m, editor } = setup();
+    completion("pgsql").provideCompletionItems(m, pos(m, DO.pg.length));
+    editor.pressKey(fake.monaco.KeyCode.Escape);
+    await vi.advanceTimersByTimeAsync(130);
+    expect(rpc).toHaveBeenCalledWith("lang.complete", expect.anything());
+    expect(editor.triggered).toEqual([]);
+  });
+
+  it("tier 2 does not open a list on the next line when Enter was typed meanwhile", async () => {
+    const { m, editor } = setup();
+    completion("pgsql").provideCompletionItems(m, pos(m, DO.pg.length));
+    m.setValue(DO.pg + "\n");
+    editor.position = m.getPositionAt(m.text.length);
+    await vi.advanceTimersByTimeAsync(130);
+    expect(editor.triggered).toEqual([]);
+  });
+
+  it("tier 2 still opens the list while the user keeps typing the same word", async () => {
+    const { m, editor } = setup();
+    completion("pgsql").provideCompletionItems(m, pos(m, DO.pg.length));
+    m.setValue(DO.pg + "_t");
+    editor.position = m.getPositionAt(m.text.length);
+    await vi.advanceTimersByTimeAsync(130);
+    expect(editor.triggered).toEqual(["tier2:editor.action.triggerSuggest"]);
+  });
+
+  it("an Escape before the request does not block the next word's list", async () => {
+    const { m, editor } = setup();
+    editor.pressKey(fake.monaco.KeyCode.Escape);
+    completion("pgsql").provideCompletionItems(m, pos(m, DO.pg.length));
+    await vi.advanceTimersByTimeAsync(130);
+    expect(editor.triggered).toEqual(["tier2:editor.action.triggerSuggest"]);
+  });
+
+  it("cursorInWord: false off the word, before it, or with no cursor", () => {
+    const m = doc("tsql", "select * from Ord\nx");
+    const e = new FakeEditor(null, {});
+    e.position = m.getPositionAt(17);
+    expect(P.cursorInWord(e as never, m as never, 14, "ord")).toBe(true);
+    expect(P.cursorInWord(e as never, m as never, 14, "orx")).toBe(false);
+    e.position = m.getPositionAt(18);
+    expect(P.cursorInWord(e as never, m as never, 14, "ord")).toBe(false);
+    e.position = m.getPositionAt(10);
+    expect(P.cursorInWord(e as never, m as never, 14, "ord")).toBe(false);
+    e.position = null;
+    expect(P.cursorInWord(e as never, m as never, 14, "ord")).toBe(false);
   });
 });
 

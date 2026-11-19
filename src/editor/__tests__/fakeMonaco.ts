@@ -77,7 +77,12 @@ export class FakeEditor {
   dispose() { this.disposed = true; this.disposeCbs.forEach((cb) => cb()); }
   executeEdits(source: string, edits: Array<{ range: unknown; text: string }>) { this.edits.push({ source, edits }); return true; }
   pushUndoStop() { this.undoStops++; }
-  trigger(source: string, id: string) { this.triggered.push(`${source}:${id}`); }
+  triggerArgs: unknown[] = [];
+  trigger(source: string, id: string, args?: unknown) { this.triggered.push(`${source}:${id}`); this.triggerArgs.push(args); }
+  keyDownCbs: Array<(e: { keyCode: number }) => void> = [];
+  onKeyDown(cb: (e: { keyCode: number }) => void) { this.keyDownCbs.push(cb); return { dispose() {} }; }
+  /** Simulates a key typed in the editor (Monaco's KeyCode numbers). */
+  pressKey(keyCode: number) { this.keyDownCbs.forEach((cb) => cb({ keyCode })); }
   onDidChangeModelContent(cb: (e: unknown) => void) { this.contentCbs.push(cb); return { dispose() {} }; }
   onDidChangeModel(cb: () => void) { this.modelCbs.push(cb); return { dispose() {} }; }
 }
@@ -91,6 +96,7 @@ export function makeFakeMonaco() {
   const monaco = {
     Uri: { parse: (s: string) => ({ toString: () => s }) },
     Range: FakeRange,
+    KeyCode: { Enter: 3, Escape: 9 },
     MarkerSeverity: { Error: 8, Warning: 4, Info: 2 },
     editor: {
       createModel: vi.fn((text: string, lang: string, uri: { toString(): string }) => { const m = new FakeModel(text, lang, uri); models.push(m); return m; }),

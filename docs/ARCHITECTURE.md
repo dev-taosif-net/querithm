@@ -1006,7 +1006,11 @@ if not, tier 2 parses only the enclosing batch.
 **Monaco wiring.** Completion provider (trigger chars `. @ ( ,` and space) returns tier 1
 synchronously with `incomplete: true`, then re-triggers when tier 2 items differ. A list opened by a typed space or comma
 with nothing typed yet is shown only where an object name comes next (`FROM |`, `JOIN |`), so Enter after `FROM t o ` or
-`a, ` starts a new line instead of accepting a keyword. Items merge by name and kind family (a column `Count` and the
+`a, ` starts a new line instead of accepting a keyword. Enter is `acceptSuggestionOnEnter: "smart"`: in a list that
+opened by itself it accepts only an item that changes the text (a keyword typed in full, the "Loading schema…" row start
+a new line). Lists re-opened from code (tier 2, a schema or row counts arriving) are auto lists (`{ auto: true }`) so the
+same rule holds, and tier 2 opens a new list only while the cursor is still in the word it asked for and no Escape was
+pressed since. Items merge by name and kind family (a column `Count` and the
 function COUNT stay two items); where tier 1 has the item its insert text wins (the dialect's quoting: a reserved word
 delimited, an alias as written) and tier 2 refines the detail. Tier 2's answer is cached per word (model, profile,
 database, session, snapshot version, word start, the text before it, and the word it was asked with — the request sends

@@ -116,7 +116,10 @@ function editorOptions(): monaco.editor.IStandaloneEditorConstructionOptions {
     suggest: { showStatusBar: true, preview: false, showWords: false, insertMode: "replace", filterGraceful: true, snippetsPreventQuickSuggestions: false },
     quickSuggestions: { other: true, comments: false, strings: false },
     suggestOnTriggerCharacters: true,
-    acceptSuggestionOnEnter: "on",
+    // "smart": in a list that opened by itself Enter accepts only an item that changes the text; otherwise it starts a
+    // new line. With "on", an item equal to what was typed (a keyword typed in full, the "Loading schema…" row) took
+    // Enter and nothing happened. A list opened with Ctrl+Space still accepts on Enter.
+    acceptSuggestionOnEnter: "smart",
     tabCompletion: "on",
     wordBasedSuggestions: "off",
     fixedOverflowWidgets: true,

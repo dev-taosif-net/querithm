@@ -153,6 +153,9 @@ describe("shared group editors", () => {
     expect(e.opts.minimap.enabled).toBe(true);
     expect(e.opts.find.addExtraSpaceOnTop).toBe(false);
     expect(e.opts.suggest.snippetsPreventQuickSuggestions).toBe(false);
+    // Regression: with "on", Enter accepted an item equal to what was typed ("Loading schema…", a full keyword) and
+    // seemed to do nothing. "smart" starts a new line then.
+    expect(e.opts.acceptSuggestionOnEnter).toBe("smart");
     useSettings.setState({ editorFontSize: 20, minimap: true, wordWrap: false, reducedDecorations: true });
     ed.refreshEditorOptions();
     expect(e.options).toMatchObject({ fontSize: 20, lineHeight: 34, wordWrap: "off", renderLineHighlight: "none", occurrencesHighlight: "off" });

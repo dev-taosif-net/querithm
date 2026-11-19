@@ -184,6 +184,33 @@ function findEditor(model: monaco.editor.ITextModel) {
   return monaco.editor.getEditors().find((e) => e.getModel() === model);
 }
 
+/**
+ * Re-opens or refreshes an editor's suggest list from code (a late tier-2 answer, a schema or row counts arriving) as an
+ * *auto* list, like one opened by typing: Enter there is accepted only for an item that changes the text
+ * (`acceptSuggestionOnEnter: "smart"` applies to auto lists only), so a refresh never makes Enter a no-op.
+ */
+export function refreshSuggest(editor: monaco.editor.ICodeEditor, source: string) {
+  editor.trigger(source, "editor.action.triggerSuggest", { auto: true });
+}
+
+/** Per model: how many times Escape was pressed in it. A tier-2 answer never opens a list the user closed meanwhile. */
+const escapes = new WeakMap<monaco.editor.ITextModel, number>();
+const escapesOf = (model: monaco.editor.ITextModel) => escapes.get(model) ?? 0;
+
+/**
+ * Whether the cursor is still in the word a tier-2 request was made for: after `wordStart`, on the same line, with only
+ * the word typed since (`typed` extended, no whitespace). Enter or a space moves past it, and a list opened there would
+ * take the next Enter.
+ */
+export function cursorInWord(editor: monaco.editor.ICodeEditor, model: monaco.editor.ITextModel, wordStart: number, typed: string): boolean {
+  const p = editor.getPosition();
+  if (!p) return false;
+  const at = model.getOffsetAt(p);
+  if (at < wordStart) return false;
+  const word = model.getValue().slice(wordStart, at);
+  return !/\s/.test(word) && word.toLowerCase().startsWith(typed);
+}
+
 function scheduleTier2(model: monaco.editor.ITextModel, ctx: DocContext, offset: number, base: string, tier1Labels: Set<string>, wordStart = offset) {
   if (!useSettings.getState().tier2) return;
   const m = ctx.docId ?? ctx.tabId; // the model key (a notebook cell's own)
@@ -198,6 +225,7 @@ function scheduleTier2(model: monaco.editor.ITextModel, ctx: DocContext, offset:
   tier2Pending.set(m, pending);
   clearTimeout(tier2Timers.get(m));
   const before = textHash(text.slice(0, wordStart));
+  const escapesBefore = escapesOf(model);
   tier2Timers.set(m, setTimeout(async () => {
     tier2Timers.delete(m);
     const seq = ++tier2Seq;
@@ -219,10 +247,12 @@ function scheduleTier2(model: monaco.editor.ITextModel, ctx: DocContext, offset:
       const changed = items.length >= TIER2_CAP || items.some((i) => !tier1Labels.has(mergeKey(i.kind, i.label)) || i.detail);
       // Replace the open popup's items in place (§9): re-trigger only while the user is still on the same word (the text
       // before it unchanged) — or, when tier 1 had nothing to show (so no popup opened), open it with tier 2's items.
+      // A new list opens only while the cursor is still in that word and the user has not closed a list with Escape
+      // since: a list opened on the next line (Enter typed meanwhile) or after Escape would take the next Enter.
       const sameWord = textHash(model.getValue().slice(0, wordStart)) === before;
-      if (editor && changed && sameWord && (suggestWidgetVisible(editor) || (tier1Labels.size === 0 && items.length > 0 && editor.hasTextFocus()))) {
-        editor.trigger("tier2", "editor.action.triggerSuggest", {});
-      }
+      const mayOpen = () => !!editor && tier1Labels.size === 0 && items.length > 0 && editor.hasTextFocus()
+        && escapesOf(model) === escapesBefore && cursorInWord(editor, model, wordStart, typed);
+      if (editor && changed && sameWord && (suggestWidgetVisible(editor) || mayOpen())) refreshSuggest(editor, "tier2");
     } catch {
       /* tier 2 is best effort */
     } finally {
@@ -595,7 +625,7 @@ export function installProviders() {
   // row counts arriving add themselves to the open list's table items.
   const refreshOpenLists = () => {
     for (const editor of monaco.editor.getEditors()) {
-      if (suggestWidgetVisible(editor)) editor.trigger("schema", "editor.action.triggerSuggest", {});
+      if (suggestWidgetVisible(editor)) refreshSuggest(editor, "schema");
     }
   };
   useSnapshots.subscribe((s, prev) => { if (s.entries !== prev.entries) refreshOpenLists(); });
@@ -780,6 +810,10 @@ export function installProviders() {
   });
   onEditorCreated((editor) => {
     installKeywordCaseOnType(editor);
+    editor.onKeyDown((e) => {
+      const model = editor.getModel();
+      if (model && e.keyCode === monaco.KeyCode.Escape) escapes.set(model, escapesOf(model) + 1);
+    });
     addCommentMenu(editor);
 
     const pairDecos = editor.createDecorationsCollection([]);
