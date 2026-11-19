@@ -201,7 +201,9 @@ export function TabLine2({ f, surfaces = TAB_SURFACES, fullDatabase = false, lay
   // The database carries the environment's colour; with no database the server does.
   const place = f.database ?? (f.target ? f.profile?.name : undefined);
   return (
-    <span className={cls} data-q-tab-subtitle>
+    // data-pair: source → target on one line. Two names can't both stay whole in a 240 px tab, so this tail shrinks
+    // and both names take the middle cut, as on line 2 of the two-line layouts.
+    <span className={cls} data-q-tab-subtitle data-pair={(tail && !!f.target) || undefined}>
       {/* Disconnected: the plug leads and the state word is never cut (D8); the engine mark gives way, and the
           database is cut at its end, so a 150 px tab still shows where it was. */}
       {f.disconnected && <Icon name="plugOff" size={11} strokeWidth={1.9} className="q-tab-icon" />}

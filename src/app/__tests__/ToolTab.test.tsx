@@ -2,6 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import "./domPolyfills";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const h = vi.hoisted(() => ({ closeTool: vi.fn() }));
 vi.mock("../toolActions", () => ({ closeTool: (id: string) => h.closeTool(id) }));
@@ -110,12 +112,19 @@ describe("ToolTabHeader", () => {
     const a = header();
     const tail = a.container.querySelector(".q-tab-top > .q-tab-tail") as HTMLElement;
     expect(tail.textContent).toBe("Billing");
+    expect(tail.dataset.pair).toBeUndefined();
     expect(a.container.querySelector(".q-tab-main > [data-q-tab-subtitle]")).toBeNull();
     a.unmount();
     const compare = { params: { source: { kind: "live", profileId: "pg1", database: "orders" }, target: { kind: "live", profileId: "ms1", database: "Billing" } } };
     setTool(tool("schemaCompare", compare));
     const b = header();
     expect(b.container.querySelector(".q-tab-top > .q-tab-tail")!.textContent).toBe("orders→Billing");
+    // Regression (CI smoke 26d/26e text-spill): the pair tail may shrink, so "→" never runs past a 240 px tab's edge;
+    // a single database stays whole (the tab widens to it instead).
+    expect((b.container.querySelector(".q-tab-tail") as HTMLElement).dataset.pair).toBe("true");
+    const css = readFileSync(join(process.cwd(), "src/theme/tokens.css"), "utf8");
+    const pair = css.slice(css.indexOf(".q-tab-l2.q-tab-tail[data-pair] {"));
+    expect(pair.slice(0, pair.indexOf("}"))).toMatch(/flex: 0 1 auto;[\s\S]*min-width: 0;/);
     b.unmount();
     useSettings.setState({ tabLayout: "guard" });
     const c = header();

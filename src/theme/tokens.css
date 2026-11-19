@@ -907,6 +907,12 @@ select {
   height: 16px;
   line-height: 16px;
 }
+/* A compare tab's "source → target" gives way instead (the tab stops at 240 px): both names are cut in the middle and
+   the arrow stays inside the tab. */
+.q-tab-l2.q-tab-tail[data-pair] {
+  flex: 0 1 auto;
+  min-width: 0;
+}
 /* The dot between name and database: 4 px, muted, so it never reads as the 8 px "modified" dot in the close slot. */
 .q-tab-l2.q-tab-tail::before {
   content: "";
