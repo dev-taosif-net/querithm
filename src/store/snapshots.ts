@@ -251,6 +251,21 @@ export const useSnapshots = create<SnapStore>((set, get) => {
   };
 });
 
+/**
+ * A server's "Refresh databases": the database list again, then a metadata refresh (the same incremental one as a
+ * database's "Refresh metadata") of every online database whose catalog is loaded. A database not loaded yet needs
+ * none: its first load asks the sidecar, which refreshes a catalog not read this launch or gone stale.
+ */
+export async function refreshServer(profileId: string): Promise<void> {
+  await useConnections.getState().refreshDatabases(profileId);
+  const server = useConnections.getState().servers[profileId];
+  if (!server || isDisconnected(profileId)) return;
+  const online = new Set(server.databases.filter((d) => !d.state || d.state.toUpperCase() === "ONLINE").map((d) => d.name));
+  const store = useSnapshots.getState();
+  const loaded = Object.values(store.entries).filter((e) => e.profileId === profileId && !e.sessionId && online.has(e.database));
+  await Promise.all(loaded.map((e) => store.refresh(profileId, e.database, false)));
+}
+
 /** meta.updated patches one entry in place: only changed objects are re-fetched (§8 step 4, §12). */
 async function applyUpdate(entry: SnapEntry, e: MetaUpdatedEvent) {
   const store = useSnapshots.getState();

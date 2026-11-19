@@ -8,7 +8,7 @@ import { engineTraits, ENGINE_LIST, ENGINES, knownEngine } from "../engines";
 import { capabilityRefusal, MEMORY_NOTE, useConnections, type CapabilityFeature } from "../store/connections";
 import { useProfiles } from "../store/profiles";
 import { schemaGroupKey, useSettings } from "../store/settings";
-import { ownSessionFor, sessionParam, useSnapshots } from "../store/snapshots";
+import { ownSessionFor, refreshServer, sessionParam, useSnapshots } from "../store/snapshots";
 import { useUi } from "../store/ui";
 import { useTabs } from "../store/tabs";
 import { disconnectServer, newQueryTab, openDefinition, scriptObject } from "../app/actions";
@@ -183,7 +183,7 @@ export function serverMenu(row: RowOf<"server">): MenuEntry[] {
       ]
     : [];
   const tools: MenuEntry[] = [
-    item("Refresh databases", () => void useConnections.getState().refreshDatabases(id).catch((e) => toast("error", `Could not refresh databases: ${e instanceof Error ? e.message : String(e)}. Choose Refresh databases to retry.`)), { hint: "F5", unavailable: off ?? (row.memory ? MEMORY_NOTE : undefined) }),
+    item("Refresh databases", () => void refreshServer(id).catch((e) => toast("error", `Could not refresh databases: ${e instanceof Error ? e.message : String(e)}. Choose Refresh databases to retry.`)), { hint: "F5", unavailable: off ?? (row.memory ? MEMORY_NOTE : undefined) }),
     item("Activity monitor", () => openActivityMonitor(id), { unavailable: off ?? (traits.monitor ? undefined : `${traits.shortLabel} has no activity monitor`) }),
   ];
   const sessions = Object.values(useTabs.getState().tabs).filter((t) => t.profileId === id && t.sessionId).length;

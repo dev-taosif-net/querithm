@@ -6,7 +6,7 @@ import type { EnvironmentKind, Profile, SnapObject } from "../ipc/contract";
 import { rpc } from "../ipc/client";
 import { useConnections } from "../store/connections";
 import { envColor, envLabel, useProfiles } from "../store/profiles";
-import { sessionParam, tabScope, useSnapshots } from "../store/snapshots";
+import { refreshServer, sessionParam, tabScope, useSnapshots } from "../store/snapshots";
 import { repickFile } from "../connections/fileAccess";
 import { schemaGroupKey, useSettings } from "../store/settings";
 import { useTabs } from "../store/tabs";
@@ -395,7 +395,7 @@ export function Explorer() {
     }
     if (e.key === "F5") {
       e.preventDefault();
-      if (r.t === "server" && r.status === "connected") void useConnections.getState().refreshDatabases(r.profileId).catch((e) => toast("error", `Could not refresh databases: ${e instanceof Error ? e.message : String(e)}. Press F5 to retry.`));
+      if (r.t === "server" && r.status === "connected") void refreshServer(r.profileId).catch((e) => toast("error", `Could not refresh databases: ${e instanceof Error ? e.message : String(e)}. Press F5 to retry.`));
       else if ("db" in r && r.db && "profileId" in r && r.profileId) void useSnapshots.getState().refresh(r.profileId, r.db, false);
       return;
     }
