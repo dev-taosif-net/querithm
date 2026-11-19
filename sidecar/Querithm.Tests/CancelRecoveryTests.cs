@@ -122,7 +122,7 @@ public class CancelRecoveryTests
 
         Assert.Equal(ExecState.Cancelled, (await rig.Done(run)).State);
         Assert.Null(s.ActiveExecutionId);
-        Assert.Equal(1, s.ExecLock.CurrentCount); // the next run on this tab is not queued behind it
+        await rig.Until(() => s.ExecLock.CurrentCount == 1); // the next run on this tab is not queued behind it
     }
 
     [Fact]
@@ -163,7 +163,7 @@ public class CancelRecoveryTests
         Assert.Contains("results channel", done.Error!.Message);
         Assert.Single(rig.Messages(run), m => m.Severity == Severity.Error);
         Assert.DoesNotContain(ran, t => t.Contains("SELECT 2"));
-        Assert.Equal(1, s.ExecLock.CurrentCount);
+        await rig.Until(() => s.ExecLock.CurrentCount == 1); // released just after query.done (ExecutionService)
     }
 
     [Fact]
@@ -380,7 +380,7 @@ public class CancelRecoveryTests
         rig.Executions.Cancel(big);
         Assert.Equal(ExecState.Cancelled, (await rig.Done(big)).State);
         Assert.True(sw.Elapsed < TestTime.Of(TimeSpan.FromSeconds(5)), $"took {sw.Elapsed}");
-        Assert.Equal(1, s1.ExecLock.CurrentCount);
+        await rig.Until(() => s1.ExecLock.CurrentCount == 1); // released just after query.done (ExecutionService)
 
         // The torn connection was dropped, not reused: only whole frames, then the cut one, and nothing after it.
         Assert.True(choked.Disposed);
@@ -435,7 +435,7 @@ public class CancelRecoveryTests
         Assert.Equal(ExecState.Cancelled, (await rig.Done(run)).State);
         Assert.Contains(rig.Messages(run), m => m.Severity == Severity.Warning && m.Message.Contains("closed this tab's connection"));
         Assert.NotEqual(ConnectionState.Open, rig.Provider.Opened.Single().State);
-        Assert.Equal(1, s.ExecLock.CurrentCount);
+        await rig.Until(() => s.ExecLock.CurrentCount == 1); // released just after query.done (ExecutionService)
 
         // The next run gets a fresh connection and works.
         var next = rig.Run(s, "SELECT 1 AS a");
@@ -484,7 +484,7 @@ public class CancelRecoveryTests
         var done = await rig.Done(run);
         Assert.Equal(ExecState.Cancelled, done.State);
         Assert.Null(done.Error);
-        Assert.Equal(1, s.ExecLock.CurrentCount);
+        await rig.Until(() => s.ExecLock.CurrentCount == 1); // released just after query.done (ExecutionService)
         Assert.Equal(ExecState.Done, (await rig.Done(rig.Run(s, "SELECT 1 AS a"))).State);
     }
 
@@ -545,7 +545,7 @@ public class CancelRecoveryTests
         Assert.Contains(rig.Messages(run), m => m.Message.Contains("any open transaction was rolled back"));
         Assert.Null(s.Pinned);
         Assert.Equal(TxState.None, s.TxState);
-        Assert.Equal(1, s.ExecLock.CurrentCount);
+        await rig.Until(() => s.ExecLock.CurrentCount == 1); // released just after query.done (ExecutionService)
     }
 
     [Fact]
@@ -706,7 +706,7 @@ public class CancelRecoveryTests
 
         Assert.Equal(ExecState.Cancelled, (await rig.Done(run)).State);
         Assert.Null(s.ActiveExecutionId);
-        Assert.Equal(1, s.ExecLock.CurrentCount);
+        await rig.Until(() => s.ExecLock.CurrentCount == 1); // released just after query.done (ExecutionService)
         Assert.Equal(ConnectionState.Open, rig.Provider.Opened.Single().State); // stopped by the run's token, not by closing the connection
     }
 
@@ -745,7 +745,7 @@ public class CancelRecoveryTests
         rig.Executions.Cancel(run);
 
         Assert.Equal(ExecState.Cancelled, (await rig.Done(run).WaitAsync(Grace)).State);
-        Assert.Equal(1, s.ExecLock.CurrentCount);
+        await rig.Until(() => s.ExecLock.CurrentCount == 1); // released just after query.done (ExecutionService)
     }
 
     [Fact]
@@ -769,7 +769,7 @@ public class CancelRecoveryTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => write.WaitAsync(Wait));
         Assert.Equal(ExecState.Cancelled, (await rig.Done(id)).State);
-        Assert.Equal(1, s.ExecLock.CurrentCount);
+        await rig.Until(() => s.ExecLock.CurrentCount == 1); // released just after query.done (ExecutionService)
     }
 
     // ------------------------------------------------------------------ plans and interactive RPCs (M5)
@@ -802,7 +802,7 @@ public class CancelRecoveryTests
         Assert.True(rig.Executions.Cancel(id).Cancelled);
 
         Assert.Equal(ExecState.Cancelled, (await rig.Done(id)).State);
-        Assert.Equal(1, s.ExecLock.CurrentCount);
+        await rig.Until(() => s.ExecLock.CurrentCount == 1); // released just after query.done (ExecutionService)
         Assert.Null(s.ActiveExecutionId);
         // The escalation closed the connection the plan's transaction was on: it is discarded, never pooled again.
         var conn = Assert.Single(rig.Provider.Opened);
