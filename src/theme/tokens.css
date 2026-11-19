@@ -457,12 +457,21 @@ select {
   }
 }
 
+/* The editor tab strip's height (Settings › Tab layout, §16 2026-11-19): 40 px for the two-line layouts, 32 px for the
+   one-line ones. The Object Explorer's header uses the same value, so their bottom borders form one line. Not themed. */
+:root {
+  --q-strip-h: 40px;
+}
+:root:is([data-tab-layout="singleLine"], [data-tab-layout="numbered"]) {
+  --q-strip-h: 32px;
+}
+
 /* Dockview, mapped onto the same tokens. */
 .dockview-theme-querithm {
   --dv-background-color: var(--q-bg);
   --dv-paneview-header-border-color: var(--q-line);
   --dv-tabs-and-actions-container-font-size: 12px;
-  --dv-tabs-and-actions-container-height: 40px;
+  --dv-tabs-and-actions-container-height: var(--q-strip-h);
   --dv-tab-close-icon: none;
   --dv-drag-over-background-color: var(--q-sel);
   --dv-drag-over-border-color: var(--q-accent);
@@ -664,7 +673,7 @@ select {
 .q-tab-sep {
   position: absolute;
   right: 0;
-  top: 11px;
+  top: calc(50% - 9px); /* centred at either strip height */
   width: 1px;
   height: 18px;
   background: var(--q-line);
@@ -876,6 +885,87 @@ select {
 .q-tab-x:hover {
   background: var(--q-line);
   color: var(--q-fg);
+}
+/* One-line layouts (singleLine, numbered): "Query1 • Sales": the name, a small dot, then the database, then the close
+   slot. Neither the name nor the database gives way when the strip fills: the tab's minimum width covers both
+   (useFullDatabase) and the strip scrolls. Only a name longer than 180 px is cut, in the middle (its tail kept). Line 2
+   is a size container in the two-line layouts; here it sizes to its text. */
+.q-tab:is([data-layout="singleLine"], [data-layout="numbered"]) .q-tab-main {
+  padding-top: 0;
+}
+.q-tab:is([data-layout="singleLine"], [data-layout="numbered"]) .q-tab-l1 {
+  flex: none;
+  max-width: 180px;
+}
+.q-tab-l2.q-tab-tail {
+  flex: none;
+  container-type: normal;
+  margin-left: 4px;
+  height: 16px;
+  line-height: 16px;
+}
+/* The dot between name and database: 4 px, muted, so it never reads as the 8 px "modified" dot in the close slot. */
+.q-tab-l2.q-tab-tail::before {
+  content: "";
+  flex: none;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--q-muted);
+}
+.dockview-theme-querithm .dv-tab:has(.q-tab:is([data-layout="singleLine"], [data-layout="numbered"])) {
+  max-width: 240px !important; /* the name and the database share one line */
+}
+/* No room is kept for the close button: the tab is as wide as its text, and × appears over the line's end (fading the
+   text under it) only while the pointer or keyboard focus is on the tab, the active tab included. A modified, pinned or
+   renamed tab keeps the slot, since its dot, pin or field is always there. */
+.q-tab:is([data-layout="singleLine"], [data-layout="numbered"]):not([data-dirty], [data-pinned], [data-editing]) .q-tab-top::after {
+  width: 0;
+  min-width: 0;
+}
+.dv-tab.dv-active-tab .q-tab:is([data-layout="singleLine"], [data-layout="numbered"]):not([data-dirty]) .q-tab-x {
+  display: none;
+}
+.dv-tab.dv-active-tab:is(:hover, :focus-visible) .q-tab:is([data-layout="singleLine"], [data-layout="numbered"]):not([data-dirty]) .q-tab-x {
+  display: flex;
+}
+.dv-tab.dv-active-tab .q-tab:is([data-layout="singleLine"], [data-layout="numbered"]):not([data-dirty], [data-editing]) .q-tab-x::before {
+  content: "";
+  position: absolute;
+  right: 100%;
+  top: 2px;
+  bottom: 2px;
+  width: 10px;
+  background: linear-gradient(to right, transparent, var(--q-row-bg));
+  pointer-events: none;
+}
+/* Guard rail layout: PRD solid, STG outlined, and a destructive verb outlined as well as red, so none of them relies on
+   colour alone. PRD is white on --q-err-solid (4.83:1); STG uses --q-warn, which passes 4.5:1 on every tab surface. */
+.q-tab-chip {
+  flex: none;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 13px;
+  letter-spacing: 0.04em;
+}
+.q-tab-chip[data-env="prod"] {
+  background: var(--q-err-solid);
+  color: var(--q-accent-fg);
+}
+.q-tab-chip[data-env="staging"] {
+  border: 1px solid var(--q-warn);
+  line-height: 11px;
+  color: var(--q-warn);
+}
+.q-tab[data-layout="guard"] .q-tab-verb[data-danger] {
+  padding: 0 3px;
+  border: 1px solid var(--q-err);
+  border-radius: 3px;
+  font-size: 10px;
+  line-height: 12px;
 }
 .q-tab-dot {
   width: 8px;

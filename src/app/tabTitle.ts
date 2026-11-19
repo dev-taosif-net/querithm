@@ -21,8 +21,13 @@ export function isDebugTitle(title: string): boolean {
   return title.startsWith(DEBUG_MARK);
 }
 
-/** The title without the debugger marker and without a ".sql" extension. */
+/**
+ * The title as shown: without the debugger marker and without a ".sql" extension, and an untitled tab reads "Query5"
+ * (stored "SQLQuery5.sql", §16 2026-11-19). Display only: the stored title keeps its SQLQuery form, so D24, saved
+ * workspaces and isUntitledTitle are unchanged, and a tab the user named "Query5" stays a named tab.
+ */
 export function tabTitleText(title: string): string {
+  if (isUntitledTitle(title)) return `Query${title.slice("SQLQuery".length, -".sql".length)}`;
   let t = title;
   if (isDebugTitle(t)) t = t.slice(DEBUG_MARK.length).trimStart();
   if (t.length > 4 && t.slice(-4).toLowerCase() === ".sql") t = t.slice(0, -4);

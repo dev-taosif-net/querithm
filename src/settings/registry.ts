@@ -197,9 +197,20 @@ export const settingDefs: SettingDef[] = [
     warning: (s) => (s.autosave ? null : "Unsaved text is lost if Querithm or the computer stops unexpectedly."),
   },
   {
+    id: "tabLayout", keys: ["tabLayout"], page: "tabs", group: "Tab names", label: "Tab layout",
+    description: "Single line: the name, then the database (Query1 Sales). Numbered: the same, but untitled tabs keep their number (Query1, Query2). Two lines: the database and server under the name. Guard rail: two lines with PRD and STG written out.",
+    control: {
+      kind: "segmented",
+      options: [{ value: "singleLine", label: "Single line" }, { value: "numbered", label: "Numbered" }, { value: "twoLine", label: "Two lines" }, { value: "guard", label: "Guard rail" }],
+    },
+    keywords: ["tab", "layout", "strip", "single line", "two lines", "compact", "numbered", "query1", "database", "server", "prd", "production", "height"],
+    note: (s) => (s.tabLayout === "singleLine" || s.tabLayout === "numbered" ? "The server and the engine are in the tab's tooltip." : null),
+  },
+  {
     id: "autoTitle", keys: ["autoTitle"], page: "tabs", group: "Tab names", label: "Name untitled tabs from their first statement",
-    description: "At the first run, SQLQuery3 takes a name such as SELECT Orders. A name you gave is never changed.",
+    description: "At the first run, Query3 takes a name such as SELECT Orders. A name you gave is never changed.",
     control: { kind: "switch" }, keywords: ["title", "rename"],
+    disabledWhy: (s) => (s.tabLayout === "numbered" ? "The Numbered tab layout keeps every untitled tab's number." : null),
   },
   {
     id: "tabListGroupByConnection", keys: ["tabListGroupByConnection"], page: "tabs", group: "Tab names", label: "Group the open-tabs list by connection",

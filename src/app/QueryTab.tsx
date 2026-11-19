@@ -4,7 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { IDockviewPanelHeaderProps, IDockviewPanelProps } from "dockview";
 import { useTabs, type TabState } from "../store/tabs";
 import { envColor, useProfiles } from "../store/profiles";
-import { useSettings } from "../store/settings";
+import { isSingleLineLayout, useSettings } from "../store/settings";
 import { DIALECTS, dialectOf } from "../engines";
 import { useConnections } from "../store/connections";
 import { attachEditor, getModel, onModelContent } from "../editor/editors";
@@ -258,6 +258,8 @@ export function QueryTabHeader(props: IDockviewPanelHeaderProps<Params>) {
   const profile = useProfiles((s) => (v?.profileId ? s.profiles.find((p) => p.id === v.profileId) : undefined));
   const groups = useProfiles((s) => s.groups);
   const disconnected = useConnections((s) => !!v?.profileId && !!s.disconnected[v.profileId]);
+  const layout = useSettings((s) => s.tabLayout);
+  const single = isSingleLineLayout(layout);
   useThemeKey();
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [editing, setEditing] = useState(false);
@@ -265,7 +267,7 @@ export function QueryTabHeader(props: IDockviewPanelHeaderProps<Params>) {
   const tabEl = useRef<HTMLElement | null>(null);
   const facts: TabFacts | undefined = v && { kind: "query", ...v, profile, disconnected: !!profile && disconnected, suffix };
   useTabSemantics(root, tabEl, facts, setMenu, () => setEditing(true));
-  useFullDatabase(root, tabEl, `${profile?.id ?? ""}|${facts?.database ?? ""}|${facts?.disconnected ?? false}`);
+  useFullDatabase(root, tabEl, `${profile?.id ?? ""}|${facts?.database ?? ""}|${facts?.disconnected ?? false}|${layout}|${!!v?.dirty}|${!!v?.pinned}`);
   if (!v || !facts) return null;
   const finishRename = (value: string | null) => {
     setEditing(false);
@@ -282,6 +284,7 @@ export function QueryTabHeader(props: IDockviewPanelHeaderProps<Params>) {
       data-disc={facts.disconnected || undefined}
       data-dirty={v.dirty || undefined}
       data-editing={editing || undefined}
+      data-layout={layout}
       title={tooltipText(facts)}
       // The transaction's age in the tooltip is read when the pointer arrives, not when the header last rendered.
       onPointerEnter={(e) => void (e.currentTarget.title = tooltipText(facts))}
@@ -303,7 +306,9 @@ export function QueryTabHeader(props: IDockviewPanelHeaderProps<Params>) {
       <span className="q-tab-main" onDoubleClick={(e) => { e.stopPropagation(); if (v.preview) keepPreview(tabId); else setEditing(true); }}>
         {/* The close slot sits at the end of line 1 (D12), so line 2 runs the tab's full width. */}
         <span className="q-tab-top">
-          {editing ? <TitleEditor initial={v.title} onDone={finishRename} /> : <TabLine1 f={facts} />}
+          {editing ? <TitleEditor initial={v.title} onDone={finishRename} /> : <TabLine1 f={facts} layout={layout} />}
+          {/* One-line layouts: the database closes the line, before the close slot. */}
+          {single && !editing && <TabLine2 f={facts} fullDatabase layout={layout} />}
           <span className="q-tab-slot" onDoubleClick={(e) => e.stopPropagation()}>
             {v.pinned ? (
               <span aria-label="Pinned" className="flex"><Icon name="pin" size={13} strokeWidth={1.9} /></span>
@@ -328,7 +333,7 @@ export function QueryTabHeader(props: IDockviewPanelHeaderProps<Params>) {
             )}
           </span>
         </span>
-        <TabLine2 f={facts} fullDatabase />
+        {!single && <TabLine2 f={facts} fullDatabase layout={layout} />}
       </span>
       {menu && <TabContextMenu tabId={tabId} at={menu} anchor={tabEl} onClose={() => setMenu(null)} onRename={() => setEditing(true)} />}
     </div>

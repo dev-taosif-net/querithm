@@ -15,6 +15,21 @@ describe("tab title text", () => {
   });
 });
 
+describe("untitled tabs read Query5 (§16 2026-11-19)", () => {
+  it.each([
+    ["SQLQuery5.sql", "Query5"],
+    ["SQLQuery12.sql", "Query12"],
+    ["SQLQuery5", "SQLQuery5"], // not the untitled form: no extension
+    ["Query5.sql", "Query5"], // a name the user typed: only .sql goes
+    ["Query 5.sql", "Query 5"],
+    ["SQLQuery.sql", "SQLQuery"],
+    ["UPDATE Invoice.sql", "UPDATE Invoice"],
+    ["mySQLQuery5.sql", "mySQLQuery5"],
+  ])("%s → %s", (title, shown) => {
+    expect(tabTitleText(title)).toBe(shown);
+  });
+});
+
 describe("tab name", () => {
   it.each([
     ["DROP Orders.sql", "DROP", true, "Orders"],

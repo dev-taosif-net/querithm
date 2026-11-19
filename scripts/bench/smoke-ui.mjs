@@ -205,7 +205,8 @@ try {
     await page.evaluate(() => document.getElementById("layout-canary")?.remove());
   }
   // Welcome screen (no tab open): close the start tab, audit, then open a query tab from its primary button.
-  await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.getAttribute("aria-label")?.startsWith("Close SQLQuery"))?.click());
+  // The start tab is untitled: it reads "Query1" (stored SQLQuery1.sql, §16 2026-11-19).
+  await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => /^Close (SQL)?Query ?\d+$/.test(b.getAttribute("aria-label") ?? ""))?.click());
   await page.waitForFunction(() => document.body.innerText.includes("A SQL IDE for SQL Server and PostgreSQL"), { timeout: 5_000 }).catch(() => errors.push("welcome screen did not appear after closing the last tab"));
   await sleep(300);
   await shot("00-welcome");

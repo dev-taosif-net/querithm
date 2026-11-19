@@ -11,7 +11,8 @@ import { EngineLogo } from "../connections/EngineLogo";
 import { serverAddress, serverAddressLine } from "../connections/serverAddress";
 import { Icon, type IconName } from "./icons";
 import { connectionText, TAB_SURFACES, useThemeKey } from "./tabStyle";
-import { isDebugTitle, middleCut, tabName, tabTitleText } from "./tabTitle";
+import { isDebugTitle, isUntitledTitle, middleCut, tabName, tabTitleText } from "./tabTitle";
+import { isSingleLineLayout, type TabLayout } from "../store/settings";
 import { txAgeLong, txAgeShort } from "./txAge";
 import { useTxNow } from "./txClock";
 import { MENU_EVENT, RENAME_EVENT } from "./stripKeyboard";
@@ -100,7 +101,8 @@ export function spokenName(f: TabFacts): string {
 
 /** The tooltip (also read when the pointer arrives, so the transaction's age is current). */
 export function tooltipText(f: TabFacts, now = Date.now()): string {
-  const lines = [`${isDebugTitle(f.title) ? tabTitleText(f.title) : f.title}${f.dirty ? " · modified" : ""}`];
+  // The stored title in full (".sql" kept), except the debugger marker and an untitled tab's SQLQuery form.
+  const lines = [`${isDebugTitle(f.title) || isUntitledTitle(f.title) ? tabTitleText(f.title) : f.title}${f.dirty ? " · modified" : ""}`];
   if (f.filePath) lines.push(f.filePath);
   const where = (t: TabTarget) =>
     t.profile ? `${envLabel[t.profile.environment]?.toUpperCase() ?? ""} ${escapeForDisplay(t.profile.name ?? "")}${t.database ? ` › ${escapeForDisplay(t.database)}` : ""}`.trim() : t.file ?? "";
@@ -141,14 +143,19 @@ function Cut({ text, keep }: { text: string; keep: number }) {
   );
 }
 
-export function TabLine1({ f }: { f: TabFacts }) {
+/**
+ * Line 1. `layout` (the strip's tab layout; Ctrl+P and Ctrl+Tab keep the two-line rows): every layout but the two-line
+ * one puts the TX pill after the name, so the name stays where it is when a transaction opens or ends.
+ */
+export function TabLine1({ f, layout = "twoLine" }: { f: TabFacts; layout?: TabLayout }) {
   const n = tabName(displayTitle(f.kind, f.title));
+  const txAfter = layout !== "twoLine";
   return (
     <span className="q-tab-l1">
       {f.kind !== "query" && <Icon name={KIND_ICON[f.kind]} size={12} strokeWidth={1.9} className="q-tab-icon" />}
       {f.notebook && <Icon name="notebook" size={12} strokeWidth={1.9} className="q-tab-icon" />}
       {isDebugTitle(f.title) && <Icon name="bug" size={12} strokeWidth={1.9} className="q-tab-icon" />}
-      {f.txOpen && <TxPill startedAt={f.txStartedAt} />}
+      {f.txOpen && !txAfter && <TxPill startedAt={f.txStartedAt} />}
       {f.busy && <Icon name="spinner" size={12} strokeWidth={2.6} className="q-spin" />}
       {f.readOnly && <Icon name="lock" size={11} strokeWidth={1.9} className="q-tab-icon" />}
       {n.verb && <span className="q-tab-verb" data-danger={n.danger || undefined}>{n.verb}</span>}
@@ -157,8 +164,16 @@ export function TabLine1({ f }: { f: TabFacts }) {
       </span>
       {f.suffix && <span className="q-tab-suffix">{f.suffix}</span>}
       {f.preview && <span className="q-tab-preview">Preview</span>}
+      {f.txOpen && txAfter && <TxPill startedAt={f.txStartedAt} />}
     </span>
   );
+}
+
+/** Guard Rail layout: production and staging are written on the tab, not only coloured (PRD solid, STG outlined). */
+function EnvChip({ profile }: { profile?: Profile }) {
+  const env = profile?.environment;
+  if (env !== "prod" && env !== "staging") return null;
+  return <span className="q-tab-chip" data-env={env}>{env === "prod" ? "PRD" : "STG"}</span>;
 }
 
 /** The colour a connection's text takes on `surfaces` (the tab's three, or the overlay's). */
@@ -172,21 +187,26 @@ function useConnectionColor(profile: Profile | undefined, surfaces: readonly str
  * `fullDatabase` (a query tab on the strip): the database is never cut; the tab widens to fit it (useFullDatabase) and
  * the server after it takes the "…". Compare tabs and the Ctrl+P / Ctrl+Tab rows keep the middle cut.
  */
-export function TabLine2({ f, surfaces = TAB_SURFACES, fullDatabase = false }: { f: TabFacts; surfaces?: readonly string[]; fullDatabase?: boolean }) {
+export function TabLine2({ f, surfaces = TAB_SURFACES, fullDatabase = false, layout = "twoLine" }: { f: TabFacts; surfaces?: readonly string[]; fullDatabase?: boolean; layout?: TabLayout }) {
   const color = useConnectionColor(f.profile, surfaces);
   const targetColor = useConnectionColor(f.target?.profile, surfaces);
+  // One-line layouts: this is the database at the end of the line; the engine mark and the server are in the tooltip.
+  const tail = isSingleLineLayout(layout);
+  const guard = layout === "guard";
+  const cls = tail ? "q-tab-l2 q-tab-tail" : "q-tab-l2";
   if (!f.profile && !f.target) {
-    return <span className="q-tab-l2" data-q-tab-subtitle>{f.kind === "query" ? "No connection" : ""}</span>;
+    return <span className={cls} data-q-tab-subtitle>{f.kind === "query" ? "No connection" : ""}</span>;
   }
   const engine = f.profile?.engine ?? f.target?.profile?.engine;
   // The database carries the environment's colour; with no database the server does.
   const place = f.database ?? (f.target ? f.profile?.name : undefined);
   return (
-    <span className="q-tab-l2" data-q-tab-subtitle>
+    <span className={cls} data-q-tab-subtitle>
       {/* Disconnected: the plug leads and the state word is never cut (D8); the engine mark gives way, and the
           database is cut at its end, so a 150 px tab still shows where it was. */}
       {f.disconnected && <Icon name="plugOff" size={11} strokeWidth={1.9} className="q-tab-icon" />}
-      {engine && !f.disconnected && <span className="q-tab-mark"><EngineLogo engine={engine} size={10} mono decorative /></span>}
+      {guard && !f.disconnected && <EnvChip profile={f.profile} />}
+      {engine && !f.disconnected && !tail && <span className="q-tab-mark"><EngineLogo engine={engine} size={10} mono decorative /></span>}
       {f.disconnected && <span className="shrink-0">disconnected</span>}
       {place && fullDatabase && !f.target ? (
         <span className="q-tab-db q-tab-db-full" style={{ color }} data-q-tab-db-full>{place}</span>
@@ -198,13 +218,14 @@ export function TabLine2({ f, surfaces = TAB_SURFACES, fullDatabase = false }: {
       {f.target && (
         <>
           <span className="shrink-0" aria-hidden>→</span>
+          {guard && <EnvChip profile={f.target.profile} />}
           <span className="q-tab-db" style={{ color: targetColor }}>
             <Cut text={f.target.database ?? f.target.file ?? f.target.profile?.name ?? "…"} keep={5} />
           </span>
         </>
       )}
       {/* The separator belongs to the server, so it goes when the server is cut away. */}
-      {!f.target && f.profile && place && <span className="q-tab-server">{`· ${f.profile.name}`}</span>}
+      {!f.target && f.profile && place && !tail && <span className="q-tab-server">{`· ${f.profile.name}`}</span>}
     </span>
   );
 }
@@ -218,24 +239,33 @@ export function TabLine2({ f, surfaces = TAB_SURFACES, fullDatabase = false }: {
 export function useFullDatabase(root: RefObject<HTMLElement | null>, tabEl: MutableRefObject<HTMLElement | null>, key: string) {
   useLayoutEffect(() => {
     const el = tabEl.current;
-    const db = root.current?.querySelector<HTMLElement>("[data-q-tab-db-full]");
+    // One line: whatever closes the line ("No connection", a server with no database) is measured as the database is.
+    const db = root.current?.querySelector<HTMLElement>("[data-q-tab-db-full]") ?? root.current?.querySelector<HTMLElement>(".q-tab-top > .q-tab-tail");
     if (!el) return;
     if (!db) {
       el.style.removeProperty("min-width");
       return;
     }
+    // One-line layouts: the database sits on line 1 after the name, before the close slot's spacer, so the minimum is
+    // the whole line's content (name, dot, database and spacer, none of which shrinks), not just up to the database.
+    const line = db.closest<HTMLElement>(".q-tab-top");
+    const name = line?.querySelector<HTMLElement>(".q-tab-l1");
     const fit = () => {
       const r = db.getBoundingClientRect();
       if (!r.width) return; // not laid out (hidden group, tests)
       el.style.removeProperty("min-width");
       const base = parseFloat(getComputedStyle(el).minWidth) || 0;
       const pad = root.current ? parseFloat(getComputedStyle(root.current).paddingRight) || 0 : 0;
-      const need = Math.ceil(r.right - el.getBoundingClientRect().left + pad);
+      const left = el.getBoundingClientRect().left;
+      const end = line ? line.getBoundingClientRect().left + line.scrollWidth : r.right;
+      const need = Math.ceil(end - left + pad);
       if (need > base) el.style.setProperty("min-width", `${need}px`, "important");
     };
     fit();
     const ro = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(fit);
     ro?.observe(db);
+    // The name moves the database: a rename, the TX pill or the spinner appearing (none of them grows with the tab).
+    if (name) ro?.observe(name);
     return () => {
       ro?.disconnect();
       el.style.removeProperty("min-width");

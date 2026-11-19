@@ -1268,6 +1268,19 @@ describe("objects", () => {
     useSettings.setState({ autoTitle: true });
   });
 
+  it("auto title: the Numbered tab layout keeps the tab's number, even with the setting on; Single line names it (§16 2026-11-19)", async () => {
+    h.rpc.mockImplementation(async (m: string) => (m === "query.execute" ? { executionId: "e1" } : { sessionId: "s1" }));
+    for (const [tabLayout, expected] of [["numbered", "SQLQuery9.sql"], ["singleLine", "UPDATE Invoice.sql"]] as const) {
+      useSettings.setState({ autoTitle: true, tabLayout });
+      const id = A.newQueryTab({ profileId: "ms1", title: "SQLQuery9.sql", text: "UPDATE Invoice SET x = 1" });
+      h.exec = { sql: "UPDATE Invoice SET x = 1", lineOffset: 1, isSelection: false };
+      useTabs.getState().update(id, { sessionId: "s1" });
+      await A.runQuery(id);
+      expect(tabOf(id).title).toBe(expected);
+    }
+    useSettings.setState({ tabLayout: "singleLine" });
+  });
+
   it("scriptObject opens a script tab, optionally running it, and reports errors", async () => {
     vi.useFakeTimers();
     connect();

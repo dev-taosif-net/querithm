@@ -14,7 +14,7 @@ const { rpc, onNotify, handlers } = vi.hoisted(() => {
 vi.mock("../../ipc/client", () => ({ rpc, onNotify, shell: {}, RpcError: class extends Error {} }));
 
 import { useDiag, installDiagListeners } from "../diag";
-import { useSettings, useSettingsStatus, defaultSettings, flushSettings, retrySettingsSave, schemaGroupKey, settingLimits } from "../settings";
+import { useSettings, useSettingsStatus, defaultSettings, flushSettings, retrySettingsSave, schemaGroupKey, settingLimits, TAB_LAYOUTS, isSingleLineLayout } from "../settings";
 import { useToolTabs, isToolId, newToolId } from "../toolTabs";
 import { useUsages } from "../usages";
 import { useUi, ask, toast, toastDuration, TOAST_MAX_MS, TOAST_MS } from "../ui";
@@ -237,6 +237,24 @@ describe("settings store", () => {
     useSettings.getState().set({ resultLayout: "side" });
     expect(useSettings.getState().resultLayout).toBe("side");
     useSettings.getState().set({ resultLayout: "tabs" });
+  });
+
+  it("the tab layout: Single line by default; an unknown value in store.db or from set() is refused", async () => {
+    expect(defaultSettings.tabLayout).toBe("singleLine");
+    rpc.mockResolvedValueOnce([{ key: "ui.settings", valueJson: JSON.stringify({ tabLayout: "threeLines" }) }]);
+    await useSettings.getState().load();
+    expect(useSettings.getState().tabLayout).toBe("singleLine");
+    rpc.mockResolvedValueOnce([{ key: "ui.settings", valueJson: JSON.stringify({ tabLayout: "numbered" }) }]);
+    await useSettings.getState().load();
+    expect(useSettings.getState().tabLayout).toBe("numbered");
+    useSettings.getState().set({ tabLayout: "<script>" as never });
+    expect(useSettings.getState().tabLayout).toBe("numbered");
+    for (const l of TAB_LAYOUTS) {
+      useSettings.getState().set({ tabLayout: l });
+      expect(useSettings.getState().tabLayout).toBe(l);
+    }
+    expect(TAB_LAYOUTS.filter(isSingleLineLayout)).toEqual(["singleLine", "numbered"]);
+    useSettings.getState().set({ tabLayout: "singleLine" });
   });
 
   it("an unknown or removed syntax theme in store.db falls back to Standard; a known one loads", async () => {

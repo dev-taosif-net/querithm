@@ -4,6 +4,7 @@ import type { IDockviewPanelHeaderProps, IDockviewPanelProps } from "dockview";
 import { useToolTabs } from "../store/toolTabs";
 import { envColor, useProfiles } from "../store/profiles";
 import { useConnections } from "../store/connections";
+import { isSingleLineLayout, useSettings } from "../store/settings";
 import { bandColor, useThemeKey } from "./tabStyle";
 import { Icon } from "./icons";
 import { TabLine1, TabLine2, tooltipText, useTabSemantics, type TabFacts } from "./TabIdentity";
@@ -39,6 +40,8 @@ export function ToolTabHeader(props: IDockviewPanelHeaderProps<Params>) {
   const profiles = useProfiles((s) => s.profiles);
   const groups = useProfiles((s) => s.groups);
   const disconnected = useConnections((s) => s.disconnected);
+  const layout = useSettings((s) => s.tabLayout);
+  const single = isSingleLineLayout(layout);
   useThemeKey();
   const root = useRef<HTMLDivElement>(null);
   const tabEl = useRef<HTMLElement | null>(null);
@@ -55,6 +58,7 @@ export function ToolTabHeader(props: IDockviewPanelHeaderProps<Params>) {
       ref={root}
       className="q-tab"
       data-disc={facts.disconnected || undefined}
+      data-layout={layout}
       title={tooltipText(facts)}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -72,7 +76,8 @@ export function ToolTabHeader(props: IDockviewPanelHeaderProps<Params>) {
       <span className="q-tab-sep" aria-hidden />
       <span className="q-tab-main">
         <span className="q-tab-top">
-          <TabLine1 f={facts} />
+          <TabLine1 f={facts} layout={layout} />
+          {single && <TabLine2 f={facts} layout={layout} />}
           <span className="q-tab-slot">
             <button
               type="button"
@@ -89,7 +94,7 @@ export function ToolTabHeader(props: IDockviewPanelHeaderProps<Params>) {
             </button>
           </span>
         </span>
-        <TabLine2 f={facts} />
+        {!single && <TabLine2 f={facts} layout={layout} />}
       </span>
       {menu && <TabContextMenu tabId={tool.id} at={menu} anchor={tabEl} onClose={() => setMenu(null)} />}
     </div>

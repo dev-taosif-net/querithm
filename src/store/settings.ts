@@ -53,6 +53,11 @@ export interface Settings {
   announceBackground: boolean;
   /** Untitled tabs take a verb-first name from their first statement at the first run or save (D24). */
   autoTitle: boolean;
+  /**
+   * How an editor tab is drawn (§16 2026-11-19): one line with the database at its end (default), the same with untitled
+   * tabs that keep their number (no D24 name), the two-line strip of D18, or two lines with PRD / STG written out.
+   */
+  tabLayout: TabLayout;
   /** Notebooks (Phase C3): Run all stops at the first cell that fails. */
   notebookStopOnError: boolean;
   /** Where query tabs put their results panel (§12 bottom panel): under the editor, or on its right. */
@@ -71,6 +76,11 @@ export interface Settings {
    */
   prodConfirmations: boolean;
 }
+
+export const TAB_LAYOUTS = ["singleLine", "numbered", "twoLine", "guard"] as const;
+export type TabLayout = (typeof TAB_LAYOUTS)[number];
+/** One line, 32 px high; the two-line layouts are 40 px (the strip and the Object Explorer's header follow it). */
+export const isSingleLineLayout = (l: TabLayout) => l === "singleLine" || l === "numbered";
 
 /** The sidecar's own key for `prodConfirmations` (QueryGuard.SettingKey). */
 export const PROD_GUARD_KEY = "guard.prodConfirmations";
@@ -108,6 +118,7 @@ export const defaultSettings: Settings = {
   autoUpdateCheck: true,
   announceBackground: true,
   autoTitle: true,
+  tabLayout: "singleLine",
   notebookStopOnError: true,
   panelDock: "bottom",
   resultLayout: "tabs",
@@ -130,6 +141,7 @@ const choices: Partial<Record<keyof Settings, readonly string[]>> = {
   resultLayout: ["tabs", "stacked", "side"],
   syntaxTheme: SYNTAX_THEME_IDS,
   keywordCase: ["upper", "lower", "preserve"],
+  tabLayout: TAB_LAYOUTS,
 };
 
 /** One value read from store.db or passed to set(): the cleaned value, or undefined when it is unusable. */

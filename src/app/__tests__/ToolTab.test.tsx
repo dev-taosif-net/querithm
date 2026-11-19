@@ -18,6 +18,7 @@ import { ToolTabHeader, ToolTabPanel } from "../ToolTab";
 import { useToolTabs } from "../../store/toolTabs";
 import { useProfiles } from "../../store/profiles";
 import { useConnections } from "../../store/connections";
+import { useSettings } from "../../store/settings";
 
 const tool = (kind: string, extra: any = {}) => ({ id: "x1", kind, title: `T-${kind}`, params: {}, ...extra });
 function fakeApi(active = false) {
@@ -34,6 +35,7 @@ const setTool = (t: any) => useToolTabs.setState({ tools: { x1: t } });
 beforeEach(() => {
   vi.clearAllMocks();
   useToolTabs.setState({ tools: {} });
+  useSettings.setState({ tabLayout: "twoLine" }); // these cover the two-line layout; one-line cases are below
   useProfiles.setState({
     profiles: [{ id: "pg1", name: "Analytics", engine: "pg", environment: "dev", color: "#123456" } as any, { id: "ms1", name: "Sales", engine: "mssql", environment: "prod" } as any],
     groups: [],
@@ -101,6 +103,23 @@ describe("ToolTabHeader", () => {
     expect(container.querySelector("[data-q-tab-subtitle]")!.textContent).toBe("orders→Billing");
     expect(container.querySelector(".q-tab-band")).not.toBeNull();
     expect(container.querySelector(".dv-tab")!.getAttribute("aria-label")).toBe("Schema compare, schema compare, Development to Production, Analytics, database orders, to database Billing");
+  });
+  it("one-line layout: the database (or source → target) closes line 1, with no server; guard writes PRD on the target", () => {
+    useSettings.setState({ tabLayout: "singleLine" });
+    setTool(tool("erd", { profileId: "ms1", database: "Billing" }));
+    const a = header();
+    const tail = a.container.querySelector(".q-tab-top > .q-tab-tail") as HTMLElement;
+    expect(tail.textContent).toBe("Billing");
+    expect(a.container.querySelector(".q-tab-main > [data-q-tab-subtitle]")).toBeNull();
+    a.unmount();
+    const compare = { params: { source: { kind: "live", profileId: "pg1", database: "orders" }, target: { kind: "live", profileId: "ms1", database: "Billing" } } };
+    setTool(tool("schemaCompare", compare));
+    const b = header();
+    expect(b.container.querySelector(".q-tab-top > .q-tab-tail")!.textContent).toBe("orders→Billing");
+    b.unmount();
+    useSettings.setState({ tabLayout: "guard" });
+    const c = header();
+    expect(c.container.querySelector("[data-q-tab-subtitle]")!.textContent).toBe("orders→PRDBilling");
   });
   it("a disconnected server is shown as on a query tab", () => {
     useConnections.setState({ disconnected: { ms1: true } });

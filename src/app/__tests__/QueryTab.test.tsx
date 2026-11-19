@@ -65,7 +65,8 @@ beforeEach(() => {
   useConnections.setState({ disconnected: {} });
   useExecutions.setState({ views: {} });
   useUsages.setState({ byTab: {} } as any);
-  useSettings.setState({ panelDock: "bottom" });
+  // The header tests below cover the two-line layout (D18); "tab layouts" covers the others.
+  useSettings.setState({ panelDock: "bottom", tabLayout: "twoLine" });
   setTab();
 });
 afterEach(cleanup);
@@ -231,6 +232,105 @@ describe("QueryTabPanel", () => {
 
 });
 
+describe("tab layouts (§16 2026-11-19)", () => {
+  const layout = (tabLayout: "singleLine" | "numbered" | "twoLine" | "guard") => useSettings.setState({ tabLayout });
+
+  it.each(["singleLine", "numbered"] as const)("%s: one line, the name then the database at its end before the close slot; no server, no engine mark", (l) => {
+    layout(l);
+    setTab({ dirty: true });
+    const { container } = header(fakeApi().api);
+    expect(q(container).dataset.layout).toBe(l);
+    const top = container.querySelector(".q-tab-main > .q-tab-top")!;
+    const sub = top.querySelector("[data-q-tab-subtitle]") as HTMLElement;
+    expect(sub).not.toBeNull();
+    expect(sub.classList.contains("q-tab-tail")).toBe(true);
+    expect(sub.textContent).toBe("Sales");
+    expect(sub.querySelector(".q-tab-mark")).toBeNull();
+    expect(sub.querySelector("[data-q-tab-db-full]")).not.toBeNull(); // never cut: the tab widens to it
+    // Name, then database, then the slot: nothing of line 2 is left under the row.
+    const order = [...top.children].map((e) => e.className);
+    expect(order.indexOf("q-tab-l1")).toBeLessThan(order.findIndex((c) => c.includes("q-tab-tail")));
+    expect(container.querySelector(".q-tab-main > [data-q-tab-subtitle]")).toBeNull();
+    // The server and the environment are still in the tooltip and the accessible name.
+    expect(q(container).title).toContain("PROD Sales › Sales");
+    expect(container.querySelector(".dv-tab")!.getAttribute("aria-label")).toContain("Production, Sales, database Sales");
+  });
+
+  it.each(["singleLine", "numbered", "guard", "twoLine"] as const)("%s: an untitled tab reads Query5 on the tab, in its accessible name and its tooltip; the stored title is unchanged", (l) => {
+    layout(l);
+    setTab({ title: "SQLQuery5.sql" });
+    const { container } = header(fakeApi().api);
+    expect(container.querySelector("[data-q-tab-title]")!.textContent).toBe("Query5");
+    expect(container.querySelector(".dv-tab")!.getAttribute("aria-label")!.startsWith("Query5, ")).toBe(true);
+    expect(screen.getByLabelText("Close Query5")).toBeInTheDocument();
+    expect(q(container).title.split("\n")[0]).toBe("Query5");
+    expect(container.textContent).not.toContain("SQLQuery");
+    expect(useTabs.getState().tabs.t1.title).toBe("SQLQuery5.sql");
+  });
+
+  it.each(["singleLine", "numbered"] as const)("%s: the database follows the name after one space (\"Query5 Sales\"), not pushed to the tab's end", (l) => {
+    layout(l);
+    setTab({ title: "SQLQuery5.sql" });
+    const { container } = header(fakeApi().api);
+    const top = container.querySelector(".q-tab-top")!;
+    expect(top.querySelector(".q-tab-l1")!.nextElementSibling!.classList.contains("q-tab-tail")).toBe(true);
+    expect(`${top.querySelector("[data-q-tab-title]")!.textContent} ${top.querySelector(".q-tab-tail")!.textContent}`).toBe("Query5 Sales");
+  });
+
+  it.each(["singleLine", "numbered", "guard"] as const)("%s: the TX pill comes after the name, so the name does not move when a transaction opens", (l) => {
+    layout(l);
+    setTab({ txState: "open", txStartedAt: Date.now() - 12 * 60_000 - 1000 });
+    const { container } = header(fakeApi().api);
+    const l1 = [...container.querySelector(".q-tab-l1")!.children];
+    expect(l1.findIndex((e) => e.matches("[data-q-tab-title]"))).toBeLessThan(l1.findIndex((e) => e.matches(".q-tx-pill")));
+  });
+
+  it("twoLine keeps the TX pill first (D18)", () => {
+    setTab({ txState: "open", txStartedAt: Date.now() });
+    const { container } = header(fakeApi().api);
+    expect(container.querySelector(".q-tab-l1")!.firstElementChild!.matches(".q-tx-pill")).toBe(true);
+  });
+
+  it("guard: PRD is written on a production tab, STG on staging, nothing on dev; two lines with the server", () => {
+    layout("guard");
+    useProfiles.setState({ profiles: [ms, pg, { id: "st1", name: "Stage", engine: "pg", environment: "staging" } as any], groups: [] });
+    const a = header(fakeApi().api);
+    const sub = a.container.querySelector(".q-tab-main > [data-q-tab-subtitle]") as HTMLElement;
+    expect(sub.querySelector(".q-tab-chip")!.textContent).toBe("PRD");
+    expect(sub.textContent).toBe("PRDSales· Sales");
+    a.unmount();
+    setTab({ profileId: "st1" });
+    const b = header(fakeApi().api);
+    expect(b.container.querySelector(".q-tab-chip")!.textContent).toBe("STG");
+    b.unmount();
+    setTab({ profileId: "pg1" });
+    const c = header(fakeApi().api);
+    expect(c.container.querySelector(".q-tab-chip")).toBeNull();
+  });
+
+  it("guard: a destructive verb is marked for the outline; a disconnected tab shows the word, not the chip", () => {
+    layout("guard");
+    setTab({ title: "DROP sales.Orders.sql" });
+    const a = header(fakeApi().api);
+    expect(q(a.container).dataset.layout).toBe("guard");
+    expect(a.container.querySelector(".q-tab-verb[data-danger]")!.textContent).toBe("DROP");
+    a.unmount();
+    useConnections.setState({ disconnected: { ms1: true } });
+    setTab();
+    const b = header(fakeApi().api);
+    expect(b.container.querySelector(".q-tab-chip")).toBeNull();
+    expect(b.container.querySelector("[data-q-tab-subtitle]")!.textContent).toContain("disconnected");
+  });
+
+  it("changing the layout re-renders the header in place", () => {
+    const { container } = header(fakeApi().api);
+    expect(container.querySelector(".q-tab-main > [data-q-tab-subtitle]")).not.toBeNull();
+    act(() => layout("singleLine"));
+    expect(container.querySelector(".q-tab-main > [data-q-tab-subtitle]")).toBeNull();
+    expect(container.querySelector(".q-tab-top > .q-tab-tail")).not.toBeNull();
+  });
+});
+
 describe("QueryTabHeader", () => {
   it("renders nothing for a closed tab", () => {
     useTabs.setState({ tabs: {}, order: [] });
@@ -282,6 +382,63 @@ describe("QueryTabHeader", () => {
       expect(tab.style.getPropertyPriority("min-width")).toBe("important");
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it("one line: a crowded strip never cuts the name: the minimum reaches past name and database, plus the slot's spacer when modified", () => {
+    useSettings.setState({ tabLayout: "singleLine" });
+    setTab({ title: "SQLQuery1.sql", profileId: "pg1", database: "PeopleDeskMatador" });
+    const rect = (left: number, right: number) => ({ left, right, width: right - left, top: 0, bottom: 16, height: 16, x: left, y: 0, toJSON() {} }) as DOMRect;
+    // The tab starts at 10, line 1 at 18; its content (name, dot, database) is 162 px, plus the 26 px spacer when the
+    // tab is modified. The browser lays that out; here the line's content width stands in for it.
+    const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.matches("[data-q-tab-db-full]")) return rect(70, 180);
+      if (this.matches(".q-tab-top")) return rect(18, 130);
+      if (this.matches(".dv-tab")) return rect(10, 130);
+      return rect(0, 0);
+    });
+    const width = vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) {
+      return this.matches(".q-tab-top") ? (this.closest(".q-tab")?.hasAttribute("data-dirty") ? 188 : 162) : 0;
+    });
+    const style = document.createElement("style");
+    style.textContent = ".dv-tab { min-width: 120px; }";
+    document.head.appendChild(style);
+    try {
+      const { container } = header(fakeApi().api);
+      const tab = container.querySelector(".dv-tab") as HTMLElement;
+      // The database is on line 1, after the name; the minimum reaches the line's end: 18 + 162 − 10.
+      expect(container.querySelector(".q-tab-top [data-q-tab-db-full]")).not.toBeNull();
+      expect(tab.style.getPropertyValue("min-width")).toBe("170px");
+      // Modified: measured again, so the slot's spacer (and the dot in it) never covers the database.
+      act(() => useTabs.getState().update("t1", { dirty: true }));
+      expect(tab.style.getPropertyValue("min-width")).toBe("196px");
+    } finally {
+      spy.mockRestore();
+      width.mockRestore();
+      style.remove();
+    }
+  });
+
+  it("one line: a tab with no connection is measured too, so \"No connection\" never runs into the next tab", () => {
+    useSettings.setState({ tabLayout: "singleLine" });
+    setTab({ title: "SQLQuery15.sql", profileId: undefined, database: undefined });
+    const rect = (left: number, right: number) => ({ left, right, width: right - left, top: 0, bottom: 16, height: 16, x: left, y: 0, toJSON() {} }) as DOMRect;
+    const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.matches(".q-tab-tail")) return rect(80, 160);
+      if (this.matches(".q-tab-top")) return rect(18, 130);
+      if (this.matches(".dv-tab")) return rect(10, 130);
+      return rect(0, 0);
+    });
+    const width = vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) {
+      return this.matches(".q-tab-top") ? 142 : 0;
+    });
+    try {
+      const { container } = header(fakeApi().api);
+      expect(container.querySelector(".q-tab-top > .q-tab-tail")!.textContent).toBe("No connection");
+      expect((container.querySelector(".dv-tab") as HTMLElement).style.getPropertyValue("min-width")).toBe("150px");
+    } finally {
+      spy.mockRestore();
+      width.mockRestore();
     }
   });
 

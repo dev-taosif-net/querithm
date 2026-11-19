@@ -943,10 +943,12 @@ export async function txAction(tabId: string, op: "begin" | "commit" | "rollback
 /**
  * D24: an untitled tab takes a verb-first name from its SQL at its first run ("UPDATE Invoice"), read from tokens.
  * Once only (the new name is no longer an untitled one), never over a name the user typed, and not when turned off.
+ * The "numbered" tab layout keeps every untitled tab's number (Query1, Query2…), so it names nothing (§16 2026-11-19).
  */
 function autoTitle(tabId: string, engine: Engine | undefined) {
   const t = tab(tabId);
-  if (!t || !useSettings.getState().autoTitle || !isUntitledTitle(t.title)) return;
+  const s = useSettings.getState();
+  if (!t || !s.autoTitle || s.tabLayout === "numbered" || !isUntitledTitle(t.title)) return;
   const name = statementTitle(getModel(tabId)?.getValue() ?? "", dialectOf(engine));
   if (name) useTabs.getState().update(tabId, { title: `${name}.sql` });
 }

@@ -491,7 +491,7 @@ export function Explorer() {
   return (
     <div className="h-full bg-panel border-r border-line flex flex-col" data-q-explorer data-focus-region="explorer">
       {/* 40 px, as tall as the tab strip: its bottom line continues the strip's across the window. */}
-      <div role="toolbar" aria-label="Object Explorer" className="h-[40px] pl-3 pr-1.5 border-b border-line flex items-center gap-0.5 shrink-0">
+      <div role="toolbar" aria-label="Object Explorer" className="h-(--q-strip-h) pl-3 pr-1.5 border-b border-line flex items-center gap-0.5 shrink-0">
         <span className="flex-1 min-w-0 truncate text-[11px] font-bold tracking-wider text-muted">{compact ? "EXPLORER" : "OBJECT EXPLORER"}</span>
         <button
           className="q-tb !h-6 !min-w-6 !px-0"

@@ -96,6 +96,9 @@ function SettingsEffects() {
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
   }, [theme, syntax]);
+  // The tab layout sets the strip's height (--q-strip-h), which the Object Explorer's header follows.
+  const tabLayout = useSettings((s) => s.tabLayout);
+  useLayoutEffect(() => void (document.documentElement.dataset.tabLayout = tabLayout), [tabLayout]);
   const font = useSettings((s) => `${s.editorFontSize}|${s.minimap}|${s.wordWrap}|${s.reducedDecorations}`);
   useEffect(() => refreshEditorOptions(), [font]);
   // Only once the settings have loaded: before, uiScale is the default, and applying it would undo the scale the window

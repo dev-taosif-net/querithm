@@ -10,6 +10,8 @@ import {
 
 const css = readFileSync(join(process.cwd(), "src/theme/tokens.css"), "utf8");
 const rgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)) as [number, number, number];
+/** The body of the first rule with exactly this selector. */
+const rule = (sel: string) => css.slice(css.indexOf(`${sel} {`), css.indexOf("}", css.indexOf(`${sel} {`)));
 
 const themes = [...css.matchAll(/--q-bg:/g)].slice(0, 2).map((m) => {
   const block = css.slice(m.index, m.index + 4000);
@@ -58,6 +60,51 @@ describe("tab surfaces (strip redesign D1–D3)", () => {
     const t = themes[i];
     expect(contrastRatio(rgb(t.warnSolidFg), rgb(t.warnSolid))).toBeGreaterThanOrEqual(4.5);
     for (const s of [t.panel, t.hover, t.rowSel]) expect(contrastRatio(rgb(t.warnSolid), rgb(s))).toBeGreaterThanOrEqual(3);
+  });
+
+  it.each([0, 1])("theme %i, guard layout: PRD's text reaches 4.5:1 on its chip; STG's and DROP's outline text 4.5:1 on every tab surface", (i) => {
+    const block = css.slice([...css.matchAll(/--q-bg:/g)][i].index);
+    const get = (name: string) => block.match(new RegExp(`${name}:\\s*(#[0-9a-f]{6})`, "i"))![1];
+    const t = themes[i];
+    expect(contrastRatio(rgb(get("--q-accent-fg")), rgb(get("--q-err-solid")))).toBeGreaterThanOrEqual(4.5);
+    for (const s of [t.panel, t.hover, t.rowSel]) {
+      expect(contrastRatio(rgb(get("--q-warn")), rgb(s))).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(rgb(get("--q-err")), rgb(s))).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(rule('.q-tab-chip[data-env="prod"]')).toContain("background: var(--q-err-solid);");
+    expect(rule('.q-tab-chip[data-env="staging"]')).toContain("color: var(--q-warn);");
+  });
+
+  it("the strip is 40 px in the two-line layouts and 32 px in the one-line ones; the Object Explorer's header follows it", () => {
+    expect(css).toMatch(/:root \{\s*--q-strip-h: 40px;/);
+    expect(css).toMatch(/:root:is\(\[data-tab-layout="singleLine"\], \[data-tab-layout="numbered"\]\) \{\s*--q-strip-h: 32px;/);
+    expect(css).toContain("--dv-tabs-and-actions-container-height: var(--q-strip-h);");
+    const explorer = readFileSync(join(process.cwd(), "src/explorer/Explorer.tsx"), "utf8");
+    expect(explorer).toMatch(/aria-label="Object Explorer" className="h-\(--q-strip-h\)/);
+    // The separator stays centred at either height.
+    expect(rule(".q-tab-sep")).toContain("top: calc(50% - 9px);");
+    // One line: the name neither stretches nor gives way to a full strip (only past 180 px is it cut), so a crowded
+    // strip scrolls instead of cutting names; a small muted dot sits between name and database ("Query1 • Sales").
+    const l1 = rule('.q-tab:is([data-layout="singleLine"], [data-layout="numbered"]) .q-tab-l1');
+    expect(l1).toContain("flex: none;");
+    expect(l1).toContain("max-width: 180px;");
+    const dot = rule(".q-tab-l2.q-tab-tail::before");
+    expect(dot).toMatch(/width: 4px;\s*height: 4px;\s*border-radius: 50%;\s*background: var\(--q-muted\);/);
+    expect(rule(".q-tab-dot")).toMatch(/width: 8px;\s*height: 8px;/); // the "modified" dot stays twice the size
+  });
+
+  it("one line: no room is kept for ×, which shows over the line's end on hover or focus only, the active tab included", () => {
+    const one = ':is([data-layout="singleLine"], [data-layout="numbered"])';
+    // The spacer is gone unless the slot always shows something (dot, pin, rename field).
+    expect(rule(`.q-tab${one}:not([data-dirty], [data-pinned], [data-editing]) .q-tab-top::after`)).toMatch(/width: 0;\s*min-width: 0;/);
+    // The active tab hides × until hovered or focused…
+    expect(rule(`.dv-tab.dv-active-tab .q-tab${one}:not([data-dirty]) .q-tab-x`)).toContain("display: none;");
+    expect(rule(`.dv-tab.dv-active-tab:is(:hover, :focus-visible) .q-tab${one}:not([data-dirty]) .q-tab-x`)).toContain("display: flex;");
+    // …and, like the other tabs, fades its text into it instead of cutting it at ×'s edge.
+    expect(rule(`.dv-tab.dv-active-tab .q-tab${one}:not([data-dirty], [data-editing]) .q-tab-x::before`)).toContain("linear-gradient(to right, transparent, var(--q-row-bg))");
+    // Inactive tabs already show × only on hover / focus, over a background that hides the text under it.
+    expect(rule(".q-tab-x")).toContain("display: none;");
+    expect(rule(".q-tab-x")).toContain("background: var(--q-row-bg);");
   });
 });
 
