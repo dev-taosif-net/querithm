@@ -527,6 +527,40 @@ public class DuckDbIntegrationTests
     }
 
     [Fact]
+    public async Task A_catalog_qualified_name_of_the_open_database_is_editable_and_writes_that_table()
+    {
+        // catalog.schema.table naming the session's own database is the same table as schema.table: editable, and Apply
+        // writes it. Another catalog stays read-only and names itself.
+        await using var h = new DuckDbHost();
+        var path = h.NewDatabase("shop.duckdb", Orders);
+        var (p, sid) = await h.OpenFileAsync(path, FileAccessMode.ReadWrite);
+        await RefreshAsync(h, p, sid, "shop", s => s.Objects.Any(o => o.Name == "orders"));
+        var (done, _, exec) = await h.RunAsync(sid, "SELECT id, name, qty FROM shop.main.orders ORDER BY id");
+        Assert.Null(done.Error);
+        var edit = h.Notifier.Of<QueryResultSetEvent>().Single(e => e.ExecutionId == exec).Edit!;
+        Assert.True(edit.Editable, edit.Reason);
+        Assert.Equal(["id"], edit.KeyColumns);
+        Assert.Equal(("main", "orders"), (edit.Schema, edit.Table));
+
+        var r = await h.Rpc.DataApplyPatch(new GridPatchParams
+        {
+            SessionId = sid, ExecutionId = exec,
+            Updates = [new GridRowUpdate { RowIndex = 0, Key = [V("1")], Changes = new() { ["qty"] = V("9") }, Original = new() { ["qty"] = V("1") } }],
+        });
+        Assert.True(r.Ok, r.Error);
+        Assert.Equal(1, r.AppliedUpdates);
+        Assert.Equal(9, Convert.ToInt32(Scalar(path, "SELECT qty FROM orders WHERE id = 1")));
+
+        // The temp catalog is another database than the file's, even for a table of the same name.
+        await h.RunAsync(sid, "CREATE TEMP TABLE orders (id INTEGER PRIMARY KEY, name VARCHAR, qty INTEGER); INSERT INTO temp.main.orders VALUES (1, 'tmp', 5)");
+        var (tdone, _, texec) = await h.RunAsync(sid, "SELECT id, name, qty FROM temp.main.orders");
+        Assert.Null(tdone.Error);
+        var tedit = h.Notifier.Of<QueryResultSetEvent>().Single(e => e.ExecutionId == texec).Edit!;
+        Assert.False(tedit.Editable);
+        Assert.Equal("Read-only: temp.main.orders is in database temp, not this tab's database (shop)", tedit.Reason);
+    }
+
+    [Fact]
     public async Task Inside_an_open_transaction_grid_edits_and_imports_are_refused_up_front_because_duckdb_has_no_savepoints()
     {
         // L15: undoing a failed grid patch or import inside the user's transaction needs a savepoint, which DuckDB lacks.

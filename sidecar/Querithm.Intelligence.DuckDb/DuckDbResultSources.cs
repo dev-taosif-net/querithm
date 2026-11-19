@@ -42,17 +42,26 @@ public static class DuckDbResultSources
         }
         else return null;
 
-        // FROM [schema.]table [[AS] alias] then only the tail.
+        // FROM [[catalog.]schema.]table [[AS] alias] then only the tail.
         var i = fromAt + 1;
         if (i >= code.Count || !Name(code[i])) return null;
         string schema = defaultSchema, table = DuckDbTokenizer.Unquote(code[i]);
-        if (i + 2 < code.Count && code[i + 1].Text == "." && Name(code[i + 2]))
+        // catalog.schema.table: only the session's own catalog — the snapshot's database, where Apply writes schema.table —
+        // is this table. Another catalog (temp included, whose tables the snapshot files under schema "temp") is not.
+        if (i + 4 < code.Count && code[i + 1].Text == "." && Name(code[i + 2]) && code[i + 3].Text == "." && Name(code[i + 4]))
+        {
+            if (!string.Equals(table, snapshot.Database, StringComparison.OrdinalIgnoreCase)) return null;
+            schema = DuckDbTokenizer.Unquote(code[i + 2]);
+            table = DuckDbTokenizer.Unquote(code[i + 4]);
+            i += 4;
+        }
+        else if (i + 2 < code.Count && code[i + 1].Text == "." && Name(code[i + 2]))
         {
             schema = table;
             table = DuckDbTokenizer.Unquote(code[i + 2]);
             i += 2;
         }
-        if (i + 2 < code.Count && code[i + 1].Text == "." ) return null; // catalog.schema.table: another catalog is never the session's
+        if (i + 1 < code.Count && code[i + 1].Text == ".") return null; // a fourth part, or a name cut short
         i++;
         string? alias = null;
         if (i < code.Count && code[i].Is("AS")) i++;
@@ -91,6 +100,27 @@ public static class DuckDbResultSources
             origins.Add(column == null ? null : new ColumnOrigin(t.Id, column.Name));
         }
         return origins.Count == resultNames.Count ? origins.ToArray() : null;
+    }
+
+    /// <summary>
+    /// Why the result cannot be edited when it reads <c>catalog.schema.table</c> of another catalog than the session's (the
+    /// snapshot's database): the snapshot does not know that table and Apply would write the session's. Null otherwise.
+    /// </summary>
+    public static string? OtherCatalogRefusal(string statement, SchemaSnapshot? snapshot)
+    {
+        if (snapshot == null) return null;
+        var code = DuckDbTokenizer.Tokenize(statement).Where(t => !t.IsTrivia).ToList();
+        for (var i = 0; i + 5 < code.Count; i++)
+        {
+            if (!(code[i].Kind == PgTokenKind.Word && (code[i].Is("FROM") || code[i].Is("JOIN")))) continue;
+            var (c, s, t) = (code[i + 1], code[i + 3], code[i + 5]);
+            if (!Name(c) || code[i + 2].Text != "." || !Name(s) || code[i + 4].Text != "." || !Name(t)) continue;
+            if (i + 6 < code.Count && code[i + 6].Text == ".") continue; // a fourth part: not catalog.schema.table
+            var catalog = DuckDbTokenizer.Unquote(c);
+            if (string.Equals(catalog, snapshot.Database, StringComparison.OrdinalIgnoreCase)) continue;
+            return $"{catalog}.{DuckDbTokenizer.Unquote(s)}.{DuckDbTokenizer.Unquote(t)} is in database {catalog}, not this tab's database ({snapshot.Database})";
+        }
+        return null;
     }
 
     static bool Name(PgToken t) => t.Kind == PgTokenKind.QuotedIdent || (t.Kind == PgTokenKind.Word && !t.Is("FROM") && !t.Is("AS") && !t.Is("SELECT"));

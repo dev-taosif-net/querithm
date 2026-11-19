@@ -31,7 +31,8 @@ public static class ResultSources
     /// Why data result set <paramref name="resultInBatch"/> cannot be edited even where its columns trace to a table: the
     /// same table is read twice (a self-join: both aliases carry one object id, so a row key could match another row than
     /// the one shown), it combines several queries (UNION, EXCEPT, INTERSECT), or an unqualified table name exists in more
-    /// than one schema (SQL Server resolves it through the login's default schema, which the snapshot does not know).
+    /// than one schema (SQL Server resolves it through the login's default schema, which the snapshot does not know), or it
+    /// reads only tables of another database or a linked server (the snapshot, and Apply, are the tab's database).
     /// </summary>
     public static string? Refusal(string batchText, SchemaSnapshot snapshot, int resultInBatch) =>
         Sets(batchText, snapshot) is { } sets && resultInBatch >= 0 && resultInBatch < sets.Count ? sets[resultInBatch].Refusal : null;
@@ -59,7 +60,7 @@ public static class ResultSources
                         if (s.QueryExpression is QuerySpecification qs && s.QueryExpression.ForClause == null)
                         {
                             if (qs.SelectElements.Any(x => x is SelectSetVariable)) break; // SELECT @x = ...: no rows
-                            results.Add(Project(qs, CteNames(s), index));
+                            results.Add(Project(qs, CteNames(s), index, snapshot.Database));
                         }
                         // UNION, FOR XML/JSON: one result set, columns not traced
                         else results.Add(new Set(null, Combined(s.QueryExpression) is { } op ? $"the query combines several queries ({op})" : null));
@@ -100,14 +101,17 @@ public static class ResultSources
     /// <summary>A FROM item: a snapshot table/view, or an opaque source (CTE, derived table, temp table, TVF...).</summary>
     sealed record From(string Exposed, string? Schema, SnapObject? Object);
 
-    static Set Project(QuerySpecification qs, HashSet<string> ctes, SchemaIndex index)
+    static Set Project(QuerySpecification qs, HashSet<string> ctes, SchemaIndex index, string? database)
     {
         var sources = new List<From>();
-        string? ambiguous = null;
-        foreach (var t in qs.FromClause?.TableReferences ?? []) Flatten(t, ctes, index, sources, ref ambiguous);
+        string? ambiguous = null, elsewhere = null;
+        foreach (var t in qs.FromClause?.TableReferences ?? []) Flatten(t, ctes, index, database, sources, ref ambiguous, ref elsewhere);
         // Exact or nothing: the snapshot cannot tell which schema SQL Server picks for the name.
         if (ambiguous != null)
             return new Set(null, $"table {ambiguous} exists in more than one schema (ambiguous schema — qualify the table name)");
+        // Only another database's (or linked server's) table is read: say so, rather than "no table columns". With a table of
+        // this database beside it, that table's columns stay editable and the other's are locked like any expression.
+        if (elsewhere != null && sources.All(s => s.Object == null)) return new Set(null, elsewhere);
         // A self-join gives every alias the same object id: a key read from one alias could update the row of another.
         if (sources.Where(s => s.Object != null).GroupBy(s => s.Object!.Id).FirstOrDefault(g => g.Count() > 1)?.First().Object is { } twice)
             return new Set(null, $"the same table ({twice.Schema}.{twice.Name}) appears more than once in the query");
@@ -162,26 +166,37 @@ public static class ResultSources
         return qualifier.Count < 2 || string.Equals(s.Schema, qualifier[^2].Value, StringComparison.OrdinalIgnoreCase);
     }
 
-    static void Flatten(TableReference t, HashSet<string> ctes, SchemaIndex index, List<From> into, ref string? ambiguous)
+    static void Flatten(TableReference t, HashSet<string> ctes, SchemaIndex index, string? database, List<From> into, ref string? ambiguous, ref string? elsewhere)
     {
         switch (t)
         {
             case JoinTableReference j:
-                Flatten(j.FirstTableReference, ctes, index, into, ref ambiguous);
-                Flatten(j.SecondTableReference, ctes, index, into, ref ambiguous);
+                Flatten(j.FirstTableReference, ctes, index, database, into, ref ambiguous, ref elsewhere);
+                Flatten(j.SecondTableReference, ctes, index, database, into, ref ambiguous, ref elsewhere);
                 return;
             case JoinParenthesisTableReference jp:
-                Flatten(jp.Join, ctes, index, into, ref ambiguous);
+                Flatten(jp.Join, ctes, index, database, into, ref ambiguous, ref elsewhere);
                 return;
             case NamedTableReference n:
             {
                 var so = n.SchemaObject;
                 var name = so.BaseIdentifier.Value;
                 var exposed = n.Alias?.Value ?? name;
-                var schema = so.SchemaIdentifier?.Value;
-                // Other databases, CTEs and temp tables are not in this snapshot.
-                if (so.DatabaseIdentifier != null || so.ServerIdentifier != null || (schema == null && ctes.Contains(name)) || name.StartsWith('#'))
+                // db..table leaves the schema part empty: the default schema, resolved like an unqualified name.
+                var schema = string.IsNullOrEmpty(so.SchemaIdentifier?.Value) ? null : so.SchemaIdentifier!.Value;
+                // A linked server and another database are not in this snapshot, nor are CTEs and temp tables. The tab's own
+                // database named in front (SSMS "Select Top 1000 Rows" writes it) is this snapshot's: the snapshot is the
+                // tab's database, and Apply checks the tab is still on it before writing schema.table there.
+                var otherDatabase = so.DatabaseIdentifier is { } db && !string.Equals(db.Value, database, StringComparison.OrdinalIgnoreCase);
+                if (so.ServerIdentifier != null || otherDatabase || (schema == null && ctes.Contains(name)) || name.StartsWith('#'))
                 {
+                    if (!name.StartsWith('#'))
+                    {
+                        var full = string.Join(".", so.Identifiers.Select(i => i.Value));
+                        if (so.ServerIdentifier != null) elsewhere ??= $"{full} is on linked server {so.ServerIdentifier.Value}";
+                        else if (otherDatabase)
+                            elsewhere ??= $"{full} is in database {so.DatabaseIdentifier!.Value}, not this tab's database ({database}) — switch the tab to {so.DatabaseIdentifier.Value} to edit it";
+                    }
                     into.Add(new From(exposed, schema, null));
                     return;
                 }

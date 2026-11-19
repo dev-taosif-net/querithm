@@ -349,6 +349,30 @@ public class DataEditIntegrationTests
         await Ok(h, sid, "DROP TABLE q_other.q_plain;");
     }
 
+    [IntegrationFact]
+    public async Task Sql_server_three_part_name_of_the_tabs_database_is_editable_and_another_database_is_not()
+    {
+        // SSMS "Select Top 1000 Rows" writes db.[schema].[table]; for the tab's own database it is the same table.
+        var (h, _, sid) = await SetupAsync("mssql");
+        await using var _h = h;
+        var (exec, edit) = await SelectAsync(h, sid, $"SELECT TOP (1000) [id], [name], [ratio] FROM {Db}.[dbo].[q_plain] ORDER BY id;");
+        Assert.True(edit.Editable, edit.Reason);
+        Assert.Equal(["id"], edit.KeyColumns);
+        Assert.Equal(("dbo", "q_plain"), (edit.Schema, edit.Table));
+        var r = await h.Rpc.DataApplyPatch(new GridPatchParams
+        {
+            SessionId = sid, ExecutionId = exec,
+            Updates = [new GridRowUpdate { RowIndex = 0, Key = [V("1")], Changes = new() { ["name"] = V("three-part") }, Original = new() { ["name"] = V("a") } }],
+        });
+        Assert.True(r.Ok, r.Error);
+        Assert.Equal("three-part", await ScalarAsync(h, sid, "SELECT name FROM dbo.q_plain WHERE id = 1"));
+
+        // master is reachable from this tab but is another database: read-only, and the reason names it.
+        var (_, other) = await SelectAsync(h, sid, "SELECT TOP (1) name, database_id FROM master.sys.databases");
+        Assert.False(other.Editable);
+        Assert.Equal($"Read-only: master.sys.databases is in database master, not this tab's database ({Db}) — switch the tab to master to edit it", other.Reason);
+    }
+
     [IntegrationTheory, MemberData(nameof(Engines))]
     public async Task An_insert_trigger_does_not_replace_the_new_key(string engine)
     {

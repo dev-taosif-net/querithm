@@ -92,6 +92,11 @@ public class DuckDbLanguageTests
     [InlineData("SELECT v, id FROM main.t ORDER BY id", "v,id")]
     [InlineData("SELECT x.v AS w, x.* FROM t x LIMIT 5", "v,id,v")]
     [InlineData("SELECT \"V\", id + 1 FROM \"T\";", "v,-")]
+    // catalog.schema.table with the session's own catalog (the snapshot's database) is the same table.
+    [InlineData("SELECT * FROM db.main.t", "id,v")]
+    [InlineData("SELECT id, v FROM \"DB\".\"main\".\"t\" WHERE id > 1", "id,v")]
+    [InlineData("SELECT x.v, id FROM db.main.t AS x ORDER BY id", "v,id")]
+    [InlineData("FROM db.main.t", "id,v")]
     public void Origins_are_predicted_for_plain_single_table_selects(string sql, string expected)
     {
         var want = expected.Split(',');
@@ -108,10 +113,31 @@ public class DuckDbLanguageTests
     [InlineData("SELECT count(*) FROM t")]
     [InlineData("SELECT * FROM t UNION ALL SELECT * FROM t")]
     [InlineData("SELECT * FROM other")]
-    [InlineData("SELECT * FROM db.main.t")]
+    // Another catalog (or the temp catalog) is not the session's database, whose snapshot this is and where Apply writes.
+    [InlineData("SELECT * FROM other.main.t")]
+    [InlineData("SELECT * FROM temp.main.t")]
+    [InlineData("SELECT * FROM x.db.main.t")]
     [InlineData("SELECT u.* FROM t")]
     [InlineData("WITH x AS (SELECT 1) SELECT * FROM t")]
     public void Anything_else_predicts_nothing(string sql) => Assert.Null(DuckDbResultSources.Predict(sql, Snap(), "main", ["id", "v"]));
+
+    [Theory]
+    [InlineData("SELECT * FROM other.main.t", "other.main.t is in database other, not this tab's database (db)")]
+    [InlineData("SELECT a.id FROM t a JOIN \"Other\".main.u b ON b.id = a.id", "Other.main.u is in database Other, not this tab's database (db)")]
+    [InlineData("FROM temp.main.t", "temp.main.t is in database temp, not this tab's database (db)")]
+    [InlineData("SELECT * FROM db.main.t", null)]
+    [InlineData("SELECT * FROM DB.main.t", null)]
+    [InlineData("SELECT * FROM main.t", null)]
+    [InlineData("SELECT 'FROM other.main.t' AS s FROM t", null)] // tokens: a string is not a FROM item
+    [InlineData("SELECT * FROM x.other.main.t", null)]
+    public void Another_catalog_is_refused_with_its_name(string sql, string? reason)
+    {
+        Assert.Equal(reason, DuckDbResultSources.OtherCatalogRefusal(sql, Snap()));
+        Assert.Equal(reason, new Querithm.Providers.DuckDb.DuckDbProvider().ResultEditRefusal(sql, 0, Snap()));
+    }
+
+    [Fact]
+    public void Without_a_snapshot_no_catalog_is_judged() => Assert.Null(DuckDbResultSources.OtherCatalogRefusal("SELECT * FROM other.main.t", null));
 
     [Theory]
     [InlineData("12345678901234567890123456789012345678", 18, "12345678901234567890.123456789012345678")]
