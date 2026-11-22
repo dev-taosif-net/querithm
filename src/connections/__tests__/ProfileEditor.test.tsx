@@ -310,6 +310,73 @@ describe.each<[Engine, string, string, string, string]>([
     expect(saveSpy).toHaveBeenCalledWith(expect.objectContaining({ passwordRetention: "duration", passwordRetentionMinutes: 10080 }), null, "");
   });
 
+  it("Remember: the hint under the select says what the chosen option does and follows the choice", async () => {
+    render(<ProfileEditor preset={engine} onClose={() => {}} />);
+    const remember = screen.getByLabelText("Remember password");
+    const description = () => document.getElementById(remember.getAttribute("aria-describedby")!)!.textContent;
+    // The old fixed note was wrong for two options: "once" and "session" never reach the OS keyring.
+    expect(screen.queryByText("Kept in the OS keyring")).toBeNull();
+    expect(description()).toBe("Forgotten as soon as you disconnect. Never saved to disk.");
+    const hints: Record<string, RegExp> = { session: /when you close Querithm\. Never saved to disk/, duration: /password vault until the time is up/, forever: /password vault until you remove it/, once: /as soon as you disconnect/ };
+    for (const [policy, hint] of Object.entries(hints)) {
+      await userEvent.selectOptions(remember, policy);
+      expect(description()).toMatch(hint);
+    }
+  });
+
+  it("Remember: the info button explains all four options with the chosen one marked; Escape closes it, not the dialog", async () => {
+    const onClose = vi.fn();
+    render(<ProfileEditor preset={engine} onClose={onClose} />);
+    const info = screen.getByRole("button", { name: "What do these options mean?" });
+    expect(info.getAttribute("aria-expanded")).toBe("false");
+    await userEvent.click(info);
+    expect(info.getAttribute("aria-expanded")).toBe("true");
+    const panel = screen.getByRole("region", { name: "How long Querithm remembers your password" });
+    expect(info.getAttribute("aria-controls")).toBe(panel.id);
+    // Regression: inside the Sign in section (a filled q-profile-reveal transform animation), the fixed panel was placed
+    // from the section's corner instead of the window's: off to the right, under a horizontal scrollbar. It lives on <body>.
+    expect(info.closest("section")).toBeTruthy();
+    expect(panel.parentElement).toBe(document.body);
+    expect(panel.closest("section, [data-q-modal-box]")).toBeNull();
+    const entries = [...panel.querySelectorAll("dl > div")];
+    expect(entries.map((e) => e.querySelector("dt")!.firstChild!.textContent)).toEqual(["Until disconnected", "Until app closes", "For a set duration", "Always remember"]);
+    expect(entries.map((e) => e.querySelector("dd")!.textContent!.length > 60)).toEqual([true, true, true, true]);
+    // A new profile starts on "Until disconnected" (the form stays clean, so the last Escape below closes it).
+    expect(entries.filter((e) => e.getAttribute("aria-current") === "true").map((e) => e.querySelector("dt")!.textContent)).toEqual([expect.stringContaining("Until disconnected")]);
+    expect(entries.map((e) => e.querySelector("dt")!.textContent)).toEqual([
+      expect.stringContaining("Memory only"), expect.stringContaining("Memory only"), expect.stringContaining("Password vault"), expect.stringContaining("Password vault"),
+    ]);
+    expect(panel.textContent).toContain("Windows Credential Manager");
+    // A click on the panel keeps it open and the focus on the button, so Escape still reaches the button.
+    await userEvent.click(panel);
+    expect(document.activeElement).toBe(info);
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("region", { name: "How long Querithm remembers your password" })).toBeNull();
+    expect(info.getAttribute("aria-expanded")).toBe("false");
+    expect(onClose).not.toHaveBeenCalled();
+    // Closed, the next Escape is the dialog's again.
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("Remember: the info panel marks the option picked since, and closes on a click elsewhere and on Tab away", async () => {
+    render(<ProfileEditor preset={engine} onClose={() => {}} />);
+    await userEvent.selectOptions(screen.getByLabelText("Remember password"), "duration");
+    const info = screen.getByRole("button", { name: "What do these options mean?" });
+    const panel = () => screen.queryByRole("region", { name: "How long Querithm remembers your password" });
+    await userEvent.click(info);
+    expect(panel()!.querySelector('[aria-current="true"] dt')!.textContent).toContain("For a set duration");
+    await userEvent.click(hostBox());
+    expect(panel()).toBeNull();
+    await userEvent.click(info);
+    expect(panel()).toBeTruthy();
+    await userEvent.click(info);
+    expect(panel()).toBeNull();
+    await userEvent.click(info);
+    await userEvent.tab();
+    expect(panel()).toBeNull();
+  });
+
   it("password can be shown and hidden", async () => {
     render(<ProfileEditor preset={engine} onClose={() => {}} />);
     const pw = () => screen.getByLabelText("Password") as HTMLInputElement;

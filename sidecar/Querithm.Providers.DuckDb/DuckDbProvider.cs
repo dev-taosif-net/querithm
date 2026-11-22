@@ -12,8 +12,10 @@ namespace Querithm.Providers.DuckDb;
 /// DuckDB (Phase D3): a granted database file (read-only unless the user allowed writes in the shell's dialog) or an
 /// in-memory database, one connection per tab (session-owned, D0d), opened under the file and configuration policy of
 /// <see cref="DuckDbInstances"/> before any user SQL. Ships hidden behind the dev setting until its release gates pass.
+/// <paramref name="memoryLimitBytes"/> and <paramref name="threads"/> override the instance defaults (tests only; the Host
+/// passes neither): DuckDB's default thread count is the number of cores.
 /// </summary>
-public sealed class DuckDbProvider(string? dataDir = null, long? memoryLimitBytes = null) : IDbProvider
+public sealed class DuckDbProvider(string? dataDir = null, long? memoryLimitBytes = null, int? threads = null) : IDbProvider
 {
     public Engine Engine => Engine.DuckDb;
     public Dialect Dialect => Dialect.DuckDb;
@@ -90,7 +92,7 @@ public sealed class DuckDbProvider(string? dataDir = null, long? memoryLimitByte
     public async Task<DbConnection> OpenAsync(Profile profile, string? secret, string? database, FileGrant? file, CancellationToken ct)
     {
         if (profile.Location != LocationKind.Memory && file == null) throw new InvalidOperationException("A DuckDB file opens only through its grant.");
-        var c = await DuckDbInstances.OpenAsync(dataDir, profile.Location == LocationKind.Memory ? null : file, ct, memoryLimitBytes).ConfigureAwait(false);
+        var c = await DuckDbInstances.OpenAsync(dataDir, profile.Location == LocationKind.Memory ? null : file, ct, memoryLimitBytes, threads).ConfigureAwait(false);
         try
         {
             await using var cmd = c.CreateCommand();

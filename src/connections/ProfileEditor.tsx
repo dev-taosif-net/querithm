@@ -21,7 +21,7 @@ import { useConnections } from "../store/connections";
 import { ask, toast } from "../store/ui";
 import { isTauri } from "../ipc/transport";
 import { confirmDeleteProfile } from "./deleteProfile";
-import { PasswordRetention } from "./PasswordRetention";
+import { PasswordRetention, retentionHint } from "./PasswordRetention";
 import { duplicateProfile, endpointKey, isLocal, locationOf, needsSecretFor } from "./auth";
 import { cleanGroupName, compareGroupNames, describeGroupChoice, findGroup } from "./groupNames";
 import { pickDatabaseFile, requestWriteAccess } from "./fileGrants";
@@ -1175,11 +1175,8 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
                 </Row>
               )}
               {needsSecret && (
-                <Row label="Remember">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="max-w-[420px] min-w-0 flex-1"><PasswordRetention profile={p} onChange={set} compact /></div>
-                    <span className="text-[11px] text-muted shrink-0">Kept in the OS keyring</span>
-                  </div>
+                <Row label="Remember" hint={retentionHint(p.passwordRetention)} hintId={`${fid}-retention-hint`}>
+                  <PasswordRetention profile={p} onChange={set} compact describedBy={`${fid}-retention-hint`} />
                 </Row>
               )}
               {existing && needsSecretFor(existing.auth) && !needsSecret && savedSecret !== false && (

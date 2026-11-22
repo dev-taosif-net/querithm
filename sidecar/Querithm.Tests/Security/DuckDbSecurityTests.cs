@@ -203,10 +203,14 @@ public sealed class DuckDbSecurityTests : IAsyncDisposable
     [Fact]
     public async Task Spill_files_land_under_app_data()
     {
-        // A 256 MB cap makes a sort of ~600 MB spill; the profile reports the temp directory's peak size.
-        var small = new DuckDbProvider(_h.AppData, 256L << 20);
+        // A 256 MB cap makes a sort of ~600 MB spill; the profile reports the temp directory's peak size. Two threads:
+        // DuckDB needs about 125 MB per thread, and at its default (one per core) a 12-core machine failed this sort with
+        // "Out of Memory Error: failed to pin block" in 7 of 13 runs, before spilling was ever checked; with two, 16 of 16 passed.
+        var small = new DuckDbProvider(_h.AppData, 256L << 20, threads: 2);
         var profile = new Profile { Id = "p", Name = "m", Engine = Engine.DuckDb, Auth = AuthKind.None, Location = LocationKind.Memory };
         await using var c = (DuckDBConnection)await small.OpenAsync(profile, null, null, null, default);
+        Assert.Equal("2", Scalar(c, "SELECT current_setting('threads')::VARCHAR"));
+        Assert.Equal("true", Scalar(c, "SELECT current_setting('lock_configuration')::VARCHAR"));
         Assert.StartsWith(DuckDbInstances.TempDirectory(_h.AppData), Scalar(c, "SELECT current_setting('temp_directory')"));
         using var cmd = c.CreateCommand();
         cmd.CommandText = "EXPLAIN (ANALYZE, FORMAT JSON) SELECT * FROM (SELECT range AS k, md5(range::VARCHAR) || md5((range + 1)::VARCHAR) AS v FROM range(6000000)) ORDER BY v";

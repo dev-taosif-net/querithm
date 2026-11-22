@@ -42,10 +42,10 @@ public static class DuckDbInstances
     /// <summary>The memory cap of each instance: a quarter of the memory this process may use, at least 256 MB (DuckDB's default is 80 %).</summary>
     public static long MemoryLimitBytes => Math.Max(256L << 20, GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 4);
 
-    public static async Task<DuckDBConnection> OpenAsync(string? dataDir, FileGrant? file, CancellationToken ct, long? memoryLimitBytes = null)
+    public static async Task<DuckDBConnection> OpenAsync(string? dataDir, FileGrant? file, CancellationToken ct, long? memoryLimitBytes = null, int? threads = null)
     {
         // Plain ":memory:" is a database of its own per connection (DuckDB.NET shares no instance for it): nothing to wait for.
-        if (file == null) return await OpenConnectionAsync(":memory:", FileAccessMode.ReadOnly, dataDir, memoryLimitBytes, isFile: false, ct).ConfigureAwait(false);
+        if (file == null) return await OpenConnectionAsync(":memory:", FileAccessMode.ReadOnly, dataDir, memoryLimitBytes, threads, isFile: false, ct).ConfigureAwait(false);
         var entry = Reserve(file);
         try
         {
@@ -61,7 +61,7 @@ public static class DuckDbInstances
                     await InitializeEmptyAsync(dataDir, file.Path, ct).ConfigureAwait(false);
                 }
                 if (BeforeOpen.Value is { } hook) await hook(entry.DataSource, ct).ConfigureAwait(false);
-                var c = await OpenConnectionAsync(entry.DataSource, entry.Mode, dataDir, memoryLimitBytes, isFile: true, ct).ConfigureAwait(false);
+                var c = await OpenConnectionAsync(entry.DataSource, entry.Mode, dataDir, memoryLimitBytes, threads, isFile: true, ct).ConfigureAwait(false);
                 lock (Sync) entry.Connections.Add(c);
                 return c;
             }
@@ -110,7 +110,7 @@ public static class DuckDbInstances
     }
 
     /// <summary>Opens, configures a fresh instance (an inherited one is already locked), verifies, and audits a file.</summary>
-    static async Task<DuckDBConnection> OpenConnectionAsync(string dataSource, FileAccessMode mode, string? dataDir, long? memoryLimitBytes, bool isFile, CancellationToken ct)
+    static async Task<DuckDBConnection> OpenConnectionAsync(string dataSource, FileAccessMode mode, string? dataDir, long? memoryLimitBytes, int? threads, bool isFile, CancellationToken ct)
     {
         var b = new DuckDBConnectionStringBuilder { DataSource = dataSource };
         if (isFile && mode != FileAccessMode.ReadWrite) b["ACCESS_MODE"] = "READ_ONLY";
@@ -118,7 +118,7 @@ public static class DuckDbInstances
         try
         {
             await c.OpenAsync(ct).ConfigureAwait(false);
-            if (!await LockedAsync(c, ct).ConfigureAwait(false)) await ConfigureAsync(c, dataDir, memoryLimitBytes ?? MemoryLimitBytes, ct).ConfigureAwait(false);
+            if (!await LockedAsync(c, ct).ConfigureAwait(false)) await ConfigureAsync(c, dataDir, memoryLimitBytes ?? MemoryLimitBytes, threads, ct).ConfigureAwait(false);
             await VerifyAsync(c, ct).ConfigureAwait(false);
             if (isFile) await AuditAsync(c, ct).ConfigureAwait(false);
         }
@@ -224,10 +224,14 @@ public static class DuckDbInstances
 
     static string Literal(string text) => "'" + text.Replace("'", "''") + "'";
 
-    /// <summary>The policy, in DuckDB's required order (allowlists cannot change once external access is off).</summary>
-    static async Task ConfigureAsync(DuckDBConnection c, string? dataDir, long memoryLimit, CancellationToken ct)
+    /// <summary>
+    /// The policy, in DuckDB's required order (allowlists cannot change once external access is off). <paramref name="threads"/>
+    /// (tests only) must be set here, before lock_configuration; null keeps DuckDB's default of one per core.
+    /// </summary>
+    static async Task ConfigureAsync(DuckDBConnection c, string? dataDir, long memoryLimit, int? threads, CancellationToken ct)
     {
         if (dataDir == null) throw new InvalidOperationException("DuckDB needs Querithm's data directory for its temporary files.");
+        ArgumentOutOfRangeException.ThrowIfLessThan(threads ?? 1, 1, nameof(threads));
         var temp = TempDirectory(dataDir);
         // DuckDB creates only the last level of its temp directory.
         Directory.CreateDirectory(temp);
@@ -248,6 +252,7 @@ public static class DuckDbInstances
             $"SET GLOBAL temp_directory = {Literal(temp)}",
             $"SET GLOBAL max_temp_directory_size = '{maxTemp.ToString(CultureInfo.InvariantCulture)} bytes'",
             $"SET GLOBAL memory_limit = '{memoryLimit.ToString(CultureInfo.InvariantCulture)} bytes'",
+            .. (threads is { } n ? [$"SET GLOBAL threads = {n.ToString(CultureInfo.InvariantCulture)}"] : Array.Empty<string>()),
             "SET GLOBAL allowed_directories = []",
             "SET GLOBAL allowed_paths = []",
             "SET GLOBAL enable_external_access = false",

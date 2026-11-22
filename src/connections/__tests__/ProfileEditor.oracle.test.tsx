@@ -135,6 +135,20 @@ describe("ProfileEditor: Oracle", () => {
     expect(secret).toBe("s3cret-pw");
   });
 
+  it("Remember shows the chosen option's hint under it and an info button explaining all four", async () => {
+    m.engines = ORACLE();
+    render(<ProfileEditor preset="oracle" onClose={() => {}} />);
+    const remember = screen.getByLabelText("Remember password");
+    const description = () => document.getElementById(remember.getAttribute("aria-describedby")!)!.textContent;
+    expect(description()).toBe("Forgotten as soon as you disconnect. Never saved to disk.");
+    await userEvent.selectOptions(remember, "forever");
+    expect(description()).toBe("Saved in your system’s password vault until you remove it.");
+    await userEvent.click(screen.getByRole("button", { name: "What do these options mean?" }));
+    const panel = screen.getByRole("region", { name: "How long Querithm remembers your password" });
+    expect(panel.querySelectorAll("dl > div")).toHaveLength(4);
+    expect(panel.querySelector('[aria-current="true"] dt')!.textContent).toContain("Always remember");
+  });
+
   it("shows wallet and OS sign-in as unavailable, with the reason, and offers only the password", async () => {
     m.engines = ORACLE();
     const { container } = render(<ProfileEditor preset="oracle" onClose={() => {}} />);
