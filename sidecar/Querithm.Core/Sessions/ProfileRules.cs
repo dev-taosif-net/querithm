@@ -184,6 +184,8 @@ public static class ProfileRules
         ["multiSubnetFailover"] = v => v is "true" or "false",
         ["connectRetryCount"] = v => v.Length is >= 1 and <= 3 && v.All(char.IsAsciiDigit) && int.Parse(v, CultureInfo.InvariantCulture) <= 255,
         ["kerberosServiceName"] = v => v.Length is >= 1 and <= 64 && v.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_' or '/' or '@'),
+        // Oracle: connect by SID instead of service name (the editor's "Connect by SID" writes "true" or "false").
+        ["oracleSid"] = v => v is "true" or "false",
     };
 
     /// <summary>The option keys a profile may carry.</summary>

@@ -270,6 +270,9 @@ public sealed class SshTunnelManager(KnownHosts known, ILogger log) : IAsyncDisp
         throw new SocketException((int)SocketError.ConnectionRefused);
     }
 
+    /// <summary>Tests: tracks a tunnel made without a bastion, so what closes it can be observed.</summary>
+    internal void Track(Tunnel t) => _tunnels[t.Key] = t;
+
     /// <summary>Closes the profile's tunnels (profile changed or deleted, or disconnected).</summary>
     public void Close(string profileId)
     {

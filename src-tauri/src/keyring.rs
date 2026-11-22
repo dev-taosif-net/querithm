@@ -100,7 +100,7 @@ async fn load_secret(id: &str, c: &mut Credential) -> Result<Option<String>, Str
 }
 async fn store_secret(id: &str, c: &mut Credential, secret: String) -> Result<(), String> {
     if c.forgotten {
-        return Err("The profile was deleted; its password was not saved.".into());
+        return Err("The profile was deleted or its connection changed; its password was not saved.".into());
     }
     let expiry = match c.policy { Policy::Duration(minutes) => Some(now_seconds() + minutes * 60), _ => None };
     if let Some(key) = account(id, &c.policy) {
@@ -172,6 +172,16 @@ pub async fn secret_delete(profile_id: String) -> Result<(), String> {
 /// memory entries. Called by the shell after the sidecar deleted the profile; every entry is tried, and the first failure
 /// is returned (the caller reports it: the profile is gone, the secret may not be).
 pub async fn forget_profile(profile_id: &str) -> Result<(), String> {
+    drop_entries(profile_id, false).await
+}
+/// PT3-1: an endpoint edit retires every vault entry and memory copy of the profile, as a delete does, before the sidecar
+/// sees the save. The profile stays, so its slots keep their retention: the sidecar may still refuse the save (and then
+/// `configure` never runs), and a slot made afresh would be Forever, writing an "until disconnected" password typed
+/// afterwards to the vault.
+pub async fn retire_profile(profile_id: &str) -> Result<(), String> {
+    drop_entries(profile_id, true).await
+}
+async fn drop_entries(profile_id: &str, keep_policy: bool) -> Result<(), String> {
     validate_id(profile_id)?;
     let ssh = format!("{profile_id}:ssh");
     // Both accounts' slots are held while their entries go (a read meanwhile waits, then finds nothing); the memory
@@ -180,7 +190,8 @@ pub async fn forget_profile(profile_id: &str) -> Result<(), String> {
     let (mut db, mut tunnel) = (db_slot.lock().await, ssh_slot.lock().await);
     db.secret = None;
     tunnel.secret = None;
-    // Callers already waiting on these slots find them forgotten; new callers get fresh slots once they leave the map.
+    // Callers already waiting on these slots find them forgotten; new callers get fresh slots once they leave the map
+    // (of the same retention when the profile stays).
     db.forgotten = true;
     tunnel.forgotten = true;
     let mut first_error = None;
@@ -191,8 +202,13 @@ pub async fn forget_profile(profile_id: &str) -> Result<(), String> {
     }
     {
         let mut all = accounts();
-        all.remove(profile_id);
-        all.remove(&ssh);
+        if keep_policy {
+            all.insert(profile_id.to_owned(), Arc::new(Mutex::new(Credential::new(db.policy.clone()))));
+            all.insert(ssh.clone(), Arc::new(Mutex::new(Credential::new(tunnel.policy.clone()))));
+        } else {
+            all.remove(profile_id);
+            all.remove(&ssh);
+        }
     }
     first_error.map_or(Ok(()), Err)
 }
@@ -348,6 +364,31 @@ mod tests {
         assert!(result.unwrap_err().contains("locked"));
         assert!(read_disk("locked:ssh".into()).await.unwrap().is_none());
         assert!(!accounts().contains_key("locked"), "the memory copy goes even when the vault refuses");
+    }
+    #[tokio::test]
+    async fn an_endpoint_edit_keeps_the_retention_when_the_save_is_then_refused() {
+        // The shell retires the credentials before the sidecar checks the edited profile. A refused save never runs
+        // configure, and the retired profile had no slot left: the next one was Forever, so an "until disconnected"
+        // password typed afterwards was written to the vault (and outlived a restart).
+        configure(&profile("retired-once", "once"), false).await.unwrap();
+        secret_set("retired-once".into(), "old-endpoint".into()).await.unwrap();
+        retire_profile("retired-once").await.unwrap();
+        assert!(get("retired-once".into()).await.unwrap().is_none(), "the old endpoint's password survived");
+        secret_set("retired-once".into(), "typed".into()).await.unwrap();
+        assert!(read_disk("retired-once".into()).await.unwrap().is_none(), "an until-disconnected password reached the vault");
+        secret_end_connection("retired-once".into()).await.unwrap();
+        assert!(get("retired-once".into()).await.unwrap().is_none());
+        // A timed one stays timed: its envelope, never a plain entry.
+        configure(&profile("retired-timed", "duration"), false).await.unwrap();
+        secret_set("retired-timed".into(), "old-endpoint".into()).await.unwrap();
+        write_disk("retired-timed:ssh".into(), Some("passphrase".into())).await.unwrap();
+        retire_profile("retired-timed").await.unwrap();
+        for account in ["retired-timed", "retired-timed:timed", "retired-timed:ssh", "retired-timed:ssh:timed"] {
+            assert!(read_disk(account.into()).await.unwrap().is_none(), "{account} left behind");
+        }
+        secret_set("retired-timed".into(), "typed".into()).await.unwrap();
+        assert!(read_disk("retired-timed".into()).await.unwrap().is_none());
+        assert!(read_disk("retired-timed:timed".into()).await.unwrap().is_some());
     }
     #[tokio::test]
     async fn disconnect_preserves_app_session_password() {

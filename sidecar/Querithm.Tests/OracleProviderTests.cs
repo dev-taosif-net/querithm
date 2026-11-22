@@ -83,6 +83,25 @@ public sealed class OracleProviderTests : IDisposable
         Assert.Contains("(CONNECT_DATA=(SID=SALESPDB))", Built(sid).DataSource);
     }
 
+    /// <summary>
+    /// The editor's "Connect by SID" (and a pasted descriptor with SID=) is the oracleSid option: profile.save takes it on
+    /// create, and its untick ("false") on edit; any other value is refused (regression: the option allowlist did not know
+    /// the key, so no profile that ever touched the checkbox could be saved).
+    /// </summary>
+    [Fact]
+    public async Task A_sid_profile_is_saved_on_create_and_unticked_on_edit()
+    {
+        await using var h = new TestHost(_oracle);
+        var created = await h.Rpc.ProfileSave(P() with { Id = "", Options = new() { [OracleConnectionStrings.SidOption] = "true" } });
+        Assert.True(OracleConnectionStrings.UsesSid(created));
+        var edited = await h.Rpc.ProfileSave(created with { Options = new() { [OracleConnectionStrings.SidOption] = "false" } });
+        Assert.False(OracleConnectionStrings.UsesSid(edited));
+        var refused = await Assert.ThrowsAsync<Querithm.Core.QuerithmException>(() =>
+            h.Rpc.ProfileSave(edited with { Options = new() { [OracleConnectionStrings.SidOption] = "yes" } }));
+        Assert.Equal("invalidProfile", refused.Code);
+        Assert.Equal("options", Assert.IsType<Dictionary<string, string>>(refused.DataPayload)["field"]);
+    }
+
     [Fact]
     public void Tns_admin_is_an_empty_querithm_folder_whatever_the_environment_says()
     {

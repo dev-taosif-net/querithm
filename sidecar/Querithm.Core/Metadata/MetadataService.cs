@@ -152,6 +152,12 @@ public sealed class MetadataService
     readonly ILogger _log;
     readonly ConcurrentDictionary<string, (string JobId, Task Task)> _running = new();
     readonly ConcurrentDictionary<string, byte> _refreshedThisLaunch = new();
+    /// <summary>Per profile, bumped by <see cref="ForgetConnection"/>: a refresh begun under an older value writes nothing.</summary>
+    readonly ConcurrentDictionary<string, long> _generation = new();
+    /// <summary>Held while a refresh publishes into the shared store and while <see cref="ForgetConnection"/> clears it.</summary>
+    readonly object _publish = new();
+
+    long GenerationOf(string profileId) => _generation.TryGetValue(profileId, out var g) ? g : 0;
 
     public MetadataService(SessionManager sessions, MetadataStore store, SchemaCache cache, INotifier notifier, ILogger log)
     {
@@ -290,6 +296,8 @@ public sealed class MetadataService
     async Task RunAsync(RefreshParams p, string key)
     {
         var sw = Stopwatch.StartNew();
+        // Taken before the profile is read: a forget from here on makes what this reads the old connection's.
+        var generation = GenerationOf(p.ProfileId);
         var profile = _sessions.GetProfile(p.ProfileId);
         var provider = _sessions.Providers.Get(profile.Engine);
         var session = p.SessionId != null ? _sessions.All.FirstOrDefault(x => x.Id == p.SessionId) : null;
@@ -358,23 +366,28 @@ public sealed class MetadataService
 
             // A session closed while this ran keeps nothing in memory (its view was dropped with it).
             if (session is { Closed: true }) { Interrupted(p, mainStore, mainDb, inMemory); return; }
-            mainStore.ApplyRefresh(p.ProfileId, mainDb, p.Full, mainChanged, mainRemoved, Only(details, mainChanged), version, notes);
-            // A tab of this file deferred its refresh while this one ran (DDL inside its transaction): the snapshot stays
-            // Stale until that refresh runs, instead of this one calling it Fresh.
             var status = SnapshotStatus.Fresh;
-            if (!inMemory && owned && _sessions.All.Any(x => x.Profile.Id == p.ProfileId && !x.Closed && x.RefreshDeferred))
+            lock (_publish)
             {
-                mainStore.SetStatus(p.ProfileId, mainDb, SnapshotStatus.Stale);
-                status = SnapshotStatus.Stale;
+                // The profile's connection was re-pointed while this read the old one: nothing it read is kept.
+                if (!inMemory && GenerationOf(p.ProfileId) != generation) { Superseded(p); return; }
+                mainStore.ApplyRefresh(p.ProfileId, mainDb, p.Full, mainChanged, mainRemoved, Only(details, mainChanged), version, notes);
+                // A tab of this file deferred its refresh while this one ran (DDL inside its transaction): the snapshot stays
+                // Stale until that refresh runs, instead of this one calling it Fresh.
+                if (!inMemory && owned && _sessions.All.Any(x => x.Profile.Id == p.ProfileId && !x.Closed && x.RefreshDeferred))
+                {
+                    mainStore.SetStatus(p.ProfileId, mainDb, SnapshotStatus.Stale);
+                    status = SnapshotStatus.Stale;
+                }
+                if (inMemory) _cache.InvalidateSession(p.ProfileId, p.Database, session!.Id);
+                else _cache.Invalidate(p.ProfileId, p.Database);
+                if (localDb != null && !inMemory)
+                {
+                    _cache.Ephemeral.ApplyRefresh(p.ProfileId, localDb, p.Full, localChanged, localRemoved, Only(details, localChanged), version);
+                    _cache.InvalidateSession(p.ProfileId, p.Database, session!.Id);
+                }
+                if (!inMemory) _refreshedThisLaunch[Key(p.ProfileId, p.Database)] = 0;
             }
-            if (inMemory) _cache.InvalidateSession(p.ProfileId, p.Database, session!.Id);
-            else _cache.Invalidate(p.ProfileId, p.Database);
-            if (localDb != null && !inMemory)
-            {
-                _cache.Ephemeral.ApplyRefresh(p.ProfileId, localDb, p.Full, localChanged, localRemoved, Only(details, localChanged), version);
-                _cache.InvalidateSession(p.ProfileId, p.Database, session!.Id);
-            }
-            if (!inMemory) _refreshedThisLaunch[Key(p.ProfileId, p.Database)] = 0;
             _notifier.Notify("meta.updated", new MetaUpdatedEvent
             {
                 ProfileId = p.ProfileId, Database = p.Database, Status = status, Changed = mainChanged.Count + mainRemoved.Count,
@@ -396,7 +409,12 @@ public sealed class MetadataService
             if (conn != null) await conn.Pool.ReturnAsync(conn).ConfigureAwait(false);
             _log.LogWarning("Metadata refresh failed for {Profile}/{Db}: {Message}", p.ProfileId, p.Database, Logging.LogScrubber.Scrub(ex.Message));
             if (session is { Closed: true }) { Interrupted(p, mainStore, mainDb, inMemory); return; }
-            mainStore.SetStatus(p.ProfileId, mainDb, SnapshotStatus.Error, ex.Message);
+            lock (_publish)
+            {
+                // The old connection's failure is not the re-pointed profile's.
+                if (!inMemory && GenerationOf(p.ProfileId) != generation) { Superseded(p); return; }
+                mainStore.SetStatus(p.ProfileId, mainDb, SnapshotStatus.Error, ex.Message);
+            }
             _notifier.Notify("meta.updated", new MetaUpdatedEvent
             {
                 ProfileId = p.ProfileId, Database = p.Database, Status = SnapshotStatus.Error, Error = Logging.LogScrubber.Scrub(ex.Message), ElapsedMs = sw.Elapsed.TotalMilliseconds,
@@ -491,6 +509,37 @@ public sealed class MetadataService
         var own = _cache.Ephemeral.Search(p.ProfileId, SchemaCache.SessionDatabase(p.Database, scope.Id), p.Text, p.Kinds, limit)
             .Select(o => o with { Database = p.Database }).ToArray();
         return scope.InMemory ? own : [.. own, .. _store.Search(p.ProfileId, p.Database, p.Text, p.Kinds, limit).Take(Math.Max(0, limit - own.Length))];
+    }
+
+    /// <summary>
+    /// The profile's connection now goes elsewhere (another server, file, engine, login or tunnel): everything read
+    /// through the old one goes, so the profile shows what a new one would (nothing until it refreshes), never the old
+    /// server's objects. A refresh still reading the old connection writes nothing (no wait here: it ends by itself).
+    /// Open explorers read the empty snapshot again.
+    /// </summary>
+    public void ForgetConnection(string profileId)
+    {
+        string[] databases;
+        lock (_publish)
+        {
+            _generation.AddOrUpdate(profileId, 1, (_, g) => g + 1);
+            databases = _store.KnownDatabases(profileId);
+            _store.ForgetProfile(profileId);
+            foreach (var key in _refreshedThisLaunch.Keys.Where(k => k.StartsWith(profileId + "|", StringComparison.Ordinal)).ToList()) _refreshedThisLaunch.TryRemove(key, out _);
+            _cache.InvalidateProfile(profileId);
+        }
+        foreach (var db in databases)
+            _notifier.Notify("meta.updated", new MetaUpdatedEvent { ProfileId = profileId, Database = db, Status = SnapshotStatus.Empty, Full = true });
+    }
+
+    /// <summary>
+    /// A refresh begun before <see cref="ForgetConnection"/> read the old connection: it keeps nothing, and the row it
+    /// marked refreshing goes (its database shows empty, as the forget left it). Called under <see cref="_publish"/>.
+    /// </summary>
+    void Superseded(RefreshParams p)
+    {
+        if (_store.GetSnapshotRow(p.ProfileId, p.Database)?.Status == SnapshotStatus.Refreshing) _store.Forget(p.ProfileId, p.Database);
+        _notifier.Notify("meta.updated", new MetaUpdatedEvent { ProfileId = p.ProfileId, Database = p.Database, Status = SnapshotStatus.Empty, Full = true });
     }
 
     /// <summary>

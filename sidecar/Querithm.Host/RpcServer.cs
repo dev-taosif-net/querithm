@@ -288,14 +288,18 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
         var credentialsChanged = before != null && !Core.Sessions.SessionManager.SameConnectionSettings(before, profile);
         if (credentialsChanged) s.Sessions.ForgetCredentials(before!.Id);
         var saved = s.Profiles.Save(profile);
+        // The schema read through the old connection is not the new one's: the edited profile shows what a new profile
+        // would (nothing until it refreshes), never the old server's objects in its explorer and completion.
+        if (credentialsChanged) s.Metadata.ForgetConnection(saved.Id);
         // A running monitor keeps the profile it started with (host, options) while kills read the environment fresh: when
         // the connection would now be built differently it stops first (not for a rename or a password-retention change).
         if (before != null && ConnectionChanged(before, saved))
             await s.Monitors.StopForProfileAsync(saved.Id, "The connection profile was changed; start the monitor again to use the new settings.");
         // A first-run confirm on Prod was given for the old target or environment: the edited profile asks again (L1).
         if (before != null && (ConnectionChanged(before, saved) || before.Environment != saved.Environment)) s.Sessions.ForgetProdConfirms(saved.Id);
-        // Connection settings may have changed: drop pooled connections built from the old settings.
-        if (!credentialsChanged) s.Sessions.ForgetPools(saved.Id);
+        // Settings outside SameConnectionSettings (timeouts, default database) may have changed: drop pooled connections
+        // built from them. Its SSH tunnels still go where the profile says, and an open transaction may run through one.
+        if (!credentialsChanged) s.Sessions.ForgetPools(saved.Id, keepTunnels: true);
         s.Objects.InvalidateCapabilities();
         return saved;
     }

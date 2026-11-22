@@ -381,7 +381,7 @@ pub async fn rpc(
         crate::credential_guard::prepare_save(&params,
             || sup.call("profile.list", Value::Null),
             |id| async move {
-                crate::keyring::forget_profile(&id).await.map_err(|e|
+                crate::keyring::retire_profile(&id).await.map_err(|e|
                     json!({ "code": -32001, "message": e, "data": { "code": "keyring" } }))
             }).await?;
     }

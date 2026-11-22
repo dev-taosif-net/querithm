@@ -355,7 +355,12 @@ public sealed class SessionManager : IAsyncDisposable
     }
 
     /// <summary>Closes idle pooled connections for a profile; busy ones finish and are dropped on return.</summary>
-    public void ForgetPools(string profileId)
+    /// <param name="keepTunnels">
+    /// The connection settings did not change (<see cref="SameConnectionSettings"/>: a rename, the environment, the
+    /// timeouts): the profile's SSH tunnels still go where it says, and a pinned connection (an open transaction) runs
+    /// through one, so closing them would end that transaction where the same edit without a tunnel keeps it.
+    /// </param>
+    public void ForgetPools(string profileId, bool keepTunnels = false)
     {
         NextCredentialEpoch(profileId);
         foreach (var (key, pool) in _pools.Where(kv => kv.Value.Profile.Id == profileId).ToList())
@@ -364,7 +369,7 @@ public sealed class SessionManager : IAsyncDisposable
             _ = pool.CloseAllAsync();
         }
         // Settings may have changed (bastion, key): the next connection opens a new tunnel.
-        Tunnels?.Close(profileId);
+        if (!keepTunnels) Tunnels?.Close(profileId);
         // Driver state built with the old secret or settings goes too (L19). Hidden engines can hold some as well.
         foreach (var provider in _providers.All.Concat(_providers.Hidden)) provider.ForgetConnections(profileId);
     }
@@ -568,7 +573,15 @@ public sealed class SessionManager : IAsyncDisposable
     /// <summary>A connection for one execution: the pinned one, or a borrowed one set to the session database.</summary>
     public async Task<(PhysicalConnection Conn, bool Borrowed)> AcquireAsync(Session s, Action? onQueued, CancellationToken ct)
     {
-        if (s.Pinned != null) return (s.Pinned, false);
+        if (s.Pinned != null)
+        {
+            // A file database's tab keeps its connection for its whole life (Phase D0d), so an edit that re-points the
+            // profile (another file, the in-memory database, another engine) never reached it: it went on reading and
+            // writing the old file. Like a server tab (below) it is refused once no transaction holds the connection.
+            if (s.SessionOwned && s.TxState == TxState.None && Stored(s.Profile.Id) is { } edited && !SameConnectionSettings(s.Profile, edited))
+                throw ProfileChanged();
+            return (s.Pinned, false);
+        }
         if (s.SessionOwned)
         {
             // Phase D0d: opened on first use and pinned for the session's life; never returned to a pool.

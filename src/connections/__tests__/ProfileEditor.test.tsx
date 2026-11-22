@@ -1006,6 +1006,22 @@ describe.each<Engine>(["mssql", "pg"])("ProfileEditor editing an existing %s pro
     expect(m.secretDelete).not.toHaveBeenCalled();
   });
 
+  it("a field typed into and erased again is no change: Cancel closes at once (regression)", async () => {
+    // As profile.list sends a profile: fields with no value are left out, never null (the editor's fields write null).
+    const sent = Object.fromEntries(Object.entries(base("a", engine)).filter(([, v]) => v != null)) as unknown as Profile;
+    useProfiles.setState({ profiles: [sent] });
+    const onClose = vi.fn();
+    render(<ProfileEditor profileId="a" onClose={onClose} />);
+    await userEvent.type(screen.getByLabelText("Group"), "Live");
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByText("Discard your changes to this profile?")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+    await userEvent.clear(screen.getByLabelText("Group"));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByText("Discard your changes to this profile?")).toBeNull();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("switching between a password and an access token never reuses the saved one", async () => {
     render(<ProfileEditor profileId="a" onClose={() => {}} />);
     await userEvent.selectOptions(screen.getByLabelText("Sign in"), "entraToken");
@@ -1164,6 +1180,21 @@ describe.each<Engine>(["mssql", "pg"])("ProfileEditor test connection (%s)", (en
     await userEvent.click(testBtn());
     await waitFor(() => expect(m.rpc).toHaveBeenCalledWith("profile.test", expect.anything()));
     expect(m.rpc.mock.calls.find((c) => c[0] === "profile.test")![1]).toMatchObject({ profileId: "a", secret: null, sshSecret: null });
+  });
+
+  it("after Forget, Test runs without the saved secret, as the saved profile will; the earlier result is out of date (regression)", async () => {
+    useProfiles.setState({ profiles: [base("a", engine)] });
+    m.rpc.mockResolvedValue(ok);
+    render(<ProfileEditor profileId="a" onClose={() => {}} />);
+    await userEvent.click(testBtn());
+    await waitFor(() => expect(status().textContent).toContain("Connected"));
+    await userEvent.click(screen.getByRole("button", { name: "Forget" }));
+    expect(status().textContent).toContain("Settings changed since this test");
+    m.rpc.mockClear();
+    await userEvent.click(testBtn());
+    await waitFor(() => expect(m.rpc).toHaveBeenCalledWith("profile.test", expect.anything()));
+    // A secret ("" here, as a new profile with nothing typed sends) means the shell fills in none from the keyring.
+    expect(m.rpc.mock.calls.find((c) => c[0] === "profile.test")![1]).toMatchObject({ secret: "" });
   });
 });
 
@@ -1535,15 +1566,28 @@ describe.each<[Engine, string]>([["sqlite", "SQLite"], ["duckDb", "DuckDB"]])("P
     await userEvent.click(screen.getByRole("button", { name: "Allow writes…" }));
     expect(m.allowWrites).toHaveBeenCalledWith("g1");
     expect(screen.getByText("Writes allowed")).toBeTruthy();
+    // "Keep read-only" leaves the grant as it is (writable here): the badge must not say Read-only (regression).
     m.allowWrites.mockResolvedValueOnce(false);
     await userEvent.click(screen.getByRole("button", { name: "Allow writes…" }));
-    expect(screen.getByText("Read-only")).toBeTruthy();
+    expect(screen.getByText("Writes allowed")).toBeTruthy();
+    expect(screen.queryByText("Read-only")).toBeNull();
     await pickEnv("Local");
     await userEvent.click(saveBtn());
     expect(saveSpy).toHaveBeenCalledWith(
       expect.objectContaining({ engine, name: "sales.db", environment: "local", location: "file", file: { grantId: "g1", displayName: "sales.db" }, auth: "none", host: null, username: null }),
       null, "",
     );
+  });
+
+  it("editing a file profile: Keep read-only never claims Read-only about a grant whose access it does not know (regression)", async () => {
+    useProfiles.setState({ profiles: [base("f", engine, { location: "file", file: { grantId: "g9", displayName: "old.db" }, auth: "none", host: null, username: null, environment: "local" })] });
+    render(<ProfileEditor profileId="f" onClose={() => {}} />);
+    m.allowWrites.mockResolvedValueOnce(false);
+    await userEvent.click(screen.getByRole("button", { name: "Allow writes…" }));
+    expect(m.allowWrites).toHaveBeenCalledWith("g9");
+    expect(screen.queryByText("Read-only")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Allow writes…" }));
+    expect(screen.getByText("Writes allowed")).toBeTruthy();
   });
 
   it("refuses to save or test a file profile without a file", async () => {

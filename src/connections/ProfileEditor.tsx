@@ -302,9 +302,23 @@ function secretKind(a: AuthKind): "token" | "password" {
   return a === "entraToken" ? "token" : "password";
 }
 
-/** What a test result belongs to: everything that reaches the server, normalised as Test sends it (not the name or environment). */
-function testKey(p: Profile, secret: string, sshSecret: string): string {
-  return JSON.stringify([{ ...withDefaultHost(p), name: "", groupName: null, environment: null, color: null, passwordRetention: null, passwordRetentionMinutes: null }, secret, sshSecret]);
+/**
+ * What a test result belongs to: everything that reaches the server, normalised as Test sends it (not the name or
+ * environment), and whether a saved secret is marked Forget (Test then runs without it, as the saved profile will).
+ */
+function testKey(p: Profile, secret: string, sshSecret: string, forgot: readonly [boolean, boolean]): string {
+  return JSON.stringify([{ ...withDefaultHost(p), name: "", groupName: null, environment: null, color: null, passwordRetention: null, passwordRetentionMinutes: null }, secret, sshSecret, forgot]);
+}
+
+/**
+ * A profile as text for "did anything change": keys in one order, and a field set to null the same as one left out
+ * (the sidecar leaves nulls out of the profiles it sends; the editor's fields write them).
+ */
+function profileText(p: Profile): string {
+  return JSON.stringify(p, (_key, v: unknown) =>
+    v && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v as Record<string, unknown>).filter(([, x]) => x != null).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : v);
 }
 
 /** What Test and Save act on: the fields, or the fields after merging the connection string. */
@@ -399,7 +413,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
   const [shown, setShown] = useState<ReadonlySet<FieldKey>>(new Set());
   const [refused, setRefused] = useState<{ field: FieldKey; message: string } | null>(null);
   const [focusField, setFocusField] = useState<Focusable | null>(null);
-  const [initial] = useState(() => JSON.stringify(start.p));
+  const [initial] = useState(() => profileText(start.p));
   const fid = useId();
   const refs = {
     name: useRef<HTMLInputElement>(null), host: useRef<HTMLInputElement>(null), port: useRef<HTMLInputElement>(null), file: useRef<HTMLButtonElement>(null),
@@ -465,9 +479,9 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
   }, [transport.tone, ackNeeded]);
 
   // What a test result belongs to: a later change to anything that reaches the server marks it out of date.
-  const connKey = testKey(p, secret, sshSecret);
+  const connKey = testKey(p, secret, sshSecret, [forget, sshForget]);
   const testStale = !!test && test.key !== connKey;
-  const dirty = JSON.stringify(p) !== initial || !!secret || !!sshSecret || forget || sshForget || !!connStr || (!start.known && (engineChosen !== !!preset || envChosen));
+  const dirty = profileText(p) !== initial || !!secret || !!sshSecret || forget || sshForget || !!connStr || (!start.known && (engineChosen !== !!preset || envChosen));
 
   /** A tunnel needs its bastion and user (the sidecar would refuse an empty one with a driver message). */
   const sshProblems = (d: Profile): { key: Focusable; text: string }[] => {
@@ -578,13 +592,14 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
       const endpointChanged = !!existing && endpointKey(existing) !== endpointKey(d.p);
       const kindChanged = !!existing && needsSecretFor(existing.auth) && needsSecretFor(d.p.auth) && secretKind(existing.auth) !== secretKind(d.p.auth);
       const sshKindChanged = !!existing?.ssh && !!d.p.ssh && existing.ssh.auth !== d.p.ssh.auth;
-      // A saved secret is used unless one was typed, or the saved one is of another kind.
-      const typed = (d.touched && !!d.secret) || !existing || kindChanged || endpointChanged;
-      const sshTyped = (sshSecretTouched && !!sshSecret) || !existing || sshKindChanged || endpointChanged;
-      const key = testKey(d.p, d.secret, sshSecret);
+      // A saved secret is used unless one was typed, the saved one is of another kind, or it is marked Forget (Save
+      // deletes it, so Test runs without it, as a new profile with nothing typed does).
+      const typed = (d.touched && !!d.secret) || !existing || kindChanged || endpointChanged || forget;
+      const sshTyped = (sshSecretTouched && !!sshSecret) || !existing || sshKindChanged || endpointChanged || sshForget;
+      const key = testKey(d.p, d.secret, sshSecret, [forget, sshForget]);
       for (let round = 0; round < 2; round++) {
         const r = await rpc("profile.test", {
-          profileId: typed && sshTyped ? null : existing!.id, profile: d.p, secret: typed ? d.secret : null, sshSecret: sshTyped ? (sshSecret || (sshKindChanged || endpointChanged ? "" : null)) : null,
+          profileId: typed && sshTyped ? null : existing!.id, profile: d.p, secret: typed ? d.secret : null, sshSecret: sshTyped ? (sshSecret || (sshForget || sshKindChanged || endpointChanged ? "" : null)) : null,
         });
         // An untrusted bastion key is shown to the user, never accepted automatically.
         if (!r.ok && r.untrustedHostKey && round === 0) {
@@ -756,7 +771,10 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
   const allowWrites = async () => {
     if (!p.file) return;
     try {
-      setAccess((await requestWriteAccess(p.file.grantId)) ? "readWrite" : "readOnly");
+      // "Keep read-only" changes nothing in the shell: a grant whose writes were allowed before stays writable. So the
+      // badge changes only on "Allow writes"; it never says Read-only about a grant it does not know to be (an existing
+      // profile's editor opens without knowing).
+      if (await requestWriteAccess(p.file.grantId)) setAccess("readWrite");
     } catch (e) {
       toast("error", (e as Error).message || "Could not change the file's access.");
     }

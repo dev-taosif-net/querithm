@@ -373,6 +373,16 @@ public sealed class MetadataStore(LocalStore store)
         tx.Commit();
     }
 
+    /// <summary>Drops everything recorded for the profile in every database: its connection now reads another server.</summary>
+    public void ForgetProfile(string profileId)
+    {
+        using var c = store.Open();
+        using var tx = c.BeginTransaction();
+        foreach (var t in new[] { "schema_snapshot", "obj", "col", "param", "fk", "idx", "definition_cache" })
+            c.Cmd($"DELETE FROM {t} WHERE profile_id=$p", tx, ("$p", profileId)).ExecuteNonQuery();
+        tx.Commit();
+    }
+
     public string[] KnownDatabases(string profileId)
     {
         using var c = store.Open();
