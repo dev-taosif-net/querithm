@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Apache.Arrow;
 using Apache.Arrow.Types;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -256,11 +255,23 @@ public sealed class OracleExecuteIntegrationTests
         Assert.True(((BooleanArray)b.Column(Col(b, "C__truncated"))).GetValue(0));
 
         // Cancelled while the value is read (the schema frame is out, the batch is not): it stops, and the session's next run works.
+        // A dedicated thread cancels 50 ms after the schema frame is written. Polling for query.resultSet from this test's
+        // thread-pool continuation resumed only after the whole value was read on a busy runner (CI run 44498708828: Done).
+        using var schemaOut = new ManualResetEventSlim();
+        string? cancelled = null;
+        h.Frames.OnFrame = (kind, id) => { if (kind == 0x01 && Interlocked.CompareExchange(ref cancelled, id, null) == null) schemaOut.Set(); };
+        var canceller = new Thread(() =>
+        {
+            if (!schemaOut.Wait(TimeSpan.FromSeconds(30))) return;
+            Thread.Sleep(50); // the row's read has started: the value takes hundreds of round trips
+            h.Rpc.QueryCancel(new ExecutionRef { ExecutionId = cancelled! }).GetAwaiter().GetResult();
+        }) { IsBackground = true, Name = "clob-cancel" };
+        canceller.Start();
         var r = await h.Rpc.QueryExecute(new QueryExecuteParams { SessionId = sid, Sql = "SELECT id, c FROM q_s04_big" });
-        var sw = Stopwatch.StartNew();
-        while (!h.Notifier.Of<QueryResultSetEvent>().Any(e => e.ExecutionId == r.ExecutionId) && sw.ElapsedMilliseconds < 30_000) await Task.Delay(5);
-        await h.Rpc.QueryCancel(new ExecutionRef { ExecutionId = r.ExecutionId! });
         var done = await h.Notifier.WaitDone(r.ExecutionId!, 60_000);
+        Assert.True(canceller.Join(TimeSpan.FromSeconds(30)), "the cancel thread did not finish");
+        h.Frames.OnFrame = null;
+        Assert.Equal(r.ExecutionId, cancelled);
         Assert.Equal(ExecState.Cancelled, done.State);
         Assert.DoesNotContain(h.Frames.For(r.ExecutionId!), f => f.Kind == 0x02);
 

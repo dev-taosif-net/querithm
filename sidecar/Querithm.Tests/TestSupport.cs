@@ -31,17 +31,30 @@ public sealed class CapturingNotifier : INotifier
 
     /// <summary>
     /// Waits for the final edit verdict of a result set whose first one was <see cref="ResultEditInfo.Rechecking"/>
-    /// (query.resultEdit, sent once the metadata was read again after the run). 15 s, scaled.
+    /// (query.resultEdit, sent once the metadata was read again after the run). 15 s unless given, scaled.
     /// </summary>
-    public async Task<ResultEditInfo> WaitEdit(string executionId, int resultIndex = 0)
+    public async Task<ResultEditInfo> WaitEdit(string executionId, int resultIndex = 0, TimeSpan? limit = null)
     {
-        var deadline = DateTime.UtcNow + TestTime.Of(TimeSpan.FromSeconds(15));
+        var deadline = DateTime.UtcNow + TestTime.Of(limit ?? TimeSpan.FromSeconds(15));
         while (DateTime.UtcNow < deadline)
         {
             if (Of<QueryResultEditEvent>().FirstOrDefault(e => e.ExecutionId == executionId && e.ResultIndex == resultIndex) is { } e) return e.Edit;
             await Task.Delay(10);
         }
         throw new Xunit.Sdk.XunitException($"no query.resultEdit for result set {resultIndex} of {executionId}: the webview would show \"checking\" for ever");
+    }
+
+    /// <summary>
+    /// Waits until the run's edit verdicts are final. A result set first marked <see cref="ResultEditInfo.Rechecking"/> (no
+    /// metadata loaded for its database yet, say) reads the metadata again after the run on a pool connection: a test that
+    /// expects the next run to get the pool's one idle connection lets that read end first. The verdict comes within the
+    /// recheck's 30 s limit (ExecutionService.RecheckLimit) whatever the read does: an Oracle catalog read under the
+    /// parallel suite took more than WaitEdit's 15 s.
+    /// </summary>
+    public async Task SettledAsync(string executionId)
+    {
+        foreach (var set in Of<QueryResultSetEvent>().Where(e => e.ExecutionId == executionId && e.Edit is { Rechecking: true }).ToList())
+            await WaitEdit(executionId, set.ResultIndex, TimeSpan.FromSeconds(40));
     }
 
     /// <summary>Payloads of one type; <c>Of&lt;ServerMessage&gt;()</c> reads the messages inside each query.messages batch (M13).</summary>
@@ -53,9 +66,17 @@ public sealed class CapturingFrames : IFrameSink
 {
     public ConcurrentQueue<(byte Kind, string ExecutionId, ushort ResultIndex, byte[] Payload)> Frames { get; } = new();
 
+    /// <summary>
+    /// Called on the writing thread after each frame is captured (kind, execution id): a test acts at an exact point of the
+    /// stream instead of polling for it from a thread-pool continuation that a busy runner may resume late.
+    /// </summary>
+    public Action<byte, string>? OnFrame { get; set; }
+
     public ValueTask WriteFrameAsync(byte kind, Ulid executionId, ushort resultIndex, ReadOnlyMemory<byte> payload, CancellationToken ct)
     {
-        Frames.Enqueue((kind, executionId.ToString(), resultIndex, payload.ToArray()));
+        var id = executionId.ToString();
+        Frames.Enqueue((kind, id, resultIndex, payload.ToArray()));
+        OnFrame?.Invoke(kind, id);
         return ValueTask.CompletedTask;
     }
 

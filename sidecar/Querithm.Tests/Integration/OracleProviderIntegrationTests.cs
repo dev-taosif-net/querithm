@@ -342,8 +342,12 @@ public sealed class OracleProviderIntegrationTests
     {
         var (h, sid) = await OpenAsync();
         await using var _ = h;
-        var spid = (await Run(h, sid, "SELECT SYS_CONTEXT('USERENV', 'SID') FROM dual")).Batches[0];
-        var before = Cell(spid, 0);
+        // The pool must hold this tab's one connection only. With no metadata loaded, a result's edit verdict reads it after
+        // the run on a pool connection; the pool then held two, handed them out in turn, and the SID after the cancel was
+        // the other one's (it failed in every full local run). The edit verdict is not what this test is about.
+        h.Services.Executions.RefreshMetadata = null;
+        var first = await Run(h, sid, "SELECT SYS_CONTEXT('USERENV', 'SID') FROM dual");
+        var before = Cell(first.Batches[0], 0);
         var r = await h.Rpc.QueryExecute(new QueryExecuteParams { SessionId = sid, Sql = "BEGIN DBMS_SESSION.SLEEP(30); END;" });
         await Task.Delay(1500); // the block is sleeping on the server
         var since = Stopwatch.StartNew();

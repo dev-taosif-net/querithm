@@ -148,30 +148,51 @@ public sealed class DataCompareService(SessionManager sessions, MetadataService 
     async Task<T> ReadAsync<T>(Session s, string db, IDataCompareDialect d, string sql, Func<DbDataReader, CancellationToken, Task<T>> read, CancellationToken ct)
     {
         var (conn, release) = await BorrowForReadAsync(s, db, ct).ConfigureAwait(false);
-        var readOnly = false;
+        var tx = new ReadTransaction();
         try
         {
-            // Read-only where the engine enforces it (PostgreSQL), through the provider's transaction control (Phase D0b).
-            readOnly = await s.Provider.Transactions.BeginReadOnlyAsync(conn.Db, ct).ConfigureAwait(false);
             await using var cmd = conn.Db.CreateCommand();
             cmd.CommandText = sql;
             cmd.CommandTimeout = 0;
-            await using var r = await ExecuteWithSnapshotRetryAsync(
-                c => cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess, c), d.SnapshotTooOld, d.SnapshotRetryDelay,
-                async c =>
-                {
-                    // A new snapshot needs a new transaction: SET TRANSACTION READ ONLY fixes it at its start.
-                    if (readOnly) await s.Provider.Transactions.RollbackAsync(conn.Db, c).ConfigureAwait(false);
-                    readOnly = await s.Provider.Transactions.BeginReadOnlyAsync(conn.Db, c).ConfigureAwait(false);
-                }, ct).ConfigureAwait(false);
+            await using var r = await ExecuteSnapshotReadAsync(s.Provider, conn.Db, d, cmd, tx, ct).ConfigureAwait(false);
             return await read(r, ct).ConfigureAwait(false);
         }
         finally
         {
-            if (readOnly) { try { using var cleanup = Cleanup.Start(); await s.Provider.Transactions.RollbackAsync(conn.Db, cleanup.Token).ConfigureAwait(false); } catch { /* connection gone */ } }
+            await EndReadAsync(s.Provider, conn.Db, tx).ConfigureAwait(false);
             // The pool reads the state: a read transaction that did not end is never handed to the next borrower.
             await release().ConfigureAwait(false);
         }
+    }
+
+    /// <summary>Whether a side's read has its read-only transaction open (its cleanup rolls it back).</summary>
+    sealed class ReadTransaction { public bool Open; }
+
+    /// <summary>
+    /// A side's SELECT: read-only where the engine enforces it, through the provider's transaction control
+    /// (Phase D0b), run again in a new snapshot when refused for its snapshot (<see cref="ExecuteWithSnapshotRetryAsync"/>).
+    /// Both sides read this way: the target read had no retry, so a target table created seconds before failed the compare
+    /// with ORA-01466 at once (CI run 44501859448; on the local fixture 2 of 9 runs of OracleCompareTests failed so).
+    /// </summary>
+    static async Task<DbDataReader> ExecuteSnapshotReadAsync(IDbProvider provider, DbConnection db, IDataCompareDialect d, DbCommand cmd,
+        ReadTransaction tx, CancellationToken ct)
+    {
+        tx.Open = await provider.Transactions.BeginReadOnlyAsync(db, ct).ConfigureAwait(false);
+        return await ExecuteWithSnapshotRetryAsync(
+            c => cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess, c), d.SnapshotTooOld, d.SnapshotRetryDelay,
+            async c =>
+            {
+                // A new snapshot needs a new transaction: SET TRANSACTION READ ONLY fixes it at its start.
+                if (tx.Open) await provider.Transactions.RollbackAsync(db, c).ConfigureAwait(false);
+                tx.Open = await provider.Transactions.BeginReadOnlyAsync(db, c).ConfigureAwait(false);
+            }, ct).ConfigureAwait(false);
+    }
+
+    static async Task EndReadAsync(IDbProvider provider, DbConnection db, ReadTransaction tx)
+    {
+        if (!tx.Open) return;
+        try { using var cleanup = Cleanup.Start(); await provider.Transactions.RollbackAsync(db, cleanup.Token).ConfigureAwait(false); }
+        catch { /* connection gone */ }
     }
 
     /// <summary>
@@ -378,19 +399,18 @@ public sealed class DataCompareService(SessionManager sessions, MetadataService 
     async IAsyncEnumerable<string?[]> Channel(Resolved r, string sql, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
     {
         var (conn, release) = await BorrowForReadAsync(r.Session, r.Database, ct).ConfigureAwait(false);
-        var readOnly = false;
+        var tx = new ReadTransaction();
         try
         {
-            readOnly = await r.Session.Provider.Transactions.BeginReadOnlyAsync(conn.Db, ct).ConfigureAwait(false);
             await using var cmd = conn.Db.CreateCommand();
             cmd.CommandText = sql;
             cmd.CommandTimeout = 0;
-            await using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess, ct).ConfigureAwait(false);
+            await using var reader = await ExecuteSnapshotReadAsync(r.Session.Provider, conn.Db, r.Compare, cmd, tx, ct).ConfigureAwait(false);
             await foreach (var row in Rows(reader, ct).ConfigureAwait(false)) yield return row;
         }
         finally
         {
-            if (readOnly) { try { using var cleanup = Cleanup.Start(); await r.Session.Provider.Transactions.RollbackAsync(conn.Db, cleanup.Token).ConfigureAwait(false); } catch { /* connection gone */ } }
+            await EndReadAsync(r.Session.Provider, conn.Db, tx).ConfigureAwait(false);
             await release().ConfigureAwait(false);
         }
     }

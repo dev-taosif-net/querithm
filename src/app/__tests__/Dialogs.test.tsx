@@ -88,7 +88,9 @@ describe("Dialogs host", () => {
     render(<Dialogs />);
     show({ kind: "connect" });
     show({ kind: "profile" });
-    await userEvent.setup().click(screen.getByText("connect-dialog"));
+    // fireEvent is synchronous: userEvent's awaited click could outlast the 130 ms exit on a slow runner, so the dialog
+    // was already gone when the inert check ran (CI run 43701917547, macos-15-intel).
+    fireEvent.click(screen.getByText("connect-dialog"));
     expect(screen.getByText("connect-dialog").closest("[inert][data-q-exiting]")).not.toBeNull();
     await waitFor(() => expect(screen.queryByText("connect-dialog")).toBeNull());
     expect(screen.getByText(/profile-editor/)).toBeInTheDocument();

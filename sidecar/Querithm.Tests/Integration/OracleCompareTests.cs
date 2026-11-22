@@ -139,7 +139,8 @@ public sealed class OracleCompareTests
         await SetupAsync();
         await using var h = await OracleS11Host.OpenAsync();
         var start = await h.Rpc.DataCompareStart(new DataCompareParams { Source = Table(h, "q_s11d_src"), Target = Table(h, "q_s11d_tgt") });
-        await WaitAsync(h, start.CompareId);
+        // The compare's own error, not SyncSql's "nothing to sync" (CI run 44501859448 showed only that).
+        Assert.Null((await WaitAsync(h, start.CompareId)).Error);
         var sync = await h.Rpc.DataCompareSyncSql(new DataSyncSqlParams { CompareId = start.CompareId, Insert = true, Update = true, Delete = true });
         // A row the target gained since the compare makes the INSERT of id 3 fail (ORA-00001) after the DELETE and UPDATE ran.
         await using (var c = await OpenAsync()) await RunScriptAsync(c, "INSERT INTO q_s11d_tgt (id, name) VALUES (3, 'raced'); COMMIT;");

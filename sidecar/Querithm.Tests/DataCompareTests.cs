@@ -407,7 +407,8 @@ public class DataCompareTests
     // ------------------------------------------------------------------ batch and kept-diff sizes (L21)
 
     /// <summary>A fake SQL Server with tables dbo.s and dbo.t (id int, v nvarchar) whose ordered reads return the rows given.</summary>
-    static async Task<(Querithm.Host.Services Services, CapturingNotifier Notifier, string Sid)> FakeCompareAsync(IFrameSink frames, object?[][] source, object?[][] target)
+    static async Task<(Querithm.Host.Services Services, CapturingNotifier Notifier, string Sid)> FakeCompareAsync(IFrameSink frames, object?[][] source, object?[][] target,
+        Action<Fakes.FakeDbProvider>? setup = null)
     {
         var provider = new Fakes.FakeDbProvider { DataCompareImpl = new SqlServerDataCompare(), DataEditImpl = new SqlServerDataEdit() };
         provider.Handler = (cmd, ct) =>
@@ -416,6 +417,7 @@ public class DataCompareTests
             var rows = cmd.CommandText.Contains("[s]") ? source : target;
             return Task.FromResult(new Fakes.FakeResult([Fakes.FakeResult.Table([("c0", typeof(string)), ("c1", typeof(string))], rows)]));
         };
+        setup?.Invoke(provider);
         var notifier = new CapturingNotifier();
         var services = Querithm.Host.Services.Create(Querithm.Core.Store.LocalStore.InMemory(), frames, notifier,
             Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance, new Querithm.Core.Sessions.ProviderRegistry([provider]));
@@ -555,5 +557,55 @@ public class DataCompareTests
         await cts.CancelAsync();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => t.WaitAsync(TimeSpan.FromSeconds(10)));
         Assert.Equal(1, runs);
+    }
+
+    /// <summary>SQL Server's dialect that refuses a read for its snapshot as Oracle does (ORA-01466), retried at once.</summary>
+    sealed class SnapshotRefusingDialect(IDataCompareDialect inner) : IDataCompareDialect
+    {
+        public ValueKind KindOf(string? columnType) => inner.KindOf(columnType);
+        public string OrderExpression(string columnExpr, ValueKind kind) => inner.OrderExpression(columnExpr, kind);
+        public bool PadsTrailingSpaces => inner.PadsTrailingSpaces;
+        public string? QueryRefusal(string sql) => inner.QueryRefusal(sql);
+        public (string Prefix, string Body) DerivedQuery(string sql) => inner.DerivedQuery(sql);
+        public string IsolationHint => inner.IsolationHint;
+        public (string On, string Off)? IdentityInsert(string table) => inner.IdentityInsert(table);
+        public string? InsertOverriding => inner.InsertOverriding;
+        public int InsertBatch => inner.InsertBatch;
+        public (string Begin, string Commit) SyncTransaction => inner.SyncTransaction;
+        public bool EmptyTextIsNull => inner.EmptyTextIsNull;
+        public string? ValueRefusal(string? columnType) => inner.ValueRefusal(columnType);
+        public bool QueryTypesFromProvider => inner.QueryTypesFromProvider;
+        public bool SnapshotTooOld(Exception ex) => ex is SnapshotError;
+        public TimeSpan SnapshotRetryDelay => TimeSpan.Zero;
+    }
+
+    [Theory]
+    [InlineData("[s]")]
+    [InlineData("[t]")]
+    public async Task Either_sides_read_refused_for_its_snapshot_runs_again_in_a_new_read_only_transaction(string refused)
+    {
+        // CI run 44501859448: only the source read had the retry, so a target table created seconds before failed the compare
+        // with ORA-01466 at once ("The compare failed, so there is nothing to sync").
+        var sent = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var reads = 0;
+        var (services, notifier, sid) = await FakeCompareAsync(new CapturingFrames(), Rows(3, 2), Rows(2, 2), p =>
+        {
+            p.DataCompareImpl = new SnapshotRefusingDialect(p.DataCompareImpl!);
+            p.Transactions = new Fakes.FakePgTransactions();
+            var rows = p.Handler;
+            p.Handler = (cmd, ct) =>
+            {
+                sent.Enqueue(cmd.CommandText);
+                if (cmd.CommandText.Contains("ORDER BY") && cmd.CommandText.Contains(refused) && Interlocked.Increment(ref reads) == 1)
+                    throw new SnapshotError();
+                return rows(cmd, ct);
+            };
+        });
+        await using var _ = services;
+        var (_, done) = await CompareAsync(services, notifier, sid); // no error
+        Assert.Equal((1, 0, 2), (done.SourceOnly, done.TargetOnly, done.Identical));
+        Assert.Equal(2, reads); // refused once, then read in the new snapshot
+        // The refused read's transaction was rolled back and a new one begun: three read-only starts for two reads.
+        Assert.Equal(3, sent.Count(c => c == "BEGIN TRANSACTION READ ONLY"));
     }
 }

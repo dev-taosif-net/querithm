@@ -187,14 +187,17 @@ public class DataEditIntegrationTests
     {
         var (h, _, sid) = await SetupAsync(engine);
         await using var _h = h;
-        var (_, system) = await SelectAsync(h, sid, engine == "mssql" ? "SELECT TOP 5 name FROM sys.objects" : "SELECT relname FROM pg_class LIMIT 5");
+        var (systemId, system) = await SelectAsync(h, sid, engine == "mssql" ? "SELECT TOP 5 name FROM sys.objects" : "SELECT relname FROM pg_class LIMIT 5");
         Assert.Equal((false, false), (system.Editable, system.Rechecking));
-        var (_, join) = await SelectAsync(h, sid, $"SELECT a.id, b.name FROM {T(engine, "q_plain")} a JOIN {T(engine, "q_plain")} b ON b.id = a.id");
+        var (joinId, join) = await SelectAsync(h, sid, $"SELECT a.id, b.name FROM {T(engine, "q_plain")} a JOIN {T(engine, "q_plain")} b ON b.id = a.id");
         Assert.Equal((false, false), (join.Editable, join.Rechecking));
         // A condition that reads the same table again is not a self-join: each row is still one row of the table.
-        var (_, sub) = await SelectAsync(h, sid, $"SELECT id, name FROM {T(engine, "q_plain")} WHERE id = (SELECT max(id) FROM {T(engine, "q_plain")})");
+        var (subId, sub) = await SelectAsync(h, sid, $"SELECT id, name FROM {T(engine, "q_plain")} WHERE id = (SELECT max(id) FROM {T(engine, "q_plain")})");
         Assert.True(sub.Editable, sub.Reason);
-        Assert.Empty(h.Notifier.Of<QueryResultEditEvent>());
+        // These three only: SetupAsync's own reads (EnsureDatabaseAsync's SELECT on master / postgres, whose snapshot this
+        // host never loaded) are rechecked, and their query.resultEdit can land at any moment.
+        string[] mine = [systemId, joinId, subId];
+        Assert.DoesNotContain(h.Notifier.Of<QueryResultEditEvent>(), e => mine.Contains(e.ExecutionId));
     }
 
     [IntegrationFact]

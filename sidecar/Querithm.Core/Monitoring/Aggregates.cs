@@ -162,14 +162,18 @@ public sealed class TopQueriesTracker(int maxTrackedEntries = TopQueriesTracker.
         var interval = new Dictionary<string, Totals>(StringComparer.Ordinal);
         var first = _first;
         _first = false;
+        var tracked = _prev.Count; // before this read: the base of the full read's reset ratio below
+        var restarted = 0;
         foreach (var e in read.Entries)
         {
             seen?.Add(e.Entry);
             var had = _prev.TryGetValue(e.Entry, out var p);
+            var down = had && Decreased(e, p);
+            if (down) restarted++;
             _prev[e.Entry] = Prev.Of(e);
             // An empty query hash: the provider read the entry only to keep it tracked (it did not run since the cutoff).
             if (first || reset || e.QueryHash.Length == 0) continue;
-            var d = !had || Decreased(e, p) ? e : Minus(e, p);
+            var d = !had || down ? e : Minus(e, p);
             if (d.Execs <= 0 && d.DurationMs <= 0) continue;
             var g = Group(e);
             if (!interval.TryGetValue(g, out var t)) interval[g] = t = new Totals { QueryHash = e.QueryHash, Database = e.Database };
@@ -184,7 +188,11 @@ public sealed class TopQueriesTracker(int maxTrackedEntries = TopQueriesTracker.
         if (read.Full)
         {
             var gone = _prev.Keys.Where(k => !seen!.Contains(k)).ToList();
-            if (!first && !reset && _prev.Count >= 10 && gone.Count >= 0.9 * _prev.Count) reset = true;
+            // A flush (an administrator cleared the plan cache, a reset without a marker): nearly every entry tracked before
+            // this read is gone or came back re-created with lower counters. Plans compiled since the flush are new entries
+            // and say nothing either way: counting them in the base hid the reset on a busy server (CI run 44501859448, T1
+            // under the parallel suite).
+            if (!first && !reset && tracked >= 10 && gone.Count + restarted >= 0.9 * tracked) reset = true;
             foreach (var k in gone) _prev.Remove(k);
         }
         if (_prev.Count > maxTrackedEntries) return OverCap(); // incremental reads add new entries

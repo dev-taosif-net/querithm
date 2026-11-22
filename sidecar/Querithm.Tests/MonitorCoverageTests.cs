@@ -620,6 +620,58 @@ public class MonitorCoverageTests
         Assert.Equal(PaneState.ResetDetected, t.Update(new TopQueryRead([Q("p0")], true, null), "cpu", false).State);
     }
 
+    [Fact]
+    public async Task T1_a_flush_the_busy_server_refilled_past_a_tenth_by_the_next_read_still_triggers_the_full_read()
+    {
+        // CI run 44501859448: under the parallel suite the reset was never reported. The base is the cache's peak since the
+        // full read (it grew after it), and half of it is the trigger, not a tenth of the count at the full read.
+        var cache = 1_000L;
+        var fulls = new List<object?>();
+        await using var conn = new FakeDbConnection((cmd, _) =>
+        {
+            fulls.Add(cmd.Parameters.Cast<DbParameter>().Single(p => p.ParameterName == "@full").Value);
+            return Task.FromResult(new FakeResult([FakeResult.Table([("c", typeof(DateTime))], [new DateTime(2026, 10, 28, 3, 0, 0)]),
+                FakeResult.Table([("p", typeof(string))]), FakeResult.Table([("n", typeof(long))], [cache])]));
+        }, 1);
+        await conn.OpenAsync();
+        var s = SqlServerActivitySessionAccess.Session(conn);
+        Assert.True((await s.TopQueriesAsync(conn, CancellationToken.None)).Value!.Full); // full at 1,000
+        cache = 4_000;                                                                     // the cache grows
+        Assert.False((await s.TopQueriesAsync(conn, CancellationToken.None)).Value!.Full);
+        cache = 900;                                                                       // flushed, then 900 new plans
+        Assert.True((await s.TopQueriesAsync(conn, CancellationToken.None)).Value!.Full);
+        Assert.Equal(4, fulls.Count);
+        // The full read is the new base: the same count afterwards is no flush.
+        Assert.False((await s.TopQueriesAsync(conn, CancellationToken.None)).Value!.Full);
+    }
+
+    [Fact]
+    public void T1_a_full_read_after_a_flush_on_a_busy_server_is_a_reset_whatever_was_compiled_since()
+    {
+        TopQueryCounter Q(string k, long n = 5) => new(TopQueryKey.Of(k), "h" + k, null, k, n, n, n, n, null, n);
+        var t = new TopQueriesTracker();
+        t.Update(new TopQueryRead([.. Enumerable.Range(0, 100).Select(i => Q("p" + i))], true, null), "cpu", false);
+        Assert.Equal(PaneState.Ok, t.Update(new TopQueryRead([.. Enumerable.Range(0, 100).Select(i => Q("p" + i, 6))], true, null), "cpu", false).State);
+        // Flushed: 15 of the 100 ran again (re-created, lower counters), 85 are gone, and 60 plans are new. Counting the
+        // new ones in the base (85 / 160) and the re-created ones as kept missed this (CI run 44501859448).
+        var after = Enumerable.Range(0, 15).Select(i => Q("p" + i, 1)).Concat(Enumerable.Range(0, 60).Select(i => Q("n" + i, 1)));
+        var (state, top) = t.Update(new TopQueryRead([.. after], true, null), "cpu", false);
+        Assert.Equal(PaneState.ResetDetected, state);
+        Assert.Empty(top);
+    }
+
+    [Fact]
+    public void A_full_read_where_new_plans_join_and_a_few_entries_were_evicted_or_recompiled_is_no_reset()
+    {
+        TopQueryCounter Q(string k, long n) => new(TopQueryKey.Of(k), "h" + k, null, k, n, n, n, n, null, n);
+        var t = new TopQueriesTracker();
+        t.Update(new TopQueryRead([.. Enumerable.Range(0, 100).Select(i => Q("p" + i, 5))], true, null), "cpu", false);
+        // 20 evicted, 10 recompiled with lower counters, 70 still counting up, 200 new plans: busy, not a reset.
+        var next = Enumerable.Range(20, 10).Select(i => Q("p" + i, 1)).Concat(Enumerable.Range(30, 70).Select(i => Q("p" + i, 9)))
+            .Concat(Enumerable.Range(0, 200).Select(i => Q("n" + i, 1)));
+        Assert.Equal(PaneState.Ok, t.Update(new TopQueryRead([.. next], true, null), "cpu", false).State);
+    }
+
     // ------------------------------------------------------------------ deadlock sources
 
     /// <summary>The system_health sources batch: session running, event-file path, the file being written.</summary>

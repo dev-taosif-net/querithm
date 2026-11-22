@@ -200,7 +200,11 @@ public class MonitorScenarioTests
             {
                 var run = Host.RunAsync(session, sleep);
                 var s = await WaitSnapshot(m.MonitorId, x => x.Sessions?.Any(r => Leased(r, session)) == true);
-                Assert.Equal(ExecState.Done, (await run).Done.State);
+                var (done, _, id) = await run;
+                Assert.Equal(ExecState.Done, done.State);
+                // PostgreSQL's pg_sleep returns a result set: with no metadata loaded, its edit verdict reads the metadata
+                // after the run on a pool connection, which leaves the idle one busy for the other tab until it ends.
+                await Host.Notifier.SettledAsync(id);
                 return s.Sessions!.Single(r => Leased(r, session));
             }
             var a = await DuringRun(SessionId);

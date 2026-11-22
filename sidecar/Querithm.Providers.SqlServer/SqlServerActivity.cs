@@ -219,7 +219,8 @@ sealed class SqlServerActivitySession(SqlServerActivity.Probe probe, MonitorCapa
     int _topRuns;
     /// <summary>The deadlock poll's position in the system_health files (per monitor connection).</summary>
     readonly SqlServerDeadlocks.FileCursor _deadlockCursor = new();
-    long _planCacheAtFullRead;
+    /// <summary>The plan cache's largest entry count since the last full read (the base a flush is measured against).</summary>
+    long _planCachePeak;
     DateTime? _cutoff;
 
     public MonitorCapabilities Capabilities => caps;
@@ -720,14 +721,18 @@ sealed class SqlServerActivitySession(SqlServerActivity.Probe probe, MonitorCapa
             if (await r.NextResultAsync(ct).ConfigureAwait(false) && await r.ReadAsync(ct).ConfigureAwait(false) && !r.IsDBNull(0)) cache = r.GetInt64(0);
         }
         _cutoff = next;
-        if (full) _planCacheAtFullRead = cache ?? 0;
-        else if (cache is { } now && _planCacheAtFullRead >= 10 && now < _planCacheAtFullRead / 10)
+        if (full) _planCachePeak = cache ?? 0;
+        else if (cache is { } now && _planCachePeak >= 10 && now < _planCachePeak / 2)
         {
-            // The plan cache was emptied (an administrator's flush, memory pressure): read it all now so
-            // the tracker sees the evictions and reports the reset (T1), instead of at the next 30th run.
+            // The plan cache lost half its entries (an administrator's flush, memory pressure): read it all now so the
+            // tracker sees the evictions and reports the reset (T1), instead of at the next 30th run. Half of the peak, not a
+            // tenth of the last full read: on a busy server the plans compiled in the seconds since a flush can refill the
+            // cache past a tenth (T1 missed its reset under the parallel suite, CI run 44501859448). The tracker decides
+            // whether it was a reset; an extra full read costs one read.
             _topRuns = 0;
             return await TopQueriesAsync(connection, ct).ConfigureAwait(false);
         }
+        else if (cache is { } grown && grown > _planCachePeak) _planCachePeak = grown;
         return PaneResult<TopQueryRead>.Ok(new TopQueryRead(list.ToArray(), full, null));
     }
 
