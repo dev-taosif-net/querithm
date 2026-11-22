@@ -305,7 +305,7 @@ public class Tier2CompletionTests(ITestOutputHelper output)
     public void Incomplete_predicates_and_trailing_garbage_still_resolve()
     {
         var where = Complete("SELECT * FROM dbo.Orders o WHERE |");
-        HasColumn(where, "OrderId", "bigint");
+        HasColumn(where, "o.OrderId", "bigint");
         var and = Complete("SELECT * FROM dbo.Orders o JOIN dbo.Customers c ON c.CustomerId = o.CustomerId WHERE o.Status = N'x' AND c.|");
         HasColumn(and, "FullName", "nvarchar(200)");
         var broken = Complete("SELECT o.| FROM dbo.Orders o WHERE o.Status =");
@@ -318,6 +318,31 @@ public class Tier2CompletionTests(ITestOutputHelper output)
         HasColumn(subq, "CustomerId", "int");
         var update = Complete("UPDATE o SET | FROM dbo.Orders o WHERE o.OrderId = 1");
         Item(update, "OrderId");
+    }
+
+    [Theory]
+    [InlineData("SELECT * FROM dbo.Orders o WHERE Ord|")]
+    [InlineData("SELECT | FROM dbo.Orders o")]
+    [InlineData("SELECT * FROM dbo.Orders AS o ORDER BY |")]
+    [InlineData("SELECT COUNT(*) FROM dbo.Orders o GROUP BY |")]
+    [InlineData("DELETE o FROM dbo.Orders o WHERE |")]
+    [InlineData("UPDATE o SET Status = N'x' FROM dbo.Orders o WHERE |")]
+    public void A_single_aliased_source_is_qualified_through_its_alias(string sql)
+    {
+        // Tier 1 offers `o.OrderId` here too (complete.ts expression): the same label merges, never a bare duplicate.
+        var items = Complete(sql);
+        HasColumn(items, "o.OrderId", "bigint");
+        // ORDER BY also names the select list's output columns, bare (ORDER BY OrderId is valid) — a separate item.
+        Assert.DoesNotContain(items, i => i.Kind == CompletionKind.Column && i.Label == "OrderId" && i.Documentation != "select-list column");
+    }
+
+    [Fact]
+    public void A_single_unaliased_source_and_a_set_list_keep_bare_columns()
+    {
+        HasColumn(Complete("SELECT * FROM dbo.Orders WHERE |"), "OrderId", "bigint");
+        var set = Complete("UPDATE o SET Status = N'x', | FROM dbo.Orders o");
+        HasColumn(set, "OrderId", "bigint");
+        Assert.DoesNotContain(set, i => i.Label == "o.OrderId");
     }
 
     [Fact]

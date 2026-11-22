@@ -797,6 +797,10 @@ class Builder {
   private expression(clause: string): void {
     const tables = this.ctx.tablesInScope;
     const multi = tables.length > 1;
+    // A table the user gave an alias is referred to through it (`FROM emp e WHERE |` → `e.id`), also when it is the only
+    // one. Not in SET: an UPDATE / ON CONFLICT / ON DUPLICATE KEY target column cannot be qualified on PostgreSQL,
+    // SQLite and DuckDB.
+    const qualify = (t: TableInScope) => multi || (t.alias !== undefined && clause !== "set");
     const nearest = this.nearestTable();
     if (clause === "on") this.fkSnippets();
     if (clause === "groupBy" && this.ctx.nonAggregatedColumns?.length) {
@@ -824,8 +828,8 @@ class Builder {
     for (const a of this.ctx.selectAliases ?? []) {
       this.cands.push({ label: a, kind: "column", detail: "select-list alias", group: 0, order: 2, insertText: this.src(a) });
     }
-    for (const t of tables) this.columnCands(t, t === nearest ? 1 : 2, multi);
-    if (clause === "select") for (const t of tables) this.allColumnsCand(t, multi);
+    for (const t of tables) this.columnCands(t, t === nearest ? 1 : 2, qualify(t));
+    if (clause === "select") for (const t of tables) this.allColumnsCand(t, qualify(t));
     for (const t of tables) {
       if (t.alias) {
         const target = t.isDerived ? "derived table" : t.schema ? `${t.schema}.${t.name}` : t.name;

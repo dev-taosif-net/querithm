@@ -60,6 +60,38 @@ describe("completion: clause words are never aliases (every engine)", () => {
   });
 });
 
+describe("completion: a single aliased table's columns go through its alias (every engine)", () => {
+  const colItem = (items: Tier1Item[], label: string) => items.find((i) => i.kind === "column" && i.label === label);
+  for (const d of ENGINES) {
+    const total = N(d, "total");
+    it(`${d}: WHERE / select list / ORDER BY insert alias.column`, () => {
+      for (const sql of ["SELECT * FROM orders o WHERE |", "SELECT * FROM orders o WHERE tot|", "SELECT | FROM orders o", "SELECT * FROM orders AS o ORDER BY |"]) {
+        const items = run(sql, d);
+        expect(ins(colItem(items, `o.${total}`)), `${sql}`).toBe(`o.${total}`);
+        expect(colItem(items, total), `${sql}: no bare duplicate`).toBeUndefined();
+      }
+      expect(colItem(run("SELECT * FROM orders o WHERE tot|", d), `o.${total}`)?.filterText).toBe(total);
+    });
+    it(`${d}: an unaliased table's columns stay bare`, () => {
+      expect(ins(colItem(run("SELECT * FROM orders WHERE |", d), total))).toBe(total);
+    });
+  }
+  // UPDATE t AS x SET col: a SET target cannot be qualified on PostgreSQL, SQLite and DuckDB, so the SET list stays bare.
+  for (const d of ["pg", "mySql", "sqlite", "duckDb", "oracle"] as const) {
+    it(`${d}: UPDATE t x SET | keeps target columns bare; its WHERE goes through the alias`, () => {
+      const total = N(d, "total");
+      expect(ins(colItem(run("UPDATE orders o SET |", d), total))).toBe(total);
+      expect(colItem(run("UPDATE orders o SET |", d), `o.${total}`)).toBeUndefined();
+      expect(ins(colItem(run("UPDATE orders o SET total = 1 WHERE |", d), `o.${total}`))).toBe(`o.${total}`);
+    });
+  }
+  it("pg: INSERT INTO t AS x … ON CONFLICT DO UPDATE SET | keeps target columns bare", () => {
+    const items = run("INSERT INTO orders AS o (total) VALUES (1) ON CONFLICT (order_id) DO UPDATE SET |", "pg");
+    expect(ins(colItem(items, "total"))).toBe("total");
+    expect(colItem(items, "o.total")).toBeUndefined();
+  });
+});
+
 describe("completion: names from the statement are inserted as written (every engine)", () => {
   for (const d of ENGINES) {
     it(`${d}: alias-qualified columns and the alias itself are not re-quoted`, () => {

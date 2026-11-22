@@ -250,6 +250,19 @@ public class DuckDbLanguageTests
     }
 
     [Fact]
+    public void Tier_two_qualifies_a_single_aliased_tables_columns_except_in_a_set_list()
+    {
+        var where = Complete("SELECT * FROM orders o WHERE |");
+        Assert.Contains(where, c => c.Kind == CompletionKind.Column && c.Label == "o.CustomerId" && c.InsertText == null);
+        Assert.Equal("o.\"order\"", where.Single(c => c.Label == "o.order").InsertText);
+        Assert.DoesNotContain(where, c => c.Kind == CompletionKind.Column && c.Label == "CustomerId");
+        Assert.Contains(Complete("SELECT * FROM orders WHERE |"), c => c.Label == "CustomerId");
+        var set = Complete("UPDATE orders AS o SET |");
+        Assert.Contains(set, c => c.Label == "CustomerId");
+        Assert.DoesNotContain(set, c => c.Label == "o.CustomerId");
+    }
+
+    [Fact]
     public void Tier_two_resolves_aliases_case_insensitively_and_inserts_names_as_duckdb_reads_them()
     {
         var cols = Complete("SELECT o.| FROM orders o");

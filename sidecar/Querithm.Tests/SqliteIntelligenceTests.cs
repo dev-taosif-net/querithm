@@ -114,6 +114,20 @@ public class SqliteIntelligenceTests
     static string[] Labels(string marked) => Complete(marked).Select(c => c.Label).Order(StringComparer.Ordinal).ToArray();
 
     [Fact]
+    public void Tier_two_qualifies_a_single_aliased_tables_columns_except_in_a_set_list()
+    {
+        var where = Complete("SELECT * FROM customer c WHERE na|");
+        Assert.Contains(where, c => c.Kind == CompletionKind.Column && c.Label == "c.name" && c.InsertText == null);
+        Assert.DoesNotContain(where, c => c.Kind == CompletionKind.Column && c.Label == "name");
+        Assert.Equal("oi.\"group\"", Complete("SELECT | FROM [Order Items] oi").Single(c => c.Label == "oi.group").InsertText);
+        Assert.Contains(Complete("SELECT * FROM customer WHERE |"), c => c.Label == "name");
+        // SQLite rejects a qualified SET target (UPDATE t AS x SET x.c = …).
+        var set = Complete("UPDATE customer AS c SET |");
+        Assert.Contains(set, c => c.Label == "name");
+        Assert.DoesNotContain(set, c => c.Label == "c.name");
+    }
+
+    [Fact]
     public void Tier_two_resolves_aliases_case_insensitively_in_every_quote_style_and_inserts_names_sqlite_reads_back()
     {
         var cols = Complete("SELECT oi.| FROM [Order Items] oi");

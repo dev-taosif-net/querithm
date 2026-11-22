@@ -105,6 +105,18 @@ public class PgTier2CompletionTests
         { "insert returning", "INSERT INTO orders (id) VALUES (1) RETURNING |", ["id", "status"], [] },
         { "delete returning alias", "DELETE FROM orders o WHERE o.id = 1 RETURNING o.|", ["status"], [] },
         { "update from", "UPDATE orders o SET status = 'x' FROM customers c WHERE c.|", ["full_name"], ["status"] },
+        // One aliased source: its columns through the alias (tier 1 offers the same labels), none bare.
+        { "single alias where", "SELECT * FROM orders o WHERE stat|", ["o.status", "o.id"], ["status", "id"] },
+        { "single alias select list", "SELECT | FROM orders AS o", ["o.status", "o.total_amount"], ["status"] },
+        { "single alias order by", "SELECT * FROM customers c ORDER BY |", ["c.full_name"], ["full_name"] },
+        { "single alias delete where", "DELETE FROM orders o WHERE |", ["o.status"], ["status"] },
+        { "single alias update where", "UPDATE orders o SET status = 'x' WHERE |", ["o.status"], ["status"] },
+        { "single alias returning", "UPDATE orders o SET status = 'x' RETURNING |", ["o.status"], ["status"] },
+        { "no alias stays bare", "SELECT * FROM orders WHERE |", ["status"], ["orders.status"] },
+        // A SET target cannot be qualified (UPDATE t AS x SET x.c is an error): bare there, the alias still offered.
+        { "single alias set list bare", "UPDATE orders o SET status = 'x', |", ["status", "total_amount"], ["o.status"] },
+        // Tier 2 lists no target columns here (tier 1 does); it must not offer qualified ones either.
+        { "on conflict set list bare", "INSERT INTO orders AS o (id) VALUES (1) ON CONFLICT (id) DO UPDATE SET |", [], ["o.status", "o.id"] },
         { "merge using", "MERGE INTO orders t USING customers s ON s.|", ["full_name"], [] },
         // ---- functions in FROM
         { "set-returning function columns", "SELECT f.| FROM public.orders_for(1) f", ["order_id", "total"], [] },
@@ -118,7 +130,7 @@ public class PgTier2CompletionTests
         { "rowtype fields", Fn + "DECLARE r orders%ROWTYPE; BEGIN r.| END $$;", ["status", "total_amount"], [] },
         { "table row type", Fn + "DECLARE r public.customers; BEGIN r.| END $$;", ["full_name"], [] },
         { "select into a record", Fn + "DECLARE rec record; BEGIN SELECT c.customer_id, c.email INTO rec FROM customers c LIMIT 1; RETURN rec.|; END $$;", ["customer_id", "email"], ["full_name"] },
-        { "variables in a where clause", Fn + "DECLARE v_limit int := 10; BEGIN PERFORM 1 FROM orders o WHERE o.id < | ; END $$;", ["v_limit", "p_id", "status"], [] },
+        { "variables in a where clause", Fn + "DECLARE v_limit int := 10; BEGIN PERFORM 1 FROM orders o WHERE o.id < | ; END $$;", ["v_limit", "p_id", "o.status"], ["status"] },
         { "trigger function variables", "CREATE FUNCTION t() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF tg_| THEN RETURN NEW; END IF; END $$;", ["tg_op", "new", "old"], [] },
         { "do block", "DO $$ DECLARE v_count bigint; BEGIN SELECT count(*) INTO v_| FROM orders; END $$;", ["v_count"], [] },
         { "named dollar tag", "CREATE FUNCTION h() RETURNS int LANGUAGE plpgsql AS $fn$ DECLARE v_x int; BEGIN RETURN v|; END $fn$;", ["v_x"], [] },

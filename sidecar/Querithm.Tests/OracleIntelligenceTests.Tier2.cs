@@ -63,6 +63,21 @@ public partial class OracleIntelligenceTests
 
     static string[] Labels(string marked, string? schema = "APP") => Complete(marked, schema).Select(c => c.Label).Order(StringComparer.Ordinal).ToArray();
 
+    [Fact]
+    public void Tier_two_qualifies_a_single_aliased_tables_columns_except_in_a_set_list()
+    {
+        static bool Is(CompletionItem c, string label) => c.Kind == CompletionKind.Column && string.Equals(c.Label, label, StringComparison.OrdinalIgnoreCase);
+        var where = Complete("SELECT * FROM emp e WHERE en|");
+        var ename = Assert.Single(where, c => Is(c, "e.ENAME"));
+        Assert.StartsWith("e.", ename.InsertText ?? ename.Label, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(where, c => Is(c, "ENAME"));
+        Assert.Contains(Complete("SELECT | FROM emp e"), c => Is(c, "e.ENAME"));
+        Assert.Contains(Complete("SELECT * FROM emp WHERE |"), c => Is(c, "ENAME"));
+        var set = Complete("UPDATE emp e SET |");
+        Assert.Contains(set, c => Is(c, "ENAME"));
+        Assert.DoesNotContain(set, c => Is(c, "e.ENAME"));
+    }
+
     static SignatureHelp Sig(string marked)
     {
         var at = marked.IndexOf('|');

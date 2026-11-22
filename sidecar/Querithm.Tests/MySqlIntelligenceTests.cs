@@ -128,6 +128,21 @@ public class MySqlIntelligenceTests
     static string[] Labels(string marked, MySqlLanguageService? service = null) => Complete(marked, service).Select(c => c.Label).Order(StringComparer.Ordinal).ToArray();
 
     [Fact]
+    public void Tier_two_qualifies_a_single_aliased_tables_columns_except_in_a_set_list()
+    {
+        var where = Complete("SELECT * FROM orders o WHERE |");
+        Assert.Contains(where, c => c.Kind == CompletionKind.Column && c.Label == "o.CustomerId" && c.InsertText == null);
+        Assert.Equal("o.`order`", where.Single(c => c.Label == "o.order").InsertText);
+        Assert.DoesNotContain(where, c => c.Kind == CompletionKind.Column && c.Label == "CustomerId");
+        Assert.Contains(Complete("SELECT | FROM orders AS o"), c => c.Label == "o.CustomerId");
+        Assert.Contains(Complete("UPDATE orders o SET CustomerId = 1 WHERE |"), c => c.Label == "o.CustomerId");
+        Assert.Contains(Complete("SELECT * FROM orders WHERE |"), c => c.Label == "CustomerId");
+        var set = Complete("UPDATE orders o SET |");
+        Assert.Contains(set, c => c.Label == "CustomerId");
+        Assert.DoesNotContain(set, c => c.Label == "o.CustomerId");
+    }
+
+    [Fact]
     public void Tier_two_resolves_backticked_names_case_insensitively_and_inserts_them_in_backticks()
     {
         var cols = Complete("SELECT o.| FROM `ORDERS` o");

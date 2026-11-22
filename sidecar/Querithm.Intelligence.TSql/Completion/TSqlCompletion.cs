@@ -433,11 +433,14 @@ sealed class ItemBuilder(DocModel doc, CursorInfo cur, Env env, Resolver resolve
     {
         var sc = GetScopes();
         var multi = sc.Inner.Count > 1;
+        // A source the user aliased is referred to through its alias, also when it is the only one (tier 1 does the
+        // same, complete.ts expression); not in an UPDATE's SET list, where tier 1 keeps target columns bare.
+        var inSet = cur.Seg is { } seg && TSqlCompletion.ClauseAt(doc, seg.First, cur.Prev) == "SET";
         var order = 0;
         foreach (var s in sc.Inner)
             foreach (var c in s.Columns)
             {
-                var label = multi ? $"{Quote(s.Exposed)}.{Quote(c.Name)}" : Quote(c.Name);
+                var label = multi || (s.HasAlias && !inSet) ? $"{Quote(s.Exposed)}.{Quote(c.Name)}" : Quote(c.Name);
                 Add(label, CompletionKind.Column, c.Type, "1", doc: ColDoc(c, s), sortKey: (order++).ToString("D5"));
             }
         if (sc.InOrderBy && sc.Spec != null)

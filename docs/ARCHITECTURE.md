@@ -1017,7 +1017,7 @@ the qualifier is resolved against aliases, then CTEs, then schemas, then databas
 | Context | Items offered |
 |---|---|
 | from, join, update, insertInto, delete | tables, views, TVFs, CTEs, synonyms; schema-qualified unless `dbo` |
-| select, where, on, groupBy, having, orderBy, set with no qualifier | columns of all tablesInScope (alias-prefixed when more than one table), aliases, variables, scalar functions, keywords |
+| select, where, on, groupBy, having, orderBy, set with no qualifier | columns of all tablesInScope (alias-prefixed when more than one table, or when the one table has an alias — `FROM emp e WHERE id|` inserts `e.id`; never in a SET list, whose target columns PostgreSQL, SQLite and DuckDB reject qualified), aliases, variables, scalar functions, keywords |
 | any clause with qualifier = alias | that table's columns only |
 | on | columns, plus FK-based join condition snippets `a.Id = b.ParentId` |
 | exec | procedures, sorted by recently used |
@@ -1097,7 +1097,8 @@ execution. It resolves:
   `p => ` for `CALL proc(|` and function calls; signature help with overloads and the active (or named)
   parameter.
 
-Columns are alias-prefixed when several sources are in scope, like tier 1; names that need it are
+Columns are alias-prefixed when several sources are in scope or the one source has an alias (not in a SET list),
+like tier 1; names that need it are
 quoted (mixed case, reserved words). Anything it cannot place answers nothing, and tier 1 alone stands.
 Metric 27 gates its latency.
 

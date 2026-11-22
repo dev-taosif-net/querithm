@@ -155,10 +155,13 @@ public static class PgTier2Completion
         var visible = scope.VisibleAt(ctx.WordStart).Where(s => !s.InsertTarget || ctx.Statement.Any(t => t.Is("RETURNING") && t.Offset < ctx.WordStart)).ToList();
         // UPDATE … SET | and INSERT … RETURNING | see the target's columns.
         var labels = visible.Select(s => s.Label).Distinct().Count();
+        // A source the user aliased is referred to through its alias, also when it is the only one (tier 1 does the same,
+        // complete.ts expression); never in a SET list, whose target columns cannot be qualified (PostgreSQL, SQLite, DuckDB).
+        var aliased = !InSetList(ctx.Before);
         foreach (var src in visible)
             foreach (var c in r.Columns(src, scope))
             {
-                if (labels > 1) items.Add($"{src.Label}.{c.Name}", CompletionKind.Column, c.Type, "0", $"{PgIdent.Quote(src.Label)}.{PgIdent.Quote(c.Name)}", $"{src.Label}.{c.Name}");
+                if (labels > 1 || (aliased && src.Alias != null)) items.Add($"{src.Label}.{c.Name}", CompletionKind.Column, c.Type, "0", $"{PgIdent.Quote(src.Label)}.{PgIdent.Quote(c.Name)}", $"{src.Label}.{c.Name}");
                 else items.Add(c.Name, CompletionKind.Column, c.Type, "0", PgIdent.Quote(c.Name), $"{src.Label}.{c.Name}");
             }
         foreach (var v in vars)
@@ -253,7 +256,26 @@ public static class PgTier2Completion
         return found;
     }
 
-    static readonly HashSet<string> ObjectWords = new(["FROM", "JOIN", "INTO", "UPDATE", "TABLE", "ONLY", "LATERAL", "USING"], StringComparer.OrdinalIgnoreCase);
+    static readonly HashSet<string> ClauseWords = new(["SELECT", "FROM", "JOIN", "ON", "USING", "WHERE", "GROUP", "HAVING", "WINDOW", "QUALIFY", "ORDER", "LIMIT", "OFFSET", "FETCH", "RETURNING", "VALUES", "SET", "UPDATE", "INTO", "CONNECT", "START"], StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The cursor is in a SET list: the nearest clause word before it at its own nesting level is SET (UPDATE … SET,
+    /// ON CONFLICT … DO UPDATE SET, MERGE … UPDATE SET) or MySQL's ON DUPLICATE KEY UPDATE. On tokens, never on text.
+    /// </summary>
+    static bool InSetList(List<Tok> b)
+    {
+        var depth = 0;
+        for (var k = b.Count - 1; k >= 0; k--)
+        {
+            if (b[k].IsP(")")) depth++;
+            else if (b[k].IsP("(")) { if (depth-- == 0) return false; }
+            else if (depth == 0 && b[k].Kind == PgTokenKind.Word && ClauseWords.Contains(b[k].Text))
+                return b[k].Is("SET") || (b[k].Is("UPDATE") && k >= 1 && b[k - 1].Is("KEY"));
+        }
+        return false;
+    }
+
+    static readonly HashSet<string> ObjectWords =new(["FROM", "JOIN", "INTO", "UPDATE", "TABLE", "ONLY", "LATERAL", "USING"], StringComparer.OrdinalIgnoreCase);
     static readonly HashSet<string> FromEnd = new(["WHERE", "GROUP", "ORDER", "HAVING", "LIMIT", "OFFSET", "ON", "SET", "RETURNING", "WINDOW", "UNION", "EXCEPT", "INTERSECT", "SELECT", "VALUES"], StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The cursor names a table: after FROM / JOIN / INTO / UPDATE …, or after a comma in a FROM list.</summary>

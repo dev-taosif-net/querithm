@@ -22,7 +22,9 @@ describe("complete: qualifier contexts", () => {
   it("alias qualifier in the select list → one item inserting all columns", () => {
     expect(byLabel(itemsOf("SELECT o.| FROM dbo.Orders o"), "(all columns)")?.insertText).toBe("OrderId, o.CustomerId, o.OrderDate, o.TotalAmount, o.Status");
     expect(byLabel(itemsOf("SELECT * FROM dbo.Orders o WHERE o.|"), "(all columns)")).toBeUndefined();
-    expect(byLabel(itemsOf("SELECT | FROM dbo.Orders o"), "(all columns of o)")?.insertText).toBe("OrderId, CustomerId, OrderDate, TotalAmount, Status");
+    // One aliased table: through its alias, like its columns.
+    expect(byLabel(itemsOf("SELECT | FROM dbo.Orders o"), "(all columns of o)")?.insertText).toBe("o.OrderId, o.CustomerId, o.OrderDate, o.TotalAmount, o.Status");
+    expect(byLabel(itemsOf("SELECT | FROM dbo.Orders"), "(all columns of Orders)")?.insertText).toBe("OrderId, CustomerId, OrderDate, TotalAmount, Status");
     expect(byLabel(itemsOf("SELECT | FROM dbo.Orders o JOIN dbo.Customers c ON 1 = 1"), "(all columns of c)")?.insertText).toBe("c.CustomerId, c.FullName, c.Email");
   });
   it("CTE qualifier → CTE columns", () => {
@@ -77,6 +79,45 @@ describe("complete: expression contexts", () => {
     const l = colLabels("SELECT | FROM dbo.Orders");
     expect(l).toContain("OrderId");
     expect(l.some((x) => x.includes("."))).toBe(false);
+  });
+  describe("single aliased table → columns through the alias", () => {
+    const col = (name: string, ordinal: number) => ({ name, type: "int", nullable: false, pk: ordinal === 1, identity: false, computed: false, ordinal });
+    const idx = buildSchemaIndex({
+      ...SNAPSHOT, fks: [],
+      objects: [{ id: 1, schema: "saas", name: "empEmployeeBasicInfo", kind: "table", columns: [col("intEmployeeBasicInfoId", 1), col("strEmployeeName", 2)] }],
+    }, "tsql", []);
+    const pick = (sql: string) => byLabel(itemsOf(sql, "tsql", idx), "ebi.intEmployeeBasicInfoId");
+    it("WHERE: the typed word becomes alias.column", () => {
+      const c = pick("SELECT * FROM saas.empEmployeeBasicInfo ebi WHERE intEmp|");
+      expect(c?.kind).toBe("column");
+      expect(c?.insertText ?? c?.label).toBe("ebi.intEmployeeBasicInfoId");
+      // Matched and filtered on the column name, so typing it finds the item.
+      expect(c?.filterText).toBe("intEmployeeBasicInfoId");
+      expect(itemsOf("SELECT * FROM saas.empEmployeeBasicInfo ebi WHERE intEmp|", "tsql", idx)[0].label).toBe("ebi.intEmployeeBasicInfoId");
+    });
+    it("select list, before and after FROM is written", () => {
+      expect(pick("SELECT | FROM saas.empEmployeeBasicInfo ebi")).toBeDefined();
+      expect(pick("SELECT intEmp| FROM saas.empEmployeeBasicInfo ebi")).toBeDefined();
+      expect(pick("SELECT ebi.strEmployeeName, | FROM saas.empEmployeeBasicInfo AS ebi")).toBeDefined();
+    });
+    it("ORDER BY / GROUP BY / HAVING / ON", () => {
+      for (const sql of [
+        "SELECT * FROM saas.empEmployeeBasicInfo ebi ORDER BY |",
+        "SELECT COUNT(*) FROM saas.empEmployeeBasicInfo ebi GROUP BY |",
+        "SELECT COUNT(*) FROM saas.empEmployeeBasicInfo ebi GROUP BY ebi.strEmployeeName HAVING MAX(|) > 1",
+      ]) expect(pick(sql), sql).toBeDefined();
+    });
+    it("no bare duplicate of an aliased column", () => {
+      expect(byLabel(itemsOf("SELECT * FROM saas.empEmployeeBasicInfo ebi WHERE |", "tsql", idx), "intEmployeeBasicInfoId")).toBeUndefined();
+    });
+    it("without an alias the column stays bare", () => {
+      const items = itemsOf("SELECT * FROM saas.empEmployeeBasicInfo WHERE intEmp|", "tsql", idx);
+      expect(byLabel(items, "intEmployeeBasicInfoId")).toBeDefined();
+      expect(items.some((i) => i.label.includes(".intEmployeeBasicInfoId"))).toBe(false);
+    });
+    it("after a typed qualifier the column is bare (the alias is already written)", () => {
+      expect(byLabel(itemsOf("SELECT * FROM saas.empEmployeeBasicInfo ebi WHERE ebi.|", "tsql", idx), "intEmployeeBasicInfoId")).toBeDefined();
+    });
   });
   it("cursor before FROM: nearest table is the first after the cursor", () => {
     const items = itemsOf("SELECT | FROM dbo.Orders o JOIN dbo.Customers c ON 1 = 1");
