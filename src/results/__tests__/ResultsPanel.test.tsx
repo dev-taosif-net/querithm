@@ -779,3 +779,127 @@ describe("ResultsPanel edit mode", () => {
     expect(edit.applyChanges).toHaveBeenCalledWith("tab1", "e1", p.staging);
   });
 });
+
+// The edit option that "often did not appear": a result whose table the cached metadata did not hold was read-only for
+// good, with the reason only in a tooltip. Now the sidecar reads the metadata again and sends the final verdict
+// (query.resultEdit); meanwhile the panel says it is checking, and a read-only set says why in words.
+describe.each(["mssql", "pg", "mysql", "oracle", "sqlite", "duckdb"] as const)("ResultsPanel: why a result cannot be edited, and the verdict that arrives later (%s)", (engine) => {
+  const STALE = "Read-only: saas.empEmployeeBasicInfo is not in this database's cached metadata";
+
+  function setup(edits: Record<number, unknown>, sets = [ordersSet()]) {
+    useProfiles.setState({ profiles: [{ id: "p1", engine, environment: "dev" } as never] });
+    useExecutions.setState({ views: { e1: view("e1", { edits: edits as never }) } });
+    registerExecution("e1", ...sets);
+    useTabs.setState({ tabs: { tab1: tab() } });
+  }
+  /** A complete result set with its columns and not one row: SELECT * FROM an empty table. */
+  function emptySet() {
+    const rs = new (ordersSet().constructor as typeof import("../model").ArrowResultSet)(0);
+    rs.setSchema(ordersSet().schema!);
+    rs.finish(false);
+    return rs;
+  }
+  const toggle = () => document.querySelector("[data-q-edit-toggle]") as HTMLButtonElement;
+  const note = () => document.querySelector("[data-q-edit-note]")?.textContent;
+
+  it("says it is checking while the metadata is read again, then offers Edit by itself", async () => {
+    setup({ 0: editInfo({ editable: false, rechecking: true, reason: STALE }) });
+    render(<LivePanel />);
+    await screen.findByTestId("grid");
+    // Not "Read-only": the answer is still coming.
+    expect(screen.queryByRole("button", { name: "Read-only" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Checking…" })).toBe(toggle());
+    expect(toggle().getAttribute("title")).toMatch(/^Checking whether these rows can be edited/);
+    expect(toggle().getAttribute("aria-busy")).toBe("true");
+    expect(note()).toMatch(/Checking whether these rows can be edited/);
+    fireEvent.click(toggle());
+    expect(toast).not.toHaveBeenCalled();
+    expect((grid.props as { staging?: unknown }).staging).toBeUndefined();
+
+    // query.resultEdit: the table is in the metadata now.
+    act(() => useExecutions.getState().patch("e1", (v) => ({ edits: { ...v.edits, 0: editInfo() } })));
+    expect(screen.queryByRole("button", { name: "Checking…" })).toBeNull();
+    expect(note()).toBeUndefined();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("button", { name: "Apply" })).toBeTruthy();
+    expect((grid.props as { staging?: unknown }).staging).toBe(stagings.get("e1:0"));
+  });
+
+  it("a verdict that stays read-only says why: in the footer, on the lock, and when the lock is clicked", async () => {
+    setup({ 0: editInfo({ editable: false, rechecking: true, reason: STALE }) });
+    render(<LivePanel />);
+    await screen.findByTestId("grid");
+    const final = `${STALE} (checked against freshly read metadata)`;
+    act(() => useExecutions.getState().patch("e1", (v) => ({ edits: { ...v.edits, 0: editInfo({ editable: false, rechecking: false, reason: final }) } })));
+    const lock = screen.getByRole("button", { name: "Read-only" });
+    expect(lock.getAttribute("title")).toBe(final);
+    // In words on screen, with the whole sentence as its tooltip when the footer is too narrow for it.
+    expect(note()).toBe(`· ${final}`);
+    expect(document.querySelector("[data-q-edit-note]")!.getAttribute("title")).toBe(final);
+    expect(document.querySelector("[data-q-edit-note]")!.closest("[data-q-panel-footer]")).toBeTruthy();
+    fireEvent.click(lock);
+    expect(toast).toHaveBeenCalledWith("info", final);
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+  });
+
+  it("a result with no rows offers Edit like any other, and its first row can be added", async () => {
+    setup({ 0: editInfo() }, [emptySet()]);
+    render(<LivePanel />);
+    await screen.findByTestId("grid");
+    expect((grid.props as { rs: { rowCount: number } }).rs.rowCount).toBe(0);
+    expect(note()).toBeUndefined();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const staging = stagings.get("e1:0")!;
+    expect((grid.props as { staging?: unknown }).staging).toBe(staging);
+    expect(screen.getByRole("button", { name: "Row" }).getAttribute("aria-disabled")).toBeNull();
+    act(() => {
+      const index = staging.addRow();
+      staging.setCell({ kind: "inserted", index }, 1, { value: "first" });
+    });
+    expect(staging.counts.inserts).toBe(1);
+    expect(screen.getAllByText(/1 new/).length).toBeGreaterThan(0); // the tool row and the footer both count it
+    expect(screen.getByRole("button", { name: "Apply" }).getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("an empty result of a table the metadata does not hold yet is checked, not refused", async () => {
+    setup({ 0: editInfo({ editable: false, rechecking: true, reason: STALE }) }, [emptySet()]);
+    render(<LivePanel />);
+    await screen.findByTestId("grid");
+    expect(screen.getByRole("button", { name: "Checking…" })).toBeTruthy();
+    act(() => useExecutions.getState().patch("e1", (v) => ({ edits: { ...v.edits, 0: editInfo() } })));
+    expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
+  });
+
+  it("a result that came without any verdict says so, not a guess about the query", async () => {
+    setup({});
+    render(<LivePanel />);
+    await screen.findByTestId("grid");
+    expect(screen.getByRole("button", { name: "Read-only" }).getAttribute("title")).toBe("Read-only: no edit information came with this result — run the query again");
+  });
+
+  it("an older run, a closed session or an interrupted set is never shown as checking: no answer would enable Edit", async () => {
+    setup({ 0: editInfo({ editable: false, rechecking: true, reason: STALE }) });
+    const { unmount } = render(<ResultsPanel tab={tab({ sessionId: undefined })} />);
+    await screen.findByTestId("grid");
+    expect(screen.queryByRole("button", { name: "Checking…" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Read-only" }).getAttribute("title")).toBe(STALE);
+    unmount();
+
+    setup({ 0: editInfo({ editable: false, rechecking: true, reason: STALE }) }, [ordersSet(0, false)]);
+    act(() => executionData.get("e1")!.finishStream());
+    render(<ResultsPanel tab={tab()} />);
+    await screen.findByTestId("grid");
+    expect(screen.queryByRole("button", { name: "Checking…" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Read-only" }).getAttribute("title")).toMatch(/stopped before every row arrived/);
+  });
+
+  it("the chart view carries no edit note (Edit belongs to the grid)", async () => {
+    setup({ 0: editInfo({ editable: false, reason: STALE }) });
+    useTabs.setState({ tabs: { tab1: tab({ charts: { 0: { view: "chart", spec: null } } }) } });
+    render(<LivePanel />);
+    await screen.findByTestId("chart");
+    expect(note()).toBeUndefined();
+    expect(toggle()).toBeNull();
+  });
+});

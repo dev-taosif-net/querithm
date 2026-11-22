@@ -36,6 +36,11 @@ public sealed record ResultEditInfo
     public bool Editable { get; init; }
     /// <summary>Why the result set is read-only, shown on the grid's badge.</summary>
     public string? Reason { get; init; }
+    /// <summary>
+    /// The read-only verdict may come from cached metadata that is out of date (a table created or altered since it was
+    /// read): the sidecar is reading the metadata again, and a <c>query.resultEdit</c> with the final verdict follows.
+    /// </summary>
+    public bool Rechecking { get; init; }
     public long? ObjectId { get; init; }
     public string? Schema { get; init; }
     public string? Table { get; init; }

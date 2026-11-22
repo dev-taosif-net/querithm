@@ -39,40 +39,69 @@ public static class OracleResultSources
     /// for an unqualified name, or the source is not in the snapshot. A synonym is followed to the object it names; a view
     /// keeps its own id (the analyzer says why it is read-only).
     /// </summary>
-    public static ColumnOrigin?[]? Predict(string statement, SchemaSnapshot snapshot, string? currentSchema, IReadOnlyList<string> resultNames)
+    public static ColumnOrigin?[]? Predict(string statement, SchemaSnapshot snapshot, string? currentSchema, IReadOnlyList<string> resultNames) =>
+        Trace(statement, snapshot, currentSchema, resultNames).Columns;
+
+    /// <summary>What the user is told when the statement is not the one shape this predictor reads.</summary>
+    const string NotPlainShape = "on Oracle only a plain SELECT from one table can be edited (no joins, DISTINCT, GROUP BY, CONNECT BY or subquery in FROM)";
+
+    /// <summary>
+    /// <see cref="Predict"/> with the reason when nothing is predicted, and whether newer metadata may change that: the
+    /// table is not in the snapshot, or <c>*</c> gave another number of columns than the snapshot lists.
+    /// </summary>
+    public static TracedOrigins Trace(string statement, SchemaSnapshot snapshot, string? currentSchema, IReadOnlyList<string> resultNames)
     {
+        var shape = new TracedOrigins(null, NotPlainShape);
         var code = Code(statement);
-        if (code == null || code.Count < 4 || !code[0].Is("SELECT")) return null;
+        if (code == null || code.Count < 4 || !code[0].Is("SELECT")) return shape;
         var fromAt = TopLevelIndex(code, 1, t => t.Is("FROM"));
-        if (fromAt < 2 || code[1].Is("DISTINCT") || code[1].Is("UNIQUE")) return null;
+        if (fromAt < 2 || code[1].Is("DISTINCT") || code[1].Is("UNIQUE")) return shape;
         var itemsStart = code[1].Is("ALL") ? 2 : 1;
-        if (itemsStart >= fromAt) return null;
+        if (itemsStart >= fromAt) return shape;
 
         var src = Source(code, fromAt + 1);
-        if (src is not { } s) return null;
+        if (src is not { } s) return shape;
+        if (s.Schema == null && currentSchema == null)
+            return new TracedOrigins(null, $"the session's current schema is not known, so {s.Name} cannot be looked up — write it with its schema (SCHEMA.{s.Name})");
+        var shown = $"{s.Schema ?? currentSchema}.{s.Name}";
         var obj = Resolve(snapshot, s.Schema, s.Name, currentSchema, out _);
-        if (obj?.Columns == null) return null;
+        // DUAL and the data dictionary are Oracle's own: no snapshot lists them, and no refresh would add them.
+        if (obj == null && Dictionary(s.Schema, s.Name)) return new TracedOrigins(null, $"{s.Name} is an Oracle system object, not a table of this schema");
+        // Not in the snapshot (created since it was read), or listed without its columns: newer metadata may trace it.
+        if (obj == null) return new TracedOrigins(null, $"{shown} is not in this schema's cached metadata", Stale: true);
+        if (obj.Columns == null) return new TracedOrigins(null, $"the columns of {obj.Schema}.{obj.Name} are not in the cached metadata", Stale: true);
         var columns = obj.Columns.Where(c => c.Ordinal < InvisibleOrdinal).OrderBy(c => c.Ordinal).ToList();
 
         var origins = new List<ColumnOrigin?>();
+        var star = false;
         foreach (var item in SplitItems(code, itemsStart, fromAt))
         {
             if (item.Count == 1 && item[0].IsP("*"))
             {
-                if (fromAt - itemsStart != 1) return null; // a bare * stands alone in Oracle
+                if (fromAt - itemsStart != 1) return shape; // a bare * stands alone in Oracle
+                star = true;
                 origins.AddRange(columns.Select(c => (ColumnOrigin?)new ColumnOrigin(obj.Id, c.Name)));
                 continue;
             }
             if (item.Count >= 3 && item[^1].IsP("*") && item[^2].IsP("."))
             {
-                if (!Qualifies(item.GetRange(0, item.Count - 2), s)) return null;
+                if (!Qualifies(item.GetRange(0, item.Count - 2), s)) return shape;
+                star = true;
                 origins.AddRange(columns.Select(c => (ColumnOrigin?)new ColumnOrigin(obj.Id, c.Name)));
                 continue;
             }
             origins.Add(ItemOrigin(item, s, obj, columns));
         }
-        return origins.Count == resultNames.Count ? origins.ToArray() : null;
+        if (origins.Count == resultNames.Count) return new TracedOrigins(origins.ToArray());
+        // * gave another number of columns than the snapshot lists: the table changed since it was read.
+        return star ? new TracedOrigins(null, $"the columns this query returned are not the ones cached for {obj.Schema}.{obj.Name}", Stale: true) : shape;
     }
+
+    static readonly string[] DictionaryPrefixes = ["USER_", "ALL_", "DBA_", "CDB_", "V$", "GV$", "V_$", "GV_$", "NLS_", "SESSION_"];
+
+    /// <summary>DUAL, a dictionary or dynamic performance view, or anything named in SYS / SYSTEM (identities are upper case).</summary>
+    static bool Dictionary(string? schema, string name) =>
+        schema is "SYS" or "SYSTEM" || (schema is null or "PUBLIC" && (name == "DUAL" || DictionaryPrefixes.Any(p => name.StartsWith(p, StringComparison.Ordinal))));
 
     /// <summary>Snapshot columns at or past this ordinal are invisible: never part of <c>*</c> (OracleMetadata.InvisibleOrdinalBase).</summary>
     const int InvisibleOrdinal = 100_000;
@@ -152,11 +181,38 @@ public static class OracleResultSources
         {
             if (code[k].IsP("(")) depth++;
             else if (code[k].IsP(")")) depth--;
-            else if (depth == 0 && (code[k].IsP(",") && !InOrderOrFor(code, i, k) || code[k].Kind == OracleTokenKind.Word && NotPlain.Contains(code[k].Text)))
+            else if (depth == 0 && (code[k].IsP(",") && !InOrderOrFor(code, i, k) || code[k].Kind == OracleTokenKind.Word && NotPlain.Contains(code[k].Text) && !UsedAsName(code, k)))
                 return null;
             else if (code[k].Kind == OracleTokenKind.DbLink) return null;
         }
         return new SourceRef(schema, name, alias);
+    }
+
+    /// <summary>Words that are never a column's name in the tail: Oracle reserves them, whatever the keyword list says.</summary>
+    static readonly HashSet<string> AlwaysClause = new(["GROUP", "HAVING", "CONNECT", "START", "UNION", "INTERSECT", "MINUS", "AS"], StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Words that follow an operand in a condition or a sort key, never the keyword that opens a clause.</summary>
+    static readonly HashSet<string> AfterAName = new(["IS", "IN", "LIKE", "BETWEEN", "NOT", "AND", "OR", "ASC", "DESC", "NULLS"], StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// A <see cref="NotPlain"/> word in the tail that is a column's name there, not a clause: Oracle does not reserve MODEL,
+    /// SAMPLE, PARTITION, WINDOW, FULL, LEFT, RIGHT, VERSIONS…, so <c>WHERE model = 'X'</c> and <c>ORDER BY sample</c> are
+    /// plain. It is a name when it is qualified (<c>t.model</c>), ends the statement, or is followed by an operator, a
+    /// comma, a closing parenthesis or a word of a condition; a clause keyword is followed by another word or by an
+    /// opening parenthesis (MODEL DIMENSION, PARTITION BY, SAMPLE (10), LEFT JOIN, WINDOW w AS), and stays a clause.
+    /// </summary>
+    static bool UsedAsName(List<OracleToken> code, int k)
+    {
+        if (AlwaysClause.Contains(code[k].Text) || OracleKeywords.IsReserved(code[k].Text)) return false;
+        if (k > 0 && code[k - 1].IsP(".")) return true;
+        if (k + 1 >= code.Count) return true;
+        var next = code[k + 1];
+        return next.Kind switch
+        {
+            OracleTokenKind.Punct or OracleTokenKind.Operator => !next.IsP("("),
+            OracleTokenKind.Word => AfterAName.Contains(next.Text),
+            _ => false,
+        };
     }
 
     /// <summary>A top-level comma after ORDER BY or FOR UPDATE OF lists sort keys or columns, not tables.</summary>

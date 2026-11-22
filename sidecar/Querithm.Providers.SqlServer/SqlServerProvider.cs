@@ -223,13 +223,21 @@ public sealed partial class SqlServerProvider : IDbProvider
     public string? ResultEditRefusal(string batchText, int resultInBatch, SchemaSnapshot? snapshot) =>
         snapshot == null ? null : ResultSources.Refusal(batchText, snapshot, resultInBatch);
 
-    public ColumnOrigin?[]? ResultOrigins(DbDataReader reader, IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot)
+    public TracedOrigins ResultOrigins(IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot, string? scope)
     {
-        if (snapshot == null || ResultSources.Predict(batchText, snapshot) is not { } sets || resultInBatch >= sets.Count || sets[resultInBatch] is not { } predicted) return null;
-        if (predicted.Length != reader.FieldCount) return null;
-        for (var i = 0; i < predicted.Length; i++)
-            if (predicted[i].Name is { } name && !string.Equals(name, reader.GetName(i), StringComparison.OrdinalIgnoreCase)) return null;
-        return predicted.Select(x => x.Origin).ToArray();
+        if (snapshot == null) return TracedOrigins.None;
+        var traced = ResultSources.Trace(batchText, snapshot, resultInBatch);
+        if (traced.Columns is not { } predicted) return new TracedOrigins(null, traced.Why, traced.Stale);
+        // The prediction is checked against what the server returned. A difference means the cached columns are not the
+        // table's any more (a column added, dropped or renamed since), so newer metadata may trace it.
+        var same = predicted.Length == columns.Count;
+        for (var i = 0; same && i < predicted.Length; i++)
+            same = predicted[i].Name is not { } name || string.Equals(name, columns[i].ColumnName, StringComparison.OrdinalIgnoreCase);
+        if (!same)
+            return new TracedOrigins(null, traced.Tables != null
+                ? $"the columns this query returned are not the ones cached for {traced.Tables} — name the columns instead of * if the table has hidden columns"
+                : "the columns this query returned are not the ones Querithm predicted from the batch", Stale: true);
+        return new TracedOrigins(predicted.Select(x => x.Origin).ToArray(), traced.Why, traced.Stale);
     }
 
     static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s;

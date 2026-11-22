@@ -161,6 +161,7 @@ public interface IQuerithmNotifications
     [RpcNotification("query.message")] void QueryMessage(ServerMessage e);
     [RpcNotification("query.messages")] void QueryMessages(QueryMessagesEvent e);
     [RpcNotification("query.resultSet")] void QueryResultSet(QueryResultSetEvent e);
+    [RpcNotification("query.resultEdit")] void QueryResultEdit(QueryResultEditEvent e);
     [RpcNotification("query.plan")] void QueryPlan(QueryPlanEvent e);
     [RpcNotification("query.done")] void QueryDone(QueryDoneEvent e);
     [RpcNotification("session.stateChanged")] void SessionStateChanged(SessionState e);

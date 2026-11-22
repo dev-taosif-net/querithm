@@ -392,7 +392,8 @@ is unchanged.
 `sidecar://notify`): `import.progress`, `dataCompare.progress`, `query.queued`, `query.started`, `query.messages` (M13:
 `{executionId, messages[]}`, a run's server info/print/error lines with line numbers, coalesced — see below; the
 single-message `query.message` stays in the contract and the webview reads both), `query.resultSet` (`{executionId, resultIndex, schema,
-rowCountHint}`), `query.plan`, `query.done` (`{executionId, affectedRows, elapsedMs,
+rowCountHint}`), `query.resultEdit` (`{executionId, resultIndex, edit}`: the final grid-edit verdict of a result set whose
+first one was `rechecking`, §7 Grid editing; sent after `query.done`), `query.plan`, `query.done` (`{executionId, affectedRows, elapsedMs,
 serverElapsedMs?, error?}`), `session.stateChanged`, `meta.updated`, `trace.event`,
 `debug.event`, `monitor.snapshot` (full session rows each tick, new texts only), `monitor.stopped`, `session.blocking`
 (the own-tab blocking banner), `dataPlane.state` (`{connected}`: the data plane lost or regained its reader),
@@ -750,7 +751,32 @@ as driver parameters, never by string substitution.
 **Grid editing (Phase 8, M1).** `query.resultSet` carries `edit: ResultEditInfo`, decided in the
 sidecar from the provider's exact column origins and the cached schema: editable only when every
 table column comes from one base table and the result holds its primary key (else a NOT NULL unique
-index); otherwise read-only with the reason on the grid's badge. Edits are staged in the webview
+index); otherwise read-only with the reason on the lock button, in the footer and in a notification when the lock is
+clicked (§12). **The verdict follows the metadata, not the moment it was cached (2026-11-22).** A read-only verdict that
+out-of-date metadata may explain — no snapshot yet, a table or its columns missing from it, or origins the provider
+calls stale (`TracedOrigins.Stale`: the query names a table the snapshot does not hold, or the result's columns are not
+the cached ones) — is sent as `rechecking`; after the run let go of its connection the sidecar reads the database's
+metadata again (`MetadataService.RefreshedAsync`: one more catalog read, queued behind a running one, bounded by
+`ExecutionService.RecheckLimit` 30 s), decides every such result set again from what it kept of it (`ResultTrace`: the
+reader's column schema, the batch text, the connection's scope — neither reader nor connection is touched) and sends
+`query.resultEdit` with the final verdict, always: a table created or altered in another tool, or by an earlier
+statement of the same run, becomes editable with no refresh and no second run, and an empty table takes its first row.
+A verdict that stays read-only against freshly read metadata says so and is final for the same reason on the same
+database for 60 s (`RecheckSettle`), so a result no refresh can make editable costs one catalog read, not one per run;
+a read that fails or runs out of time leaves the first verdict with that reason, scrubbed, and is tried again on the
+next run. What the query's shape explains (a join, an expression, a batch position, a system view) is never read again.
+An editable result with one column the cache does not list yet keeps its verdict (it is never changed under an edit in
+progress); the metadata is read again behind it, for the next run. Providers say why they traced nothing, in words for
+the user: SQL Server predicts **per position** — the result sets before the first statement whose results cannot be
+counted (EXEC, an IF / WHILE / TRY around a SELECT, DBCC, GOTO) keep their origins, the ones after it name that statement
+("run the SELECT on its own"); statements that return no rows (a conditional DROP, TRUNCATE, GRANT, WAITFOR DELAY,
+cursor DECLARE / OPEN / CLOSE, a loop of updates) cost nothing, an OUTPUT clause or a cursor FETCH is one untraced set,
+RETURN ends the list. The shape check shared by PostgreSQL, SQLite, DuckDB and Oracle (`ResultShape`) leaves out a
+subquery used as a value or a condition of a SELECT whose FROM list has ended: it feeds no result column and adds no
+rows, so `SELECT * FROM t WHERE v = (SELECT max(v) FROM t)` is editable; a subquery inside the FROM list, a CTE body and
+a statement that is not a SELECT are read as before. DuckDB's token predictor reads parentheses in the WHERE / ORDER BY /
+LIMIT tail and in select items (an item with them is an expression); Oracle's takes MODEL, SAMPLE, PARTITION, WINDOW,
+FULL, LEFT, RIGHT, VERSIONS as column names where they stand as operands (they are not reserved). Edits are staged in the webview
 (`src/results/staging.ts`: cell edits, new rows, deletions, undo/redo) and never sent on blur.
 Lost updates are caught with the engine's row version — PostgreSQL `xmin`, SQL Server a
 `rowversion` column — read lazily for edited rows (`data.rowTokens`, which also checks that the
@@ -920,6 +946,11 @@ names them and a PostgreSQL trigger may share its table's name.
    profile can be opened unattended (`SessionManager.CanOpen`, Phase D0a): a remembered secret for a password/token sign-in;
    always for Windows/Kerberos (before the first open and after a sidecar restart too); a browser or device-code sign-in only
    after the user signed in once in this sidecar; a file database with its injected grant; never for a memory database.
+   The webview asks again when a server becomes connected (`installSnapshotListeners`): restored tabs load their schema
+   at startup, often before the sidecar holds the credentials, and that first `meta.snapshot` started no refresh. A row
+   left `refreshing` by a sidecar that closed mid-refresh is marked `stale` (`empty` when nothing was ever read) when the
+   next one starts (`MetadataStore.ResetInterruptedRefreshes`), and a refresh that ends without a result because its
+   session closed clears the status too: while it stayed, no refresh started for that database, on its own or when asked.
 2. A background job per (profile, database) — or per (profile, database, session) for a session's own view — fetches
    `modify_date` for all objects in one query. **Session scope (Phase D0d):** `meta.snapshot`, `meta.refresh`, `meta.objects`,
    `meta.objectDetails`, `meta.search`, `lang.complete` and `lang.signature` take an optional `sessionId`, which must be a live
@@ -1387,7 +1418,10 @@ badges (result sets, "✕ 2" errors, plans, "● Live" trace, "Paused" debugger,
 switch on their own. Runtime holds Trace (SQL Server Extended Events) and Debug (PostgreSQL pldebugger) behind a
 Trace | Debug switch; the side an engine cannot use keeps its place, says why and offers what the engine has (Trace →
 Debug or Explain › Actual, Debug → Trace). The header's right end holds the run picker (the 3 runs the tab keeps;
-an older run opens read-only, its notice says so, Edit is off with the reason), dock right / under (`panelDock`,
+an older run opens read-only, its notice says so, Edit is off with the reason: the lock button's tooltip, the footer
+(`· Read-only: …`, the whole sentence in its tooltip when the footer is narrow) and a notification when the lock is
+clicked; while the sidecar reads the metadata again for the verdict the place reads "Checking…" and becomes Edit by
+itself on `query.resultEdit`, 45 s after `query.done` at the latest it falls back to read-only), dock right / under (`panelDock`,
 saved), maximize (the editor keeps a 28 px strip with its first line and Restore) and hide. The separator is a
 focusable `role="separator"`: arrows ±5 %, Home/End to the limits, Enter hides.
 The **ledger** (`src/results/ledger.ts`) is one chip per result set and per error, in the order they happened (each
@@ -1835,6 +1869,7 @@ record loops, a temp table); a 1,000,000-row, 40-column result query. 5 runs, me
 | 18 | ER diagram 2-hop neighbourhood on the fixture | subgraph + dagre layout, main thread | ≤ 30 ms |
 | 19 | ER diagram whole schema, compact | subgraph + layout in the web worker | ≤ 1 s |
 | 20 | Grid edits: DML preview for 100 staged cells | `data.previewPatch` roundtrip | ≤ 15 ms |
+| 20b | Grid-edit verdict decided again on freshly read metadata | `query.done` → `query.resultEdit` of a result set first sent `rechecking`: one incremental catalog read (metric 10) plus the analysis; never before the first batch (the read starts after the run ended). Bound enforced by `EditRecheckTests.A_metadata_read_that_never_ends_is_given_up_within_its_limit`; **not yet measured on the fixture** (Docker was not running on 2026-11-22) | ≤ metric 10 + 50 ms; given up after 30 s |
 | 21 | Schema compare of the fixture database with itself (600 tables, 400 procedures) | `schemaCompare.run` roundtrip, both sides read, slower of SQL Server / PostgreSQL | ≤ 2 s |
 | 22 | Data compare 100k × 10 against a copy with 1,000 changed rows | `dataCompare.start` → final `dataCompare.progress`, slower engine, server time included; sidecar RSS delta | ≤ 1.5 s; ≤ 64 MB |
 | 24 | Find usages of a column every fixture module mentions (~550 cached modules, the 12k-line procedure included) + 5 open tabs | `refactor.findUsages` roundtrip for a target not searched before, definitions cached | ≤ 120 ms |
@@ -2216,3 +2251,4 @@ without a UI stall.
 | Installer size with Oracle (2026-11-12, D4 S13) | metric 17: ≤ 120 MB per package, AppImage ≤ 150 MB, measured on the built packages | **Projected, not built here** (this Windows machine has no Rust toolchain; release.yml's size gate measures the real packages on every tag). The win-x64 trimmed single-file sidecar measured against v0.1.2's, both built here from their commits with `build-sidecar --release`: 108.6 → 116.1 MB raw (+7.5 MB), gzip -9 39.9 → 43.3 MB (+3.4 MB), xz -6 27.8 → 30.5 MB (+2.7 MB) — ODP.NET is one managed DLL, so the other RIDs grow by about the same. Added to the released v0.1.2 packages (MiB): AppImage 137.2 → about 140.5 (≤ 150), deb / rpm 62.9 → about 66.3, msi 42.3 → about 45.7, NSIS setup 29.9 → about 33.3, dmg 46.6 (arm64) / 49.5 (x64) → about 50 / 53 | The first tag with Oracle un-hidden is the measurement; a package over its budget fails that release in the size gate, as before |
 | First CI run of the Oracle branch (2026-11-12, D4 S13) | the D4 sessions ran their gates on Windows only | Found on Linux, macOS and in the integration job, fixed with a test each: (1) **every engine** — since D4 S04 an Error-severity after-batch message failed the run; MySQL / MariaDB's SHOW WARNINGS still lists a cancelled query's 1317 after a table-less `SELECT` (which does not clear the diagnostics area), so the run after a Cancel failed on MariaDB (6 of 12 runs here; the dev base 12 of 12 green). `ProviderMessage.FailsRun` now marks the batch's own failure (Oracle's compile errors only); other after-batch rows are shown and fail nothing (`OracleExecuteTests.An_error_row_read_after_a_batch_that_does_not_fail_the_run_is_only_shown`; `MySqlIntegrationTests.Cancel_kills_the_query_and_the_session_is_reused` 12 of 12 on MariaDB). (2) On Linux and macOS ODP.NET reports a refused or unreachable address as ORA-50232 ("TCP transport address connect failure for host H port P") where Windows says ORA-12541: the redirect-through-a-tunnel refusal and the closed-port message read both (`OracleTunnelTests`, incl. a real dial to a closed loopback port). (3) Tests built the provider with its public constructor, which on Intel macOS gives the platform refusal (O6): 29 tests asserted supported-platform behaviour there; `TestOracle.Supported` builds it as on a supported platform, the refusal keeps its own tests. (4) The integration job now starts the fixture with `--profile oracle` and runs smoke `--oracle` | The platform differences are the driver's; the after-batch rule was wider than Oracle needed |
 | Database-qualified names in grid editing (2026-11-19) | Grid-edit audit row above: a SQL Server name with a database part (`db.schema.table`, `db..table`) and a DuckDB `catalog.schema.table` were opaque, so the result was read-only ("the result has no table columns") | The tab's own database named in front is the snapshot's table. SQL Server Management Studio's "Select Top 1000 Rows" writes `db.[schema].[table]`, and those results were read-only while the same query without the prefix was editable. `ResultSources` (ScriptDom) resolves a database part equal to the snapshot's database, case-insensitively like the snapshot's own lookups. `db..table` resolves like an unqualified name, and the ambiguous-schema check still applies. `DuckDbResultSources` does the same for the session's catalog. Another database, the DuckDB `temp` catalog and a linked server stay read-only, and when no table of this database is read, the reason names the other database (`ResultEditRefusal`). Safe because the snapshot is the tab's database, and Apply refuses with `databaseChanged` once the tab is on another database, then writes `schema.table` on the tab's connection. PostgreSQL, MySQL / MariaDB and SQLite take origins from the driver and already matched. Oracle has no database part, and a database link stays refused. Tests: `ResultSourcesTests`, `DuckDbLanguageTests`, `DuckDbIntegrationTests` (Apply through `shop.main.orders`), `DataEditIntegrationTests` (SQL Server, Docker) | Exact or nothing still holds: only the database whose metadata the grid reads, and where Apply writes, is treated as local |
+| Grid-edit verdict decided again on fresh metadata (2026-11-22) | §7: `query.resultSet` carries `edit`, decided once from the cached schema; Grid-edit audit row above: a table named twice anywhere (subqueries included) refuses editing, and a SQL Server batch with one unpredictable statement predicts nothing | (1) A read-only verdict that out-of-date metadata may explain is sent `rechecking` and decided again after one catalog read (`query.resultEdit`, §7). Reported by the owner: `SELECT TOP 10 * FROM schema.table alias` "often" had no edit option, and never on an empty table — the table (new, so empty) or its columns were not in the snapshot, the verdict was final, and the reason was only a tooltip; the sidecar log showed one refresh per database per launch with 21 objects changed in 8 hours. `IDbProvider.ResultOrigins` returns `TracedOrigins` (columns, why, stale) and no longer takes the reader or the connection (`OriginScope` captures Oracle's current schema), so Core can call it again. (2) SQL Server predicts per position; DuckDB reads parentheses; Oracle reads unreserved keywords as column names; `ResultShape` leaves out value / condition subqueries (§7). (3) A `refreshing` row left by a closed sidecar no longer blocks every later refresh, and the webview asks for the schema again on connect (§8). (4) The reason is in the footer and on a click, and a result that arrives with no verdict says so instead of "not one table with a key". **Not changed, by the owner's decision:** a `USE` inside a run still reads the snapshot of the database the tab was on when the batch started, and temporal (`FOR SYSTEM_TIME`), synonym and case-only name cases are as before. SQL Server tables whose `SELECT *` differs from `sys.columns` (hidden period columns, a sparse column set, graph columns) stay read-only for `*`, now with the reason and the advice to name the columns | The verdict depended on when the cache was last read, which the user cannot see; every refusal that only cost an edit and could not change which row a key names was removed, and none that can was |

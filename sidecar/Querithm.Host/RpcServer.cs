@@ -56,6 +56,8 @@ public sealed class Services : IAsyncDisposable
         catch (Exception e) when (e is not OutOfMemoryException) { executions.Guard.ProdConfirmations = true; }
         var dataEditor = new DataEditorService(sessions, executions, metaStore, cache, logs.CreateLogger("dataedit"));
         executions.Editability = dataEditor.Decide;
+        // A read-only verdict that out-of-date metadata may explain is decided again once the metadata was read again.
+        executions.RefreshMetadata = metadata.RefreshedAsync;
         executions.DdlExecuted += s =>
         {
             // Phase D0d: a session-owned session reads its catalog on its own connection (after the execution releases it).

@@ -728,6 +728,24 @@ function lingerStream(executionId: string) {
   }, STREAM_LINGER_MS);
 }
 
+/**
+ * How long after query.done a result set may still say "checking" (edit verdict being decided again on freshly read
+ * metadata). The sidecar always answers with query.resultEdit, within 30 s of the run's end; one lost on the way (the
+ * engine restarted) must not leave the grid "checking" for good, so past this the first verdict stands as read-only.
+ */
+export const RECHECK_LINGER_MS = 45_000;
+
+function lingerRecheck(executionId: string) {
+  const pending = (id: string) => Object.values(useExecutions.getState().views[id]?.edits ?? {}).some((e) => e.rechecking);
+  if (!pending(executionId)) return;
+  setTimeout(() => {
+    if (!pending(executionId)) return;
+    useExecutions.getState().patch(executionId, (v) => ({
+      edits: Object.fromEntries(Object.entries(v.edits ?? {}).map(([i, e]) => [i, e.rechecking ? { ...e, rechecking: false } : e])),
+    }));
+  }, RECHECK_LINGER_MS);
+}
+
 function startExecutionView(tabId: string, sessionId: string, executionId: string, sql: string, lineOffset: number, bottomTab: BottomTab, notes: string[] = []) {
   const t = tab(tabId)!;
   trackExecution(tabId, sessionId, executionId, sql, lineOffset, () => {
@@ -873,6 +891,11 @@ export function installExecutionListeners() {
         })),
       ),
     ),
+    // The final verdict of a result set whose first one was `rechecking`: the sidecar read the metadata again after the
+    // run (a table created or altered since the cache was read) and decided once more. It may arrive after query.done.
+    onNotify("query.resultEdit", (e) =>
+      whenView(e.executionId, () => ex().patch(e.executionId, (v) => ({ edits: { ...v.edits, [e.resultIndex]: e.edit } }))),
+    ),
     onNotify("query.plan", (e) =>
       whenView(e.executionId, () => ex().patch(e.executionId, (v) => ({ plans: [...v.plans, { batchIndex: e.batchIndex, plan: e.plan, raw: e.raw }] }))),
     ),
@@ -880,6 +903,7 @@ export function installExecutionListeners() {
       whenView(e.executionId, () => {
         unwatchCancel(e.executionId);
         lingerStream(e.executionId);
+        lingerRecheck(e.executionId);
         const v = ex().views[e.executionId];
         const hasError = e.state === "failed" || !!e.error || (v?.messages.some((m) => m.severity === "error") ?? false);
         const data = executionData.get(e.executionId);

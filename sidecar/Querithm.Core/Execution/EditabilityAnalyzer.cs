@@ -6,30 +6,39 @@ namespace Querithm.Core.Execution;
 /// <summary>
 /// Decides whether a result set can be edited in the grid from the provider's exact column origins and
 /// the cached schema. Exact or nothing: when anything is unknown the result set is read-only with the reason shown.
+/// <para>
+/// A read-only verdict that out-of-date metadata may explain — no snapshot yet, a table or its columns missing from it,
+/// or origins the provider called <see cref="TracedOrigins.Stale"/> — is marked <see cref="ResultEditInfo.Rechecking"/>:
+/// the caller reads the metadata again and analyzes once more (ExecutionService), so a table created or altered since the
+/// snapshot was read becomes editable without the user doing anything. A verdict the query's shape or the table itself
+/// explains (a join, an expression, no key) is final.
+/// </para>
 /// </summary>
 public static class EditabilityAnalyzer
 {
+    /// <param name="why">The provider's reason when it traced no table column (<see cref="TracedOrigins.Why"/>).</param>
+    /// <param name="stale">The provider's <see cref="TracedOrigins.Stale"/>: newer metadata may trace the columns.</param>
     public static ResultEditInfo Analyze(IDataEditDialect dialect, ResultColumn[] columns, ColumnOrigin?[]? origins, SchemaSnapshot? snapshot,
-        Func<long, IndexInfo[]> indexes)
+        Func<long, IndexInfo[]> indexes, string? why = null, bool stale = false)
     {
         if (snapshot == null || snapshot.Objects.Length == 0)
-            return ReadOnly("Read-only: no cached metadata for this database yet (open it in the explorer to load it)");
-        if (origins == null) return ReadOnly("Read-only: column origins unknown for this batch");
+            return ReadOnly("Read-only: no cached metadata for this database yet (open it in the explorer to load it)", recheck: true);
+        if (origins == null) return ReadOnly(why != null ? $"Read-only: {why}" : "Read-only: column origins unknown for this batch", stale);
         var visible = columns.Where(c => !c.Hidden && c.Ordinal >= 0).ToArray();
         var ids = visible.Select(c => At(origins, c.Ordinal)?.ObjectId).OfType<long>().Distinct().ToArray();
-        if (ids.Length == 0) return ReadOnly("Read-only: the result has no table columns");
+        if (ids.Length == 0) return ReadOnly(why != null ? $"Read-only: {why}" : "Read-only: the result has no table columns", stale);
         var byId = snapshot.Objects.GroupBy(o => o.Id).ToDictionary(g => g.Key, g => g.First());
         if (ids.Length > 1)
         {
             var names = ids.Select(i => byId.TryGetValue(i, out var o) ? $"{o.Schema}.{o.Name}" : $"#{i}").OrderBy(n => n, StringComparer.Ordinal);
             return ReadOnly($"Read-only: query reads more than one table ({string.Join(", ", names)})");
         }
-        if (!byId.TryGetValue(ids[0], out var table)) return ReadOnly("Read-only: the table is not in the cached metadata (refresh the explorer)");
+        if (!byId.TryGetValue(ids[0], out var table)) return ReadOnly("Read-only: the table is not in the cached metadata (refresh the explorer)", recheck: true);
         var qualified = $"{table.Schema}.{table.Name}";
         if (table.Kind != ObjectKind.Table) return ReadOnly($"Read-only: {qualified} is a {KindName(table.Kind)}");
         // Apply is all or nothing through a transaction; a MyISAM / MEMORY / ARCHIVE / Aria table keeps what a failed Apply wrote.
         if (table.NoRollbackEngine is { } engine) return ReadOnly($"Read-only: {qualified} is a {engine} table — its changes can't be rolled back");
-        if (table.Columns is not { Length: > 0 } tableColumns) return ReadOnly($"Read-only: column metadata for {qualified} is not loaded yet");
+        if (table.Columns is not { Length: > 0 } tableColumns) return ReadOnly($"Read-only: column metadata for {qualified} is not loaded yet", recheck: true);
         // Phase D4 S10: the engine's row address (Oracle ROWID) is a column of the result like any other, always locked.
         var address = dialect.RowAddress;
         if (address != null && !tableColumns.Any(c => c.Name == address))
@@ -74,7 +83,7 @@ public static class EditabilityAnalyzer
             // Phase D4 S10: no proven key in the result — the row address stands in when the result reads it from this table
             // and the catalog says it keeps naming the same row.
             if (address == null || !firstOrdinal.ContainsKey(address)) return ReadOnly(noKey!);
-            if (dialect.RowAddressRefusal(table, table.RowAddress) is { } why) return ReadOnly($"{noKey}, and its {address} cannot stand in: {why}");
+            if (dialect.RowAddressRefusal(table, table.RowAddress) is { } refused) return ReadOnly($"{noKey}, and its {address} cannot stand in: {refused}");
             key = [address];
         }
         foreach (var k in key)
@@ -130,7 +139,7 @@ public static class EditabilityAnalyzer
 
     static ColumnOrigin? At(ColumnOrigin?[] origins, int ordinal) => ordinal >= 0 && ordinal < origins.Length ? origins[ordinal] : null;
 
-    static ResultEditInfo ReadOnly(string reason) => new() { Editable = false, Reason = reason };
+    static ResultEditInfo ReadOnly(string reason, bool recheck = false) => new() { Editable = false, Reason = reason, Rechecking = recheck };
 
     static string KindName(ObjectKind k) => k switch
     {

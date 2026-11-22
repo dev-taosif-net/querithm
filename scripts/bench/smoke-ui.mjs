@@ -1334,8 +1334,13 @@ try {
           .catch(async () => errors.push(`${e.key}: the grid did not show 2 rows: ${await page.evaluate(() => document.querySelector("[data-q-messages]")?.textContent?.slice(0, 300) ?? document.body.innerText.slice(-300))}`));
         await sleep(500);
         await shot(`${e.shot}a-${e.key}-results`);
-        // Grid edit on SQLite (dynamically typed column v): applied, then read from the file outside Querithm. The table was
-        // created in the same script, so the result is read again once the DDL-triggered metadata refresh has it.
+        // The script created the table it reads, so the cached metadata did not hold it when the SELECT ran. The verdict
+        // is decided again once the metadata was read after the run (query.resultEdit): Edit appears on this very result,
+        // without running again — it used to stay read-only until a second run.
+        await page.waitForFunction(() => !!document.querySelector("[data-q-edit-toggle]:not([aria-disabled])"), { timeout: 15_000 })
+          .catch(async () => errors.push(`${e.key}: Edit did not appear for the table the script itself created: ${await page.evaluate(() => document.querySelector("[data-q-edit-toggle]")?.getAttribute("title") ?? "no toggle")}`));
+        // Grid edit on SQLite (dynamically typed column v): applied, then read from the file outside Querithm, on a result
+        // of a run of its own.
         await sleep(1500);
         await page.click(".monaco-editor .view-lines");
         await page.keyboard.down("Control"); await page.keyboard.press("A"); await page.keyboard.up("Control");

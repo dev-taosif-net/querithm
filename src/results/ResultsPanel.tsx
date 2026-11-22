@@ -100,6 +100,11 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
   const stagedBefore = key ? stagings.get(key)?.hasChanges : false;
   // An interrupted set never completes and the sidecar drops its edit record, so it stays read-only; an older run too.
   const editable = rs && executionId && latest && (sessionLive || stagedBefore) && edit?.editable && !rs.interrupted ? stagingFor(executionId, rs, engine) : undefined;
+  // The sidecar is reading the metadata again for this verdict (a table created or altered since the cache was read):
+  // "checking", not "read-only", until query.resultEdit brings the final one. Only where an answer could still enable Edit.
+  const checking = !!rs && !editable && !!edit?.rechecking && latest && sessionLive && !rs.interrupted;
+  // Why the shown set cannot be edited: on the lock button, and in words in the footer so nobody has to hover to learn it.
+  const readOnly = rs && !editable ? (checking ? EDIT_CHECKING : readOnlyWhy(rs, latest, sessionLive, edit?.reason)) : undefined;
   const chart = rs ? tab.charts?.[rs.index] : undefined;
   // Results open read-only; Edit (shown only when the set is editable) turns the grid into an editor. Staged changes
   // keep it in edit mode so they never sit hidden behind a read-only grid.
@@ -390,7 +395,7 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
         onChange={(v) => !(v === "chart" && editable?.hasChanges) && setResultChart(tab.id, rs.index, { view: v })}
       />
       {!chartOn && filterBox}
-      {!chartOn && <EditButton rs={rs} editable={!!editable} latest={latest} sessionLive={sessionLive} reason={edit?.reason} onEdit={() => setEditKey(key)} compact={width === "narrow"} />}
+      {!chartOn && <EditButton editable={!!editable} checking={checking} why={readOnly} onEdit={() => setEditKey(key)} compact={width === "narrow"} />}
       <span aria-hidden className="w-px h-4 bg-line shrink-0" />
       {!chartOn && width !== "narrow" && (
         <SplitButton
@@ -485,7 +490,7 @@ export function ResultsPanel({ tab }: { tab: TabState }) {
           </Suspense>
         )}
       </div>
-      <ResultsFooter rs={rs} item={item} view={view} stats={stats} staging={staging} comparing={comparing ? compareRs : sideOther} />
+      <ResultsFooter rs={rs} item={item} view={view} stats={stats} staging={staging} comparing={comparing ? compareRs : sideOther} readOnly={chartOn ? undefined : readOnly} />
     </div>
   );
 }
@@ -600,8 +605,10 @@ function RunSummary({ tab, view }: { tab: TabState; view: ExecutionView }) {
   );
 }
 
-function ResultsFooter({ rs, item, view, stats, staging, comparing }: {
+function ResultsFooter({ rs, item, view, stats, staging, comparing, readOnly }: {
   rs: ArrowResultSet | undefined; item: LedgerItem | undefined; view: ExecutionView; stats: SelectionStats | null; staging?: GridStaging; comparing?: ArrowResultSet;
+  /** Why the shown set cannot be edited (or that it is being checked): said in words, not only on the lock's tooltip. */
+  readOnly?: string;
 }) {
   useSyncExternalStore(staging?.subscribe ?? EMPTY.subscribe, staging?.getVersion ?? EMPTY.getVersion);
   if (!rs) {
@@ -614,9 +621,13 @@ function ResultsFooter({ rs, item, view, stats, staging, comparing }: {
   else if (rs.truncated) state = " · row limit reached";
   else if (!rs.complete) state = " · streaming…";
   let left: ReactNode = (
-    <span className="truncate" title={`Arrow stream · ${rs.batches.length} batch${rs.batches.length === 1 ? "" : "es"} · ${rs.columns.length} columns`}>
-      Result set {rs.index + 1} · {shown !== rs.rowCount ? `${fmt(shown)} of ` : ""}{rowsText(rs.rowCount)} · {rs.columns.length} {rs.columns.length === 1 ? "column" : "columns"}{state}
-    </span>
+    <>
+      <span className="truncate" title={`Arrow stream · ${rs.batches.length} batch${rs.batches.length === 1 ? "" : "es"} · ${rs.columns.length} columns`}>
+        Result set {rs.index + 1} · {shown !== rs.rowCount ? `${fmt(shown)} of ` : ""}{rowsText(rs.rowCount)} · {rs.columns.length} {rs.columns.length === 1 ? "column" : "columns"}{state}
+      </span>
+      {/* The reason gives way first when the footer is narrow; its tooltip always has all of it. */}
+      {readOnly && <span className="truncate min-w-0 shrink-[99]" title={readOnly} data-q-edit-note>· {readOnly}</span>}
+    </>
   );
   if (staging) {
     const c = staging.counts;
@@ -673,9 +684,16 @@ function StatsLine({ stats }: { stats: SelectionStats }) {
   );
 }
 
-/** Edit / Read-only in the same place: an uneditable set says why (the edit rule teaches itself). */
-function EditButton({ rs, editable, latest, sessionLive, reason, onEdit, compact }: {
-  rs: ArrowResultSet; editable: boolean; latest: boolean; sessionLive: boolean; reason?: string | null; onEdit: () => void; compact: boolean;
+/** Said while the sidecar reads the metadata again for a verdict that out-of-date metadata may explain. */
+export const EDIT_CHECKING = "Checking whether these rows can be edited: reading this database's metadata again…";
+
+/**
+ * Edit / Read-only in the same place: an uneditable set says why (the edit rule teaches itself) — on hover, to a screen
+ * reader, and as a notification when the lock is clicked, so the reason is one click away for anyone who looks for Edit.
+ * While the verdict is being checked against freshly read metadata the place says so, and becomes Edit by itself.
+ */
+function EditButton({ editable, checking, why, onEdit, compact }: {
+  editable: boolean; checking: boolean; why?: string; onEdit: () => void; compact: boolean;
 }) {
   if (editable) {
     return (
@@ -685,9 +703,19 @@ function EditButton({ rs, editable, latest, sessionLive, reason, onEdit, compact
       </button>
     );
   }
-  const why = readOnlyWhy(rs, latest, sessionLive, reason);
+  if (checking) {
+    return (
+      <button type="button" className="q-btn h-[22px] px-2 shrink-0" data-q-edit-toggle data-q-edit-checking aria-disabled aria-busy title={why} aria-label={compact ? why : undefined} aria-description={compact ? undefined : why}>
+        <Icon name="spinner" size={13} strokeWidth={2} className="animate-spin motion-reduce:animate-none" />
+        {!compact && "Checking…"}
+      </button>
+    );
+  }
   return (
-    <button type="button" className="q-btn h-[22px] px-2 shrink-0" data-q-edit-toggle aria-disabled title={why} aria-label={compact ? why : undefined} aria-description={compact ? undefined : why}>
+    <button
+      type="button" className="q-btn h-[22px] px-2 shrink-0" data-q-edit-toggle aria-disabled title={why} aria-label={compact ? why : undefined} aria-description={compact ? undefined : why}
+      onClick={() => why && toast("info", why)}
+    >
       <Icon name="lock" size={13} strokeWidth={2} />
       {!compact && "Read-only"}
     </button>
@@ -700,7 +728,9 @@ export function readOnlyWhy(rs: Pick<ArrowResultSet, "interrupted">, latest: boo
   if (rs.interrupted) return "Read-only: the run stopped before every row arrived";
   if (reason) return /^read-only\b/i.test(reason.trim()) ? reason.trim() : `Read-only: ${reason}`;
   if (!sessionLive) return "Read-only: the connection was closed since this ran — run the query again to edit";
-  return "Read-only: these rows are not one table with a key";
+  // No verdict came with the result set (the sidecar always sends one for a query's rows): say what is known, not a guess
+  // about the query.
+  return "Read-only: no edit information came with this result — run the query again";
 }
 
 /** A text button of the edit row: always in its place; unavailable ones stay focusable and say why (aria-disabled). */

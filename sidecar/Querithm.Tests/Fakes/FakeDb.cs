@@ -281,7 +281,10 @@ public sealed class FakeDbProvider : IDbProvider
     public (Profile Profile, string? Note) RouteThrough(Profile profile, string host, int port) => (profile, null);
     public (string Host, int Port, string? Refusal) TunnelTarget(Profile profile) => (profile.Host ?? "", profile.Port ?? 0, null);
     public ParseConnectionStringResult ParseConnectionString(string connectionString, Profile basis) => throw new NotSupportedException();
-    public ColumnOrigin?[]? ResultOrigins(DbDataReader reader, IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot) => null;
+    /// <summary>Grid-edit tests: what this fake engine traces of a result set (batch text, result in batch, snapshot); null = nothing.</summary>
+    public Func<string, int, SchemaSnapshot?, TracedOrigins>? Origins { get; set; }
+    public TracedOrigins ResultOrigins(IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot, string? scope) =>
+        Origins?.Invoke(batchText, resultInBatch, snapshot) ?? TracedOrigins.None;
     /// <summary>Grid-edit audit tests: the statement-shape refusal this fake engine reports (null = none).</summary>
     public Func<string, int, string?>? EditRefusal { get; set; }
     public string? ResultEditRefusal(string batchText, int resultInBatch, SchemaSnapshot? snapshot) => EditRefusal?.Invoke(batchText, resultInBatch);

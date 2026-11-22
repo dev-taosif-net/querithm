@@ -1046,6 +1046,62 @@ describe("execution notifications", () => {
     fire("query.resultSet", { executionId: "e1", resultIndex: 1, edit: { editable: false, table: "b" } });
     expect(useExecutions.getState().views.e1.edits).toEqual({ 1: { editable: false, table: "b" } });
   });
+  it("query.resultEdit replaces the verdict of its result set only — also after query.done, and when it stays read-only", () => {
+    const stale = { editable: false, rechecking: true, reason: "Read-only: t is not in this database's cached metadata" };
+    fire("query.resultSet", { executionId: "e1", resultIndex: 0, edit: stale });
+    fire("query.resultSet", { executionId: "e1", resultIndex: 1, edit: { editable: true, table: "known" } });
+    fire("query.resultSet", { executionId: "e1", resultIndex: 2, edit: stale });
+    expect(useExecutions.getState().views.e1.edits?.[0]).toMatchObject({ editable: false, rechecking: true });
+    // The sidecar reads the metadata again after the run, so the answer comes after query.done.
+    fire("query.done", { executionId: "e1", state: "done", elapsedMs: 5, resultSetCount: 3 });
+    expect(useExecutions.getState().views.e1.state).toBe("done");
+    fire("query.resultEdit", { executionId: "e1", resultIndex: 0, edit: { editable: true, rechecking: false, table: "t" } });
+    fire("query.resultEdit", { executionId: "e1", resultIndex: 2, edit: { editable: false, rechecking: false, reason: "still not there" } });
+    expect(useExecutions.getState().views.e1.edits).toEqual({
+      0: { editable: true, rechecking: false, table: "t" },
+      1: { editable: true, table: "known" },
+      2: { editable: false, rechecking: false, reason: "still not there" },
+    });
+    // The run stays finished: a late verdict is not a new result set.
+    expect(useExecutions.getState().views.e1).toMatchObject({ state: "done", resultSetCount: 3 });
+  });
+  it("query.resultEdit that arrives before the view exists is applied once it does", () => {
+    fire("query.resultEdit", { executionId: "late", resultIndex: 0, edit: { editable: true, rechecking: false } });
+    useExecutions.getState().put({ id: "late", tabId: id, sessionId: "s1", state: "queued", startedAt: 0, resultSetCount: 0, truncated: false, messages: [], statistics: [], plans: [], sql: "", lineOffset: 1 });
+    h.rpc.mockResolvedValue({ executionId: "late" });
+    return A.runQuery(id).then(() => {
+      expect(useExecutions.getState().views.late.edits?.[0]).toMatchObject({ editable: true });
+    });
+  });
+  it("a verdict still 'checking' long after the run ended falls back to read-only (the answer was lost with the engine)", () => {
+    vi.useFakeTimers();
+    try {
+      const stale = { editable: false, rechecking: true, reason: "Read-only: t is not in this database's cached metadata" };
+      fire("query.resultSet", { executionId: "e1", resultIndex: 0, edit: stale });
+      fire("query.resultSet", { executionId: "e1", resultIndex: 1, edit: { editable: true } });
+      fire("query.done", { executionId: "e1", state: "done", elapsedMs: 5, resultSetCount: 2 });
+      vi.advanceTimersByTime(A.RECHECK_LINGER_MS - 1);
+      expect(useExecutions.getState().views.e1.edits?.[0].rechecking).toBe(true);
+      vi.advanceTimersByTime(1);
+      // The reason stays; only "checking" ends. The other set is untouched.
+      expect(useExecutions.getState().views.e1.edits).toEqual({ 0: { ...stale, rechecking: false }, 1: { editable: true } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("an answered verdict leaves nothing for that fallback to do", () => {
+    vi.useFakeTimers();
+    try {
+      fire("query.resultSet", { executionId: "e1", resultIndex: 0, edit: { editable: false, rechecking: true, reason: "x" } });
+      fire("query.done", { executionId: "e1", state: "done", elapsedMs: 5, resultSetCount: 1 });
+      fire("query.resultEdit", { executionId: "e1", resultIndex: 0, edit: { editable: true, rechecking: false, table: "t" } });
+      const answered = useExecutions.getState().views.e1.edits;
+      vi.advanceTimersByTime(A.RECHECK_LINGER_MS * 2);
+      expect(useExecutions.getState().views.e1.edits).toBe(answered);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("buffers events that arrive before the view exists", () => {
     fire("query.started", { executionId: "late" });
     expect(useExecutions.getState().views.late).toBeUndefined();

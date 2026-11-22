@@ -30,6 +30,18 @@ public sealed class MetadataStore(LocalStore store)
             .ExecuteNonQuery();
     }
 
+    /// <summary>
+    /// A refresh the last run of the sidecar left unfinished (the app closed, or the engine was restarted, while it ran):
+    /// its 'refreshing' row belongs to nobody now, and while it stays no refresh starts for that database — neither on
+    /// its own nor when asked. Such rows become stale (empty when nothing was ever read), so the next read refreshes them.
+    /// </summary>
+    public int ResetInterruptedRefreshes()
+    {
+        using var c = store.Open();
+        return c.Cmd("UPDATE schema_snapshot SET status = CASE WHEN refreshed_at IS NULL THEN $empty ELSE $stale END WHERE status=$refreshing", null,
+            ("$empty", EnumText.Of(SnapshotStatus.Empty)), ("$stale", EnumText.Of(SnapshotStatus.Stale)), ("$refreshing", EnumText.Of(SnapshotStatus.Refreshing))).ExecuteNonQuery();
+    }
+
     static string[]? NotesOf(string? json)
     {
         if (string.IsNullOrEmpty(json)) return null;

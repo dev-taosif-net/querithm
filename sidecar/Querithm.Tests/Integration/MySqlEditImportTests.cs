@@ -62,6 +62,62 @@ public sealed class MySqlEditImportTests
           ('one', 1, 1.5000, '2026-01-02 03:04:05.120', 1, 0x0A0B, 0.1), ('two', 2, 2.0000, NULL, 0, NULL, NULL), ('three', 3, NULL, NULL, 1, NULL, NULL);
         """;
 
+    static async Task OutsideAsync(string product, string sql)
+    {
+        // Another tool on the same database: nothing tells Querithm, so its cached metadata does not hold the change.
+        await using var c = new MySqlConnection($"Server=127.0.0.1;Port={Port(product)};User ID=root;Password={TestHost.MySqlPassword};SslMode=Required;Pooling=False;Database={Db(product)}");
+        await c.OpenAsync();
+        await using var cmd = c.CreateCommand();
+        cmd.CommandText = sql;
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    [IntegrationTheory]
+    [MemberData(nameof(Products), MemberType = typeof(MySqlIntegrationTests))]
+    public async Task A_table_created_by_another_tool_after_the_metadata_was_read_becomes_editable_on_its_own_and_takes_its_first_row(string product)
+    {
+        var (h, _, sid) = await OpenWithAsync(product, Orders);
+        await using var _ = h;
+        var table = "e_fresh_" + Guid.NewGuid().ToString("N")[..8];
+        await OutsideAsync(product, $"CREATE TABLE {table} (id INT PRIMARY KEY, body VARCHAR(40) NOT NULL)");
+        try
+        {
+            var (done, batches, exec) = await Run(h, sid, $"SELECT * FROM {table} f LIMIT 10");
+            Assert.Null(done.Error);
+            Assert.Equal(0, batches.Sum(b => b.Length));
+            var first = EditOf(h, exec);
+            Assert.False(first.Editable);
+            Assert.True(first.Rechecking, first.Reason);
+            Assert.Equal($"Read-only: {table} is not in this database's cached metadata", first.Reason);
+
+            var final = await h.Notifier.WaitEdit(exec);
+            Assert.True(final.Editable, final.Reason);
+            Assert.Equal(["id"], final.KeyColumns);
+            var r = await h.Rpc.DataApplyPatch(new GridPatchParams
+            {
+                SessionId = sid, ExecutionId = exec,
+                Inserts = [new GridRowInsert { TempIndex = 0, Values = new() { ["id"] = V("1"), ["body"] = V("first") } }],
+            });
+            Assert.True(r.Ok, r.Error);
+            Assert.Equal("first", await ScalarAsync(product, $"SELECT body FROM {table} WHERE id = 1"));
+        }
+        finally { await OutsideAsync(product, $"DROP TABLE {table}"); }
+    }
+
+    [IntegrationTheory]
+    [MemberData(nameof(Products), MemberType = typeof(MySqlIntegrationTests))]
+    public async Task Another_databases_table_and_a_self_join_say_why_and_are_never_rechecked(string product)
+    {
+        var (h, _, sid) = await OpenWithAsync(product, Orders);
+        await using var _ = h;
+        var (_, _, other) = await Run(h, sid, "SELECT TABLE_NAME FROM information_schema.TABLES LIMIT 3");
+        Assert.Equal((false, false), (EditOf(h, other).Editable, EditOf(h, other).Rechecking));
+        var (_, _, self) = await Run(h, sid, "SELECT a.id, b.name FROM e_orders a JOIN e_orders b ON b.id = a.id");
+        Assert.Equal("Read-only: the same table (e_orders) appears more than once in the query", EditOf(h, self).Reason);
+        Assert.False(EditOf(h, self).Rechecking);
+        Assert.Empty(h.Notifier.Of<QueryResultEditEvent>());
+    }
+
     [IntegrationTheory]
     [MemberData(nameof(Products), MemberType = typeof(MySqlIntegrationTests))]
     public async Task A_table_with_a_primary_key_is_editable_and_spatial_columns_are_locked(string product)

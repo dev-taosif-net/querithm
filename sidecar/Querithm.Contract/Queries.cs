@@ -197,6 +197,17 @@ public sealed record QueryResultSetEvent
     public ResultEditInfo? Edit { get; init; }
 }
 
+/// <summary>
+/// The final edit verdict of a result set whose first one was <see cref="ResultEditInfo.Rechecking"/>: decided again
+/// after the database's metadata was read again. Always sent for such a result set, also when the verdict did not change.
+/// </summary>
+public sealed record QueryResultEditEvent
+{
+    public required string ExecutionId { get; init; }
+    public int ResultIndex { get; init; }
+    public required ResultEditInfo Edit { get; init; }
+}
+
 public sealed record QueryPlanEvent
 {
     public required string ExecutionId { get; init; }

@@ -122,6 +122,69 @@ public class DuckDbLanguageTests
     public void Anything_else_predicts_nothing(string sql) => Assert.Null(DuckDbResultSources.Predict(sql, Snap(), "main", ["id", "v"]));
 
     [Theory]
+    // Regression: any parenthesis anywhere used to predict nothing, so WHERE id IN (1, 2) made a plain query read-only.
+    [InlineData("SELECT * FROM t WHERE id IN (1, 2)", "id,v")]
+    [InlineData("SELECT id, v FROM t WHERE lower(v) = 'x' AND (id > 1 OR id < 0) ORDER BY length(v) LIMIT 5", "id,v")]
+    [InlineData("SELECT * FROM t x WHERE x.id IN (SELECT max(k) FROM u GROUP BY g HAVING count(*) > 1)", "id,v")]
+    [InlineData("FROM t WHERE v IN ('a', 'b')", "id,v")]
+    // An item with parentheses or brackets is an expression: one column without an origin, the others keep theirs.
+    [InlineData("SELECT id, upper(v) AS shout, v FROM t", "id,-,v")]
+    [InlineData("SELECT id, count(*) OVER (PARTITION BY v) AS n FROM t", "id,-")]
+    [InlineData("SELECT id, extract(year FROM now()) AS y, [1, 2] AS l FROM t", "id,-,-")]
+    [InlineData("SELECT id, (SELECT max(k) FROM u) AS m FROM t WHERE v LIKE 'a%'", "id,-")]
+    [InlineData("SELECT coalesce(v, 'x'), id FROM main.t LIMIT (2)", "-,id")]
+    public void Parentheses_in_conditions_and_items_do_not_cost_the_origins(string sql, string expected)
+    {
+        var want = expected.Split(',');
+        var origins = DuckDbResultSources.Predict(sql, Snap(), "main", want.Select((_, i) => $"c{i}").ToList());
+        Assert.NotNull(origins);
+        Assert.Equal(want, origins!.Select(o => o == null ? "-" : o.Column));
+    }
+
+    [Theory]
+    // At the statement's own level the tail still must not group, combine or sample; and what follows FROM must be one table.
+    [InlineData("SELECT * FROM t WHERE id IN (1) GROUP BY ALL")]
+    [InlineData("SELECT * FROM t WHERE id IN (1) UNION ALL SELECT * FROM t WHERE id IN (2)")]
+    [InlineData("SELECT * FROM t WHERE id > 1 QUALIFY row_number() OVER (ORDER BY id) = 1")]
+    [InlineData("SELECT * FROM t USING SAMPLE 10")]
+    [InlineData("SELECT * FROM read_csv('x.csv')")]
+    [InlineData("SELECT * FROM t(1)")]
+    [InlineData("SELECT * FROM (SELECT * FROM t)")]
+    [InlineData("SELECT * FROM (t)")]
+    [InlineData("SELECT * FROM t x(a, b)")]
+    [InlineData("SELECT * FROM t, (SELECT 1) y")]
+    [InlineData("SELECT * EXCLUDE (v), 1 FROM t")] // an item that expands: two items, two names, but not these two columns
+    public void Shapes_with_parentheses_that_are_not_one_plain_table_still_predict_nothing(string sql)
+    {
+        var traced = DuckDbResultSources.Trace(sql, Snap(), "main", ["id", "v"]);
+        Assert.True(traced.Columns == null || traced.Columns.All(o => o == null), sql);
+        Assert.False(traced.Stale);
+    }
+
+    [Fact]
+    public void A_trace_says_why_and_whether_newer_metadata_could_change_it()
+    {
+        var snap = Snap() with { Objects = [.. Snap().Objects, new SnapObject { Id = 8, Schema = "main", Name = "vw", Kind = ObjectKind.View, Columns = [new SnapColumn { Name = "id", Type = "INTEGER", Ordinal = 1 }] }] };
+        // A table the snapshot does not hold: created since it was read.
+        var missing = DuckDbResultSources.Trace("SELECT * FROM fresh WHERE id IN (1, 2)", snap, "main", ["id"]);
+        Assert.Equal((true, "main.fresh is not in this database's cached metadata"), (missing.Stale, missing.Why));
+        Assert.Null(missing.Columns);
+        // * returned another number of columns than the snapshot lists: a column added or dropped since.
+        var changed = DuckDbResultSources.Trace("SELECT * FROM t", snap, "main", ["id", "v", "added"]);
+        Assert.Equal((true, "the columns this query returned are not the ones cached for main.t"), (changed.Stale, changed.Why));
+        // A view, a shape that is not plain, an expanding item: nothing newer metadata would change.
+        Assert.Equal((false, "main.vw is not a table"), (DuckDbResultSources.Trace("SELECT * FROM vw", snap, "main", ["id"]) is var v ? (v.Stale, v.Why) : default));
+        var join = DuckDbResultSources.Trace("SELECT * FROM t JOIN u USING (id)", snap, "main", ["id", "v"]);
+        Assert.False(join.Stale);
+        Assert.StartsWith("on DuckDB only a plain SELECT from one table can be edited", join.Why);
+        Assert.False(DuckDbResultSources.Trace("SELECT COLUMNS('.*') FROM t", snap, "main", ["id", "v"]).Stale);
+        // The provider hands it on.
+        var p = new Querithm.Providers.DuckDb.DuckDbProvider();
+        Assert.True(p.ResultOrigins([], "SELECT * FROM fresh", 0, snap, null).Stale);
+        Assert.Null(p.ResultOrigins([], "SELECT * FROM fresh", 1, snap, null).Why); // only the first result of a statement is predicted
+    }
+
+    [Theory]
     [InlineData("SELECT * FROM other.main.t", "other.main.t is in database other, not this tab's database (db)")]
     [InlineData("SELECT a.id FROM t a JOIN \"Other\".main.u b ON b.id = a.id", "Other.main.u is in database Other, not this tab's database (db)")]
     [InlineData("FROM temp.main.t", "temp.main.t is in database temp, not this tab's database (db)")]

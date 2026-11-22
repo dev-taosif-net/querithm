@@ -500,6 +500,86 @@ public class DuckDbIntegrationTests
     }
 
     [Fact]
+    public async Task A_table_created_outside_after_the_metadata_was_read_becomes_editable_on_its_own_and_takes_its_first_row()
+    {
+        // The reported bug on DuckDB: a new (so empty) table is not in the cached metadata, and the verdict was final.
+        await using var h = new DuckDbHost();
+        var path = h.NewDatabase("shop.duckdb", Orders);
+        var (p, sid) = await h.OpenFileAsync(path, FileAccessMode.ReadWrite);
+        await RefreshAsync(h, p, sid, "shop", s => s.Objects.Any(o => o.Name == "orders"));
+        Scalar(path, "CREATE TABLE notes (id INTEGER PRIMARY KEY, body VARCHAR NOT NULL)"); // another connection: nothing tells Querithm
+
+        var (done, batches, exec) = await h.RunAsync(sid, "SELECT * FROM notes WHERE id IN (1, 2) OR length(body) >= 0");
+        Assert.Null(done.Error);
+        Assert.Equal(0, batches.Sum(b => b.Length));
+        var first = h.Notifier.Of<QueryResultSetEvent>().Single(e => e.ExecutionId == exec).Edit!;
+        Assert.Equal((false, true, "Read-only: main.notes is not in this database's cached metadata"), (first.Editable, first.Rechecking, first.Reason));
+
+        var final = await h.Notifier.WaitEdit(exec);
+        Assert.True(final.Editable, final.Reason);
+        Assert.False(final.Rechecking);
+        Assert.Equal(["id"], final.KeyColumns);
+
+        var r = await h.Rpc.DataApplyPatch(new GridPatchParams
+        {
+            SessionId = sid, ExecutionId = exec,
+            Inserts = [new GridRowInsert { TempIndex = 0, Values = new() { ["id"] = V("1"), ["body"] = V("first") } }],
+        });
+        Assert.True(r.Ok, r.Error);
+        Assert.Equal("first", Convert.ToString(Scalar(path, "SELECT body FROM notes WHERE id = 1")));
+    }
+
+    [Fact]
+    public async Task A_condition_with_parentheses_keeps_the_result_editable_and_a_table_created_in_the_same_run_becomes_so()
+    {
+        await using var h = new DuckDbHost();
+        var path = h.NewDatabase("shop.duckdb", Orders);
+        var (p, sid) = await h.OpenFileAsync(path, FileAccessMode.ReadWrite);
+        await RefreshAsync(h, p, sid, "shop", s => s.Objects.Any(o => o.Name == "orders"));
+
+        // Regression: any parenthesis made the query read-only.
+        var (_, batches, exec) = await h.RunAsync(sid, "SELECT id, name, qty FROM orders WHERE id IN (1, 2) AND lower(name) <> 'x' ORDER BY id");
+        Assert.Equal(2, batches.Sum(b => b.Length));
+        var edit = h.Notifier.Of<QueryResultSetEvent>().Single(e => e.ExecutionId == exec).Edit!;
+        Assert.True(edit.Editable, edit.Reason);
+        Assert.False(edit.Rechecking);
+        var r = await h.Rpc.DataApplyPatch(new GridPatchParams
+        {
+            SessionId = sid, ExecutionId = exec,
+            Updates = [new GridRowUpdate { RowIndex = 1, Key = [V("2")], Changes = new() { ["qty"] = V("22") }, Original = new() { ["qty"] = V("2") } }],
+        });
+        Assert.True(r.Ok, r.Error);
+        Assert.Equal(22, Convert.ToInt32(Scalar(path, "SELECT qty FROM orders WHERE id = 2")));
+
+        // A condition that reads the same table: each result row is still one row of orders.
+        var (_, _, sub) = await h.RunAsync(sid, "SELECT id, name, qty FROM orders WHERE qty = (SELECT max(qty) FROM orders)");
+        var subEdit = h.Notifier.Of<QueryResultSetEvent>().Single(e => e.ExecutionId == sub).Edit!;
+        Assert.True(subEdit.Editable, subEdit.Reason);
+        var rs = await h.Rpc.DataApplyPatch(new GridPatchParams
+        {
+            SessionId = sid, ExecutionId = sub,
+            Updates = [new GridRowUpdate { RowIndex = 0, Key = [V("2")], Changes = new() { ["name"] = V("dos") }, Original = new() { ["name"] = V("two") } }],
+        });
+        Assert.True(rs.Ok, rs.Error);
+        Assert.Equal("dos", Convert.ToString(Scalar(path, "SELECT name FROM orders WHERE id = 2")));
+
+        // An empty result of a table the metadata knows: editable at once, no second look.
+        var (_, none, empty) = await h.RunAsync(sid, "SELECT * FROM orders WHERE id IN (-1)");
+        Assert.Equal(0, none.Sum(b => b.Length));
+        var emptyEdit = h.Notifier.Of<QueryResultSetEvent>().Single(e => e.ExecutionId == empty).Edit!;
+        Assert.True(emptyEdit.Editable, emptyEdit.Reason);
+        Assert.False(emptyEdit.Rechecking);
+
+        // CREATE and SELECT in one run: the table is in the catalog by the time the metadata is read again after the run.
+        var (done, _, fresh) = await h.RunAsync(sid, "CREATE TABLE fresh (id INTEGER PRIMARY KEY, v VARCHAR); SELECT * FROM fresh;");
+        Assert.Null(done.Error);
+        Assert.True(h.Notifier.Of<QueryResultSetEvent>().Single(e => e.ExecutionId == fresh).Edit!.Rechecking);
+        var final = await h.Notifier.WaitEdit(fresh);
+        Assert.True(final.Editable, final.Reason);
+        Assert.Equal("fresh", final.Table);
+    }
+
+    [Fact]
     public async Task A_self_join_and_a_union_are_read_only_and_an_expression_unique_index_is_not_a_key()
     {
         // Grid-edit audit: shapes whose rows a key cannot name exactly, and a unique index on lower(code) that proves nothing.

@@ -46,12 +46,202 @@ public class ResultSourcesTests
         Assert.Null(sets[1]);
     }
 
+    // ------------------------------------------------------------------------------- batches: positional prediction
+
+    [Fact]
+    public void A_batch_that_does_not_parse_predicts_nothing_and_says_so()
+    {
+        Assert.Null(Predict("SELECT * FROM Orders WHERE"));
+        var traced = ResultSources.Trace("SELECT * FROM Orders WHERE", Sales, 0);
+        Assert.Null(traced.Columns);
+        Assert.False(traced.Stale);
+        Assert.StartsWith("Querithm could not parse this batch", traced.Why);
+    }
+
     [Theory]
-    [InlineData("EXEC dbo.usp_GetCustomerOrders 1; SELECT * FROM Orders")]
-    [InlineData("IF 1 = 1 SELECT * FROM Orders")]
-    [InlineData("DELETE FROM Orders OUTPUT deleted.OrderId; SELECT * FROM Orders")]
-    [InlineData("SELECT * FROM Orders WHERE")]
-    public void Batches_that_might_reorder_result_sets_are_not_predicted(string sql) => Assert.Null(Predict(sql));
+    [InlineData("EXEC dbo.usp_GetCustomerOrders 1; SELECT * FROM Orders", "EXEC")]
+    [InlineData("EXECUTE dbo.usp_GetCustomerOrders 1; SELECT * FROM Orders", "EXECUTE")]
+    [InlineData("IF 1 = 1 SELECT * FROM Orders", "IF")]
+    [InlineData("WHILE 1 = 0 BEGIN SELECT 1 END; SELECT * FROM Orders", "WHILE")]
+    [InlineData("BEGIN TRY SELECT 1 / 0 END TRY BEGIN CATCH SELECT ERROR_MESSAGE() END CATCH; SELECT * FROM Orders", "BEGIN TRY")]
+    [InlineData("DBCC CHECKIDENT ('dbo.Orders'); SELECT * FROM Orders", "DBCC")]
+    [InlineData("again: SELECT 1; IF 1 = 0 GOTO again; SELECT * FROM Orders", "IF")]
+    public void Result_sets_after_a_statement_that_may_return_any_number_are_not_predicted_and_name_it(string sql, string keyword)
+    {
+        var sets = Predict(sql)!;
+        var after = ResultSources.Trace(sql, Sales, sets.Count);
+        Assert.Null(after.Columns);
+        Assert.False(after.Stale); // nothing a metadata refresh would change
+        Assert.Equal($"this result comes after {keyword} in the same batch, so Querithm cannot tell which statement returned it — run the SELECT on its own to edit its rows", after.Why);
+    }
+
+    [Fact]
+    public void Result_sets_before_an_unpredictable_statement_keep_their_origins()
+    {
+        // The user's case: a SELECT with an EXEC further down in the same batch used to lose its edit option.
+        const string sql = "SELECT * FROM dbo.Orders; EXEC dbo.usp_GetCustomerOrders 1; SELECT * FROM dbo.Customers";
+        var sets = Predict(sql)!;
+        var first = Assert.Single(sets)!;
+        Assert.All(first, c => Assert.Equal(1, c.Origin!.ObjectId));
+        Assert.NotNull(ResultSources.Trace(sql, Sales, 0).Columns);
+        Assert.Contains("after EXEC", ResultSources.Trace(sql, Sales, 1).Why);
+    }
+
+    [Theory]
+    [InlineData("IF OBJECT_ID('tempdb..#t') IS NOT NULL DROP TABLE #t; SELECT * FROM dbo.Orders")]
+    [InlineData("IF 1 = 1 BEGIN UPDATE Orders SET Status = 'a' END ELSE BEGIN DELETE FROM Orders WHERE 1 = 0 END; SELECT * FROM dbo.Orders")]
+    [InlineData("WHILE @@ROWCOUNT > 0 BEGIN DELETE TOP (10) FROM Orders WHERE 1 = 0 END; SELECT * FROM dbo.Orders")]
+    [InlineData("BEGIN TRY UPDATE Orders SET Status = 'a' END TRY BEGIN CATCH THROW; END CATCH; SELECT * FROM dbo.Orders")]
+    [InlineData("TRUNCATE TABLE dbo.Customers; SELECT * FROM dbo.Orders")]
+    [InlineData("WAITFOR DELAY '00:00:00'; SELECT * FROM dbo.Orders")]
+    [InlineData("GRANT SELECT ON dbo.Orders TO public; SELECT * FROM dbo.Orders")]
+    [InlineData("UPDATE STATISTICS dbo.Orders; SELECT * FROM dbo.Orders")]
+    [InlineData("CHECKPOINT; SELECT * FROM dbo.Orders")]
+    [InlineData("DECLARE c CURSOR FOR SELECT OrderId FROM Orders; OPEN c; DECLARE @id bigint; FETCH NEXT FROM c INTO @id; CLOSE c; DEALLOCATE c; SELECT * FROM dbo.Orders")]
+    [InlineData("BEGIN SELECT * FROM dbo.Orders END")]
+    [InlineData("SET NOCOUNT ON; DECLARE @x int = 1; PRINT 'x'; SELECT * FROM dbo.Orders")]
+    public void Statements_that_return_no_rows_do_not_cost_the_select_its_origins(string sql)
+    {
+        var set = Assert.Single(Predict(sql)!)!;
+        Assert.Equal(["OrderId", "CustomerId", "OrderDate", "TotalAmount", "Status"], set.Select(c => c.Name));
+        Assert.All(set, c => Assert.Equal(1, c.Origin!.ObjectId));
+    }
+
+    [Fact]
+    public void An_output_clause_or_a_cursor_fetch_is_one_untraced_result_set_and_the_next_select_keeps_its_place()
+    {
+        var sets = Predict("DELETE FROM Orders OUTPUT deleted.OrderId; SELECT * FROM dbo.Orders")!;
+        Assert.Equal(2, sets.Count);
+        Assert.Null(sets[0]);
+        Assert.All(sets[1]!, c => Assert.Equal(1, c.Origin!.ObjectId));
+        Assert.Equal("the rows come from an OUTPUT clause, not from a table", ResultSources.Trace("DELETE FROM Orders OUTPUT deleted.OrderId", Sales, 0).Why);
+        // OUTPUT … INTO returns no rows.
+        Assert.Single(Predict("DECLARE @t TABLE (id bigint); DELETE FROM Orders OUTPUT deleted.OrderId INTO @t; SELECT * FROM dbo.Orders")!);
+
+        var fetch = Predict("DECLARE c CURSOR FOR SELECT OrderId FROM Orders; OPEN c; FETCH NEXT FROM c; SELECT * FROM dbo.Orders")!;
+        Assert.Equal(2, fetch.Count);
+        Assert.Null(fetch[0]);
+    }
+
+    [Fact]
+    public void A_return_ends_the_batch_and_what_follows_is_never_a_result_set()
+    {
+        const string sql = "SELECT * FROM dbo.Orders; RETURN; SELECT * FROM dbo.Customers";
+        Assert.Single(Predict(sql)!);
+        var beyond = ResultSources.Trace(sql, Sales, 1);
+        Assert.Null(beyond.Columns);
+        Assert.StartsWith("the batch returned more result sets than its statements account for", beyond.Why);
+    }
+
+    // ------------------------------------------------------------------------------- the user's query, and stale metadata
+
+    [Theory]
+    [InlineData("SELECT TOP 10 * FROM sales.Regions r")]
+    [InlineData("SELECT TOP 10 * FROM sales.Regions AS r")]
+    [InlineData("SELECT TOP (10) r.* FROM [sales].[Regions] r")]
+    [InlineData("select top 10 * from SALES.REGIONS R;")]
+    [InlineData("SELECT TOP 10 * FROM sales.Regions r -- trailing comment")]
+    [InlineData("/* lead */ SELECT TOP 10 * FROM sales.Regions r WITH (NOLOCK) WHERE r.RegionId > 0 ORDER BY r.RegionId OPTION (RECOMPILE)")]
+    public void Top_n_star_from_a_schema_qualified_table_with_an_alias_traces_every_column(string sql)
+    {
+        var traced = ResultSources.Trace(sql, Sales, 0);
+        Assert.Equal([new ColumnOrigin(3, "RegionId"), new ColumnOrigin(3, "Name")], traced.Columns!.Select(c => c.Origin));
+        Assert.Null(traced.Why);
+        Assert.False(traced.Stale);
+        Assert.Equal("sales.Regions", traced.Tables);
+        Assert.Null(ResultSources.Refusal(sql, Sales, 0));
+    }
+
+    [Theory]
+    [InlineData("SELECT TOP 10 * FROM saas.empEmployeeBasicInfo ebi", "saas.empEmployeeBasicInfo")]
+    [InlineData("SELECT * FROM NewTable", "NewTable")]
+    [InlineData("SELECT n.* FROM dbo.NewTable n", "dbo.NewTable")]
+    public void Star_from_a_table_the_snapshot_does_not_hold_is_stale_not_final(string sql, string table)
+    {
+        // The table exists on the server (the query returned rows) but was created after the snapshot was read: newer
+        // metadata traces it, so the caller reads the metadata again instead of leaving the result read-only.
+        var traced = ResultSources.Trace(sql, Sales, 0);
+        Assert.Null(traced.Columns);
+        Assert.True(traced.Stale);
+        Assert.Equal($"{table} is not in this database's cached metadata", traced.Why);
+    }
+
+    [Fact]
+    public void Named_columns_of_a_table_the_snapshot_does_not_hold_are_stale_too()
+    {
+        var traced = ResultSources.Trace("SELECT Id, Title FROM dbo.NewTable", Sales, 0);
+        Assert.Equal([null, null], traced.Columns!.Select(c => c.Origin));
+        Assert.True(traced.Stale);
+        Assert.Equal("dbo.NewTable is not in this database's cached metadata", traced.Why);
+    }
+
+    [Fact]
+    public void A_table_listed_without_its_columns_is_stale()
+    {
+        var snap = Sales with { Objects = [.. Sales.Objects, new Contract.SnapObject { Id = 70, Schema = "dbo", Name = "Bare", Kind = Contract.ObjectKind.Table }] };
+        var traced = ResultSources.Trace("SELECT * FROM dbo.Bare", snap, 0);
+        Assert.Null(traced.Columns);
+        Assert.True(traced.Stale);
+        Assert.Equal("the columns of dbo.Bare are not in this database's cached metadata", traced.Why);
+    }
+
+    [Theory]
+    // What no metadata refresh would ever add: system views, temporary tables, CTEs, derived tables, functions.
+    [InlineData("SELECT * FROM sys.objects")]
+    [InlineData("SELECT * FROM INFORMATION_SCHEMA.TABLES")]
+    [InlineData("SELECT * FROM sysobjects")]
+    [InlineData("SELECT * FROM #t")]
+    [InlineData("WITH x AS (SELECT 1 AS n) SELECT * FROM x")]
+    [InlineData("SELECT * FROM (SELECT 1 AS n) d")]
+    [InlineData("SELECT * FROM dbo.tvf_OrdersFor(1)")]
+    [InlineData("SELECT * FROM dbo.tvf_OrdersFor")] // a name the snapshot knows as something else than a table
+    public void Sources_that_are_not_tables_are_untraced_but_not_stale(string sql)
+    {
+        var traced = ResultSources.Trace(sql, Sales, 0);
+        Assert.Null(traced.Columns);
+        Assert.False(traced.Stale);
+        Assert.NotNull(traced.Why);
+    }
+
+    // ------------------------------------------------------------------------------- the provider's check against the real result
+
+    sealed class Col : System.Data.Common.DbColumn
+    {
+        public Col(string name) => ColumnName = name;
+    }
+
+    static List<System.Data.Common.DbColumn> Cols(params string[] names) => names.Select(n => (System.Data.Common.DbColumn)new Col(n)).ToList();
+
+    [Fact]
+    public void The_provider_returns_the_origins_when_the_result_has_the_predicted_columns()
+    {
+        var p = new Providers.SqlServer.SqlServerProvider();
+        var traced = p.ResultOrigins(Cols("regionid", "NAME"), "SELECT TOP 10 * FROM sales.Regions r", 0, Sales, null);
+        Assert.Equal([new ColumnOrigin(3, "RegionId"), new ColumnOrigin(3, "Name")], traced.Columns);
+        Assert.False(traced.Stale);
+        Assert.Null(p.ResultOrigins(Cols("x"), "SELECT 1 AS x", 0, null, null).Columns); // no snapshot: nothing traced
+    }
+
+    [Theory]
+    [InlineData("RegionId", "Name", "AddedLater")] // a column added since the snapshot was read
+    [InlineData("RegionId")] // a column dropped since
+    [InlineData("RegionId", "Title")] // a column renamed since
+    public void A_result_whose_columns_differ_from_the_cached_ones_is_stale_and_names_the_table(params string[] actual)
+    {
+        var traced = new Providers.SqlServer.SqlServerProvider().ResultOrigins(Cols(actual), "SELECT TOP 10 * FROM sales.Regions r", 0, Sales, null);
+        Assert.Null(traced.Columns);
+        Assert.True(traced.Stale);
+        Assert.Equal("the columns this query returned are not the ones cached for sales.Regions — name the columns instead of * if the table has hidden columns", traced.Why);
+    }
+
+    [Fact]
+    public void The_provider_passes_on_why_a_later_result_set_is_untraced()
+    {
+        var traced = new Providers.SqlServer.SqlServerProvider().ResultOrigins(Cols("OrderId"), "EXEC dbo.usp_GetCustomerOrders 1; SELECT OrderId FROM Orders", 0, Sales, null);
+        Assert.Null(traced.Columns);
+        Assert.False(traced.Stale);
+        Assert.Contains("after EXEC", traced.Why);
+    }
 
     [Fact]
     public void Ctes_derived_tables_and_temp_tables_are_opaque()

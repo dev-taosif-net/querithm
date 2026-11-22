@@ -112,7 +112,6 @@ public class EditAuditTests
     [InlineData("SELECT a.id, b.v FROM t a JOIN t b ON b.id = a.id + 1", "the same table (t) appears more than once in the query")]
     // public.t and t: the check compares the table part, so it errs on the safe side (as it does for "T" against t).
     [InlineData("SELECT a.id, a.v FROM public.t a, t b WHERE b.id = a.id", "the same table (t) appears more than once in the query")]
-    [InlineData("SELECT id, v FROM t WHERE id IN (SELECT id FROM t WHERE v > 1)", "the same table (t) appears more than once in the query")]
     [InlineData("SELECT * FROM (t a JOIN \"T\" b ON true)", "the same table (t) appears more than once in the query")]
     [InlineData("SELECT * FROM (t a JOIN t b ON true)", "the same table (t) appears more than once in the query")]
     [InlineData("WITH x AS (SELECT id FROM t) SELECT t.id, t.v FROM t JOIN x ON x.id = t.id", "the same table (t) appears more than once in the query")]
@@ -133,6 +132,50 @@ public class EditAuditTests
     {
         Assert.Null(PgResultShape.EditRefusal(sql));
         Assert.Null(SqliteResultShape.EditRefusal(sql));
+    }
+
+    [Theory]
+    // A subquery used as a value or a condition feeds no result column and adds no rows: each result row is still one row
+    // of the table in FROM, whatever the subquery reads — the same table, a self-join, a UNION. These were refused before.
+    [InlineData("SELECT id, v FROM t WHERE id IN (SELECT id FROM t WHERE v > 1)")]
+    [InlineData("SELECT * FROM t WHERE v = (SELECT max(v) FROM t)")]
+    [InlineData("SELECT * FROM t x WHERE EXISTS (SELECT 1 FROM t y WHERE y.id = x.id + 1) ORDER BY id")]
+    [InlineData("SELECT * FROM t WHERE (id IN (SELECT a.id FROM t a JOIN t b ON b.id = a.id))")]
+    [InlineData("SELECT * FROM t WHERE id IN (SELECT id FROM t UNION SELECT id FROM u)")]
+    [InlineData("SELECT * FROM t WHERE id IN (SELECT id FROM (SELECT id FROM t) d)")]
+    [InlineData("SELECT id, (SELECT count(*) FROM t) AS n FROM t")]
+    [InlineData("SELECT id, coalesce((SELECT max(v) FROM t), 0) AS top FROM t")]
+    [InlineData("SELECT * FROM t WHERE ((SELECT max(v) FROM t)) = v")]
+    [InlineData("SELECT * FROM t ORDER BY (SELECT count(*) FROM t y WHERE y.v < t.v)")]
+    [InlineData("SELECT * FROM t GROUP BY id, v HAVING v > (SELECT avg(v) FROM t)")]
+    // The same inside a derived table: its rows are still one each of its own table.
+    [InlineData("SELECT * FROM (SELECT * FROM t WHERE id IN (SELECT id FROM t)) d")]
+    public void A_subquery_used_as_a_value_or_a_condition_does_not_cost_the_edit(string sql)
+    {
+        Assert.Null(PgResultShape.EditRefusal(sql));
+        Assert.Null(SqliteResultShape.EditRefusal(sql));
+        Assert.Null(new DuckDbProvider().ResultEditRefusal(sql, 0, null));
+        Assert.Null(Querithm.Intelligence.Oracle.OracleResultSources.EditRefusal(sql, null));
+    }
+
+    [Theory]
+    // Everything that can change which row a result row is stays refused: a subquery inside the FROM list (derived table,
+    // join condition), a CTE body, a statement that is not a SELECT or begins with a parenthesis, and the query's own UNION.
+    [InlineData("SELECT * FROM (SELECT a.id, b.v FROM t a JOIN t b ON b.id = a.id) d", "the same table (t) appears more than once in the query")]
+    [InlineData("SELECT d.id FROM (SELECT id FROM t) d JOIN t ON t.id = d.id", "the same table (t) appears more than once in the query")]
+    [InlineData("SELECT a.id FROM t a JOIN u b ON b.id IN (SELECT id FROM t)", "the same table (t) appears more than once in the query")]
+    [InlineData("SELECT a.id FROM t a, LATERAL (SELECT id FROM t WHERE id > a.id) b", "the same table (t) appears more than once in the query")]
+    [InlineData("WITH x AS (SELECT id FROM t WHERE id IN (SELECT id FROM u)) SELECT t.id FROM t JOIN x ON x.id = t.id", "the same table (t) appears more than once in the query")]
+    [InlineData("(SELECT a.id, b.v FROM t a JOIN t b ON b.id = a.id)", "the same table (t) appears more than once in the query")]
+    [InlineData("((SELECT a.id FROM t a JOIN t b ON b.id = a.id))", "the same table (t) appears more than once in the query")]
+    [InlineData("DELETE FROM t WHERE id IN (SELECT id FROM t) RETURNING *", "the same table (t) appears more than once in the query")]
+    [InlineData("SELECT id FROM t WHERE id IN (SELECT id FROM t) UNION SELECT id FROM u", "the query combines several queries (UNION)")]
+    [InlineData("SELECT * FROM (SELECT id FROM t WHERE id IN (SELECT 1) EXCEPT SELECT id FROM u) d", "the query combines several queries (EXCEPT)")]
+    [InlineData("SELECT id FROM t WHERE v = (SELECT max(v) FROM t) INTERSECT SELECT id FROM u", "the query combines several queries (INTERSECT)")]
+    public void What_can_change_the_row_behind_a_result_row_is_still_refused(string sql, string reason)
+    {
+        Assert.Equal(reason, PgResultShape.EditRefusal(sql));
+        Assert.Equal(reason, SqliteResultShape.EditRefusal(sql));
     }
 
     [Theory]
@@ -222,7 +265,7 @@ public class EditAuditTests
         var seenOrigins = new List<ColumnOrigin?[]?>();
         await using var executions = new ExecutionService(sessions, new CapturingFrames(), notifier, new HistoryStore(store), Log.Null)
         {
-            Editability = (_, _, origins, _) => { seenOrigins.Add(origins); return new ResultEditInfo { Editable = true }; },
+            Editability = (_, _, origins, _) => { seenOrigins.Add(origins.Columns); return new ResultEditInfo { Editable = true }; },
         };
         var s = sessions.Open(new SessionOpenParams { ProfileId = profile.Id, Secret = "x" }).SessionId;
 

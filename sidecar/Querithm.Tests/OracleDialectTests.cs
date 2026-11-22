@@ -264,6 +264,63 @@ public sealed class OracleDialectTests
     public void Anything_but_one_plain_table_predicts_nothing(string sql) => Assert.Null(Origins(sql, "ID"));
 
     [Theory]
+    // Regression: MODEL, SAMPLE, PARTITION, WINDOW, FULL, LEFT, RIGHT, VERSIONS are not reserved in Oracle, so they are
+    // ordinary column names — a condition or sort key on one used to make the query read-only.
+    [InlineData("SELECT id FROM orders WHERE model = 'X'")]
+    [InlineData("SELECT id FROM orders WHERE sample > 1 AND partition IS NULL ORDER BY window DESC, full")]
+    [InlineData("SELECT id FROM orders o WHERE o.left = 1 ORDER BY o.right")]
+    [InlineData("SELECT id FROM orders WHERE versions BETWEEN 1 AND 3")]
+    [InlineData("SELECT id FROM orders WHERE model IN ('a', 'b') AND NOT full LIKE 'x%' ORDER BY model")]
+    [InlineData("SELECT id FROM orders WHERE (left) > 0 FOR UPDATE OF model")]
+    public void A_column_named_like_an_unreserved_keyword_is_still_a_plain_query(string sql) => Same([new ColumnOrigin(1, "ID")], Origins(sql, "ID"));
+
+    [Theory]
+    // The same words as the clauses they open keep the query out, wherever they stand.
+    [InlineData("SELECT id FROM orders WHERE id > 1 MODEL DIMENSION BY (id) MEASURES (id m) RULES ()")]
+    [InlineData("SELECT id FROM orders WHERE id > 1 WINDOW w AS (ORDER BY id)")]
+    [InlineData("SELECT id FROM orders SAMPLE (10)")]
+    [InlineData("SELECT id FROM orders VERSIONS BETWEEN SCN MINVALUE AND MAXVALUE")]
+    [InlineData("SELECT id FROM orders FULL OUTER JOIN log ON 1 = 1")]
+    [InlineData("SELECT id FROM orders LEFT JOIN log ON 1 = 1 WHERE id > 1")]
+    [InlineData("SELECT id FROM orders WHERE id > 1 GROUP BY id")]
+    [InlineData("SELECT id FROM orders WHERE id > 1 START WITH id = 1 CONNECT BY PRIOR id = id")]
+    [InlineData("SELECT id FROM orders WHERE id > 1 EXCEPT SELECT id FROM orders")]
+    public void The_clauses_those_words_open_still_predict_nothing(string sql) => Assert.Null(Origins(sql, "ID"));
+
+    [Fact]
+    public void A_trace_says_why_and_whether_newer_metadata_could_change_it()
+    {
+        // A table the snapshot does not hold: created since it was read.
+        var missing = OracleResultSources.Trace("SELECT * FROM fresh WHERE id > 1", Snap(), "APP", ["ID"]);
+        Assert.Equal((true, "APP.FRESH is not in this schema's cached metadata"), (missing.Stale, missing.Why));
+        Assert.Null(missing.Columns);
+        // * returned another number of columns than the snapshot lists.
+        var changed = OracleResultSources.Trace("SELECT * FROM orders", Snap(), "APP", ["ID", "NAME", "NOTE", "TWICE", "ADDED"]);
+        Assert.Equal((true, "the columns this query returned are not the ones cached for APP.ORDERS"), (changed.Stale, changed.Why));
+        // Oracle's own objects, an unknown current schema, a shape that is not plain: nothing a refresh would change.
+        foreach (var sql in new[] { "SELECT sysdate FROM dual", "SELECT * FROM user_tables", "SELECT * FROM v$session", "SELECT * FROM sys.obj$", "SELECT * FROM all_objects WHERE owner = 'APP'" })
+        {
+            var own = OracleResultSources.Trace(sql, Snap(), "APP", ["X"]);
+            Assert.False(own.Stale, sql);
+            Assert.EndsWith("is an Oracle system object, not a table of this schema", own.Why);
+        }
+        var unknown = OracleResultSources.Trace("SELECT id FROM orders", Snap(), null, ["ID"]);
+        Assert.Equal((false, "the session's current schema is not known, so ORDERS cannot be looked up — write it with its schema (SCHEMA.ORDERS)"), (unknown.Stale, unknown.Why));
+        var join = OracleResultSources.Trace("SELECT o.id FROM orders o JOIN log l ON 1 = 1", Snap(), "APP", ["ID"]);
+        Assert.False(join.Stale);
+        Assert.StartsWith("on Oracle only a plain SELECT from one table can be edited", join.Why);
+        // The provider reads the current schema from the scope Core captured with the batch's connection.
+        var p = TestOracle.Supported();
+        Assert.Equal([new ColumnOrigin(1, "ID")], ((IDbProvider)p).ResultOrigins([new NamedColumn("ID")], "SELECT id FROM orders", 0, Snap(), "APP").Columns);
+        Assert.Null(((IDbProvider)p).ResultOrigins([new NamedColumn("ID")], "SELECT id FROM orders", 0, Snap(), null).Columns);
+    }
+
+    sealed class NamedColumn : System.Data.Common.DbColumn
+    {
+        public NamedColumn(string name) => ColumnName = name;
+    }
+
+    [Theory]
     [InlineData("SELECT id FROM orders@far", "database link")]
     [InlineData("SELECT id FROM far", "APP.FAR is a synonym for a remote object")]
     [InlineData("SELECT id FROM orders MINUS SELECT id FROM log", "MINUS")]

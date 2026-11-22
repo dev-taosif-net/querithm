@@ -357,18 +357,33 @@ public sealed class PostgresProvider : IDbProvider
     /// <summary>A self-join (one table OID for every alias) or a set operator: the row a key names may not be the one shown.</summary>
     public string? ResultEditRefusal(string batchText, int resultInBatch, SchemaSnapshot? snapshot) => PgResultShape.EditRefusal(batchText);
 
-    public ColumnOrigin?[]? ResultOrigins(DbDataReader reader, IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot)
+    /// <summary>OIDs below this belong to the system catalogs (PostgreSQL's FirstNormalObjectId): no snapshot lists them.</summary>
+    const uint FirstUserOid = 16384;
+
+    public TracedOrigins ResultOrigins(IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot, string? scope)
     {
-        if (snapshot == null) return null;
-        var byId = snapshot.Objects.Where(o => o.Columns != null).GroupBy(o => o.Id).ToDictionary(g => g.Key, g => g.First());
+        if (snapshot == null) return TracedOrigins.None;
+        var byId = snapshot.Objects.GroupBy(o => o.Id).ToDictionary(g => g.Key, g => g.First());
         var origins = new ColumnOrigin?[columns.Count];
+        // A user table the server named but the snapshot does not hold (created, or dropped and created again, since it
+        // was read: a new OID), or a column it does not list: newer metadata traces it. A temporary table is never listed.
+        string? missing = null;
         for (var i = 0; i < columns.Count; i++)
         {
-            if (columns[i] is not Npgsql.Schema.NpgsqlDbColumn { TableOID: > 0 } c || !byId.TryGetValue(c.TableOID, out var obj)) continue;
-            var col = obj.Columns!.FirstOrDefault(x => x.Ordinal == c.ColumnAttributeNumber);
-            if (col != null) origins[i] = new ColumnOrigin(obj.Id, col.Name);
+            if (columns[i] is not Npgsql.Schema.NpgsqlDbColumn { TableOID: > 0 } c) continue;
+            if (byId.TryGetValue(c.TableOID, out var obj))
+            {
+                if (obj.Columns == null) continue; // listed without columns (a sequence): nothing to trace, nothing newer to read
+                var col = obj.Columns.FirstOrDefault(x => x.Ordinal == c.ColumnAttributeNumber);
+                if (col != null) origins[i] = new ColumnOrigin(obj.Id, col.Name);
+                else if (c.ColumnAttributeNumber > 0) missing ??= $"{obj.Schema}.{obj.Name}";
+            }
+            else if (c.TableOID >= FirstUserOid && c.ColumnAttributeNumber > 0 && c.BaseSchemaName?.StartsWith("pg_", StringComparison.Ordinal) != true)
+                missing ??= string.IsNullOrEmpty(c.BaseTableName) ? "the table this query reads"
+                    : string.IsNullOrEmpty(c.BaseSchemaName) ? c.BaseTableName : $"{c.BaseSchemaName}.{c.BaseTableName}";
         }
-        return origins;
+        return missing == null ? new TracedOrigins(origins)
+            : new TracedOrigins(origins, $"{missing} is not in this database's cached metadata as the server has it now", Stale: true);
     }
 
     /// <summary>postgres://user:password@host:port/database?param=value → Npgsql keywords (single host only).</summary>

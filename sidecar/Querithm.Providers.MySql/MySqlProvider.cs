@@ -272,24 +272,33 @@ public sealed class MySqlProvider : IDbProvider
     /// The protocol names each column's database, table and column as stored (org_table / org_name), so origins are exact.
     /// One table read under two aliases (a self-join) gives no origins: a row key could name either row.
     /// </summary>
-    public ColumnOrigin?[]? ResultOrigins(DbDataReader reader, IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot)
+    public TracedOrigins ResultOrigins(IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot, string? scope)
     {
-        if (snapshot == null) return null;
+        if (snapshot == null) return TracedOrigins.None;
         var names = Traits.NameMatch;
         var origins = new ColumnOrigin?[columns.Count];
         var aliasOf = new Dictionary<long, string?>();
+        // A table of this database the server named but the snapshot does not hold (created since it was read): newer
+        // metadata traces it. Another database's table is never in this snapshot, whatever its age.
+        string? missing = null, elsewhere = null;
         for (var i = 0; i < columns.Count; i++)
         {
             if (columns[i] is not MySqlDbColumn c || string.IsNullOrEmpty(c.BaseTableName) || string.IsNullOrEmpty(c.BaseColumnName)) continue;
             var obj = snapshot.Objects.FirstOrDefault(o => o.Kind is ObjectKind.Table or ObjectKind.View && names.Equals(o.Schema, c.BaseSchemaName) && names.Equals(o.Name, c.BaseTableName));
-            if (obj == null) continue;
-            if (aliasOf.TryGetValue(obj.Id, out var alias) && !string.Equals(alias, c.TableName, StringComparison.Ordinal)) return null;
+            if (obj == null)
+            {
+                if (string.IsNullOrEmpty(c.BaseSchemaName) || string.Equals(c.BaseSchemaName, snapshot.Database, StringComparison.OrdinalIgnoreCase)) missing ??= c.BaseTableName;
+                else elsewhere ??= $"{c.BaseSchemaName}.{c.BaseTableName} is in database {c.BaseSchemaName}, not this tab's database ({snapshot.Database}) — switch the tab to {c.BaseSchemaName} to edit it";
+                continue;
+            }
+            if (aliasOf.TryGetValue(obj.Id, out var alias) && !string.Equals(alias, c.TableName, StringComparison.Ordinal))
+                return new TracedOrigins(null, $"the same table ({obj.Name}) appears more than once in the query");
             aliasOf[obj.Id] = c.TableName;
             // Column names are case-insensitive in MySQL / MariaDB.
             var col = obj.Columns?.FirstOrDefault(x => string.Equals(x.Name, c.BaseColumnName, StringComparison.OrdinalIgnoreCase));
             origins[i] = new ColumnOrigin(obj.Id, col?.Name ?? c.BaseColumnName);
         }
-        return origins;
+        return missing != null ? new TracedOrigins(origins, $"{missing} is not in this database's cached metadata", Stale: true) : new TracedOrigins(origins, elsewhere);
     }
 
     public async Task<DbConnection> OpenAsync(Profile profile, string? secret, string? database, FileGrant? file, CancellationToken ct)

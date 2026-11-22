@@ -214,18 +214,18 @@ public sealed class OracleProvider : IDbProvider
 
     public ParseConnectionStringResult ParseConnectionString(string connectionString, Profile basis) => OracleConnectionStrings.Parse(connectionString, basis);
 
-    /// <summary>Without the connection the current schema is unknown: nothing is predicted (Core calls the overload below).</summary>
-    public ColumnOrigin?[]? ResultOrigins(DbDataReader reader, IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot) => null;
+    /// <summary>The connection's current schema as last read (<see cref="OracleSessionSchema"/>): where an unqualified name is looked up.</summary>
+    public string? OriginScope(DbConnection connection) => OracleSessionSchema.Of(connection);
 
     /// <summary>
     /// D4 S10: predicted from the statement's tokens and the snapshot (<see cref="OracleResultSources"/>): ODP.NET's schema
     /// table names a base table without its schema, and the same table for both sides of a self-join. Only the first data
-    /// result of a plain SQL batch; an unqualified name resolves in the connection's current schema as last read
-    /// (<see cref="OracleSessionSchema"/>).
+    /// result of a plain SQL batch; an unqualified name resolves in <paramref name="scope"/>, the current schema
+    /// <see cref="OriginScope"/> read from the batch's connection (without it nothing unqualified is predicted).
     /// </summary>
-    public ColumnOrigin?[]? ResultOrigins(DbConnection connection, DbDataReader reader, IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot) =>
-        snapshot == null || resultInBatch != 0 ? null
-            : OracleResultSources.Predict(batchText, snapshot, OracleSessionSchema.Of(connection), columns.Select(c => c.ColumnName).ToList());
+    public TracedOrigins ResultOrigins(IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot, string? scope) =>
+        snapshot == null || resultInBatch != 0 ? TracedOrigins.None
+            : OracleResultSources.Trace(batchText, snapshot, scope, columns.Select(c => c.ColumnName).ToList());
 
     /// <summary>A set operator (MINUS too), the same table twice, a database link, a synonym for a remote object.</summary>
     public string? ResultEditRefusal(string batchText, int resultInBatch, SchemaSnapshot? snapshot) => OracleResultSources.EditRefusal(batchText, snapshot);

@@ -96,6 +96,122 @@ public class DataEditIntegrationTests
         };
     }
 
+    /// <summary>Another tool on the same database: a sidecar of its own, so nothing tells the first one's metadata cache.</summary>
+    static async Task OutsideAsync(string engine, string sql)
+    {
+        await using var other = new TestHost();
+        string sid;
+        if (engine == "mssql") sid = (await other.OpenMssqlAsync(Db)).SessionId;
+        else
+        {
+            var p = await other.Rpc.ProfileSave(new Profile
+            {
+                Id = "", Name = "Fixture PG outside", Engine = Engine.Pg, Host = "localhost", Port = 54329, Auth = AuthKind.Password, Username = "postgres",
+                Environment = EnvironmentKind.Dev, TlsMode = TlsMode.Prefer, DatabaseDefault = Db,
+            });
+            sid = (await other.Rpc.SessionOpen(new SessionOpenParams { ProfileId = p.Id, Secret = TestHost.PgPassword, Database = Db })).SessionId;
+        }
+        await Ok(other, sid, sql);
+    }
+
+    [IntegrationTheory, MemberData(nameof(Engines))]
+    public async Task A_table_created_by_another_tool_after_the_metadata_was_read_becomes_editable_on_its_own_and_takes_its_first_row(string engine)
+    {
+        // The reported bug, on the real engines: "SELECT TOP 10 * FROM schema.table alias" often had no edit option, and
+        // never on an empty table. A new table is empty and is not in the cached metadata; the verdict was final.
+        var (h, _, sid) = await SetupAsync(engine);
+        await using var _h = h;
+        var table = T(engine, "q_fresh_" + Guid.NewGuid().ToString("N")[..8]);
+        await OutsideAsync(engine, engine == "mssql"
+            ? $"CREATE TABLE {table} (id int PRIMARY KEY, body nvarchar(50) NOT NULL)"
+            : $"CREATE TABLE {table} (id int PRIMARY KEY, body text NOT NULL)");
+        try
+        {
+            var (exec, first) = await SelectAsync(h, sid, engine == "mssql" ? $"SELECT TOP 10 * FROM {table} f" : $"SELECT * FROM {table} f LIMIT 10");
+            Assert.False(first.Editable);
+            Assert.True(first.Rechecking, first.Reason); // not a final "read-only": the metadata is being read again
+            Assert.Contains("cached metadata", first.Reason);
+
+            var final = await h.Notifier.WaitEdit(exec);
+            Assert.True(final.Editable, final.Reason);
+            Assert.False(final.Rechecking);
+            Assert.Equal(["id"], final.KeyColumns);
+
+            var r = await h.Rpc.DataApplyPatch(new GridPatchParams
+            {
+                SessionId = sid, ExecutionId = exec,
+                Inserts = [new GridRowInsert { TempIndex = 0, Values = new() { ["id"] = V("1"), ["body"] = V("first") } }],
+            });
+            Assert.True(r.Ok, r.Error);
+            Assert.Equal("first", await ScalarAsync(h, sid, $"SELECT body FROM {table} WHERE id = 1"));
+
+            // The next run needs no second look.
+            var (_, again) = await SelectAsync(h, sid, engine == "mssql" ? $"SELECT TOP 10 * FROM {table} f" : $"SELECT * FROM {table} f LIMIT 10");
+            Assert.True(again.Editable, again.Reason);
+            Assert.False(again.Rechecking);
+        }
+        finally { await OutsideAsync(engine, $"DROP TABLE {table}"); }
+    }
+
+    [IntegrationTheory, MemberData(nameof(Engines))]
+    public async Task A_column_added_by_another_tool_does_not_cost_select_star_its_edit_option(string engine)
+    {
+        var (h, p, sid) = await SetupAsync(engine);
+        await using var _h = h;
+        await OutsideAsync(engine, $"ALTER TABLE {T(engine, "q_plain")} ADD added_since int NULL");
+        var (exec, first) = await SelectAsync(h, sid, $"SELECT * FROM {T(engine, "q_plain")} ORDER BY id");
+        if (engine == "mssql")
+        {
+            // SQL Server names no base table: the prediction from the cached columns no longer matches the result, and the
+            // whole set was read-only ("column origins unknown") until the user refreshed and ran again.
+            Assert.False(first.Editable);
+            Assert.True(first.Rechecking, first.Reason);
+            var final = await h.Notifier.WaitEdit(exec);
+            Assert.True(final.Editable, final.Reason);
+            Assert.Contains(final.Columns, c => c.Column == "added_since" && !c.Locked);
+        }
+        else
+        {
+            // PostgreSQL names each column's table: the result stays editable, the unknown column locked until the next run.
+            Assert.True(first.Editable, first.Reason);
+            Assert.False(first.Rechecking);
+            await Task.Delay(200);
+            await h.Services.Metadata.WaitAsync(p.Id, Db);
+            var (_, again) = await SelectAsync(h, sid, $"SELECT * FROM {T(engine, "q_plain")} ORDER BY id");
+            Assert.Contains(again.Columns, c => c.Column == "added_since" && !c.Locked);
+        }
+    }
+
+    [IntegrationTheory, MemberData(nameof(Engines))]
+    public async Task System_tables_and_shapes_the_query_explains_are_never_rechecked(string engine)
+    {
+        var (h, _, sid) = await SetupAsync(engine);
+        await using var _h = h;
+        var (_, system) = await SelectAsync(h, sid, engine == "mssql" ? "SELECT TOP 5 name FROM sys.objects" : "SELECT relname FROM pg_class LIMIT 5");
+        Assert.Equal((false, false), (system.Editable, system.Rechecking));
+        var (_, join) = await SelectAsync(h, sid, $"SELECT a.id, b.name FROM {T(engine, "q_plain")} a JOIN {T(engine, "q_plain")} b ON b.id = a.id");
+        Assert.Equal((false, false), (join.Editable, join.Rechecking));
+        // A condition that reads the same table again is not a self-join: each row is still one row of the table.
+        var (_, sub) = await SelectAsync(h, sid, $"SELECT id, name FROM {T(engine, "q_plain")} WHERE id = (SELECT max(id) FROM {T(engine, "q_plain")})");
+        Assert.True(sub.Editable, sub.Reason);
+        Assert.Empty(h.Notifier.Of<QueryResultEditEvent>());
+    }
+
+    [IntegrationFact]
+    public async Task Sql_server_a_select_before_an_exec_in_the_same_batch_keeps_its_edit_option()
+    {
+        var (h, _, sid) = await SetupAsync("mssql");
+        await using var _h = h;
+        var (done, _, id) = await h.RunAsync(sid, "SET NOCOUNT ON; IF OBJECT_ID('tempdb..#gone') IS NOT NULL DROP TABLE #gone; SELECT TOP 10 * FROM dbo.q_plain p; EXEC sp_executesql N'SELECT 1 AS one'; SELECT id FROM dbo.q_plain;");
+        Assert.True(done.State == ExecState.Done, string.Join(" | ", h.Messages(id)));
+        var sets = h.Notifier.Of<QueryResultSetEvent>().Where(e => e.ExecutionId == id).OrderBy(e => e.ResultIndex).ToList();
+        Assert.Equal(3, sets.Count);
+        Assert.True(sets[0].Edit!.Editable, sets[0].Edit!.Reason); // used to be "column origins unknown for this batch"
+        Assert.False(sets[1].Edit!.Editable);
+        Assert.Equal("Read-only: this result comes after EXEC in the same batch, so Querithm cannot tell which statement returned it — run the SELECT on its own to edit its rows", sets[2].Edit!.Reason);
+        Assert.False(sets[2].Edit!.Rechecking);
+    }
+
     [IntegrationTheory, MemberData(nameof(Engines))]
     public async Task Update_insert_and_delete_round_trip(string engine)
     {

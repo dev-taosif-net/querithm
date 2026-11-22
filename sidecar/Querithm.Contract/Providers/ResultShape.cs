@@ -25,8 +25,15 @@ public readonly record struct ShapeToken(ShapeTokenKind Kind, string Text)
 /// Grid-edit audit: shapes of a row-returning statement whose driver-reported column origins cannot be trusted to name the
 /// row a key identifies. PostgreSQL (table OID) and SQLite (base table name) give every alias of a self-join the same
 /// table, and SQLite names the leftmost query's table for every column of a UNION. Read from the engine's own tokens
-/// (never a regular expression over the text): a set operator anywhere, or a table named more than once in a FROM / JOIN
-/// (subqueries, CTEs and derived tables included), refuses editing. Conservative by design: a refusal only costs an edit.
+/// (never a regular expression over the text): a set operator, or a table named more than once in a FROM / JOIN (CTEs
+/// and derived tables included), refuses editing. Conservative by design: a refusal only costs an edit.
+/// <para>
+/// One thing is left out, because it cannot change which row a result row is: a subquery used as a value or a condition
+/// — in the select list, or after WHERE, HAVING, ORDER BY — of a SELECT whose FROM list has ended. Its tables feed no
+/// result column (the drivers report no origin for an expression) and add no rows, so
+/// <c>SELECT * FROM t WHERE v = (SELECT max(v) FROM t)</c> is as editable as <c>SELECT * FROM t</c>. A subquery inside the
+/// FROM list (a derived table, a join condition), a CTE body, and a statement that is not a SELECT are still read as before.
+/// </para>
 /// </summary>
 public static class ResultShape
 {
@@ -46,12 +53,14 @@ public static class ResultShape
     {
         // Per open parenthesis: does it hold a query (so FROM there lists tables, not EXTRACT(x FROM y)), and is a FROM
         // list open at that level (so a comma starts another table).
-        var frames = new List<(bool Query, bool InFrom)> { (true, false) };
+        // Selecting: the level has read its SELECT keyword. Aside: the level is, or lies inside, a subquery used as a value
+        // or a condition, whose tables and set operators say nothing about the rows of the result.
+        var frames = new List<Frame> { new(true, false, false, false) };
         var seen = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         for (var i = 0; i < code.Count; i++)
         {
             var t = code[i];
-            if (t.Is("UNION") || t.Is("INTERSECT") || t.Is("EXCEPT"))
+            if (!frames[^1].Aside && (t.Is("UNION") || t.Is("INTERSECT") || t.Is("EXCEPT")))
                 return $"the query combines several queries ({t.Text.ToUpperInvariant()})";
             if (t.IsPunct("("))
             {
@@ -60,13 +69,14 @@ public static class ResultShape
                 var here = frames[^1];
                 // Where a table may stand: FROM (a JOIN b), JOIN (…), a comma or another parenthesis inside a FROM list.
                 var slot = here.Query && (prev.Is("FROM") || prev.Is("JOIN") || prev.Is("LATERAL") || (here.InFrom && (prev.IsPunct(",") || prev.IsPunct("("))));
-                if (next.Kind == ShapeTokenKind.Word && Opens.Contains(next.Text)) frames.Add((true, false));
+                if (next.Kind == ShapeTokenKind.Word && Opens.Contains(next.Text)) frames.Add(new(true, false, false, here.Aside || AsAValue(frames)));
                 else if (slot)
                 {
-                    frames.Add((true, true));
-                    if (Seen(seen, TableAt(code, i + 1)) is { } again) return again;
+                    frames.Add(new(true, true, false, here.Aside));
+                    if (!here.Aside && Seen(seen, TableAt(code, i + 1)) is { } again) return again;
                 }
-                else frames.Add((next.IsPunct("("), false));
+                // Parentheses around an operand, ((SELECT …)) or f((SELECT …)): the query inside is a value wherever these are.
+                else frames.Add(new(next.IsPunct("("), false, next.IsPunct("(") && AsAValue(frames), here.Aside));
                 continue;
             }
             if (t.IsPunct(")"))
@@ -74,19 +84,36 @@ public static class ResultShape
                 if (frames.Count > 1) frames.RemoveAt(frames.Count - 1);
                 continue;
             }
-            var (query, inFrom) = frames[^1];
-            if (!query) continue;
+            var frame = frames[^1];
+            if (!frame.Query) continue;
             string? table = null;
-            if (t.Is("FROM") || t.Is("JOIN"))
+            if (t.Is("SELECT")) frames[^1] = frame with { Selecting = true, InFrom = false };
+            else if (t.Is("FROM") || t.Is("JOIN"))
             {
-                if (t.Is("FROM")) frames[^1] = (true, true);
+                if (t.Is("FROM")) frames[^1] = frame with { InFrom = true };
                 table = TableAt(code, i + 1);
             }
-            else if (inFrom && t.IsPunct(",")) table = TableAt(code, i + 1);
-            else if (inFrom && t.Kind == ShapeTokenKind.Word && EndsFrom.Contains(t.Text)) frames[^1] = (true, false);
-            if (Seen(seen, table) is { } twice) return twice;
+            else if (frame.InFrom && t.IsPunct(",")) table = TableAt(code, i + 1);
+            else if (frame.InFrom && t.Kind == ShapeTokenKind.Word && EndsFrom.Contains(t.Text)) frames[^1] = frame with { InFrom = false };
+            if (!frame.Aside && Seen(seen, table) is { } twice) return twice;
         }
         return null;
+    }
+
+    /// <summary>One open parenthesis (the first is the statement itself).</summary>
+    readonly record struct Frame(bool Query, bool InFrom, bool Selecting, bool Aside);
+
+    /// <summary>
+    /// Whether a query opening here is a value or a condition of the SELECT around it: that SELECT — looking out through
+    /// the parentheses of expressions and function calls — has read its SELECT keyword and is not inside its FROM list.
+    /// A CTE body comes before the SELECT keyword, a derived table inside the FROM list, and a statement that begins with
+    /// a parenthesis or is not a SELECT never reads the keyword: none of them is one.
+    /// </summary>
+    static bool AsAValue(List<Frame> frames)
+    {
+        for (var k = frames.Count - 1; k >= 0; k--)
+            if (frames[k].Query) return frames[k].Selecting && !frames[k].InFrom;
+        return false;
     }
 
     static string? Seen(Dictionary<string, string> seen, string? table)

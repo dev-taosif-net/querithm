@@ -35,6 +35,16 @@ public sealed class Execution(Ulid id, Session? session, string sql, ExecuteOpti
     /// result sets never share <see cref="Results"/> or the grid's edits.
     /// </summary>
     internal int NextResultIndex;
+    /// <summary>
+    /// Result sets whose read-only verdict out-of-date metadata may explain (<see cref="ResultEditInfo.Rechecking"/>): decided
+    /// again once the run has ended and the metadata was read again. Written by the run only.
+    /// </summary>
+    internal List<(int ResultIndex, ResultTrace Trace)>? Rechecks;
+    /// <summary>
+    /// The database whose cached metadata an editable result set showed to be out of date in part (a column the cache does
+    /// not list yet, locked as if computed): read again after the run, so the next run of the query has it right.
+    /// </summary>
+    internal string? StaleDatabase;
 
     /// <summary>
     /// The connection the run holds, from the moment it has one until it hands it back (pool or pin); guarded by
@@ -79,8 +89,51 @@ public sealed class Execution(Ulid id, Session? session, string sql, ExecuteOpti
     }
 }
 
-/// <summary>A result set's columns, their table origins and the edit decision made when it started streaming.</summary>
+/// <summary>
+/// A result set's columns, their table origins and the edit decision made when it started streaming — replaced by the
+/// decision made again on newer metadata when the first one was <see cref="ResultEditInfo.Rechecking"/>.
+/// </summary>
 public sealed record RecordedResult(ResultColumn[] Columns, Contract.Providers.ColumnOrigin?[]? Origins, string? ProfileId, string? Database, ResultEditInfo? Edit);
+
+/// <summary>
+/// How one result set's shape refusal and column origins are read from a snapshot: when it starts streaming, and once
+/// more after the reader is gone when newer metadata arrived. It keeps what the provider needs for that — the reader's
+/// column schema, the batch text, the connection's scope — so the second reading touches neither reader nor connection.
+/// </summary>
+internal sealed class ResultTrace(Contract.Providers.IDbProvider provider, string text, int inBatch, string? scope, string? database, ILogger log)
+{
+    IReadOnlyList<DbColumn>? _columns;
+
+    /// <summary>The database whose snapshot the result set is read against (the tab's when the batch started).</summary>
+    public string? Database => database;
+    /// <summary>Why the statement's shape rules editing out whatever its origins say; null = no objection.</summary>
+    public string? Refusal { get; private set; }
+    public Contract.Providers.TracedOrigins Origins { get; private set; } = Contract.Providers.TracedOrigins.None;
+
+    /// <summary>A statement shape whose origins cannot name the row shown (self-join, UNION): the reason, and no origins.</summary>
+    public void ReadShape(SchemaSnapshot? snapshot)
+    {
+        Origins = Contract.Providers.TracedOrigins.None;
+        try { Refusal = provider.ResultEditRefusal(text, inBatch, snapshot); }
+        catch (Exception ex) { log.LogDebug("Result shape check skipped: {Message}", ex.Message); Refusal = "the query's shape could not be checked"; }
+    }
+
+    public Contract.Providers.ColumnOrigin?[]? ReadOrigins(IReadOnlyList<DbColumn> columns, SchemaSnapshot? snapshot)
+    {
+        _columns = columns;
+        if (Refusal != null) return null;
+        try { Origins = provider.ResultOrigins(columns, text, inBatch, snapshot, scope); }
+        catch (Exception ex) { log.LogDebug("Result origins skipped: {Message}", ex.Message); Origins = Contract.Providers.TracedOrigins.None; }
+        return Origins.Columns;
+    }
+
+    /// <summary>Both again, against <paramref name="snapshot"/>, for a result set whose reader is closed.</summary>
+    public void ReadAgain(SchemaSnapshot? snapshot)
+    {
+        ReadShape(snapshot);
+        if (_columns != null) ReadOrigins(_columns, snapshot);
+    }
+}
 
 /// <summary>A Querithm-generated write running inside an execution (grid patch, import, sync): its connection and message sink.</summary>
 public sealed class ToolContext(Execution exec, Session session, PhysicalConnection conn, Action<Severity, string> message, ILogger? log = null)
@@ -173,7 +226,31 @@ public sealed class ExecutionService : IAsyncDisposable
     public event Action<Session>? DdlExecuted;
 
     /// <summary>Decides whether the grid may edit a result set (set by the composition root; null = never editable).</summary>
-    public Func<Session, ResultColumn[], Contract.Providers.ColumnOrigin?[]?, SchemaSnapshot?, ResultEditInfo?>? Editability { get; set; }
+    public Func<Session, ResultColumn[], Contract.Providers.TracedOrigins, SchemaSnapshot?, ResultEditInfo?>? Editability { get; set; }
+
+    /// <summary>
+    /// Reads a database's metadata again and completes once that is done: null, or why it could not be read (set by the
+    /// composition root; null = verdicts are never decided again). A read-only verdict that out-of-date metadata may
+    /// explain (<see cref="ResultEditInfo.Rechecking"/>) is decided again after it, so a table created or altered since
+    /// the snapshot was read becomes editable without the user refreshing anything.
+    /// </summary>
+    public Func<Session, string, CancellationToken, Task<string?>>? RefreshMetadata { get; set; }
+
+    /// <summary>The limit on that read (§4 No Unbounded Waits); past it the first verdict stands, with the reason. Settable for tests.</summary>
+    internal TimeSpan RecheckLimit { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// How long a verdict that stayed read-only against freshly read metadata is taken as final for the same reason on
+    /// the same database, so a result no refresh can make editable (a temporary table, a table with hidden columns) does
+    /// not start a metadata read on every run.
+    /// </summary>
+    internal TimeSpan RecheckSettle { get; set; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>Said after a reason that was checked against metadata read moments ago: refreshing again will not change it.</summary>
+    internal const string CheckedFresh = " (checked against freshly read metadata)";
+
+    readonly ConcurrentDictionary<string, long> _settled = new();
+    readonly CancellationTokenSource _stopping = new();
 
     public ExecutionService(SessionManager sessions, IFrameSink frames, INotifier notifier, HistoryStore history, ILogger log, Contract.Providers.ISchemaSource? schema = null)
     {
@@ -635,6 +712,14 @@ public sealed class ExecutionService : IAsyncDisposable
                     AddHistory(session, exec.Sql, sw.Elapsed.TotalMilliseconds, affected, EnumText.Of(exec.State), firstError?.Message);
                 }
                 catch (Exception ex) { _log.LogWarning("History write failed: {Message}", ex.Message); }
+            // After the run let go of its connection and the tab's lock: a session-owned session reads its catalog on that
+            // connection, and DDL of this same run is in the catalog by now.
+            if (exec.Rechecks is { Count: > 0 } || exec.StaleDatabase != null)
+            {
+                var pending = exec.Rechecks ?? [];
+                var database = pending.Count > 0 ? pending[0].Trace.Database! : exec.StaleDatabase!;
+                _ = Task.Run(() => RecheckAsync(exec, session, pending, database));
+            }
             // A run that started may have committed DDL before a cancel (auto-commit engines, earlier batches), so the
             // schema is read again then too; only a run that never ran (still queued when cancelled) changed nothing.
             if (classification.HasDdl && lockTaken) DdlExecuted?.Invoke(session);
@@ -654,6 +739,7 @@ public sealed class ExecutionService : IAsyncDisposable
         var truncatedAny = false;
         var dataResult = 0;
         SchemaSnapshot? snapshot = null;
+        string? database = null;
         try
         {
             await using var reg = ct.Register(() => { try { session.Provider.Cancel(cmd); } catch { /* best effort */ } });
@@ -694,22 +780,19 @@ public sealed class ExecutionService : IAsyncDisposable
                     continue;
                 }
                 // Key markers come from cached metadata only; a missing snapshot just means no markers.
-                snapshot ??= SafeSnapshot(session);
+                database ??= session.Database ?? session.Profile.DatabaseDefault;
+                snapshot ??= SafeSnapshot(session, database);
                 var inBatch = dataResult++;
                 var snap = snapshot;
+                string? scope = null;
+                try { scope = session.Provider.OriginScope(db); }
+                catch (Exception ex) { _log.LogDebug("Origin scope skipped: {Message}", ex.Message); }
                 // A statement shape whose origins cannot name the row shown (self-join, UNION): no origins, and the reason.
-                string? refusal = null;
-                try { refusal = session.Provider.ResultEditRefusal(text, inBatch, snap); }
-                catch (Exception ex) { _log.LogDebug("Result shape check skipped: {Message}", ex.Message); refusal = "the query's shape could not be checked"; }
-                Func<IReadOnlyList<DbColumn>, Contract.Providers.ColumnOrigin?[]?> origins = cols =>
-                {
-                    if (refusal != null) return null;
-                    try { return session.Provider.ResultOrigins(db, reader, cols, text, inBatch, snap); }
-                    catch (Exception ex) { _log.LogDebug("Result origins skipped: {Message}", ex.Message); return null; }
-                };
+                var trace = new ResultTrace(session.Provider, text, inBatch, scope, database, _log);
+                trace.ReadShape(snap);
                 bool truncated;
                 // The index is spent once the set started, even when it fails part-way: the UI may already hold its schema.
-                try { truncated = await StreamResultSetAsync(exec, reader, session.Provider, resultIndex, batchIndex, maxRows, ct, origins, snap, refusal).ConfigureAwait(false); }
+                try { truncated = await StreamResultSetAsync(exec, reader, session.Provider, resultIndex, batchIndex, maxRows, ct, trace, snap).ConfigureAwait(false); }
                 finally { exec.NextResultIndex = resultIndex + 1; }
                 truncatedAny |= truncated;
             } while (await reader.NextResultAsync(ct).ConfigureAwait(false));
@@ -721,26 +804,125 @@ public sealed class ExecutionService : IAsyncDisposable
         }
     }
 
-    SchemaSnapshot? SafeSnapshot(Session session)
+    SchemaSnapshot? SafeSnapshot(Session session, string? database)
     {
         // Phase D0d: the session's own view (an in-memory database, temporary tables) where it has one.
-        try { return _schema is Metadata.SchemaCache scoped ? scoped.Get(session.Profile.Id, session.Database ?? session.Profile.DatabaseDefault, session.Id) : _schema?.Get(session.Profile.Id, session.Database ?? session.Profile.DatabaseDefault); }
+        try { return _schema is Metadata.SchemaCache scoped ? scoped.Get(session.Profile.Id, database, session.Id) : _schema?.Get(session.Profile.Id, database); }
         catch (Exception ex) { _log.LogDebug("No snapshot for key markers: {Message}", ex.Message); return null; }
     }
 
-    async Task<bool> StreamResultSetAsync(Execution exec, DbDataReader reader, Contract.Providers.IDbProvider provider, int resultIndex, int batchIndex,
-        int maxRows, CancellationToken ct, Func<IReadOnlyList<DbColumn>, Contract.Providers.ColumnOrigin?[]?>? origins = null, SchemaSnapshot? snapshot = null, string? editRefusal = null)
+    /// <summary>
+    /// Whether the grid may edit a result set, from what <paramref name="trace"/> last read. A check that throws leaves the
+    /// set read-only and says so, rather than no verdict at all (the webview would then show a reason that is not true).
+    /// </summary>
+    ResultEditInfo? Verdict(Session session, ResultColumn[] columns, ResultTrace trace, SchemaSnapshot? snapshot)
     {
-        var enc = new ResultSetEncoder(reader, provider, exec.Cells, resultIndex, origins, snapshot, ct);
+        if (Editability is not { } decide) return null;
+        ResultEditInfo? edit;
+        try { edit = decide(session, columns, trace.Origins, snapshot); }
+        catch (Exception ex)
+        {
+            _log.LogWarning("Editability check failed: {Message}", Logging.LogScrubber.Scrub(ex.Message));
+            edit = new ResultEditInfo { Editable = false, Reason = "Read-only: Querithm could not check whether these rows can be edited — run the query again" };
+        }
+        // The statement shape outranks the analyzer (which sees no origins), unless the engine refuses grid edits outright.
+        if (trace.Refusal != null && session.Provider.FeatureRefusal(Contract.Providers.Feature.DataEdit) == null)
+            edit = new ResultEditInfo { Editable = false, Reason = "Read-only: " + trace.Refusal };
+        return edit;
+    }
+
+    static string SettleKey(Session session, string database, string? reason) => $"{session.Profile.Id}|{database}|{reason}";
+
+    /// <summary>Remembers a finding for <see cref="RecheckSettle"/>; the few entries that outlive it are dropped as new ones arrive.</summary>
+    void Settle(string key)
+    {
+        var now = Time.NowMs();
+        if (_settled.Count >= 256)
+            foreach (var (k, at) in _settled)
+                if (now - at >= RecheckSettle.TotalMilliseconds) _settled.TryRemove(k, out _);
+        _settled[key] = now;
+    }
+
+    /// <summary>
+    /// After the run: reads the database's metadata again (bounded by <see cref="RecheckLimit"/>) and decides each pending
+    /// result set once more. Every one of them gets a <c>query.resultEdit</c>, whatever happens — the webview shows
+    /// "checking" until it arrives — and none is left <see cref="ResultEditInfo.Rechecking"/>.
+    /// </summary>
+    async Task RecheckAsync(Execution exec, Session session, List<(int ResultIndex, ResultTrace Trace)> pending, string database)
+    {
+        string? failed = null;
+        try
+        {
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(_stopping.Token);
+            limit.CancelAfter(RecheckLimit);
+            failed = await RefreshMetadata!(session, database, limit.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { failed = $"it did not finish within {RecheckLimit.TotalSeconds:0} s"; }
+        catch (Exception ex)
+        {
+            failed = Logging.LogScrubber.Scrub(ex.Message);
+            _log.LogWarning("Execution {Id}: reading the metadata again for its edit verdicts failed: {Message}", exec.IdText, failed);
+        }
+        foreach (var (index, trace) in pending)
+        {
+            if (!exec.Results.TryGetValue(index, out var rec) || rec.Edit is not { } first) continue; // the result set was dropped meanwhile
+            var final = first with { Rechecking = false };
+            try
+            {
+                var snapshot = SafeSnapshot(session, trace.Database);
+                trace.ReadAgain(snapshot);
+                if (Verdict(session, rec.Columns, trace, snapshot) is { } again)
+                {
+                    final = again with { Rechecking = false };
+                    if (again is { Editable: false, Rechecking: true })
+                    {
+                        // Still what out-of-date metadata would explain, against metadata read a moment ago: final.
+                        if (failed == null) Settle(SettleKey(session, trace.Database!, again.Reason));
+                        final = final with { Reason = failed == null ? again.Reason + CheckedFresh : $"{again.Reason} — reading the metadata again failed: {failed}" };
+                    }
+                    exec.Results.TryUpdate(index, rec with { Origins = trace.Origins.Columns, ProfileId = snapshot?.ProfileId, Database = snapshot?.Database, Edit = final }, rec);
+                }
+            }
+            catch (Exception ex) { _log.LogWarning("Execution {Id}: deciding result set {Index} again failed: {Message}", exec.IdText, index, Logging.LogScrubber.Scrub(ex.Message)); }
+            finally
+            {
+                // Leave no recorded verdict "checking", even when the update above lost to a dropped result set.
+                if (exec.Results.TryGetValue(index, out var now) && now.Edit is { Rechecking: true } stuck) exec.Results.TryUpdate(index, now with { Edit = stuck with { Rechecking = false } }, now);
+                _notifier.Notify("query.resultEdit", new QueryResultEditEvent { ExecutionId = exec.IdText, ResultIndex = index, Edit = final });
+            }
+        }
+    }
+
+    async Task<bool> StreamResultSetAsync(Execution exec, DbDataReader reader, Contract.Providers.IDbProvider provider, int resultIndex, int batchIndex,
+        int maxRows, CancellationToken ct, ResultTrace? trace = null, SchemaSnapshot? snapshot = null)
+    {
+        var enc = new ResultSetEncoder(reader, provider, exec.Cells, resultIndex, trace != null ? cols => trace.ReadOrigins(cols, snapshot) : null, snapshot, ct);
         var ri = checked((ushort)resultIndex); // below MaxResultSets (L13), never wrapped
         ResultEditInfo? edit = null;
-        if (exec.Session is { } session && Editability is { } decide)
+        if (exec.Session is { } session && trace != null)
         {
-            try { edit = decide(session, enc.Columns, enc.Origins, snapshot); }
-            catch (Exception ex) { _log.LogDebug("Editability check skipped: {Message}", ex.Message); }
-            // The statement shape outranks the analyzer (which sees no origins), unless the engine refuses grid edits outright.
-            if (editRefusal != null && provider.FeatureRefusal(Contract.Providers.Feature.DataEdit) == null)
-                edit = new ResultEditInfo { Editable = false, Reason = "Read-only: " + editRefusal };
+            edit = Verdict(session, enc.Columns, trace, snapshot);
+            if (edit is { Rechecking: true })
+            {
+                // Out-of-date metadata may explain the verdict: decided again after the run, unless nothing can read the
+                // metadata again, or the same reason held against freshly read metadata moments ago.
+                var settled = trace.Database != null && _settled.TryGetValue(SettleKey(session, trace.Database, edit.Reason), out var at) && Time.NowMs() - at < RecheckSettle.TotalMilliseconds;
+                if (edit.Editable || RefreshMetadata == null || trace.Database == null) edit = edit with { Rechecking = false };
+                else if (settled) edit = edit with { Rechecking = false, Reason = edit.Reason + CheckedFresh };
+                else (exec.Rechecks ??= []).Add((resultIndex, trace));
+            }
+            else if (edit is { Editable: true } && trace.Origins.Stale && RefreshMetadata != null && trace.Database != null)
+            {
+                // Editable, but a column of it is not in the cached metadata yet (added since it was read): it is locked like
+                // an expression for now. The verdict stands — it is never changed under an edit in progress — and the
+                // metadata is read again after the run, at most once per settle window for the same finding.
+                var key = SettleKey(session, trace.Database, "stale:" + trace.Origins.Why);
+                if (!(_settled.TryGetValue(key, out var at) && Time.NowMs() - at < RecheckSettle.TotalMilliseconds))
+                {
+                    Settle(key);
+                    exec.StaleDatabase = trace.Database;
+                }
+            }
         }
         exec.Results[resultIndex] = new RecordedResult(enc.Columns, enc.Origins, snapshot?.ProfileId, snapshot?.Database, edit);
         await WriteFrame(FrameKind.Schema, exec, ri, ResultSetEncoder.ToIpc(enc.Schema, null), ct).ConfigureAwait(false);
@@ -781,6 +963,7 @@ public sealed class ExecutionService : IAsyncDisposable
         catch
         {
             exec.Results.TryRemove(resultIndex, out _);
+            exec.Rechecks?.RemoveAll(r => r.ResultIndex == resultIndex);
             throw;
         }
     }
@@ -1179,6 +1362,7 @@ public sealed class ExecutionService : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _sessions.SessionClosing -= OnSessionClosing;
+        _stopping.Cancel(); // a metadata read a recheck waits on
         await _watchdog.DisposeAsync().ConfigureAwait(false);
         foreach (var e in _executions.Values) e.Cts.Cancel();
     }

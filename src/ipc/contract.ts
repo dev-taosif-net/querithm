@@ -1264,6 +1264,11 @@ export interface QueryQueuedEvent {
   executionId: string;
   sessionId: string;
 }
+export interface QueryResultEditEvent {
+  executionId: string;
+  resultIndex: number;
+  edit: ResultEditInfo;
+}
 export interface QueryResultSetEvent {
   executionId: string;
   resultIndex: number;
@@ -1349,6 +1354,7 @@ export interface ResultColumn {
 export interface ResultEditInfo {
   editable: boolean;
   reason?: string | null;
+  rechecking: boolean;
   objectId?: number | null;
   schema?: string | null;
   table?: string | null;
@@ -1870,6 +1876,7 @@ export interface NotificationMap {
   "query.message": ServerMessage;
   "query.messages": QueryMessagesEvent;
   "query.resultSet": QueryResultSetEvent;
+  "query.resultEdit": QueryResultEditEvent;
   "query.plan": QueryPlanEvent;
   "query.done": QueryDoneEvent;
   "session.stateChanged": SessionState;

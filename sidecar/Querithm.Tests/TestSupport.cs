@@ -29,6 +29,21 @@ public sealed class CapturingNotifier : INotifier
     public Task<QueryDoneEvent> WaitDone(string executionId, int timeoutMs = -1) =>
         Done(executionId).Task.WaitAsync(TimeSpan.FromMilliseconds(timeoutMs < 0 ? TestTime.Ms(30_000) : timeoutMs));
 
+    /// <summary>
+    /// Waits for the final edit verdict of a result set whose first one was <see cref="ResultEditInfo.Rechecking"/>
+    /// (query.resultEdit, sent once the metadata was read again after the run). 15 s, scaled.
+    /// </summary>
+    public async Task<ResultEditInfo> WaitEdit(string executionId, int resultIndex = 0)
+    {
+        var deadline = DateTime.UtcNow + TestTime.Of(TimeSpan.FromSeconds(15));
+        while (DateTime.UtcNow < deadline)
+        {
+            if (Of<QueryResultEditEvent>().FirstOrDefault(e => e.ExecutionId == executionId && e.ResultIndex == resultIndex) is { } e) return e.Edit;
+            await Task.Delay(10);
+        }
+        throw new Xunit.Sdk.XunitException($"no query.resultEdit for result set {resultIndex} of {executionId}: the webview would show \"checking\" for ever");
+    }
+
     /// <summary>Payloads of one type; <c>Of&lt;ServerMessage&gt;()</c> reads the messages inside each query.messages batch (M13).</summary>
     public IEnumerable<T> Of<T>() =>
         All.Select(x => x.Payload).SelectMany(p => p is QueryMessagesEvent b && typeof(T) == typeof(ServerMessage) ? b.Messages.Cast<object>() : [p]).OfType<T>();

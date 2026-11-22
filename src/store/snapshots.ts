@@ -340,10 +340,23 @@ export function installSnapshotListeners() {
   // A disconnected server's schema is no longer shown or searched (explorer, completion).
   const offConn = useConnections.subscribe((s, prev) => {
     if (s.order !== prev.order) for (const id of prev.order) if (!s.order.includes(id)) useSnapshots.getState().forget(id);
-    // Reconnected: the tabs still bound to the server get their schema back (it was dropped on disconnect).
+    // Reconnected: the tabs still bound to the server get their schema back (it was dropped on disconnect). A schema
+    // loaded before the server was connected is asked for again: restored tabs load theirs at startup, often before the
+    // sidecar holds the profile's credentials, and without those it starts no refresh — the cache then stayed as old as
+    // the last launch left it for the whole session (tables created since: no completion, read-only in the grid).
     for (const id of s.order) {
       if (s.servers[id]?.status !== "connected" || prev.servers[id]?.status === "connected") continue;
-      for (const t of Object.values(useTabs.getState().tabs)) if (t.profileId === id && t.database) ensureTabSnapshot(t);
+      const asked = new Set<string>();
+      for (const t of Object.values(useTabs.getState().tabs)) {
+        const scope = t.profileId === id && t.database ? tabScope(t) : undefined;
+        const k = scope && snapKey(scope.profileId, scope.database, scope.sessionId);
+        if (!scope || !k || asked.has(k)) continue;
+        asked.add(k);
+        const store = useSnapshots.getState();
+        const entry = store.entries[k];
+        if (!entry) store.ensure(scope.profileId, scope.database, scope.sessionId);
+        else if (entry.status !== "loading" && entry.status !== "refreshing") void store.load(scope.profileId, scope.database, scope.sessionId);
+      }
     }
   });
   const offTabs = useTabs.subscribe((s, prev) => {

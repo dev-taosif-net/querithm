@@ -22,10 +22,10 @@ public sealed class DataEditorService(SessionManager sessions, ExecutionService 
     const int MaxConflictReads = 50;
 
     /// <summary>The editability hook ExecutionService calls for every data result set.</summary>
-    public ResultEditInfo? Decide(Session session, ResultColumn[] columns, ColumnOrigin?[]? origins, SchemaSnapshot? snapshot) =>
+    public ResultEditInfo? Decide(Session session, ResultColumn[] columns, TracedOrigins origins, SchemaSnapshot? snapshot) =>
         session.Provider.FeatureRefusal(Feature.DataEdit) is { } refused
             ? new ResultEditInfo { Editable = false, Reason = refused }
-            : EditabilityAnalyzer.Analyze(session.Provider.DataEdit, columns, origins, snapshot, id => Indexes(snapshot!, id));
+            : EditabilityAnalyzer.Analyze(session.Provider.DataEdit, columns, origins.Columns, snapshot, id => Indexes(snapshot!, id), origins.Why, origins.Stale);
 
     IndexInfo[] Indexes(SchemaSnapshot snapshot, long objectId)
     {

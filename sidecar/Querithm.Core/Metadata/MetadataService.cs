@@ -160,6 +160,12 @@ public sealed class MetadataService
         _cache = cache;
         _notifier = notifier;
         _log = log;
+        // No refresh of this process can be running yet: a row still 'refreshing' was left by one that never finished.
+        try
+        {
+            if (_store.ResetInterruptedRefreshes() is > 0 and var n) _log.LogInformation("Metadata: {Count} interrupted refresh(es) from the last run marked stale", n);
+        }
+        catch (Exception ex) { _log.LogWarning("Metadata: could not reset interrupted refreshes: {Message}", ex.Message); }
     }
 
     public SchemaCache Cache => _cache;
@@ -351,7 +357,7 @@ public sealed class MetadataService
             if (conn != null) { var done = conn; conn = null; await done.Pool.ReturnAsync(done).ConfigureAwait(false); }
 
             // A session closed while this ran keeps nothing in memory (its view was dropped with it).
-            if (session is { Closed: true }) return;
+            if (session is { Closed: true }) { Interrupted(p, mainStore, mainDb, inMemory); return; }
             mainStore.ApplyRefresh(p.ProfileId, mainDb, p.Full, mainChanged, mainRemoved, Only(details, mainChanged), version, notes);
             // A tab of this file deferred its refresh while this one ran (DDL inside its transaction): the snapshot stays
             // Stale until that refresh runs, instead of this one calling it Fresh.
@@ -389,7 +395,7 @@ public sealed class MetadataService
             if (dedicated != null) await dedicated.DisposeAsync().ConfigureAwait(false);
             if (conn != null) await conn.Pool.ReturnAsync(conn).ConfigureAwait(false);
             _log.LogWarning("Metadata refresh failed for {Profile}/{Db}: {Message}", p.ProfileId, p.Database, Logging.LogScrubber.Scrub(ex.Message));
-            if (session is { Closed: true }) return;
+            if (session is { Closed: true }) { Interrupted(p, mainStore, mainDb, inMemory); return; }
             mainStore.SetStatus(p.ProfileId, mainDb, SnapshotStatus.Error, ex.Message);
             _notifier.Notify("meta.updated", new MetaUpdatedEvent
             {
@@ -397,6 +403,44 @@ public sealed class MetadataService
                 SessionId = inMemory ? session!.Id : null,
             });
         }
+    }
+
+    /// <summary>
+    /// A refresh that ends without a result because its session closed: a file database's shared row must not stay
+    /// 'refreshing' — nothing would refresh that database again, on its own or when asked, until the engine restarts.
+    /// An in-memory database's row went with its session.
+    /// </summary>
+    void Interrupted(RefreshParams p, MetadataStore mainStore, string mainDb, bool inMemory)
+    {
+        if (inMemory) return;
+        try
+        {
+            if (mainStore.GetSnapshotRow(p.ProfileId, mainDb)?.Status != SnapshotStatus.Refreshing) return;
+            mainStore.SetStatus(p.ProfileId, mainDb, SnapshotStatus.Stale);
+            _notifier.Notify("meta.updated", new MetaUpdatedEvent { ProfileId = p.ProfileId, Database = p.Database, Status = SnapshotStatus.Stale });
+        }
+        catch (Exception ex) { _log.LogWarning("Metadata refresh of {Profile}/{Db}: could not clear its status: {Message}", p.ProfileId, p.Database, ex.Message); }
+    }
+
+    /// <summary>
+    /// Reads <paramref name="database"/>'s metadata again for <paramref name="session"/> — its own view where it has one —
+    /// and completes when that read (queued behind a running one) is done: null, or why the metadata is still not current.
+    /// Grid editing decides a result set again after it (ExecutionService.RefreshMetadata).
+    /// </summary>
+    public async Task<string?> RefreshedAsync(Session session, string database, CancellationToken ct)
+    {
+        var sessionId = session.SessionOwned ? session.Id : null;
+        Refresh(new RefreshParams { ProfileId = session.Profile.Id, Database = database, SessionId = sessionId });
+        await WaitAsync(session.Profile.Id, database, sessionId).WaitAsync(ct).ConfigureAwait(false);
+        var row = session.InMemory
+            ? _cache.Ephemeral.GetSnapshotRow(session.Profile.Id, SchemaCache.SessionDatabase(database, session.Id))
+            : _store.GetSnapshotRow(session.Profile.Id, database);
+        return row?.Status switch
+        {
+            SnapshotStatus.Error => Logging.LogScrubber.Scrub(row.Error ?? "the metadata could not be read"),
+            SnapshotStatus.Stale when session.RefreshDeferred => "it is read when the open transaction ends (commit or roll back, then run the query again)",
+            _ => null,
+        };
     }
 
     static (List<ObjectStamp> Changed, List<long> Removed) Diff(Dictionary<long, long> markers, List<ObjectStamp> stamps, bool full)

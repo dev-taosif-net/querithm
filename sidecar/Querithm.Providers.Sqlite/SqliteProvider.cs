@@ -85,22 +85,35 @@ public sealed class SqliteProvider : IDbProvider
     /// <summary>A self-join (one base table for every alias) or a compound SELECT (the leftmost table for every column).</summary>
     public string? ResultEditRefusal(string batchText, int resultInBatch, SchemaSnapshot? snapshot) => SqliteResultShape.EditRefusal(batchText);
 
-    public ColumnOrigin?[]? ResultOrigins(DbDataReader reader, IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot)
+    public TracedOrigins ResultOrigins(IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot, string? scope)
     {
-        if (snapshot == null) return null;
+        if (snapshot == null) return TracedOrigins.None;
         var origins = new ColumnOrigin?[columns.Count];
+        // A table SQLite named but the snapshot does not hold, or a column it does not list (created or altered since it
+        // was read): newer metadata traces it. A name in both main and temp never does.
+        string? missing = null, twice = null;
         for (var i = 0; i < columns.Count; i++)
         {
             var table = columns[i].BaseTableName;
             var column = columns[i].BaseColumnName;
             if (string.IsNullOrEmpty(table) || string.IsNullOrEmpty(column)) continue;
             var matches = snapshot.Objects.Where(o => o.Kind == ObjectKind.Table && string.Equals(o.Name, table, StringComparison.OrdinalIgnoreCase)).Take(2).ToList();
-            if (matches.Count != 1) continue;
-            var name = matches[0].Columns?.FirstOrDefault(c => string.Equals(c.Name, column, StringComparison.OrdinalIgnoreCase))?.Name;
-            if (name != null) origins[i] = new ColumnOrigin(matches[0].Id, name);
+            if (matches.Count == 2) twice ??= $"table {table} exists in more than one schema (main and temp), so its rows cannot be told apart";
+            // sqlite_master and its kin are SQLite's own, and an attached database's tables are another file's: no snapshot
+            // of this database lists them.
+            else if (matches.Count == 0) { if (!table.StartsWith("sqlite_", StringComparison.OrdinalIgnoreCase) && !Attached(columns[i])) missing ??= table; }
+            else if (matches[0].Columns?.FirstOrDefault(c => string.Equals(c.Name, column, StringComparison.OrdinalIgnoreCase))?.Name is { } name) origins[i] = new ColumnOrigin(matches[0].Id, name);
+            // rowid and its aliases are not listed columns: nothing newer metadata would add.
+            else if (!RowIdNames.Contains(column)) missing ??= table;
         }
-        return origins;
+        return missing != null ? new TracedOrigins(origins, $"{missing} is not in this database's cached metadata as the file has it now", Stale: true) : new TracedOrigins(origins, twice);
     }
+
+    static readonly HashSet<string> RowIdNames = new(["rowid", "oid", "_rowid_"], StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The column's database, where the driver reports one, is neither main nor temp: an ATTACHed file.</summary>
+    static bool Attached(DbColumn c) =>
+        !string.IsNullOrEmpty(c.BaseCatalogName) && !string.Equals(c.BaseCatalogName, "main", StringComparison.OrdinalIgnoreCase) && !string.Equals(c.BaseCatalogName, "temp", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Exactly the granted file in exactly its mode — never ReadWriteCreate, so a missing file is never created — or a

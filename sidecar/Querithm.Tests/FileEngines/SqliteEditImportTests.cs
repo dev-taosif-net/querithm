@@ -65,6 +65,163 @@ public sealed class SqliteEditImportTests
         Assert.True(edit.Columns.Single(c => c.Column == "raw").Locked);
     }
 
+    // ------------------------------------------------------------------------------- metadata that is out of date
+
+    static void Outside(string path, string sql)
+    {
+        // Another tool on the same file: nothing tells Querithm, so its cached metadata does not hold the change.
+        using var other = new SqliteConnection($"Data Source={path};Pooling=False");
+        other.Open();
+        using var cmd = other.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
+    }
+
+    [Fact]
+    public async Task A_table_created_outside_after_the_metadata_was_read_becomes_editable_on_its_own_and_takes_its_first_row()
+    {
+        // The reported bug, both halves: the edit option "often" missing, and missing on a result with no rows. A new table is
+        // empty and is not in the cached metadata; the verdict was decided once from that cache and never looked at again.
+        var (h, _, sid, path) = await OpenAsync(Orders);
+        await using var _ = h;
+        Outside(path, "CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL)");
+
+        var (done, batches, exec) = await h.RunAsync(sid, "SELECT * FROM notes");
+        Assert.Null(done.Error);
+        Assert.Equal(0, batches.Sum(b => b.Length)); // no rows at all
+        var first = ResultSet(h, exec).Edit!;
+        Assert.False(first.Editable);
+        Assert.True(first.Rechecking); // not a final "read-only": the metadata is being read again
+        Assert.Equal("Read-only: notes is not in this database's cached metadata as the file has it now", first.Reason);
+
+        var final = await h.Notifier.WaitEdit(exec);
+        Assert.True(final.Editable, final.Reason);
+        Assert.False(final.Rechecking);
+        Assert.Equal(["id"], final.KeyColumns);
+        Assert.Null(final.InsertBlockedReason);
+
+        // The first row of the empty table, written through the same result set (no re-run).
+        var r = await h.Rpc.DataApplyPatch(new GridPatchParams
+        {
+            SessionId = sid, ExecutionId = exec,
+            Inserts = [new GridRowInsert { TempIndex = 0, Values = new() { ["body"] = V("first") } }],
+        });
+        Assert.True(r.Ok, r.Error);
+        Assert.Equal(1, r.AppliedInserts);
+        Assert.Equal("first", Scalar(path, "SELECT body FROM notes WHERE id = 1"));
+
+        // The next run needs no second look: the metadata holds the table now.
+        var (_, _, again) = await h.RunAsync(sid, "SELECT * FROM notes");
+        var edit = ResultSet(h, again).Edit!;
+        Assert.True(edit.Editable, edit.Reason);
+        Assert.False(edit.Rechecking);
+    }
+
+    [Fact]
+    public async Task An_empty_table_the_metadata_knows_is_editable_at_once_and_takes_its_first_row()
+    {
+        var (h, _, sid, path) = await OpenAsync("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL);");
+        await using var _ = h;
+        var (done, batches, exec) = await h.RunAsync(sid, "SELECT * FROM notes");
+        Assert.Null(done.Error);
+        Assert.Equal(0, batches.Sum(b => b.Length));
+        var edit = ResultSet(h, exec).Edit!;
+        Assert.True(edit.Editable, edit.Reason);
+        Assert.False(edit.Rechecking);
+        Assert.Empty(h.Notifier.Of<QueryResultEditEvent>());
+        var r = await h.Rpc.DataApplyPatch(new GridPatchParams
+        {
+            SessionId = sid, ExecutionId = exec,
+            Inserts = [new GridRowInsert { TempIndex = 0, Values = new() { ["body"] = V("first") } }],
+        });
+        Assert.True(r.Ok, r.Error);
+        Assert.Equal("first", Scalar(path, "SELECT body FROM notes"));
+    }
+
+    [Fact]
+    public async Task A_table_created_and_read_in_the_same_run_becomes_editable()
+    {
+        var (h, _, sid, _) = await OpenAsync(Orders);
+        await using var _ = h;
+        var (done, _, exec) = await h.RunAsync(sid, "CREATE TABLE fresh (id INTEGER PRIMARY KEY, v TEXT); INSERT INTO fresh (v) VALUES ('a'); SELECT * FROM fresh;");
+        Assert.Null(done.Error);
+        var first = ResultSet(h, exec).Edit!;
+        Assert.True(first.Rechecking, first.Reason);
+        var final = await h.Notifier.WaitEdit(exec);
+        Assert.True(final.Editable, final.Reason);
+        Assert.Equal("fresh", final.Table);
+    }
+
+    [Fact]
+    public async Task A_column_added_outside_keeps_the_result_editable_and_is_unlocked_by_the_next_run()
+    {
+        var (h, p, sid, path) = await OpenAsync(Orders);
+        await using var _ = h;
+        Outside(path, "ALTER TABLE orders ADD COLUMN note TEXT");
+
+        var (_, _, exec) = await h.RunAsync(sid, "SELECT * FROM orders ORDER BY id");
+        var first = ResultSet(h, exec).Edit!;
+        // The verdict stands (it is never changed under an edit in progress): editable, the unknown column locked.
+        Assert.True(first.Editable, first.Reason);
+        Assert.False(first.Rechecking);
+        Assert.True(first.Columns.Last().Locked);
+        Assert.Empty(h.Notifier.Of<QueryResultEditEvent>().Where(e => e.ExecutionId == exec));
+
+        // The metadata is read again behind it, with nobody asking.
+        var deadline = DateTime.UtcNow + TestTime.Of(TimeSpan.FromSeconds(10));
+        SchemaSnapshot snap;
+        do
+        {
+            await Task.Delay(25);
+            snap = await h.Rpc.MetaSnapshot(new SnapshotParams { ProfileId = p.Id, Database = "main", SessionId = sid });
+        } while (snap.Objects.Single(o => o.Name == "orders").Columns!.All(c => c.Name != "note") && DateTime.UtcNow < deadline);
+
+        var (_, _, again) = await h.RunAsync(sid, "SELECT * FROM orders ORDER BY id");
+        var edit = ResultSet(h, again).Edit!;
+        Assert.True(edit.Editable, edit.Reason);
+        Assert.Equal(("note", false), (edit.Columns.Last().Column, edit.Columns.Last().Locked));
+    }
+
+    [Fact]
+    public async Task A_condition_that_reads_the_same_table_keeps_the_result_editable_and_writes_the_row_shown()
+    {
+        // Regression: any second mention of the table, also inside WHERE (SELECT …), made the result read-only.
+        var (h, _, sid, path) = await OpenAsync(Orders);
+        await using var _ = h;
+        var (_, batches, exec) = await h.RunAsync(sid, "SELECT id, name, qty FROM orders WHERE qty = (SELECT max(qty) FROM orders) OR id IN (SELECT min(id) FROM orders) ORDER BY id");
+        Assert.Equal(2, batches.Sum(b => b.Length)); // ids 1 and 3
+        var edit = ResultSet(h, exec).Edit!;
+        Assert.True(edit.Editable, edit.Reason);
+        var r = await h.Rpc.DataApplyPatch(new GridPatchParams
+        {
+            SessionId = sid, ExecutionId = exec,
+            Updates = [new GridRowUpdate { RowIndex = 1, Key = [V("3")], Changes = new() { ["name"] = V("tres") }, Original = new() { ["name"] = V("three") } }],
+        });
+        Assert.True(r.Ok, r.Error);
+        Assert.Equal("tres", Scalar(path, "SELECT name FROM orders WHERE id = 3"));
+        Assert.Equal("one", Scalar(path, "SELECT name FROM orders WHERE id = 1")); // only the row shown
+        // A self-join in FROM is still refused: there a key could name either row.
+        var (_, _, join) = await h.RunAsync(sid, "SELECT a.id, b.name FROM orders a JOIN orders b ON b.id = a.id + 1");
+        Assert.Equal("Read-only: the same table (orders) appears more than once in the query", ResultSet(h, join).Edit!.Reason);
+    }
+
+    [Fact]
+    public async Task A_result_no_refresh_can_make_editable_says_so_once_and_is_not_checked_on_every_run()
+    {
+        var (h, _, sid, _) = await OpenAsync(Orders);
+        await using var _ = h;
+        // sqlite_schema is SQLite's own table: nothing a metadata read would add, so nothing is read again.
+        var (_, _, own) = await h.RunAsync(sid, "SELECT name FROM sqlite_schema");
+        var edit = ResultSet(h, own).Edit!;
+        Assert.False(edit.Editable);
+        Assert.False(edit.Rechecking);
+        Assert.Empty(h.Notifier.Of<QueryResultEditEvent>());
+
+        // A join is the query's own doing.
+        var (_, _, join) = await h.RunAsync(sid, "SELECT a.id, b.name FROM orders a JOIN orders b ON b.id = a.id");
+        Assert.Equal((false, false), (ResultSet(h, join).Edit!.Editable, ResultSet(h, join).Edit!.Rechecking));
+    }
+
     [Fact]
     public async Task Updates_inserts_and_deletes_are_written_and_affinity_types_the_values()
     {

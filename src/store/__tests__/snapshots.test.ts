@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterAll, describe, it, expect, vi, beforeEach } from "vitest";
 import type { MetaUpdatedEvent, SchemaSnapshot, SnapObject } from "../../ipc/contract";
 import { installSnapshotListeners, loginSchemaOf, RETRY_MS, snapKey, useSnapshots } from "../snapshots";
 import { useProfiles } from "../profiles";
@@ -204,6 +204,8 @@ describe("snapshots: meta.updated", () => {
     notify.get("meta.updated")!(e);
     await flush();
   };
+  // The last test's listeners must not outlive this block: a second set would answer the next block's events too.
+  afterAll(() => off?.());
   beforeEach(async () => {
     off?.();
     useSnapshots.setState({ entries: {} });
@@ -331,6 +333,37 @@ describe("snapshots: disconnected servers", () => {
     await flush();
     expect(rpc).toHaveBeenCalledWith("meta.snapshot", { profileId: "p1", database: "Sales" });
     expect(s().get("p1", "Sales")?.snapshot?.objects[0].name).toBe("Orders");
+  });
+  it("a schema loaded before the server was connected is asked for again once it is, once per database", async () => {
+    // Restored tabs load their schema at startup, often before the sidecar holds the profile's credentials; without those
+    // meta.snapshot starts no refresh. Nothing asked again, so the cache stayed as old as the last launch left it: tables
+    // created since had no completion and were read-only in the grid.
+    off = installSnapshotListeners();
+    const conn = { profileId: "p1", sessionId: "s1", status: "connecting" as const, databases: [] };
+    useConnections.setState({ servers: { p1: conn }, order: ["p1"] });
+    useTabs.setState({ tabs: {
+      t1: { id: "t1", title: "a", profileId: "p1", database: "Sales" } as never,
+      t2: { id: "t2", title: "b", profileId: "p1", database: "Sales" } as never,
+      t3: { id: "t3", title: "c", profileId: "p1", database: "Hr" } as never,
+      t4: { id: "t4", title: "d", profileId: "p2", database: "Other" } as never,
+    } });
+    rpc.mockResolvedValueOnce(snapshot([obj(1, "dbo", "Orders")]));
+    await s().load("p1", "Sales"); // the startup load: the old cache, no refresh behind it
+    rpc.mockReset();
+    rpc.mockImplementation(async (_m: string, p: { database: string }) =>
+      p.database === "Sales" ? snapshot([obj(1, "dbo", "Orders"), obj(2, "dbo", "CreatedSince")]) : snapshot([obj(3, "dbo", "People")]));
+
+    useConnections.setState({ servers: { p1: { ...conn, status: "connected" } } });
+    await flush();
+    const asked = rpc.mock.calls.filter((c) => c[0] === "meta.snapshot").map((c) => (c[1] as { database: string }).database).sort();
+    expect(asked).toEqual(["Hr", "Sales"]); // Sales again (two tabs, one request), Hr for the first time, nothing for another server
+    expect(s().get("p1", "Sales")?.snapshot?.objects.map((o) => o.name)).toEqual(["Orders", "CreatedSince"]);
+
+    // Staying connected asks nothing more.
+    rpc.mockClear();
+    useConnections.setState({ servers: { p1: { ...conn, status: "connected", databases: [{ name: "Sales" }] as never } } });
+    await flush();
+    expect(rpc).not.toHaveBeenCalled();
   });
 });
 

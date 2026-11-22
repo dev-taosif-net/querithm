@@ -82,9 +82,9 @@ public sealed class DuckDbProvider(string? dataDir = null, long? memoryLimitByte
         ResultShape.EditRefusal(Querithm.Intelligence.PgSql.PgResultShape.Shape(DuckDbTokenizer.Tokenize(batchText)))
         ?? DuckDbResultSources.OtherCatalogRefusal(batchText, snapshot);
 
-    public ColumnOrigin?[]? ResultOrigins(DbDataReader reader, IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot) =>
-        snapshot == null || resultInBatch != 0 ? null
-            : DuckDbResultSources.Predict(batchText, snapshot, Traits.DefaultSchema!, columns.Select(c => c.ColumnName).ToList());
+    public TracedOrigins ResultOrigins(IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot, string? scope) =>
+        snapshot == null || resultInBatch != 0 ? TracedOrigins.None
+            : DuckDbResultSources.Trace(batchText, snapshot, Traits.DefaultSchema!, columns.Select(c => c.ColumnName).ToList());
 
     /// <summary>Exactly the granted file in exactly its mode, or a private in-memory database, under the policy (DuckDbInstances).</summary>
     public async Task<DbConnection> OpenAsync(Profile profile, string? secret, string? database, FileGrant? file, CancellationToken ct)

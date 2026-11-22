@@ -9,6 +9,19 @@ namespace Querithm.Contract.Providers;
 /// <summary>A result column's source: a snapshot object and one of its column names.</summary>
 public sealed record ColumnOrigin(long ObjectId, string Column);
 
+/// <summary>
+/// What a provider traced of a result set's columns. <see cref="Columns"/>: the table column behind each result column
+/// (a null entry = computed or unknown; a null array = nothing could be traced). <see cref="Why"/>: when a table's
+/// columns could not be traced, the reason in words for the user (without the "Read-only: " prefix). <see cref="Stale"/>:
+/// the cached metadata being out of date may be that reason — the query names a table the snapshot does not hold, or
+/// the result's columns differ from the cached ones — so Core reads the metadata again and decides once more.
+/// </summary>
+public sealed record TracedOrigins(ColumnOrigin?[]? Columns, string? Why = null, bool Stale = false)
+{
+    /// <summary>Nothing traced, no reason known.</summary>
+    public static readonly TracedOrigins None = new((ColumnOrigin?[]?)null);
+}
+
 public interface IDbProvider
 {
     Engine Engine { get; }
@@ -119,20 +132,21 @@ public interface IDbProvider
     ConnectionStringAffinity ConnectionStringAffinity(IReadOnlyDictionary<string, string> keywords) => default;
 
     /// <summary>
-    /// The table column behind each column of the current result set (null where computed or unknown), used to
-    /// mark keys in the grid. Exact or nothing: a guess would label the wrong column. <paramref name="resultInBatch"/>
-    /// counts the batch's data result sets from 0.
+    /// The table column behind each column of a result set (null where computed or unknown), used to mark keys in the
+    /// grid and to decide whether it can be edited. Exact or nothing: a guess would label the wrong column.
+    /// <paramref name="resultInBatch"/> counts the batch's data result sets from 0. Reads only its arguments —
+    /// <paramref name="columns"/> is the reader's column schema, kept by Core — because Core calls it again after the
+    /// reader is gone, with a newer <paramref name="snapshot"/>, when the first answer was <see cref="TracedOrigins.Stale"/>.
+    /// <paramref name="scope"/> is what <see cref="OriginScope"/> returned for the batch's connection.
     /// </summary>
-    ColumnOrigin?[]? ResultOrigins(DbDataReader reader, IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot);
+    TracedOrigins ResultOrigins(IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot, string? scope);
 
     /// <summary>
-    /// Phase D4 S10: <see cref="ResultOrigins(DbDataReader, IReadOnlyList{DbColumn}, string, int, SchemaSnapshot?)"/> with
-    /// the connection the batch ran on, for an engine whose name resolution depends on the connection's state (Oracle: an
-    /// unqualified table name is looked up in the session's current schema). Must not touch the connection's network: it
-    /// reads what the provider already knows of it. Default: the overload without it.
+    /// Phase D4 S10: the state of the connection a batch runs on that <see cref="ResultOrigins"/> depends on, read once
+    /// when the result set starts (Oracle: the session's current schema, where an unqualified table name is looked up);
+    /// null elsewhere. Must not touch the connection's network: it reads what the provider already knows of it.
     /// </summary>
-    ColumnOrigin?[]? ResultOrigins(DbConnection connection, DbDataReader reader, IReadOnlyList<DbColumn> columns, string batchText, int resultInBatch, SchemaSnapshot? snapshot) =>
-        ResultOrigins(reader, columns, batchText, resultInBatch, snapshot);
+    string? OriginScope(DbConnection connection) => null;
 
     /// <summary>
     /// Phase D4 S11: the schema a tab's unqualified names resolve to when the engine has no fixed default schema but the
