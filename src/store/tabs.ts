@@ -116,12 +116,26 @@ export function cleanTabTitle(input: string): string | null {
   return t || null;
 }
 
+/** A tab's server and database. */
+export interface TabBinding {
+  profileId?: string;
+  database?: string;
+}
+
+const bindingOf = (t: TabState): TabBinding => ({ profileId: t.profileId, database: t.database });
+
 interface TabsStore {
   tabs: Record<string, TabState>;
   order: string[];
   activeId?: string;
   /** Tab ids, most recently active first (Ctrl+Tab and the open-tabs list). */
   mru: string[];
+  /**
+   * The server and database of the query tab that was in front last, taken as it left the front (closed, or another
+   * tab or a tool tab took its place). While no query tab is in front (all closed, a tool tab active) the top bar
+   * keeps showing it and a new query opens on it, so closing the last tab never drops the connection.
+   */
+  lastBinding?: TabBinding;
   add(t: Partial<TabState> & { id: string; title: string }): TabState;
   update(id: string, patch: Partial<TabState>): void;
   /** Renames a tab (its label; a file on disk keeps its name). False when the name is empty or the tab is gone. */
@@ -168,12 +182,16 @@ export const useTabs = create<TabsStore>((set, get) => ({
     set((s) => {
       const { [id]: _, ...rest } = s.tabs;
       const order = s.order.filter((x) => x !== id);
-      const activeId = s.activeId === id ? order[Math.max(0, s.order.indexOf(id) - 1)] : s.activeId;
-      return { tabs: rest, order, activeId, mru: s.mru.filter((x) => x !== id) };
+      const leaving = s.activeId === id ? s.tabs[id] : undefined;
+      const activeId = leaving ? order[Math.max(0, s.order.indexOf(id) - 1)] : s.activeId;
+      return { tabs: rest, order, activeId, mru: s.mru.filter((x) => x !== id), lastBinding: leaving ? bindingOf(leaving) : s.lastBinding };
     });
   },
   setActive(id) {
-    set((s) => ({ activeId: id, mru: id ? touchMru(s.mru, id) : s.mru }));
+    set((s) => {
+      const leaving = s.activeId !== id && s.activeId ? s.tabs[s.activeId] : undefined;
+      return { activeId: id, mru: id ? touchMru(s.mru, id) : s.mru, lastBinding: leaving ? bindingOf(leaving) : s.lastBinding };
+    });
   },
   touch(id) {
     set((s) => ({ mru: touchMru(s.mru, id) }));

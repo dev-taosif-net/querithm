@@ -49,7 +49,7 @@ const ms: any = { id: "ms1", name: "Sales", engine: "mssql", environment: "dev",
 const pg: any = { id: "pg1", name: "Analytics", engine: "pg", environment: "prod", auth: "trust", color: "#ff0000" };
 const base = { txState: "none", busy: false, dirty: false, executions: [], bottomTab: "results", bottomOpen: true, bottomSize: 0.35, actualPlan: false };
 function setTab(extra: any = {}) {
-  useTabs.setState({ tabs: { t1: { ...base, id: "t1", title: "one.sql", profileId: "ms1", database: "Sales", ...extra } as any }, order: ["t1"], activeId: "t1", mru: ["t1"] });
+  useTabs.setState({ tabs: { t1: { ...base, id: "t1", title: "one.sql", profileId: "ms1", database: "Sales", ...extra } as any }, order: ["t1"], activeId: "t1", mru: ["t1"], lastBinding: undefined });
 }
 const view = (state: string, extra: any = {}) =>
   useExecutions.setState({ views: { e1: { id: "e1", tabId: "t1", sessionId: "s", state, startedAt: Date.now(), resultSetCount: 0, truncated: false, messages: [], statistics: [], plans: [], sql: "", lineOffset: 1, ...extra } as any } });
@@ -246,6 +246,48 @@ describe("TopBar: launch strip", () => {
     expect(h.cmd["query.run"]).not.toHaveBeenCalled();
     expect(h.a.showPlan).not.toHaveBeenCalled();
     expect(h.a.txAction).not.toHaveBeenCalled();
+  });
+
+  it("with every tab closed it keeps the last tab's server and database; Run, Plan and Tx wait for a query", async () => {
+    const user = userEvent.setup();
+    useTabs.setState({ tabs: {}, order: [], activeId: undefined, mru: [], lastBinding: { profileId: "pg1", database: "reports" } });
+    render(<TopBar />);
+    expect(screen.getByTestId("strip-server")).toHaveTextContent("Analytics");
+    expect(screen.getByTestId("strip-database")).toHaveTextContent("reports");
+    expect(screen.getByText("PROD")).toBeInTheDocument();
+    expect(screen.queryByText("Connect…")).toBeNull();
+    expect(btn(/Change connection, now PROD Analytics/)).toHaveAttribute("title", "New queries open on Analytics. Choose another connection (Ctrl+Shift+U)");
+    expect(btn("Change database, now reports")).toHaveAttribute("title", "New queries open in reports. Choose another database (Ctrl+U)");
+    expect(run()).toHaveAttribute("aria-label", "Run (open a query first)");
+    for (const el of [run(), btn(/^Plan:/), btn("Begin transaction (Tx)")]) unavailable(el);
+    expect(btn("Begin transaction (Tx)")).toHaveAttribute("title", "Open a query first");
+    await user.click(btn("Change database, now reports"));
+    expect(useUi.getState().palette).toEqual({ mode: "databases" });
+    await user.click(btn(/Change connection, now PROD Analytics/));
+    expect(useUi.getState().palette).toEqual({ mode: "connections" });
+  });
+
+  it("with every tab closed, a server the user disconnected since, or a deleted profile, shows Connect…, which works without a tab", async () => {
+    const user = userEvent.setup();
+    useTabs.setState({ tabs: {}, order: [], activeId: undefined, mru: [], lastBinding: { profileId: "ms1", database: "Sales" } });
+    useConnections.setState({ disconnected: { ms1: true } });
+    const { unmount } = render(<TopBar />);
+    expect(screen.queryByTestId("strip-server")).toBeNull();
+    available(btn("Connect…"));
+    await user.click(btn("Connect…"));
+    expect(useUi.getState().palette).toEqual({ mode: "connections" });
+    unmount();
+    useConnections.setState({ disconnected: {} });
+    useTabs.setState({ lastBinding: { profileId: "gone", database: "x" } });
+    render(<TopBar />);
+    expect(btn("Connect…")).toBeInTheDocument();
+  });
+
+  it("the active tab's connection, not the last one, while a tab is in front", () => {
+    useTabs.setState({ lastBinding: { profileId: "pg1", database: "reports" } });
+    render(<TopBar />);
+    expect(screen.getByTestId("strip-server")).toHaveTextContent("Sales");
+    expect(screen.getByTestId("strip-database")).toHaveTextContent("Sales");
   });
 
   it("a server the user disconnected keeps its names and says so; Begin Tx waits for a reconnect", () => {

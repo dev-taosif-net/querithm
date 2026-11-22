@@ -7,7 +7,7 @@ import { onNotify, rpc, RpcError, shell } from "../ipc/client";
 import { isStreaming, ResultsDroppedError, stopAllStreams, stopStream, streamExecution } from "../ipc/frames";
 import { ExecutionData, executionData } from "../results/model";
 import { useExecutions } from "../store/executions";
-import { useTabs, newTabId, type BottomTab, type TabState } from "../store/tabs";
+import { useTabs, newTabId, type BottomTab, type TabBinding, type TabState } from "../store/tabs";
 import { useToolTabs } from "../store/toolTabs";
 import { useProfiles } from "../store/profiles";
 import { isDisconnected, obtainSecret, REPICK_HINT, useConnections } from "../store/connections";
@@ -82,13 +82,24 @@ export function serverDatabase(profileId: string): string | undefined {
   return useProfiles.getState().byId(profileId)?.databaseDefault ?? useConnections.getState().servers[profileId]?.database ?? undefined;
 }
 
-/** The connection a new tab starts on (§6): the one asked for ("" = none), else the active tab's. */
+/**
+ * The connection a new query inherits: the active query tab's; with none in front (every tab closed, a tool tab
+ * active), the one the last tab was on, while its profile still exists. The top bar shows the same one.
+ */
+export function inheritedBinding(): TabBinding | undefined {
+  const t = activeTabState();
+  if (t) return t;
+  const last = useTabs.getState().lastBinding;
+  return last?.profileId && useProfiles.getState().byId(last.profileId) ? last : undefined;
+}
+
+/** The connection a new tab starts on (§6): the one asked for ("" = none), else the inherited one. */
 export function newQueryTabBinding(profileId?: string, database?: string) {
-  return newTabBinding({ profileId, database }, activeTabState(), isDisconnected, serverDatabase);
+  return newTabBinding({ profileId, database }, inheritedBinding(), isDisconnected, serverDatabase);
 }
 
 export function newQueryTab(o: NewTabOptions = {}): string {
-  const { profileId, database } = newTabBinding(o, activeTabState(), isDisconnected, serverDatabase);
+  const { profileId, database } = newTabBinding(o, inheritedBinding(), isDisconnected, serverDatabase);
   const id = o.id ?? newTabId();
   const profile = useProfiles.getState().byId(profileId);
   createModel(id, o.text ?? "", languageFor(profile?.engine));

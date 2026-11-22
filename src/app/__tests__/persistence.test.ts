@@ -85,7 +85,7 @@ beforeEach(() => {
   h.open.mockReset();
   newQueryTab.mockClear();
   localStorage.clear();
-  useTabs.setState({ tabs: {}, order: [], activeId: undefined, mru: [] });
+  useTabs.setState({ tabs: {}, order: [], activeId: undefined, mru: [], lastBinding: undefined });
   useUi.setState({ toasts: [], explorerWidth: 290, banner: null });
   resetPersistence();
   h.appInfo.mockReset();
@@ -142,6 +142,41 @@ describe("restoreWorkspace", () => {
     localStorage.setItem("querithm.workspace", JSON.stringify({ version: 1, tabs: [{ id: "a", title: "a" }], servers: "ms1" }));
     await restoreWorkspace();
     expect(connect).not.toHaveBeenCalled();
+  });
+
+  it("a tab saved without a connection comes back without one, never on the tab restored before it", async () => {
+    localStorage.setItem("querithm.workspace", JSON.stringify({
+      version: 1, activeId: "a",
+      tabs: [{ id: "a", title: "a.sql", profileId: "ms1", database: "Sales" }, { id: "b", title: "b.sql" }, { id: "c", title: "c.sql", profileId: "pg1" }],
+    }));
+    expect(await restoreWorkspace()).toBe(true);
+    // "" asks for no connection; undefined would inherit the active tab's (the one restored just before).
+    expect(newQueryTab.mock.calls.map((c) => c[0].profileId)).toEqual(["ms1", "", "pg1"]);
+  });
+
+  it("with no tab saved, the new query of the next launch opens on the connection the last tab was on", async () => {
+    useTabs.getState().add({ id: "a", title: "a.sql", profileId: "pg1", database: "reports" });
+    useTabs.getState().remove("a");
+    await saveWorkspaceNow();
+    const ws = JSON.parse(localStorage.getItem("querithm.workspace")!);
+    expect(ws).toMatchObject({ tabs: [], lastBinding: { profileId: "pg1", database: "reports" } });
+    useTabs.setState({ lastBinding: undefined });
+    expect(await restoreWorkspace()).toBe(false);
+    expect(useTabs.getState().lastBinding).toEqual({ profileId: "pg1", database: "reports" });
+  });
+
+  it("restores the last connection only when no tab comes back, and never a deleted profile or junk", async () => {
+    localStorage.setItem("querithm.workspace", JSON.stringify({ version: 1, tabs: [{ id: "a", title: "a" }], lastBinding: { profileId: "ms1" } }));
+    expect(await restoreWorkspace()).toBe(true);
+    expect(useTabs.getState().lastBinding).toBeUndefined();
+    for (const lastBinding of [{ profileId: "gone" }, { profileId: 42 }, "ms1", ["ms1"], null]) {
+      localStorage.setItem("querithm.workspace", JSON.stringify({ version: 1, tabs: [], lastBinding }));
+      expect(await restoreWorkspace()).toBe(false);
+      expect(useTabs.getState().lastBinding).toBeUndefined();
+    }
+    localStorage.setItem("querithm.workspace", JSON.stringify({ version: 1, tabs: [], lastBinding: { profileId: "ms1", database: 7 } }));
+    await restoreWorkspace();
+    expect(useTabs.getState().lastBinding).toEqual({ profileId: "ms1" });
   });
 
   it("does not wait for the reconnect: startup goes on while a server is still dialing", async () => {

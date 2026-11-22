@@ -4,7 +4,7 @@ import { activeTab, cleanTabTitle, newTabId, touchMru, useTabs } from "../tabs";
 const s = () => useTabs.getState();
 
 describe("tabs store", () => {
-  beforeEach(() => useTabs.setState({ tabs: {}, order: [], activeId: undefined, mru: [] }));
+  beforeEach(() => useTabs.setState({ tabs: {}, order: [], activeId: undefined, mru: [], lastBinding: undefined }));
 
   it("tab ids are unique even within the same millisecond", () => {
     const ids = new Set(Array.from({ length: 100 }, () => newTabId()));
@@ -39,6 +39,35 @@ describe("tabs store", () => {
     s().remove("c");
     expect(s().activeId).toBeUndefined();
     expect(activeTab()).toBeUndefined();
+  });
+  it("closing the last tab keeps its server and database as the last binding", () => {
+    s().add({ id: "a", title: "a", profileId: "p1", database: "Sales" });
+    s().update("a", { database: "Hr" });
+    s().remove("a");
+    expect(s().activeId).toBeUndefined();
+    expect(s().lastBinding).toEqual({ profileId: "p1", database: "Hr" });
+  });
+  it("the last binding is the tab that left the front: switched away from (a tool tab took it) or closed while active", () => {
+    s().add({ id: "a", title: "a", profileId: "p1", database: "Sales" });
+    s().add({ id: "b", title: "b", profileId: "p2", database: "app" });
+    s().setActive(undefined);
+    expect(s().lastBinding).toEqual({ profileId: "p2", database: "app" });
+    // Closing a tab that is not in front changes nothing.
+    s().remove("a");
+    expect(s().lastBinding).toEqual({ profileId: "p2", database: "app" });
+    s().setActive("b");
+    s().setActive("b");
+    expect(s().lastBinding).toEqual({ profileId: "p2", database: "app" });
+  });
+  it("a tab without a connection, closed last, leaves no connection behind", () => {
+    s().add({ id: "a", title: "a", profileId: "p1", database: "Sales" });
+    s().add({ id: "b", title: "b" });
+    s().remove("b");
+    s().remove("a");
+    expect(s().lastBinding).toEqual({ profileId: "p1", database: "Sales" });
+    s().add({ id: "c", title: "c" });
+    s().remove("c");
+    expect(s().lastBinding).toEqual({ profileId: undefined, database: undefined });
   });
   it("closing an inactive tab keeps the active one", () => {
     for (const id of ["a", "b", "c"]) s().add({ id, title: id });

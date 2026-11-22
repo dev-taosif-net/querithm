@@ -60,6 +60,16 @@ interface WorkspaceFile {
   servers?: string[];
   /** The Explorer's expanded rows, by name (server, database, folder, object; §10), restored with the servers. */
   explorerExpanded?: string[];
+  /** The connection of the query tab in front last (ids and a name only): a launch with no tabs opens its query there. */
+  lastBinding?: { profileId: string; database?: string };
+}
+
+/** The saved last connection, when it is well formed and its profile still exists; otherwise none. */
+export function cleanLastBinding(v: unknown): { profileId: string; database?: string } | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
+  const { profileId, database } = v as Record<string, unknown>;
+  if (typeof profileId !== "string" || !useProfiles.getState().byId(profileId)) return undefined;
+  return typeof database === "string" && database.length <= 1024 ? { profileId, database } : { profileId };
 }
 
 let fsModule: Promise<typeof import("@tauri-apps/plugin-fs")> | undefined;
@@ -283,6 +293,7 @@ function snapshotWorkspace(): WorkspaceFile {
       })),
     servers: [...useConnections.getState().order],
     explorerExpanded: savedExpansion(),
+    lastBinding: s.lastBinding?.profileId ? { profileId: s.lastBinding.profileId, database: s.lastBinding.database } : undefined,
   };
 }
 
@@ -313,7 +324,12 @@ export async function restoreWorkspace(): Promise<boolean> {
   reconnectServers(w?.servers);
   // After the servers are back in the Explorer (connecting), so their expansion is not pruned as of servers gone.
   restoreExpansion(w?.explorerExpanded);
-  if (!w || !tabs.length) return false;
+  if (!w || !tabs.length) {
+    // No tabs to bring back: the caller's new query opens on the connection the last one was on.
+    const last = cleanLastBinding(w?.lastBinding);
+    if (last) useTabs.setState({ lastBinding: last });
+    return false;
+  }
   for (const t of tabs) {
     if (t.notebook) {
       await restoreNotebook(t, t.id === w.activeId);
@@ -321,7 +337,9 @@ export async function restoreWorkspace(): Promise<boolean> {
     }
     const text = (await readScript(t.id)) ?? "";
     newQueryTab({
-      id: t.id, title: t.title, profileId: t.profileId, database: t.database, boundObject: t.boundObject, filePath: t.filePath, readOnly: t.readOnly, pinned: t.pinned, text,
+      // "" = no connection. Left undefined, a tab saved without one inherited the tab restored before it (each restored
+      // tab is the active one while the next is added).
+      id: t.id, title: t.title, profileId: typeof t.profileId === "string" ? t.profileId : "", database: t.database, boundObject: t.boundObject, filePath: t.filePath, readOnly: t.readOnly, pinned: t.pinned, text,
       charts: cleanCharts(t.charts), resultLayout: cleanLayout(t.resultLayout), activate: t.id === w.activeId, atEnd: true,
     });
   }

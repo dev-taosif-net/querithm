@@ -1,4 +1,5 @@
-// Which server and database a new query tab starts on (§6): what the caller asked for, else the active tab's.
+// Which server and database a new query tab starts on (§6): what the caller asked for, else the active tab's (with
+// no query tab in front, the last one's: `inheritedBinding` in actions).
 
 export interface Binding {
   profileId?: string;

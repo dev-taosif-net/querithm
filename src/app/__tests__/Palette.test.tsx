@@ -55,7 +55,7 @@ const pg: any = { id: "pg1", name: "Analytics", engine: "pg", environment: "dev"
 function setTab(extra: any = {}) {
   useTabs.setState({
     tabs: { t1: { id: "t1", title: "one.sql", txState: "none", busy: false, dirty: false, executions: [], bottomTab: "results", bottomOpen: true, bottomSize: 0.3, actualPlan: false, profileId: "ms1", database: "Sales", ...extra } as any },
-    order: ["t1"], activeId: "t1", mru: ["t1"],
+    order: ["t1"], activeId: "t1", mru: ["t1"], lastBinding: undefined,
   });
 }
 const snapshot = (objects: any[]) =>
@@ -232,6 +232,29 @@ describe("Palette", () => {
       expect(connect).toHaveBeenCalledWith("ms1");
       await act(async () => {});
       expect(useUi.getState().palette).toEqual({ mode: "databases" });
+    });
+    it("with every tab closed, lists the last tab's server and opens a new query in the database picked", async () => {
+      const connect = vi.fn(async () => true);
+      useConnections.setState({ connect } as any);
+      useTabs.setState({ tabs: {}, order: [], activeId: undefined, mru: [], lastBinding: { profileId: "pg1", database: "reports" } });
+      const user = userEvent.setup();
+      render(<Palette />);
+      open({ mode: "databases" });
+      expect(connect).toHaveBeenCalledWith("pg1");
+      act(() => useConnections.setState({ servers: { pg1: { profileId: "pg1", status: "connected", databases: [{ name: "reports" }, { name: "postgres" }] } as any } }));
+      expect(within(screen.getByText("reports").closest("div")!).getByText("current")).toBeInTheDocument();
+      await user.click(screen.getByText("postgres"));
+      expect(h.actions.newQueryTab).toHaveBeenCalledWith({ profileId: "pg1", database: "postgres" });
+      expect(h.actions.changeDatabase).not.toHaveBeenCalled();
+    });
+    it("with every tab closed and the last tab's server disconnected, offers to connect it instead of reconnecting", () => {
+      const connect = vi.fn(async () => true);
+      useConnections.setState({ connect, disconnected: { ms1: true } } as any);
+      useTabs.setState({ tabs: {}, order: [], activeId: undefined, mru: [], lastBinding: { profileId: "ms1", database: "Sales" } });
+      render(<Palette />);
+      open({ mode: "databases" });
+      expect(connect).not.toHaveBeenCalled();
+      expect(screen.getByText(/Disconnected. Connect to list databases/)).toBeInTheDocument();
     });
   });
 

@@ -41,6 +41,11 @@ export function Palette() {
   const profiles = useProfiles((s) => s.profiles);
   const servers = useConnections((s) => s.servers);
   const disconnected = useConnections((s) => (tab?.profileId ? !!s.disconnected[tab.profileId] : false));
+  // Change database with no query tab in front lists the databases of the server a new query opens on (the last tab's,
+  // as the top bar shows it); a pick opens a new query there.
+  const last = useTabs((s) => (tab ? undefined : s.lastBinding));
+  const dbTarget = tab ?? (last?.profileId && profiles.some((p) => p.id === last.profileId) ? last : undefined);
+  const dbOffline = useConnections((s) => (dbTarget?.profileId ? !!s.disconnected[dbTarget.profileId] : false));
   // A session-owned engine's tab (SQLite) searches its own session's view (Phase D0d).
   const snapKey = tabSnapKey(tab);
   const snap = useSnapshots((s) => (snapKey ? s.entries[snapKey] : undefined));
@@ -58,7 +63,7 @@ export function Palette() {
     setSel(0);
     setTimeout(() => input.current?.focus(), 0);
     // Opening the list reconnects a server that was never connected, never one the user disconnected.
-    if (palette.mode === "databases" && tab?.profileId && !servers[tab.profileId] && !disconnected) void useConnections.getState().connect(tab.profileId);
+    if (palette.mode === "databases" && dbTarget?.profileId && !servers[dbTarget.profileId] && !dbOffline) void useConnections.getState().connect(dbTarget.profileId);
     if (palette.mode === "snippets") void useSnippets.getState().load();
   }, [palette]);
 
@@ -89,13 +94,16 @@ export function Palette() {
       list.push(...Object.values(tabs).map((t) => ({ id: `t${t.id}`, label: t.title, detail: "open tab", run: () => activateTab(t.id) })));
       if (!objs.length && !query) list.unshift({ id: "none", label: disconnected ? "Disconnected: connect the server to search its objects" : tab?.profileId ? "Metadata is loading…" : "Connect the tab to a database to search objects", run: () => {} });
     } else if (effective === "databases") {
-      const conn = tab?.profileId && !disconnected ? servers[tab.profileId] : undefined;
+      const pid = dbTarget?.profileId;
+      const conn = pid && !dbOffline ? servers[pid] : undefined;
       list = (conn?.status === "connected" ? conn.databases : []).map((d) => ({
-        id: d.name, label: d.name, detail: d.isSystem ? "system" : d.state ?? "", hint: d.name === tab?.database ? "current" : undefined,
-        run: () => tab && void changeDatabase(tab.id, d.name),
+        id: d.name, label: d.name, detail: d.isSystem ? "system" : d.state ?? "", hint: d.name === dbTarget?.database ? "current" : undefined,
+        run: () => {
+          if (tab) void changeDatabase(tab.id, d.name);
+          else if (pid) newQueryTab({ profileId: pid, database: d.name });
+        },
       }));
-      if (disconnected) {
-        const pid = tab!.profileId!;
+      if (pid && dbOffline) {
         list = [{ id: "c", label: "Disconnected. Connect to list databases", detail: "Enter: connect", run: () => void useConnections.getState().connect(pid).then((ok) => ok && useUi.getState().setPalette({ mode: "databases" })) }];
       } else if (conn?.status === "error") list = [{ id: "c", label: conn.error ?? "Connection failed", run: () => {} }];
       else if (conn?.status !== "connected") list = [{ id: "c", label: "Connecting…", run: () => {} }];
@@ -123,7 +131,7 @@ export function Palette() {
       .sort((a, b) => b.s - a.s)
       .slice(0, 200)
       .map((x) => x.i);
-  }, [palette, q, mode, snap?.version, profiles, servers, disconnected, tab?.id, tab?.database, tabs, snippetLib]);
+  }, [palette, q, mode, snap?.version, profiles, servers, disconnected, tab?.id, tab?.database, dbTarget?.profileId, dbTarget?.database, dbOffline, tabs, snippetLib]);
 
   if (!palette) return null;
   if (palette.mode === "tabs") return <TabList onClose={close} only={palette.only} />;

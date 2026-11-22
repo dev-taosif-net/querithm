@@ -82,6 +82,7 @@ import { executionData, ExecutionData } from "../../results/model";
 import { useSettings } from "../../store/settings";
 import { useClosedTabs } from "../../store/closedTabs";
 import * as A from "../actions";
+import { ENGINE_LIST } from "../../engines";
 import { resetAnnouncer, useAnnounce } from "../../store/announce";
 
 const ms: any = { id: "ms1", name: "Sales", engine: "mssql", environment: "dev", auth: "windows", databaseDefault: "master" };
@@ -112,7 +113,7 @@ function reset() {
   A.workspaceHooks.onTabAdded = undefined;
   A.workspaceHooks.onTabRemoved = undefined;
   A.workspaceHooks.activate = undefined;
-  useTabs.setState({ tabs: {}, order: [], activeId: undefined, mru: [] });
+  useTabs.setState({ tabs: {}, order: [], activeId: undefined, mru: [], lastBinding: undefined });
   useUi.setState({ dialogs: [], palette: null, toasts: [], banner: null });
   useProfiles.setState({ profiles: [ms, pg], groups: [] });
   useConnections.setState({ servers: {}, order: [], disconnected: {} });
@@ -170,11 +171,66 @@ describe("newQueryTab", () => {
     expect(tabOf(A.newQueryTab({ profileId: "ms1" }))).toMatchObject({ profileId: "ms1", database: "Warehouse" });
   });
 
+  it("workspace restore order: a tab asked for with no connection (\"\") stays unbound after a bound one, which is the active tab then", () => {
+    const a = A.newQueryTab({ profileId: "ms1", database: "Sales", activate: false, atEnd: true });
+    expect(A.activeTabState()?.id).toBe(a);
+    // undefined means "inherit": what a restored tab without a connection used to get.
+    expect(tabOf(A.newQueryTab({ profileId: undefined, activate: false, atEnd: true }))).toMatchObject({ profileId: "ms1", database: "Sales" });
+    expect(tabOf(A.newQueryTab({ profileId: "", database: "Sales", activate: false, atEnd: true }))).toMatchObject({ profileId: undefined, database: undefined });
+  });
+
   it("does not inherit from a disconnected server", () => {
     A.newQueryTab({ profileId: "ms1" });
     useConnections.setState({ disconnected: { ms1: true } });
     const id = A.newQueryTab();
     expect(useTabs.getState().tabs[id].profileId).toBeUndefined();
+  });
+});
+
+describe("a new query after every tab is closed", () => {
+  const profileOn = (engine: string): any => ({ id: `p-${engine}`, name: engine, engine, environment: "dev", auth: "trust", databaseDefault: "def" });
+
+  it.each(ENGINE_LIST)("opens on the server and database the last tab was on (%s)", async (engine) => {
+    useProfiles.setState({ profiles: [ms, pg, profileOn(engine)], groups: [] });
+    const id = A.newQueryTab({ profileId: `p-${engine}`, database: "Orders" });
+    h.rpc.mockResolvedValue(undefined);
+    expect(await A.closeTab(id)).toBe(true);
+    expect(A.activeTabState()).toBeUndefined();
+    expect(A.inheritedBinding()).toEqual({ profileId: `p-${engine}`, database: "Orders" });
+    expect(tabOf(A.newQueryTab())).toMatchObject({ profileId: `p-${engine}`, database: "Orders" });
+    // The notebook's new tab takes the same connection.
+    useTabs.getState().remove(useTabs.getState().activeId!);
+    expect(A.newQueryTabBinding()).toEqual({ profileId: `p-${engine}`, database: "Orders" });
+  });
+
+  it("a tool tab in front: a new query opens on the query tab that was in front before it", () => {
+    A.newQueryTab({ profileId: "pg1", database: "reports" });
+    useTabs.getState().setActive(undefined);
+    expect(tabOf(A.newQueryTab())).toMatchObject({ profileId: "pg1", database: "reports" });
+  });
+
+  it("not on a server the user disconnected since, nor on a deleted profile", async () => {
+    const id = A.newQueryTab({ profileId: "ms1", database: "Sales" });
+    h.rpc.mockResolvedValue(undefined);
+    await A.closeTab(id);
+    useConnections.setState({ disconnected: { ms1: true } });
+    const unbound = A.newQueryTab();
+    expect(tabOf(unbound).profileId).toBeUndefined();
+    useTabs.getState().remove(unbound);
+    useTabs.setState({ lastBinding: { profileId: "gone", database: "x" } });
+    expect(A.inheritedBinding()).toBeUndefined();
+    expect(tabOf(A.newQueryTab()).profileId).toBeUndefined();
+  });
+
+  it("a connection asked for wins over the last tab's; on the same server the last tab's database is kept", async () => {
+    const id = A.newQueryTab({ profileId: "ms1", database: "Sales" });
+    h.rpc.mockResolvedValue(undefined);
+    await A.closeTab(id);
+    expect(tabOf(A.newQueryTab({ profileId: "pg1" }))).toMatchObject({ profileId: "pg1", database: "postgres" });
+    useTabs.setState({ tabs: {}, order: [], activeId: undefined, mru: [], lastBinding: { profileId: "ms1", database: "Sales" } });
+    expect(tabOf(A.newQueryTab({ profileId: "ms1" }))).toMatchObject({ profileId: "ms1", database: "Sales" });
+    useTabs.setState({ tabs: {}, order: [], activeId: undefined, mru: [], lastBinding: { profileId: "ms1", database: "Sales" } });
+    expect(tabOf(A.newQueryTab({ profileId: "" })).profileId).toBeUndefined();
   });
 });
 

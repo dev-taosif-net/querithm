@@ -4,7 +4,7 @@
 // status bar keeps the quiet detail. Below 1440 px labels drop, never functions; state (environment, Run/Cancel,
 // transaction) never collapses.
 import { useEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from "react";
-import { useActiveTab, useTabs, type TabState } from "../store/tabs";
+import { useActiveTab, useTabs, type TabBinding, type TabState } from "../store/tabs";
 import { useUi } from "../store/ui";
 import { envColor, envLabel, useProfiles } from "../store/profiles";
 import { useExecutions } from "../store/executions";
@@ -168,12 +168,24 @@ function NewButton() {
   );
 }
 
+/**
+ * The connection the strip shows: the active query tab's; with none in front (every tab closed, a tool tab active),
+ * the one a new query opens on, the last tab's (`inheritedBinding`). Never a server the user disconnected there: a new
+ * query does not inherit one.
+ */
+function useStripBinding(tab: TabState | undefined): TabBinding | undefined {
+  const last = useTabs((s) => (tab ? undefined : s.lastBinding));
+  const offline = useConnections((s) => !!last?.profileId && !!s.disconnected[last.profileId]);
+  return tab ?? (offline ? undefined : last);
+}
+
 /** Environment · engine · connection › database, joined to Run ▾: the eye crosses the target before it reaches Run. */
 function LaunchStrip({ tab }: { tab: TabState | undefined }) {
   useThemeKey(); // the badge and label colors are computed from the theme's colors
-  const profile = useProfiles((s) => s.profiles.find((p) => p.id === tab?.profileId));
-  const disconnected = useConnections((s) => !!tab?.profileId && !!s.disconnected[tab.profileId]);
-  const lost = useConnections((s) => !!tab?.profileId && !s.disconnected[tab.profileId] && s.servers[tab.profileId]?.status === "error");
+  const shown = useStripBinding(tab);
+  const profile = useProfiles((s) => s.profiles.find((p) => p.id === shown?.profileId));
+  const disconnected = useConnections((s) => !!shown?.profileId && !!s.disconnected[shown.profileId]);
+  const lost = useConnections((s) => !!shown?.profileId && !s.disconnected[shown.profileId] && s.servers[shown.profileId]?.status === "error");
   const debugging = useDiag((s) => {
     const d = tab?.debugId ? s.debugs[tab.debugId] : undefined;
     return !!d && d.state !== "finished" && d.state !== "error";
@@ -189,7 +201,8 @@ function LaunchStrip({ tab }: { tab: TabState | undefined }) {
   const color = envColor(profile);
   const env = profile ? envLabel[profile.environment].toUpperCase() : "";
   const prod = profile?.environment === "prod";
-  const target = profile ? `${env} ${profile.name} › ${tab?.database ?? "(default)"}` : "";
+  const database = shown?.database ?? "(default)";
+  const target = profile ? `${env} ${profile.name} › ${database}` : "";
   const scope = (mode: ScopeMode) => (on: boolean) => (on && tab && profile && !running ? showRunScope(tab.id, mode) : clearRunScope());
   const plan = !!profile && actualPlanWithRun(profile.engine) && !!tab?.actualPlan;
 
@@ -201,21 +214,29 @@ function LaunchStrip({ tab }: { tab: TabState | undefined }) {
     else runCommand("query.run");
   };
 
-  const runLabel = running ? "Cancel the running query" : debugging ? "Continue debugging" : profile ? `Run on ${target}${plan ? ", with actual plan" : ""}` : "Run (choose a connection first)";
+  const runLabel = running
+    ? "Cancel the running query"
+    : debugging
+      ? "Continue debugging"
+      : !tab
+        ? "Run (open a query first)"
+        : profile
+          ? `Run on ${target}${plan ? ", with actual plan" : ""}`
+          : "Run (choose a connection first)";
   const runKeys = running ? keyOf("query.cancel") : keyOf("query.run");
   const tone = running ? "text-err hover:bg-err/15" : "text-ok hover:bg-ok/15";
 
   return (
-    <div className={`flex items-stretch h-[28px] rounded-md border bg-bg ${!tab?.profileId ? "border-dashed border-line-strong" : lost ? "border-err" : "border-line-strong"}`}>
+    <div className={`flex items-stretch h-[28px] rounded-md border bg-bg ${!profile ? "border-dashed border-line-strong" : lost ? "border-err" : "border-line-strong"}`}>
       {/* Widened by what the Run slot gave up (19 / 21 / 21 / 18 px), so the strip as a whole keeps its width. */}
       <div className="w-[199px] min-[1280px]:w-[261px] min-[1440px]:w-[301px] max-[1100px]:w-[178px] flex items-center gap-1 pl-1 pr-1 min-w-0">
         {!profile ? (
+          // Without a query tab the palette opens a new query on the connection picked.
           <button
             type="button"
             className="q-tb flex-1 justify-between !h-[22px] !px-1.5 text-accent font-semibold"
-            aria-disabled={!tab || undefined}
-            onClick={guarded(!tab, () => useUi.getState().setPalette({ mode: "connections" }))}
-            title={tip("Choose a connection", "palette.connections")}
+            onClick={() => useUi.getState().setPalette({ mode: "connections" })}
+            title={tip(tab ? "Choose a connection" : "Choose a connection for a new query", "palette.connections")}
           >
             <span className="flex items-center gap-1.5">
               <Icon name="plug" size={14} strokeWidth={2} />
@@ -237,7 +258,7 @@ function LaunchStrip({ tab }: { tab: TabState | undefined }) {
               type="button"
               className="q-tb !h-[22px] !px-1 !gap-1 !min-w-0 flex-[1_1_48px] min-[1100px]:flex-[1_1_66px] max-w-max text-muted"
               onClick={() => useUi.getState().setPalette({ mode: "connections" })}
-              title={tip(`Change connection: ${profile.name}`, "palette.connections")}
+              title={tip(tab ? `Change connection: ${profile.name}` : `New queries open on ${profile.name}. Choose another connection`, "palette.connections")}
               aria-label={`Change connection, now ${env} ${profile.name}${disconnected ? ", disconnected" : lost ? ", connection lost" : ""}`}
             >
               {prod ? (
@@ -258,12 +279,12 @@ function LaunchStrip({ tab }: { tab: TabState | undefined }) {
               type="button"
               className="q-tb !h-[22px] !px-1 !min-w-[52px] flex-[1.6_1_0%] max-w-max justify-start font-semibold"
               onClick={() => useUi.getState().setPalette({ mode: "databases" })}
-              title={tip(`Change database: ${tab?.database ?? "(default)"}${disconnected ? ". Disconnected: running asks before reconnecting" : ""}`, "palette.databases")}
-              aria-label={`Change database, now ${tab?.database ?? "(default)"}`}
+              title={tip(tab ? `Change database: ${database}${disconnected ? ". Disconnected: running asks before reconnecting" : ""}` : `New queries open in ${database}. Choose another database`, "palette.databases")}
+              aria-label={`Change database, now ${database}`}
             >
               <span className="flex items-center gap-1.5 min-w-0">
                 {disconnected && <span aria-hidden className="w-2 h-2 rounded-full border border-fg shrink-0" />}
-                <span data-testid="strip-database" className="truncate text-[11px]">{tab?.database ?? "(default)"}</span>
+                <span data-testid="strip-database" className="truncate text-[11px]">{database}</span>
               </span>
             </button>
             {lost && (
@@ -396,7 +417,7 @@ function PlanButton({ tab }: { tab: TabState | undefined }) {
   const engine = useProfiles((s) => s.profiles.find((p) => p.id === tab?.profileId)?.engine);
   const running = useRunning(tab);
   const off = !tab?.profileId || running;
-  const why = !tab?.profileId ? "Connect to a server first" : "Wait for the running query";
+  const why = !tab ? "Open a query first" : !tab.profileId ? "Connect to a server first" : "Wait for the running query";
   const perRun = actualPlanWithRun(engine);
   const on = !!engine && perRun && !!tab?.actualPlan;
   const labels = planLabels(engine);
@@ -455,7 +476,7 @@ function TxSlot({ tab }: { tab: TabState | undefined }) {
       className="q-tb"
       aria-disabled={off || undefined}
       onClick={guarded(off, () => tab && void txAction(tab.id, "begin"))}
-      title={!tab?.profileId ? "Connect to a server first" : running ? "Wait for the running query" : offline ? "Reconnect first" : "Begin transaction: pins a connection to this tab"}
+      title={!tab ? "Open a query first" : !tab.profileId ? "Connect to a server first" : running ? "Wait for the running query" : offline ? "Reconnect first" : "Begin transaction: pins a connection to this tab"}
       aria-label="Begin transaction (Tx)"
     >
       <Icon name="transaction" className="text-muted" />
