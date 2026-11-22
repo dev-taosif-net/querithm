@@ -172,7 +172,6 @@ function NewButton() {
 function LaunchStrip({ tab }: { tab: TabState | undefined }) {
   useThemeKey(); // the badge and label colors are computed from the theme's colors
   const profile = useProfiles((s) => s.profiles.find((p) => p.id === tab?.profileId));
-  const groups = useProfiles((s) => s.groups);
   const disconnected = useConnections((s) => !!tab?.profileId && !!s.disconnected[tab.profileId]);
   const lost = useConnections((s) => !!tab?.profileId && !s.disconnected[tab.profileId] && s.servers[tab.profileId]?.status === "error");
   const debugging = useDiag((s) => {
@@ -187,7 +186,7 @@ function LaunchStrip({ tab }: { tab: TabState | undefined }) {
     was.current = running;
   }, [running]);
 
-  const color = envColor(profile, groups);
+  const color = envColor(profile);
   const env = profile ? envLabel[profile.environment].toUpperCase() : "";
   const prod = profile?.environment === "prod";
   const target = profile ? `${env} ${profile.name} › ${tab?.database ?? "(default)"}` : "";

@@ -16,6 +16,8 @@ const m = vi.hoisted(() => {
   }
   let next = 0;
   const rpc = vi.fn(async (method: string, params?: unknown): Promise<unknown> => {
+    // The group read after a save touches no secret: it stays out of the order these tests check.
+    if (method === "group.list") return [];
     log.push(`rpc:${method}`);
     if (method === "profile.save") {
       const p = params as Profile;

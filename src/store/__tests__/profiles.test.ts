@@ -12,17 +12,17 @@ const { rpc, shell, RpcError } = vi.hoisted(() => ({
 vi.mock("../../ipc/client", () => ({ rpc, shell, RpcError }));
 
 import { envColor, envLabel, engineBadge, profileDialect, profileTitle, sshAccount, useProfiles } from "../profiles";
+import { useUi } from "../ui";
 
 const prof = (o: Record<string, unknown> = {}) => ({ id: "p1", name: "Zed", engine: "mssql", environment: "dev", ...o }) as never;
 const s = () => useProfiles.getState();
 
 describe("profile helpers (both engines)", () => {
-  it("envColor prefers profile color, then group color, then css var", () => {
+  it("envColor prefers the profile's own color, then the environment's; a group never changes it", () => {
     expect(envColor(undefined)).toBe("var(--q-accent)");
     expect(envColor(prof({ color: "#f00" }))).toBe("#f00");
-    expect(envColor(prof({ groupName: "g" }), [{ name: "g", color: "#0f0" } as never])).toBe("#0f0");
-    expect(envColor(prof({ groupName: "g" }), [{ name: "g" } as never])).toBe("var(--q-env-dev)");
-    expect(envColor(prof({ environment: "prod" }))).toBe("var(--q-env-prod)");
+    expect(envColor(prof({ groupName: "g" }))).toBe("var(--q-env-dev)");
+    expect(envColor(prof({ environment: "prod", groupName: "Payments" }))).toBe("var(--q-env-prod)");
   });
   it("engineBadge and title", () => {
     expect(engineBadge(prof({ engine: "pg" }))).toBe("PG");
@@ -112,13 +112,91 @@ describe("profiles store", () => {
     expect(s().profiles.map((p) => p.id)).toEqual(["p2"]);
   });
 
-  it("group save/remove replace the group list from the reply", async () => {
-    rpc.mockResolvedValueOnce([{ name: "g1" }]);
-    await s().saveGroup({ name: "g1" } as never);
-    expect(s().groups).toEqual([{ name: "g1" }]);
-    rpc.mockResolvedValueOnce([]);
-    await s().removeGroup("g1");
-    expect(rpc).toHaveBeenLastCalledWith("group.delete", { name: "g1" });
+  it("createGroup replaces the group list from the reply", async () => {
+    rpc.mockResolvedValueOnce([{ name: "g1", members: 0 }]);
+    await s().createGroup("g1");
+    expect(rpc).toHaveBeenLastCalledWith("group.create", { name: "g1" });
+    expect(s().groups).toEqual([{ name: "g1", members: 0 }]);
+  });
+
+  it("rename, delete and assign apply the groups and the moved profiles in one step", async () => {
+    useProfiles.setState({ profiles: [prof({ groupName: "Old" }), prof({ id: "p2", groupName: "Other" })], groups: [{ name: "Old", members: 1 }] });
+    const seen: string[][] = [];
+    const stop = useProfiles.subscribe((st) => seen.push([st.groups.map((g) => g.name).join(), st.profiles.map((p) => p.groupName ?? "-").join()]));
+    rpc.mockResolvedValueOnce({ groups: [{ name: "New", members: 1 }], profiles: [prof({ groupName: "New" })], renamed: { from: "Old", to: "New" } });
+    const r = await s().renameGroup("Old", "New");
+    expect(rpc).toHaveBeenLastCalledWith("group.rename", { from: "Old", to: "New" });
+    expect(r.renamed).toEqual({ from: "Old", to: "New" });
+    expect(seen).toEqual([["New", "New,Other"]]); // one set(): never the new group with the old profile
+    rpc.mockResolvedValueOnce({ groups: [], profiles: [prof({ groupName: null })] });
+    await s().deleteGroup("New", 1);
+    expect(rpc).toHaveBeenLastCalledWith("group.delete", { name: "New", expectedMembers: 1 });
+    expect(s().byId("p1")?.groupName).toBeNull();
+    rpc.mockResolvedValueOnce({ groups: [{ name: "Core", members: 2 }], profiles: [prof({ groupName: "Core" }), prof({ id: "p2", groupName: "Core" })], missing: ["gone"] });
+    expect((await s().assignGroup(["p1", "p2", "gone"], "Core")).missing).toEqual(["gone"]);
+    expect(rpc).toHaveBeenLastCalledWith("group.assign", { profileIds: ["p1", "p2", "gone"], name: "Core" });
+    expect(s().profiles.map((p) => p.groupName)).toEqual(["Core", "Core"]);
+    stop();
+  });
+
+  it("a refused group write changes nothing in the store", async () => {
+    useProfiles.setState({ profiles: [prof({ groupName: "Old" })], groups: [{ name: "Old", members: 1 }] });
+    rpc.mockRejectedValueOnce(new RpcError("now 2", -32001, "groupChanged"));
+    await expect(s().deleteGroup("Old", 1)).rejects.toMatchObject({ appCode: "groupChanged" });
+    expect(s().groups).toEqual([{ name: "Old", members: 1 }]);
+    expect(s().byId("p1")?.groupName).toBe("Old");
+  });
+
+  it("load still loads the profiles when group.list fails, and says so", async () => {
+    useUi.setState({ toasts: [] });
+    rpc.mockImplementation(async (m: string) => {
+      if (m === "group.list") throw new Error("store busy");
+      return [prof({ groupName: "Payments" })];
+    });
+    await s().load();
+    expect(s().loaded).toBe(true);
+    expect(s().byId("p1")?.groupName).toBe("Payments");
+    expect(s().groups).toEqual([]);
+    expect(useUi.getState().toasts.some((t) => t.kind === "warn" && /groups/.test(t.text))).toBe(true);
+  });
+
+  it("load still fails when profile.list fails (the start screen shows it)", async () => {
+    rpc.mockImplementation(async (m: string) => {
+      if (m === "profile.list") throw new Error("no store");
+      return [];
+    });
+    await expect(s().load()).rejects.toThrow("no store");
+    expect(s().loaded).toBe(false);
+  });
+
+  it("a failed group refresh after a save never fails the save, so a second save updates the same profile (G2)", async () => {
+    let n = 0;
+    rpc.mockImplementation(async (m: string, p: { id?: string }) => {
+      if (m === "group.list") throw new Error("store busy");
+      return { ...p, id: p.id || `new${++n}` };
+    });
+    const saved = await s().save(prof({ id: "", groupName: "Payments" }));
+    expect(saved.id).toBe("new1");
+    await s().save({ ...saved, name: "Renamed" });
+    expect(s().profiles.map((p) => p.id)).toEqual(["new1"]);
+  });
+
+  it("a delete that happened is never reported as failed because the group refresh failed (G2)", async () => {
+    useProfiles.setState({ profiles: [prof()], groups: [{ name: "g", members: 1 }] });
+    rpc.mockImplementation(async (m: string) => {
+      if (m === "group.list") throw new Error("store busy");
+    });
+    await s().remove("p1");
+    expect(s().profiles).toEqual([]);
+    expect(s().groups).toEqual([{ name: "g", members: 1 }]);
+  });
+
+  it("save and remove read the groups again (a typed name may have made one, or emptied one)", async () => {
+    rpc.mockImplementation(async (m: string, p: unknown) => (m === "group.list" ? [{ name: "Payments", members: 1 }] : p));
+    await s().save(prof({ groupName: "Payments" }));
+    expect(s().groups).toEqual([{ name: "Payments", members: 1 }]);
+    rpc.mockImplementation(async (m: string) => (m === "group.list" ? [] : undefined));
+    await s().remove("p1");
     expect(s().groups).toEqual([]);
   });
 });

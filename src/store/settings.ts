@@ -39,6 +39,9 @@ export interface Settings {
   explorerHoverOpen: boolean;
   /** Show connected servers under environment group rows (otherwise a flat list ordered by environment). */
   explorerGroupByEnv: boolean;
+  /** Grouped connections sit under their group (Group › Environment › Connection) in the Object Explorer and the Connect
+   *  dialog; connections without a group stay where they are. Has no visible effect until a connection has a group. */
+  showGroups: boolean;
   /** List every saved profile in the Object Explorer, not only the servers in use and pinned ones (§12). */
   explorerShowAll: boolean;
   /** Databases whose tree is grouped by schema, as schemaGroupKey(profileId, database). */
@@ -111,6 +114,7 @@ export const defaultSettings: Settings = {
   explorerAutoHide: false,
   explorerHoverOpen: true,
   explorerGroupByEnv: false,
+  showGroups: true,
   explorerShowAll: false,
   explorerSchemaGroups: [],
   pinnedProfiles: [],

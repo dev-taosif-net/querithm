@@ -15,6 +15,7 @@ public sealed class Services : IAsyncDisposable
 {
     public required LocalStore Store { get; init; }
     public required ProfileStore Profiles { get; init; }
+    public required GroupStore Groups { get; init; }
     public required SettingsStore Settings { get; init; }
     public required HistoryStore History { get; init; }
     public required SnippetStore Snippets { get; init; }
@@ -94,7 +95,7 @@ public sealed class Services : IAsyncDisposable
         };
         return new Services
         {
-            Store = store, Profiles = profiles, Settings = settings, History = history, Snippets = new SnippetStore(store), Usage = new CompletionUsageStore(store), Sessions = sessions,
+            Store = store, Profiles = profiles, Groups = new GroupStore(store, profiles), Settings = settings, History = history, Snippets = new SnippetStore(store), Usage = new CompletionUsageStore(store), Sessions = sessions,
             Executions = executions, Metadata = metadata, Objects = objects,
             Language = new LanguageService(providers, cache),
             Trace = new TraceService(sessions, notifier, logs.CreateLogger("trace")),
@@ -253,6 +254,8 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
             {
                 Id = p.Id, Name = name, Engine = Enum.IsDefined(p.Engine) ? p.Engine : Engine.Mssql, Auth = Enum.IsDefined(p.Auth) ? p.Auth : AuthKind.Sql,
                 Location = p.Location is { } l && Enum.IsDefined(l) ? l : null, Unsupported = UnlistableProfile, CreatedAt = p.CreatedAt, UpdatedAt = p.UpdatedAt,
+                // G10: the stub stays in its group, so the group manager counts the members group.delete counts.
+                GroupName = Core.Store.GroupNames.CleanOrNull(p.GroupName),
             };
         }
     }
@@ -504,26 +507,51 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
         TlsMode = TlsMode.Default, TrustCert = false, CaPath = null, Options = null,
     };
 
-    const string GroupsKey = "profile.groups";
+    /// <summary>
+    /// The groups of builds before v12, a JSON list in the setting table. No longer read, and refused by settings.set, so
+    /// nothing new lands where an older build's strict reader would trip on it.
+    /// </summary>
+    internal const string LegacyGroupsKey = "profile.groups";
 
-    public Task<ProfileGroup[]> GroupList() => Task.FromResult(s.Settings.Read(GroupsKey, Json.Context.ProfileGroupArray) ?? []);
+    // ---- connection groups (§6): GroupStore validates every name (PT8-3) and runs each write in one transaction ----
+    public Task<ProfileGroup[]> GroupList() => Task.Run(() => StoreWrite(s.Groups.List));
 
-    public Task<ProfileGroup[]> GroupSave(ProfileGroup g)
+    public Task<ProfileGroup[]> GroupCreate(GroupCreateParams p) =>
+        Task.Run(() => StoreWrite(() => s.Groups.Create(p?.Name ?? throw QuerithmException.Invalid("group.create needs a name."))));
+
+    public Task<GroupChangeResult> GroupRename(GroupRenameParams p) =>
+        Task.Run(() => Changed(StoreWrite(() => s.Groups.Rename(p?.From ?? throw QuerithmException.Invalid("group.rename needs from and to."), p.To))));
+
+    public Task<GroupChangeResult> GroupDelete(GroupDeleteParams p) =>
+        Task.Run(() => Changed(StoreWrite(() => s.Groups.Delete(p?.Name ?? throw QuerithmException.Invalid("group.delete needs a name."), p.ExpectedMembers))));
+
+    public Task<GroupChangeResult> GroupAssign(GroupAssignParams p) =>
+        Task.Run(() => Changed(StoreWrite(() => s.Groups.Assign(p?.ProfileIds ?? throw QuerithmException.Invalid("group.assign needs profileIds."), p.Name))));
+
+    /// <summary>The reply of a group write: the changed profiles as profile.list shows them, so the UI applies both in one step.</summary>
+    GroupChangeResult Changed(Core.Store.GroupChange change)
     {
-        // PT8-3: the same text rules as a profile's group name (size, control and invisible characters), a known environment and a CSS color.
-        if (Core.Sessions.ProfileRules.CheckGroup(g) is { } invalid)
-            throw new QuerithmException("invalidGroup", invalid.Message, invalid.Field is { } field ? new Dictionary<string, string> { ["field"] = field } : null);
-        var list = (s.Settings.Read(GroupsKey, Json.Context.ProfileGroupArray) ?? []).Where(x => !string.Equals(x.Name, g.Name, StringComparison.OrdinalIgnoreCase)).Append(g)
-            .OrderBy(x => x.Name).ToArray();
-        s.Settings.Write(GroupsKey, list, Json.Context.ProfileGroupArray);
-        return Task.FromResult(list);
+        var ids = change.Changed.ToHashSet(StringComparer.Ordinal);
+        return new GroupChangeResult
+        {
+            Groups = change.Groups,
+            Profiles = ids.Count == 0 ? [] : s.Profiles.List().Where(p => ids.Contains(p.Id)).Select(Describe).Select(Listable).ToArray(),
+            Renamed = change.Renamed,
+            Missing = change.Missing,
+        };
     }
 
-    public Task<ProfileGroup[]> GroupDelete(ProfileGroup g)
+    /// <summary>Another Querithm instance holding the store's write lock past the busy timeout: nothing was written, try again.</summary>
+    static T StoreWrite<T>(Func<T> write)
     {
-        var list = (s.Settings.Read(GroupsKey, Json.Context.ProfileGroupArray) ?? []).Where(x => !string.Equals(x.Name, g.Name, StringComparison.OrdinalIgnoreCase)).ToArray();
-        s.Settings.Write(GroupsKey, list, Json.Context.ProfileGroupArray);
-        return Task.FromResult(list);
+        try
+        {
+            return write();
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException ex) when (ex.SqliteErrorCode is 5 or 6) // SQLITE_BUSY, SQLITE_LOCKED
+        {
+            throw new QuerithmException("storeBusy", "Querithm's store is busy (another Querithm window is writing to it). Nothing was changed; try again.");
+        }
     }
 
     // ---- sessions ----
@@ -715,6 +743,8 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
             s.Executions.Guard.ProdConfirmations = on;
             return Task.CompletedTask;
         }
+        // Groups live in the profile_group table; the old key stays as stored and is never written again.
+        if (p.Key == LegacyGroupsKey) throw QuerithmException.Invalid("Connection groups are not a setting; use the group methods.");
         s.Settings.Set(p.Key, p.ValueJson);
         return Task.CompletedTask;
     }

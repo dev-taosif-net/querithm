@@ -638,6 +638,42 @@ try {
     await page.evaluate(() => window.__bench.explorerWidth(280));
     await sleep(300);
   }
+  // Connection groups (§6): Connect dialog › Select › tick the fixture › Move to group… › a new name; the Explorer then
+  // shows Group › Server with no "No group" row, and the move is undone so the rest of the run sees today's tree.
+  {
+    await page.evaluate(() => [...document.querySelectorAll('[data-q-explorer] button')].find((b) => b.getAttribute("aria-label") === "Connect…")?.click());
+    await page.waitForSelector('[role="dialog"] input[aria-label="Search profiles"]', { timeout: 5_000 }).catch(() => errors.push("groups: the Connect dialog did not open"));
+    await clickButton("Select");
+    await sleep(200);
+    const ticked = await page.evaluate(() => {
+      const box = document.querySelector('[role="dialog"] input[aria-label="Select Bench fixture"]');
+      box?.click();
+      return !!box;
+    });
+    if (!ticked) errors.push("groups: Select mode shows no checkbox for the fixture profile");
+    await clickButton("Move to group…");
+    await page.waitForSelector('[role="dialog"] input[placeholder="Pick a group or type a new name"]', { timeout: 5_000 }).catch(() => errors.push("groups: the Move to group dialog did not open"));
+    await page.type('[role="dialog"] input[placeholder="Pick a group or type a new name"]', "Smoke Group");
+    await clickButton("Move 1 connection");
+    await page.waitForFunction(() => [...document.querySelectorAll('[data-q-explorer] [role="treeitem"]')].some((x) => x.getAttribute("aria-label")?.startsWith("Group Smoke Group, 1 server")), { timeout: 10_000 })
+      .catch(() => errors.push("groups: the Explorer shows no 'Smoke Group' row after the move"));
+    if (await page.evaluate(() => [...document.querySelectorAll('[data-q-explorer] [role="treeitem"]')].some((x) => /no group/i.test(x.getAttribute("aria-label") ?? ""))))
+      errors.push("groups: the Explorer shows a 'No group' row");
+    await page.keyboard.press("Escape");
+    await sleep(200);
+    await shot("02e-explorer-groups");
+    // Undo through the group row's menu: Delete group… ungroups the fixture (no connection is deleted).
+    await page.evaluate(() => {
+      const r = [...document.querySelectorAll('[data-q-explorer] [role="treeitem"]')].find((x) => x.getAttribute("aria-label")?.startsWith("Group Smoke Group"));
+      r?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 40, clientY: 40 }));
+    });
+    await sleep(200);
+    await page.evaluate(() => [...document.querySelectorAll('[role="menu"] [role^="menuitem"]')].find((b) => b.getAttribute("aria-label")?.startsWith("Delete group…"))?.click());
+    await sleep(200);
+    await clickButton("Delete group");
+    await page.waitForFunction(() => ![...document.querySelectorAll('[data-q-explorer] [role="treeitem"]')].some((x) => x.getAttribute("aria-label")?.startsWith("Group Smoke Group")), { timeout: 10_000 })
+      .catch(() => errors.push("groups: deleting the group left its row in the Explorer"));
+  }
   // Type a query and run it with F5.
   await page.click(".monaco-editor .view-lines");
   await page.keyboard.type("SELECT TOP 200 o.OrderId, o.CustomerId, o.OrderDate, o.TotalAmount, o.Status FROM dbo.Orders o;\nSELECT name, object_id, type_desc FROM sys.objects WHERE is_ms_shipped = 0 ORDER BY name;");

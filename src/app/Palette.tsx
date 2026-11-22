@@ -39,7 +39,6 @@ export function Palette() {
   const palette = useUi((s) => s.palette);
   const tab = useActiveTab();
   const profiles = useProfiles((s) => s.profiles);
-  const groups = useProfiles((s) => s.groups);
   const servers = useConnections((s) => s.servers);
   const disconnected = useConnections((s) => (tab?.profileId ? !!s.disconnected[tab.profileId] : false));
   // A session-owned engine's tab (SQLite) searches its own session's view (Phase D0d).
@@ -109,7 +108,7 @@ export function Palette() {
       if (!list.length) list = [{ id: "none", label: snippetLib.error ?? (snippetLib.loaded ? "No snippets yet: use \"Save selection as snippet\"" : "Loading snippets…"), run: () => {} }];
     } else if (effective === "connections") {
       list = profiles.map((p) => ({
-        id: p.id, label: `[${engineBadge(p)}] ${envLabel[p.environment]} - ${p.name}`, detail: `${p.host ?? ""}${p.port ? `:${p.port}` : ""}`, color: envColor(p, groups),
+        id: p.id, label: `[${engineBadge(p)}] ${envLabel[p.environment]} - ${p.name}`, detail: `${p.host ?? ""}${p.port ? `:${p.port}` : ""}`, color: envColor(p),
         hint: servers[p.id]?.status === "connected" ? "connected" : undefined,
         run: () => {
           if (tab) void changeConnection(tab.id, p.id);

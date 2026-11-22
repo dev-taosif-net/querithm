@@ -31,7 +31,6 @@ const EMPTY = { subscribe: () => () => {}, getVersion: () => 0 };
 export function StatusBar() {
   const tab = useActiveTab();
   const profile = useProfiles((s) => s.profiles.find((p) => p.id === tab?.profileId));
-  const groups = useProfiles((s) => s.groups);
   const disconnected = useConnections((s) => !!tab?.profileId && !!s.disconnected[tab.profileId]);
   // The tab's database file needs picking again (its grant was revoked, or the file moved or was replaced).
   const needsFile = useConnections((s) => !!tab?.profileId && !!s.servers[tab.profileId]?.repick);
@@ -41,7 +40,7 @@ export function StatusBar() {
   const running = !!view && ["queued", "running", "streaming"].includes(view.state);
   const now = useNow(running);
   const engine = useEngineStatus();
-  const color = envColor(profile, groups);
+  const color = envColor(profile);
   const elapsed = running ? now - view!.startedAt : view?.elapsedMs;
   const rows = data?.totalRows ?? 0;
   const address = serverAddress(profile);

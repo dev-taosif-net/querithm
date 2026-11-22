@@ -10,6 +10,8 @@ export const MAX_SAVED_KEYS = 2000;
 interface ExplorerState {
   expanded: ReadonlySet<string>;
   collapsedEnvs: ReadonlySet<EnvironmentKind>;
+  /** Collapsed group rows (g:<name>) and environment rows inside a group (ge:<env>:<name>); in memory only, like collapsedEnvs. */
+  collapsedGroups: ReadonlySet<string>;
   details: Readonly<Record<string, DetailsCell>>;
   kind: KindFilter;
   folderFilters: Readonly<Record<string, string>>;
@@ -19,12 +21,13 @@ interface ExplorerState {
   selected?: string;
   setExpanded(f: (prev: ReadonlySet<string>) => ReadonlySet<string>): void;
   toggle(key: string, open?: boolean): boolean;
-  set(p: Partial<Pick<ExplorerState, "collapsedEnvs" | "details" | "kind" | "folderFilters" | "query" | "uncapped" | "selected">>): void;
+  set(p: Partial<Pick<ExplorerState, "collapsedEnvs" | "collapsedGroups" | "details" | "kind" | "folderFilters" | "query" | "uncapped" | "selected">>): void;
 }
 
 export const useExplorer = create<ExplorerState>((set, get) => ({
   expanded: new Set(),
   collapsedEnvs: new Set(),
+  collapsedGroups: new Set(),
   details: {},
   kind: "all",
   folderFilters: {},

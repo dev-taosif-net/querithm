@@ -95,6 +95,7 @@ public sealed class StrictEnumConverter(JsonNamingPolicy policy) : JsonConverter
 
 [JsonSerializable(typeof(ProfileGroup))]
 [JsonSerializable(typeof(ProfileGroup[]))]
+[JsonSerializable(typeof(Profile))]
 [JsonSerializable(typeof(string))]
 [JsonSerializable(typeof(FkColumnPair[]))]
 [JsonSerializable(typeof(Querithm.Contract.Providers.SchemaModel))]

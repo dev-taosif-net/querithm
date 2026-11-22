@@ -1,6 +1,7 @@
 // Connect dialog list logic: search, environment filter and pins (kept pure so it is testable without a DOM).
 import type { Engine, EnvironmentKind, Profile } from "../ipc/contract";
 import { envLabel } from "../store/profiles";
+import { compareGroupNames } from "./groupNames";
 
 export type EnvFilter = "all" | EnvironmentKind;
 
@@ -58,7 +59,16 @@ export interface ProfileSection {
   key: string;
   title: string;
   groups: { group: string; profiles: Profile[] }[];
+  /** A connection group's section (Show groups on): its name, how many profiles it shows and how many are Production. */
+  connectionGroup?: { name: string; count: number; prod: number };
 }
+
+/** Inside a group's section, the environment buckets as the env sections name them (Production first, decision 3). */
+const GROUP_BUCKETS: { envs: EnvironmentKind[]; title: string }[] = [
+  { envs: ["prod"], title: "Production" },
+  { envs: ["staging", "test"], title: "Staging & QA" },
+  { envs: ["dev", "local"], title: "Development" },
+];
 
 const ENV_SECTIONS: { envs: EnvironmentKind[]; title: string }[] = [
   { envs: ["prod"], title: "Production profiles" },
@@ -66,13 +76,27 @@ const ENV_SECTIONS: { envs: EnvironmentKind[]; title: string }[] = [
   { envs: ["dev", "local"], title: "Development profiles" },
 ];
 
-/** Pinned first, then by environment (production on top) and group; `flat` is the on-screen order for keyboard moves. */
-export function buildSections(list: readonly Profile[], pinned: readonly string[]): { sections: ProfileSection[]; flat: Profile[] } {
+/**
+ * Pinned first, then by environment (production on top) and group; `flat` is the on-screen order for keyboard moves.
+ * With `showGroups`, profiles in a connection group come first, one section per group (A–Z) with its environment buckets
+ * inside; the profiles without a group keep exactly today's sections (there is no "No group" section, §6).
+ */
+export function buildSections(list: readonly Profile[], pinned: readonly string[], showGroups = false): { sections: ProfileSection[]; flat: Profile[] } {
   const split = splitPinned(list, pinned);
   const sections: ProfileSection[] = [];
   if (split.pinned.length) sections.push({ key: "pinned", title: "Pinned", groups: [{ group: "", profiles: split.pinned }] });
+  let rest = split.rest;
+  if (showGroups) {
+    const names = [...new Set(rest.map((p) => p.groupName).filter((g): g is string => !!g))].sort(compareGroupNames);
+    for (const name of names) {
+      const members = rest.filter((p) => p.groupName === name);
+      const groups = GROUP_BUCKETS.map(({ envs, title }) => ({ group: title, profiles: members.filter((p) => envs.includes(p.environment)) })).filter((g) => g.profiles.length);
+      sections.push({ key: `g:${name}`, title: name, groups, connectionGroup: { name, count: members.length, prod: members.filter((p) => p.environment === "prod").length } });
+    }
+    rest = rest.filter((p) => !p.groupName);
+  }
   for (const { envs, title } of ENV_SECTIONS) {
-    const ps = split.rest.filter((p) => envs.includes(p.environment));
+    const ps = rest.filter((p) => envs.includes(p.environment));
     if (!ps.length) continue;
     const byGroup = new Map<string, Profile[]>();
     for (const p of ps) byGroup.set(p.groupName ?? "", [...(byGroup.get(p.groupName ?? "") ?? []), p]);

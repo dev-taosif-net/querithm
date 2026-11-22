@@ -27,9 +27,10 @@ vi.mock("../engineInfo", async (orig) => ({ ...(await orig<typeof import("../eng
 vi.mock("../fileGrants", () => ({ pickDatabaseFile: m.pick, requestWriteAccess: m.allowWrites, needsRepick: () => false }));
 
 import {
-  ProfileEditor, looksLikeConnectionString, looksLikeProduction, profileFieldErrors, splitHostPort, suggestedName, transportSummary, withDefaultHost,
+  ProfileEditor, identityOnlyChange, looksLikeConnectionString, looksLikeProduction, profileFieldErrors, splitHostPort, suggestedName, transportSummary, withDefaultHost,
 } from "../ProfileEditor";
 import { useConnections } from "../../store/connections";
+import { ENGINE_LIST } from "../../engines";
 import { useProfiles } from "../../store/profiles";
 import { useUi } from "../../store/ui";
 
@@ -549,27 +550,27 @@ describe("ProfileEditor Production safety", () => {
 });
 
 describe("ProfileEditor groups and environment", () => {
-  const live = () => useProfiles.setState({ groups: [{ name: "Live", environment: "prod", color: null } as never, { name: "Lab", environment: "test", color: null } as never] });
+  const live = () => useProfiles.setState({ groups: [{ name: "Live", members: 2 }, { name: "Lab", members: 0 }] });
 
-  it("a group's default environment fills an environment nobody chose, and says so", async () => {
+  // SEC-4: groups have no default environment; picking one never sets, raises or lowers it (a Prod profile stays Prod).
+  for (const engine of ENGINE_LIST) {
+    it(`picking a group never changes the environment (${engine})`, async () => {
+      live();
+      render(<ProfileEditor preset={engine} onClose={() => {}} />);
+      await userEvent.type(screen.getByLabelText("Group"), "Live");
+      expect(screen.queryByText(/Set from group/)).toBeNull();
+      expect(["Local", "Dev", "Test", "Staging", "Prod"].some((e) => env(e).getAttribute("aria-pressed") === "true")).toBe(false);
+    });
+  }
+
+  it("a saved Production profile stays Production whatever group is picked or cleared", async () => {
     live();
-    render(<ProfileEditor preset="pg" onClose={() => {}} />);
+    useProfiles.setState({ profiles: [base("a", "pg", { environment: "prod", groupName: "Lab" })] });
+    render(<ProfileEditor profileId="a" onClose={() => {}} />);
+    await userEvent.clear(screen.getByLabelText("Group"));
+    expect((env("Prod").getAttribute("aria-pressed") === "true")).toBe(true);
     await userEvent.type(screen.getByLabelText("Group"), "Live");
     expect((env("Prod").getAttribute("aria-pressed") === "true")).toBe(true);
-    expect(screen.getByText(/Set from group “Live”/)).toBeTruthy();
-    // another group may replace what a group filled
-    await userEvent.clear(screen.getByLabelText("Group"));
-    await userEvent.type(screen.getByLabelText("Group"), "Lab");
-    expect((env("Test").getAttribute("aria-pressed") === "true")).toBe(true);
-  });
-
-  it("never overwrites an environment the user chose (regression: a Prod choice became the group's)", async () => {
-    live();
-    render(<ProfileEditor preset="pg" onClose={() => {}} />);
-    await pickEnv("Dev");
-    await userEvent.type(screen.getByLabelText("Group"), "Live");
-    expect((env("Dev").getAttribute("aria-pressed") === "true")).toBe(true);
-    expect(screen.queryByText(/Set from group/)).toBeNull();
   });
 
   it("an existing profile keeps its environment", async () => {
@@ -578,6 +579,98 @@ describe("ProfileEditor groups and environment", () => {
     render(<ProfileEditor profileId="a" onClose={() => {}} />);
     await userEvent.type(screen.getByLabelText("Group"), "Live");
     expect((env("Dev").getAttribute("aria-pressed") === "true")).toBe(true);
+  });
+});
+
+describe("ProfileEditor Group field", () => {
+  const group = () => screen.getByLabelText("Group") as HTMLInputElement;
+  beforeEach(() => useProfiles.setState({ groups: [{ name: "Payments", members: 3 }, { name: "Team 10", members: 1 }, { name: "team 2", members: 0 }] }));
+
+  for (const engine of ENGINE_LIST) {
+    it(`offers the groups with their member counts, says a typed name joins one, and takes its spelling on leaving the field (${engine})`, async () => {
+      // Oracle's connection target is its service name: a saved Oracle profile has one.
+      useProfiles.setState({ profiles: [base("a", engine, engine === "oracle" ? { databaseDefault: "FREEPDB1" } : {})] });
+      render(<ProfileEditor profileId="a" onClose={() => {}} />);
+      const options =[...document.querySelectorAll(`#${CSS.escape(group().getAttribute("list")!)} option`)].map((o) => `${o.getAttribute("value")}|${o.getAttribute("label")}`);
+      expect(options).toEqual(["Payments|3 connections", "team 2|0 connections", "Team 10|1 connection"]);
+      await userEvent.type(group(), "  payments ");
+      expect(screen.getByText("Joins “Payments” · 3 connections")).toBeTruthy();
+      await userEvent.tab();
+      expect(group().value).toBe("Payments");
+      await userEvent.click(saveBtn());
+      await waitFor(() => expect(saveSpy).toHaveBeenCalled());
+      expect(saveSpy.mock.calls[0][0].groupName).toBe("Payments");
+    });
+  }
+
+  it("says a new name makes a group when the profile is saved", async () => {
+    useProfiles.setState({ profiles: [base("a", "pg")] });
+    render(<ProfileEditor profileId="a" onClose={() => {}} />);
+    await userEvent.type(group(), "Core   Banking");
+    expect(screen.getByText("Creates group “Core Banking” when you save")).toBeTruthy();
+    await userEvent.tab();
+    expect(group().value).toBe("Core Banking");
+  });
+
+  it("a profile already in the group counts the others", async () => {
+    useProfiles.setState({ profiles: [base("a", "pg", { groupName: "Payments" })] });
+    render(<ProfileEditor profileId="a" onClose={() => {}} />);
+    expect(screen.getByText("In “Payments” · 2 other connections")).toBeTruthy();
+  });
+
+  it("a name the sidecar would refuse is said at the field and never sent", async () => {
+    useProfiles.setState({ profiles: [base("a", "pg")] });
+    render(<ProfileEditor profileId="a" onClose={() => {}} />);
+    await userEvent.type(group(), "Pay​ments");
+    await userEvent.tab();
+    expect(group().getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByText(/The group name must be at most 256 characters/)).toBeTruthy();
+    await userEvent.click(saveBtn());
+    expect(saveSpy).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(group());
+  });
+
+  it("a sidecar refusal of the group is shown at the Group field", async () => {
+    useProfiles.setState({ profiles: [base("a", "pg")] });
+    saveSpy.mockRejectedValueOnce(Object.assign(new Error("The group name needs at least one visible letter, digit or symbol."), { data: { field: "groupName" } }));
+    render(<ProfileEditor profileId="a" onClose={() => {}} />);
+    await userEvent.type(group(), "Ops");
+    await userEvent.click(saveBtn());
+    await waitFor(() => expect(group().getAttribute("aria-invalid")).toBe("true"));
+    expect(toasts()).toEqual([]);
+  });
+
+  it("G1: a group renamed while the editor is open is kept when the user did not touch the field", async () => {
+    useProfiles.setState({ profiles: [base("a", "pg", { groupName: "Old" })] });
+    render(<ProfileEditor profileId="a" onClose={() => {}} />);
+    // The group manager renames Old → New: the store already holds the new name, the editor's draft the old one.
+    useProfiles.setState({ profiles: [base("a", "pg", { groupName: "New" })] });
+    await userEvent.type(nameBox(), " 2");
+    await userEvent.click(saveBtn());
+    await waitFor(() => expect(saveSpy).toHaveBeenCalled());
+    expect(saveSpy.mock.calls[0][0].groupName).toBe("New");
+  });
+
+  it("G1: a group the user typed wins over a rename made meanwhile", async () => {
+    useProfiles.setState({ profiles: [base("a", "pg", { groupName: "Old" })] });
+    render(<ProfileEditor profileId="a" onClose={() => {}} />);
+    useProfiles.setState({ profiles: [base("a", "pg", { groupName: "New" })] });
+    await userEvent.clear(group());
+    await userEvent.type(group(), "Mine");
+    await userEvent.click(saveBtn());
+    await waitFor(() => expect(saveSpy).toHaveBeenCalled());
+    expect(saveSpy.mock.calls[0][0].groupName).toBe("Mine");
+  });
+});
+
+describe("identityOnlyChange", () => {
+  it("is true only when the name or group (or timestamps) differ", () => {
+    const a = base("a", "pg", { groupName: "Old" });
+    expect(identityOnlyChange(a, { ...a, name: "x", groupName: "New", updatedAt: 9 })).toBe(true);
+    expect(identityOnlyChange(a, { ...a, host: "other" })).toBe(false);
+    expect(identityOnlyChange(a, { ...a, environment: "prod" })).toBe(false);
+    expect(identityOnlyChange(a, { ...a, options: { appName: "x" } })).toBe(false);
+    expect(identityOnlyChange(a, { ...a, caPath: undefined } as never)).toBe(true); // missing and null are the same
   });
 });
 
@@ -871,11 +964,22 @@ describe.each<Engine>(["mssql", "pg"])("ProfileEditor editing an existing %s pro
     expect(saveSpy.mock.calls[0][1]).toBe("");
   });
 
-  it("reminds to reconnect when the server is connected", async () => {
+  it("reminds to reconnect when the server is connected and the connection changed", async () => {
     useConnections.setState({ servers: { a: { profileId: "a", status: "connected", databases: [] } } as never, order: ["a"] });
     render(<ProfileEditor profileId="a" onClose={() => {}} />);
+    await userEvent.type(hostBox(), "2");
     await userEvent.click(saveBtn());
     await waitFor(() => expect(toasts()).toContain("info:Saved. Reconnect to apply connection changes."));
+  });
+
+  it("asks for no reconnect when only the name or group changed", async () => {
+    useConnections.setState({ servers: { a: { profileId: "a", status: "connected", databases: [] } } as never, order: ["a"] });
+    render(<ProfileEditor profileId="a" onClose={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Group"), "Payments");
+    await userEvent.type(nameBox(), " 2");
+    await userEvent.click(saveBtn());
+    await waitFor(() => expect(saveSpy).toHaveBeenCalled());
+    expect(toasts()).not.toContain("info:Saved. Reconnect to apply connection changes.");
   });
 
   it("reports a failed save and stays open", async () => {

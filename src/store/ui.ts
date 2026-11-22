@@ -55,6 +55,10 @@ export type Dialog =
   | { kind: "authPrompt"; message: string; url?: string | null; code?: string | null }
   | { kind: "debugCall"; title: string; sql: string; resolve: (sql: string | null) => void }
   | { kind: "snippets" }
+  /** The group manager; `focus` selects that group. */
+  | { kind: "groups"; focus?: string }
+  /** Bulk move: put these profiles in a group (or a new one). */
+  | { kind: "moveToGroup"; profileIds: string[] }
   | { kind: "snippetEdit"; snippet: Snippet }
   | {
       kind: "rename"; profileId?: string; database?: string; target?: RefactorTarget; fromTabId?: string;

@@ -125,16 +125,7 @@ public static class ProfileRules
         return null;
     }
 
-    /// <summary>A group as group.save may store it (PT8-3).</summary>
-    public static ProfileProblem? CheckGroup(ProfileGroup? g)
-    {
-        if (g == null) return new("group.save needs a group.");
-        if (Text(g.Name, "name", "group name", MaxNameLength, required: true) is { } name) return name;
-        if (g.Environment is { } env && !Enum.IsDefined(env)) return new("Unknown environment.", "environment");
-        return Color(g.Color);
-    }
-
-    static bool CleanText(string value, bool visible)
+    internal static bool CleanText(string value, bool visible)
     {
         for (var i = 0; i < value.Length;)
         {
@@ -151,7 +142,8 @@ public static class ProfileRules
     static ProfileProblem? Input(Profile p)
     {
         if (Text(p.Name, "name", "name", MaxNameLength, required: true) is { } name) return name;
-        if (Text(p.GroupName, "groupName", "group name", MaxNameLength) is { } group) return group;
+        // PT8-3: the group rules every group method applies (trimmed, spaces collapsed, NFC, a visible character).
+        if (Store.GroupNames.Clean(p.GroupName, out _) is { } group) return group;
         if (Text(p.Username, "username", "user name") is { } user) return user;
         if (Text(p.DatabaseDefault, "databaseDefault", "database name") is { } db) return db;
         if (Text(p.File?.GrantId, "file", "file grant", visible: false) is { } grant) return grant;

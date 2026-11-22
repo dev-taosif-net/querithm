@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Engine, Profile } from "../../ipc/contract";
 
 const m = vi.hoisted(() => ({
-  rpc: vi.fn(async (..._a: unknown[]) => undefined),
+  rpc: vi.fn(async (..._a: unknown[]): Promise<unknown> => undefined),
   activateTab: vi.fn(),
   changeConnection: vi.fn(async (..._a: unknown[]) => {}),
   newQueryTab: vi.fn(),
@@ -235,5 +235,85 @@ describe("ConnectDialog", () => {
     useProfiles.setState({ profiles: [prof("a", "pg", { groupName: "Analytics" }), prof("b", "mssql")] });
     render(<ConnectDialog onClose={() => {}} />);
     expect(screen.getByText("Analytics")).toBeTruthy();
+  });
+});
+
+// Bulk move (§6): Select mode ticks connections and moves them into a group; the list shows Group › Environment.
+describe("Connect dialog: groups and Select mode", () => {
+  const box = (name: string) => screen.getByLabelText(`Select ${name}`) as HTMLInputElement;
+  beforeEach(() => {
+    useSettings.setState({ showGroups: true });
+    useProfiles.setState({
+      profiles: [
+        prof("orders", "mssql", { name: "Orders", environment: "prod", groupName: "Payments" }),
+        prof("ledger", "mySql", { name: "Ledger", groupName: "Payments" }),
+        prof("warehouse", "duckDb", { name: "Warehouse", environment: "prod" }),
+        prof("scratch", "sqlite", { name: "Scratch", environment: "local" }),
+      ],
+      groups: [{ name: "Payments", members: 2 }],
+    });
+  });
+
+  it("shows a grouped profile under its group with the counts, and the others in today's sections", () => {
+    render(<ConnectDialog onClose={() => {}} />);
+    const group = screen.getByRole("group", { name: "Group Payments" });
+    expect(group.textContent).toContain("2 · 1 Production");
+    expect(screen.getByRole("group", { name: "Production profiles" }).textContent).toContain("Warehouse");
+    expect(screen.queryByText(/no group/i)).toBeNull();
+  });
+
+  it("ticks rows instead of connecting, ranges with Shift, and moves the ticked ones", async () => {
+    render(<ConnectDialog onClose={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByText("Orders"));
+    fireEvent.click(screen.getByText("Warehouse"), { shiftKey: true });
+    expect(["Orders", "Ledger", "Warehouse", "Scratch"].map((n) => box(n).checked)).toEqual([true, true, true, false]);
+    fireEvent.doubleClick(screen.getByText("Scratch"));
+    expect(useConnections.getState().servers.scratch).toBeUndefined();
+    const bar = screen.getByRole("toolbar", { name: "Selection" });
+    expect(bar.textContent).toContain("3 selected");
+    expect(bar.textContent).toContain("2 Production");
+    await userEvent.click(within(bar).getByRole("button", { name: "Move to group…" }));
+    expect(useUi.getState().dialogs.at(-1)).toEqual({ kind: "moveToGroup", profileIds: ["orders", "ledger", "warehouse"] });
+  });
+
+  it("a group heading ticks all its shown profiles; the selection survives a filter and says how many it hides", async () => {
+    render(<ConnectDialog onClose={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: "Select" }));
+    await userEvent.click(screen.getByLabelText("Select all in Payments"));
+    expect([box("Orders").checked, box("Ledger").checked]).toEqual([true, true]);
+    await userEvent.type(screen.getByLabelText("Search profiles"), "orders");
+    expect(screen.getByRole("toolbar", { name: "Selection" }).textContent).toContain("1 hidden by filter");
+  });
+
+  it("Enter ticks the active row in Select mode; Esc leaves Select mode before it closes the dialog", async () => {
+    const onClose = vi.fn();
+    render(<ConnectDialog onClose={onClose} />);
+    await userEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.keyDown(screen.getByLabelText("Search profiles"), { key: "Enter" });
+    expect(box("Orders").checked).toBe(true);
+    expect(useConnections.getState().servers.orders).toBeUndefined();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("toolbar", { name: "Selection" })).toBeNull());
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("Remove from group asks first when a Production connection is among them, then ungroups only the grouped ones", async () => {
+    m.rpc.mockImplementation(async (method: unknown) => (method === "group.assign" ? { groups: [], profiles: [] } : undefined));
+    render(<ConnectDialog onClose={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByText("Orders"));
+    fireEvent.click(screen.getByText("Scratch"));
+    await userEvent.click(screen.getByRole("button", { name: "Remove from group" }));
+    let d: unknown;
+    await waitFor(() => expect((d = useUi.getState().dialogs.at(-1)) && (d as { kind: string }).kind).toBe("confirm"));
+    (d as { resolve: (ok: boolean) => void }).resolve(true);
+    await waitFor(() => expect(m.rpc).toHaveBeenCalledWith("group.assign", { profileIds: ["orders"], name: null }));
+  });
+
+  it("Groups… opens the group manager", async () => {
+    render(<ConnectDialog onClose={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: "Groups…" }));
+    expect(useUi.getState().dialogs.at(-1)).toEqual({ kind: "groups" });
   });
 });

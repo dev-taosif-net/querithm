@@ -10,6 +10,13 @@ CREATE TABLE IF NOT EXISTS profile (
   file_grant_id TEXT                                                      -- the shell's grant for a file database; never a path (v4)
 );
 
+-- Connection groups (v12). A group is a row here (an empty group made with New) or a name at least one profile carries
+-- in group_name; name_key is GroupNames.Key (NFKC, upper case), so spellings that differ only in case or form are one group.
+CREATE TABLE IF NOT EXISTS profile_group (
+  name_key TEXT PRIMARY KEY, name TEXT NOT NULL,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS schema_snapshot (
   profile_id TEXT, database TEXT, refreshed_at INTEGER, server_version TEXT,
   status TEXT,                                                            -- 'fresh' | 'stale' | 'refreshing' | 'error'

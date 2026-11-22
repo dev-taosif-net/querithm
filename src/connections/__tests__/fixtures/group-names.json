@@ -1,0 +1,128 @@
+[
+  {
+    "raw": "Payments",
+    "name": "Payments",
+    "key": "PAYMENTS",
+    "error": false
+  },
+  {
+    "raw": "  payments  ",
+    "name": "payments",
+    "key": "PAYMENTS",
+    "error": false
+  },
+  {
+    "raw": "Core   Banking",
+    "name": "Core Banking",
+    "key": "CORE BANKING",
+    "error": false
+  },
+  {
+    "raw": " Ops　Team ",
+    "name": "Ops Team",
+    "key": "OPS TEAM",
+    "error": false
+  },
+  {
+    "raw": "",
+    "name": null,
+    "key": null,
+    "error": false
+  },
+  {
+    "raw": "   ",
+    "name": null,
+    "key": null,
+    "error": false
+  },
+  {
+    "raw": "ড় টিম",
+    "name": "ড় টিম",
+    "key": "ড় টিম",
+    "error": false
+  },
+  {
+    "raw": "ড় টিম",
+    "name": "ড় টিম",
+    "key": "ড় টিম",
+    "error": false
+  },
+  {
+    "raw": "Straße",
+    "name": "Straße",
+    "key": "STRAßE",
+    "error": false
+  },
+  {
+    "raw": "ﬁle",
+    "name": "ﬁle",
+    "key": "FILE",
+    "error": false
+  },
+  {
+    "raw": "Σίσυφος",
+    "name": "Σίσυφος",
+    "key": "ΣΊΣΥΦΟΣ",
+    "error": false
+  },
+  {
+    "raw": "İstanbul",
+    "name": "İstanbul",
+    "key": "İSTANBUL",
+    "error": false
+  },
+  {
+    "raw": "Team 10",
+    "name": "Team 10",
+    "key": "TEAM 10",
+    "error": false
+  },
+  {
+    "raw": "Ops ✓ (EU)",
+    "name": "Ops ✓ (EU)",
+    "key": "OPS ✓ (EU)",
+    "error": false
+  },
+  {
+    "raw": "a​b",
+    "name": null,
+    "key": null,
+    "error": true
+  },
+  {
+    "raw": "g‮x",
+    "name": null,
+    "key": null,
+    "error": true
+  },
+  {
+    "raw": "line\nbreak",
+    "name": null,
+    "key": null,
+    "error": true
+  },
+  {
+    "raw": "tab\there",
+    "name": null,
+    "key": null,
+    "error": true
+  },
+  {
+    "raw": "ㅤ",
+    "name": null,
+    "key": null,
+    "error": true
+  },
+  {
+    "raw": "́́",
+    "name": null,
+    "key": null,
+    "error": true
+  },
+  {
+    "raw": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "name": null,
+    "key": null,
+    "error": true
+  }
+]

@@ -21,9 +21,8 @@ export function EnvTag({ env, color }: { env: EnvironmentKind; color: string }) 
 export function ServerChip({ profileId, database, surface = "var(--q-panel)" }: { profileId: string | undefined; database?: string | null; surface?: string }) {
   useThemeKey();
   const profile = useProfiles((s) => s.profiles.find((p) => p.id === profileId));
-  const groups = useProfiles((s) => s.groups);
   if (!profile) return null;
-  const raw = envColor(profile, groups);
+  const raw = envColor(profile);
   const env = envLabel[profile.environment]?.toUpperCase() ?? "";
   return (
     <span className="inline-flex items-center gap-1.5 min-w-0 max-w-full align-bottom text-[11px]" data-testid="server-chip" title={`${env ? `${env} ` : ""}${escapeForDisplay(profile.name ?? "")}${database ? ` › ${escapeForDisplay(database)}` : ""}`}>

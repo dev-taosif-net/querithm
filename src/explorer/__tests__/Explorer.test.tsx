@@ -428,7 +428,7 @@ describe.each<Engine>(["mssql", "pg"])("Explorer tree (%s)", (engine) => {
     render(<Explorer />);
     openMenu(/^STAGE, Srv-p1/);
     expect(menu().getAttribute("aria-label")).toBe("Actions for STAGE Srv-p1 · connection failed");
-    expect(menuLabels().slice(0, 4)).toEqual(["Reconnect", "Edit profile…", "Duplicate profile…", "Copy error"]);
+    expect(menuLabels().slice(0, 5)).toEqual(["Reconnect", "Edit profile…", "Move to group…", "Duplicate profile…", "Copy error"]);
     expect(menuLabels()).toContain("New query, Not connected");
     menuClick("Reconnect");
     expect(connect).toHaveBeenCalledWith("p1");
@@ -1112,3 +1112,102 @@ describe("session-owned engines (SQLite, Phase D0d)", () => {
     await waitFor(() => expect(detailCalls()).toEqual([{ profileId: "p1", database: "AppDb", objectId: 1 }]));
   });
 });
+
+// Connection groups (§6, owner decisions 2026-11-22): Group › Environment › Connection; ungrouped servers stay as they are.
+describe.each<Engine>(["mssql", "pg"])("Explorer groups (%s)", (engine) => {
+  const inGroup = (id: string, groupName: string | null) =>
+    useProfiles.setState({ profiles: useProfiles.getState().profiles.map((p) => (p.id === id ? { ...p, groupName } : p)) });
+  beforeEach(() => {
+    useSettings.setState({ showGroups: true });
+    useExplorer.setState({ collapsedGroups: new Set() });
+  });
+
+  it("a grouped server sits under its group row; an ungrouped one stays at the top level", () => {
+    seed(engine, { id: "a", env: "prod" });
+    seed(engine, { id: "b" });
+    inGroup("a", "Payments");
+    render(<Explorer />);
+    const group = item("Group Payments, 1 server, 1 Production");
+    expect(group.getAttribute("aria-level")).toBe("1");
+    expect(item(/^PROD, Srv-a,/).getAttribute("aria-level")).toBe("2");
+    expect(item(/^DEV, Srv-b,/).getAttribute("aria-level")).toBe("1");
+    expect(names().some((n) => /no group/i.test(n ?? ""))).toBe(false);
+  });
+
+  it("the View ⋯ menu's Show groups is on by default, says when nothing is grouped, and draws today's tree when off", () => {
+    seed(engine, { id: "a" });
+    render(<Explorer />);
+    fireEvent.click(screen.getByRole("button", { name: "View options" }));
+    const view = screen.getByRole("menu", { name: "View options" });
+    const show = within(view).getByRole("menuitemcheckbox", { name: "Show groups, no connection is in a group" });
+    expect(show.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(show);
+    expect(useSettings.getState().showGroups).toBe(false);
+    inGroup("a", "Payments");
+    expect(maybe(/^Group Payments/)).toBeNull();
+    expect(item(/^DEV, Srv-a,/).getAttribute("aria-level")).toBe("1");
+    fireEvent.click(screen.getByRole("button", { name: "View options" }));
+    fireEvent.click(within(screen.getByRole("menu", { name: "View options" })).getByRole("menuitem", { name: "Manage groups…" }));
+    expect(useUi.getState().dialogs.at(-1)).toMatchObject({ kind: "groups" });
+  });
+
+  it("a server the user connects is never left inside a folded group", () => {
+    useExplorer.setState({ collapsedGroups: new Set(["g:Payments"]) });
+    seed(engine, { id: "a" });
+    inGroup("a", "Payments");
+    render(<Explorer />);
+    expect(ex().collapsedGroups.size).toBe(0);
+    expect(item(/^DEV, Srv-a,/)).toBeTruthy();
+  });
+
+  it("ArrowLeft folds a group row and ArrowRight opens it", () => {
+    seed(engine, { id: "a" });
+    inGroup("a", "Payments");
+    render(<Explorer />);
+    click(/^Group Payments/);
+    key("ArrowLeft");
+    expect(ex().collapsedGroups.has("g:Payments")).toBe(true);
+    expect(maybe(/^DEV, Srv-a,/)).toBeNull();
+    key("ArrowRight");
+    expect(item(/^DEV, Srv-a,/)).toBeTruthy();
+  });
+
+  it("a group row's menu renames, moves all its connections, deletes it or opens the manager", () => {
+    seed(engine, { id: "a" });
+    seed(engine, { id: "b" });
+    inGroup("a", "Payments");
+    inGroup("b", "Payments");
+    render(<Explorer />);
+    openMenu(/^Group Payments/);
+    expect(menuLabels()).toEqual(["Rename group…", "Move all connections to…", "Delete group…, connections stay", "Manage groups…"]);
+    menuClick("Move all connections to…");
+    expect(useUi.getState().dialogs.at(-1)).toMatchObject({ kind: "moveToGroup", profileIds: ["a", "b"] });
+  });
+
+  it("a server's menu offers Move to group…, naming its group", () => {
+    seed(engine, { id: "a" });
+    inGroup("a", "Payments");
+    render(<Explorer />);
+    openMenu(/^DEV, Srv-a,/);
+    menuClick("Move to group…, in Payments");
+    expect(useUi.getState().dialogs.at(-1)).toMatchObject({ kind: "moveToGroup", profileIds: ["a"] });
+  });
+
+  it("Reveal active database opens a folded group and the environment row inside it (regression: env rows stayed shut)", () => {
+    // A background reconnect (quiet): only Reveal may open what the user folded.
+    seed(engine, { id: "a", env: "prod", conn: { quiet: true } });
+    inGroup("a", "Payments");
+    useSettings.setState({ explorerGroupByEnv: true });
+    useExplorer.setState({ collapsedGroups: new Set(["g:Payments", "ge:prod:Payments"]) });
+    useTabs.setState({ activeId: "t1", tabs: { t1: { id: "t1", profileId: "a", database: "AppDb" } }, order: ["t1"] } as never);
+    render(<Explorer />);
+    expect(maybe(/^PROD, Srv-a,/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "View options" }));
+    fireEvent.click(within(screen.getByRole("menu", { name: "View options" })).getByRole("menuitem", { name: "Reveal active database" }));
+    expect(ex().collapsedGroups.size).toBe(0);
+    expect(item(/^PROD, Srv-a,/)).toBeTruthy();
+    expect(ex().selected).toBe(dbKeyOf("a"));
+  });
+});
+
+const dbKeyOf = (id: string) => `db:${id}:AppDb`;

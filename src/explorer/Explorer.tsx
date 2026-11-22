@@ -24,7 +24,7 @@ import { pruneExpanded, takeNewlyConnected } from "./expansion";
 import { menuFor, sessionReason } from "./menus";
 import { bindActiveTab, columnList, columnName, connectFromExplorer, copyText, insertName, insertText, openObject, qualified } from "./objectActions";
 import {
-  ancestorsOf, buildTree, CATEGORIES, catKey, dbKey, objKey, schemaKey, searchRows, searchScope, serverKey, sysKey,
+  ancestorsOf, buildTree, CATEGORIES, catKey, dbKey, headsOf, objKey, schemaKey, searchRows, searchScope, serverKey, sysKey,
   type CatId, type DetailsCell, type Engine, type KindFilter, type RowOf, type TreeRow,
 } from "./tree";
 
@@ -47,6 +47,7 @@ function rowName(r: TreeRow, profiles: Map<string, Profile>): string {
     case "obj": return r.obj.name;
     case "leaf": return r.text;
     case "env": return envLabel[r.env];
+    case "group": return r.name;
     default: return "";
   }
 }
@@ -73,13 +74,13 @@ interface RowView {
 
 export function Explorer() {
   const profilesList = useProfiles((s) => s.profiles);
-  const groups = useProfiles((s) => s.groups);
   const servers = useConnections((s) => s.servers);
   const order = useConnections((s) => s.order);
   const entries = useSnapshots((s) => s.entries);
   const pinned = useSettings((s) => s.pinnedProfiles);
   const showAll = useSettings((s) => s.explorerShowAll);
   const groupByEnv = useSettings((s) => s.explorerGroupByEnv);
+  const showGroups = useSettings((s) => s.showGroups);
   const schemaGroups = useSettings((s) => s.explorerSchemaGroups);
   const hoverOpen = useSettings((s) => s.explorerHoverOpen);
   const width = useExplorerWidth();
@@ -102,12 +103,12 @@ export function Explorer() {
   const envText = useMemo(() => {
     const m = new Map<string, string>();
     for (const p of profilesList) {
-      const c = envColor(p, groups);
+      const c = envColor(p);
       m.set(p.id, readableOnAll(c, SURFACES) ?? c);
     }
     return m;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profilesList, groups, themeKey]);
+  }, [profilesList, themeKey]);
 
   useEffect(() => {
     explorerHooks.focusSearch = () => searchBox.current?.focus();
@@ -128,13 +129,23 @@ export function Explorer() {
       for (const id of fresh) next.add(serverKey(id));
       return next;
     });
+    // A server the user just connected is never hidden inside a collapsed group (§6).
+    if (fresh.length) {
+      const s = useSettings.getState();
+      const groups = new Set(st.collapsedGroups);
+      for (const id of fresh) {
+        const p = useProfiles.getState().byId(id);
+        if (p) for (const k of headsOf(p, { showGroups: s.showGroups, groupByEnv: s.explorerGroupByEnv }).groups) groups.delete(k);
+      }
+      if (groups.size !== st.collapsedGroups.size) st.set({ collapsedGroups: groups });
+    }
   }, [order, servers]);
 
   const active = activeProfile && activeDb ? { profileId: activeProfile, db: activeDb } : undefined;
   const tree = useMemo(
-    () => buildTree({ profiles: profilesList, servers, order, pinned, showAll, groupByEnv, collapsedEnvs: ex.collapsedEnvs, expanded: ex.expanded, entries, details: ex.details, schemaGroups, kind: ex.kind, folderFilters: ex.folderFilters, active }),
+    () => buildTree({ profiles: profilesList, servers, order, pinned, showAll, groupByEnv, collapsedEnvs: ex.collapsedEnvs, showGroups, collapsedGroups: ex.collapsedGroups, expanded: ex.expanded, entries, details: ex.details, schemaGroups, kind: ex.kind, folderFilters: ex.folderFilters, active }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [profilesList, servers, order, pinned, showAll, groupByEnv, ex.collapsedEnvs, ex.expanded, entries, ex.details, schemaGroups, ex.kind, ex.folderFilters, active?.profileId, active?.db],
+    [profilesList, servers, order, pinned, showAll, groupByEnv, ex.collapsedEnvs, showGroups, ex.collapsedGroups, ex.expanded, entries, ex.details, schemaGroups, ex.kind, ex.folderFilters, active?.profileId, active?.db],
   );
 
   // Keys and indexes of expanded objects are read lazily, again after a refresh replaced the object's record.
@@ -198,10 +209,24 @@ export function Explorer() {
     const st = useExplorer.getState();
     switch (r.t) {
       case "env": {
+        if (r.group != null) {
+          const next = new Set(st.collapsedGroups);
+          if (open ?? next.has(r.key)) next.delete(r.key);
+          else next.add(r.key);
+          st.set({ collapsedGroups: next });
+          return;
+        }
         const next = new Set(st.collapsedEnvs);
         if (open ?? next.has(r.env)) next.delete(r.env);
         else next.add(r.env);
         st.set({ collapsedEnvs: next });
+        return;
+      }
+      case "group": {
+        const next = new Set(st.collapsedGroups);
+        if (open ?? next.has(r.key)) next.delete(r.key);
+        else next.add(r.key);
+        st.set({ collapsedGroups: next });
         return;
       }
       case "server":
@@ -269,11 +294,9 @@ export function Explorer() {
     if (owner) keys.push(objKey(r.profileId, r.db, owner), ...(r.obj.kind === "trigger" ? [`${objKey(r.profileId, r.db, owner)}:triggers`] : []));
     st.setExpanded((prev) => new Set([...prev, ...keys]));
     const key = owner ? objKey(r.profileId, r.db, r.obj, owner) : r.key.replace(/^r:/, "");
-    const envs = new Set(st.collapsedEnvs);
-    if (p) envs.delete(p.environment);
     reveal.current = key;
     st.set({
-      query: "", selected: key, collapsedEnvs: envs,
+      query: "", selected: key, ...openedHeads(p),
       kind: st.kind === "all" || st.kind === cat ? st.kind : "all",
       folderFilters: ck && st.folderFilters[ck] ? { ...st.folderFilters, [ck]: "" } : st.folderFilters,
     });
@@ -571,7 +594,8 @@ export function Explorer() {
     const keys = [serverKey(a.profileId)];
     if (d?.isSystem && p?.databaseDefault?.toLowerCase() !== a.db.toLowerCase()) keys.push(sysKey(a.profileId));
     st.setExpanded((prev) => new Set([...prev, ...keys]));
-    st.set({ query: "", selected: dbKey(a.profileId, d?.name ?? a.db) });
+    // A collapsed group or environment row would hide the database the user asked to see (it left env rows shut before).
+    st.set({ query: "", selected: dbKey(a.profileId, d?.name ?? a.db), ...openedHeads(p) });
     requestAnimationFrame(() => treeRef.current?.focus());
   }
 
@@ -620,11 +644,27 @@ function kindItems(current: KindFilter, engine: Engine | undefined): MenuEntry[]
   ];
 }
 
+/** The collapsed rows with this server opened: its group row and the environment row above it (headsOf). */
+function openedHeads(p: Profile | undefined): { collapsedEnvs: ReadonlySet<EnvironmentKind>; collapsedGroups: ReadonlySet<string> } {
+  const st = useExplorer.getState();
+  if (!p) return { collapsedEnvs: st.collapsedEnvs, collapsedGroups: st.collapsedGroups };
+  const s = useSettings.getState();
+  const heads = headsOf(p, { showGroups: s.showGroups, groupByEnv: s.explorerGroupByEnv });
+  const envs = new Set(st.collapsedEnvs);
+  if (heads.env) envs.delete(heads.env);
+  const groups = new Set(st.collapsedGroups);
+  for (const k of heads.groups) groups.delete(k);
+  return { collapsedEnvs: envs, collapsedGroups: groups };
+}
+
 function viewItems(active: { profileId: string; db: string } | undefined, hoverOpen: boolean, reveal: () => void): MenuEntry[] {
   const s = useSettings.getState();
   const key = active ? schemaGroupKey(active.profileId, active.db) : "";
   const grouped = !!active && s.explorerSchemaGroups.includes(key);
+  // With no grouped connection in view the switch changes nothing yet: it says so instead of looking broken.
+  const anyGrouped = useProfiles.getState().profiles.some((p) => !!p.groupName);
   return [
+    { label: "Show groups", checked: s.showGroups, detail: s.showGroups && !anyGrouped ? "no connection is in a group" : undefined, run: () => s.set({ showGroups: !s.showGroups }) },
     { label: "Group by environment", checked: s.explorerGroupByEnv, run: () => s.set({ explorerGroupByEnv: !s.explorerGroupByEnv }) },
     { label: "Show all saved profiles", checked: s.explorerShowAll, run: () => s.set({ explorerShowAll: !s.explorerShowAll }) },
     {
@@ -632,6 +672,7 @@ function viewItems(active: { profileId: string; db: string } | undefined, hoverO
       run: () => s.set({ explorerSchemaGroups: grouped ? s.explorerSchemaGroups.filter((k) => k !== key) : [...s.explorerSchemaGroups, key] }),
     },
     "sep",
+    { label: "Manage groups…", run: () => useUi.getState().openDialog({ kind: "groups" }) },
     { label: "Reveal active database", run: reveal, unavailable: active ? undefined : "No active database" },
     { label: "Collapse all", run: () => useExplorer.getState().setExpanded(() => new Set()) },
     "sep",
@@ -1016,6 +1057,22 @@ const Row = memo(function Row({ row: r, index: i, selected, focused, fresh, view
 
 function RowBody({ r, view, handlers }: { r: TreeRow; view: RowView; handlers: Handlers }) {
   switch (r.t) {
+    case "group":
+      // No colour of its own (§6): a group never changes an environment cue. A Production member shows the Prod shield.
+      return (
+        <>
+          <span aria-hidden className="shrink-0 text-muted"><Icon name="folder" size={13} /></span>
+          <span className="flex-1 min-w-0 truncate font-semibold text-fg">{r.name}</span>
+          {r.prod > 0 && (
+            <span className="shrink-0 flex items-center gap-0.5 text-[10.5px]" style={{ color: "var(--q-env-prod)" }} title={`${r.prod} Production`}>
+              <Icon name="shield" size={11} strokeWidth={2.25} />
+              {r.prod}
+            </span>
+          )}
+          {!r.expanded && r.failed > 0 && <span className="shrink-0 text-err" title={`${r.failed} failed`}><Icon name="alert" size={12} /></span>}
+          <span className="text-[10px] text-muted q-mono shrink-0">{r.count}</span>
+        </>
+      );
     case "env":
       return (
         <>
@@ -1190,6 +1247,8 @@ function ariaLabelOf(r: TreeRow, view: RowView): string {
     case "action": return r.label;
     case "header": return r.text;
     case "env": return `${envLabel[r.env]}, ${r.count} server${r.count === 1 ? "" : "s"}`;
+    case "group":
+      return `Group ${r.name}, ${r.count} server${r.count === 1 ? "" : "s"}${r.prod ? `, ${r.prod} Production` : ""}${r.failed ? `, ${r.failed} failed` : ""}`;
   }
 }
 

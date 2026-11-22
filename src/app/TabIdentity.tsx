@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useRef, type MutableRefObject, type RefObje
 import { escapeForDisplay } from "../monitor/format";
 import type { EnvironmentKind, Profile } from "../ipc/contract";
 import type { ToolKind } from "../store/toolTabs";
-import { envColor, envLabel, useProfiles } from "../store/profiles";
+import { envColor, envLabel } from "../store/profiles";
 import { EngineLogo } from "../connections/EngineLogo";
 import { serverAddress, serverAddressLine } from "../connections/serverAddress";
 import { Icon, type IconName } from "./icons";
@@ -179,8 +179,7 @@ function EnvChip({ profile }: { profile?: Profile }) {
 /** The colour a connection's text takes on `surfaces` (the tab's three, or the overlay's). */
 function useConnectionColor(profile: Profile | undefined, surfaces: readonly string[]): string | undefined {
   useThemeKey();
-  const groups = useProfiles((s) => s.groups);
-  return profile ? connectionText(envColor(profile, groups), surfaces) : undefined;
+  return profile ? connectionText(envColor(profile), surfaces) : undefined;
 }
 
 /**

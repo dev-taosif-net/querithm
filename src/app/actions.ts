@@ -1330,6 +1330,9 @@ function engineLost(restarted: boolean): string[] {
 export function onSidecarRestarted() {
   const lost = engineLost(true);
   useConnections.getState().resetSessions();
+  // A group change whose reply the restart swallowed may have committed: read profiles and groups again (a failure
+  // keeps what is shown; the next change reads them anyway).
+  void useProfiles.getState().load().catch(() => {});
   // Nothing above: no tab had a session, so the restart took nothing a tab had (servers in the Explorer reconnect now).
   useUi.getState().setBanner({
     kind: "warn",

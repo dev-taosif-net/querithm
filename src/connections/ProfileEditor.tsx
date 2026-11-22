@@ -23,6 +23,7 @@ import { isTauri } from "../ipc/transport";
 import { confirmDeleteProfile } from "./deleteProfile";
 import { PasswordRetention } from "./PasswordRetention";
 import { duplicateProfile, endpointKey, isLocal, locationOf, needsSecretFor } from "./auth";
+import { cleanGroupName, compareGroupNames, describeGroupChoice, findGroup } from "./groupNames";
 import { pickDatabaseFile, requestWriteAccess } from "./fileGrants";
 import { loadEngineInfo, offeredEngines, unavailableEngines } from "./engineInfo";
 import { EngineLogo } from "./EngineLogo";
@@ -174,8 +175,8 @@ const empty = (engine: Engine): Profile => {
 };
 
 /** The fields the editor checks itself and shows a message at (L25); the sidecar names the same ones when it refuses. */
-export type FieldKey = "name" | "host" | "port" | "service" | "file";
-const FIELD_ORDER: FieldKey[] = ["name", "host", "port", "service", "file"];
+export type FieldKey = "name" | "host" | "port" | "service" | "file" | "groupName";
+const FIELD_ORDER: FieldKey[] = ["name", "host", "port", "service", "file", "groupName"];
 /** What Test checks (a name is needed only to save). */
 const CONNECT_FIELDS: FieldKey[] = ["host", "port", "service", "file"];
 /** As the sidecar's ProfileRules.MaxHostLength. */
@@ -190,6 +191,9 @@ const MAX_HOST = 1024;
 export function profileFieldErrors(p: Profile): Partial<Record<FieldKey, string>> {
   const e: Partial<Record<FieldKey, string>> = {};
   if (!p.name.trim()) e.name = "Give the profile a name.";
+  // The sidecar's group rule (PT8-3), said at the field before Save sends it.
+  const group = cleanGroupName(p.groupName);
+  if (group.error) e.groupName = group.error;
   if (isLocal(p)) {
     if (locationOf(p) === "file" && !p.file) e.file = "Pick the database file first.";
     return e;
@@ -225,6 +229,18 @@ export function withDefaultHost(p: Profile): Profile {
  * unencrypted, "unchecked" when it encrypts without checking the server certificate; PostgreSQL's default Require is
  * named as it is but not flagged, as before (§13.2).
  */
+/** Fields that name or file a profile without changing how its connection is built. */
+const IDENTITY_FIELDS = new Set(["name", "groupName", "createdAt", "updatedAt"]);
+
+/** Only the name or group differ: the connection is built the same, so an open one needs no reconnect. */
+export function identityOnlyChange(a: Profile, b: Profile): boolean {
+  const x = a as unknown as Record<string, unknown>;
+  const y = b as unknown as Record<string, unknown>;
+  for (const k of new Set([...Object.keys(x), ...Object.keys(y)]))
+    if (!IDENTITY_FIELDS.has(k) && JSON.stringify(x[k] ?? null) !== JSON.stringify(y[k] ?? null)) return false;
+  return true;
+}
+
 export function transportSummary(p: Pick<Profile, "engine" | "tlsMode" | "trustCert" | "location">): { text: string; tone: "ok" | "warn" | "muted"; risk: "plain" | "unchecked" | null } {
   if (isLocal(p)) return { text: "Not used for a database on this computer", tone: "muted", risk: null };
   const f = FIELDS[knownEngine(p.engine)];
@@ -310,8 +326,9 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
   const [engineChosen, setEngineChosen] = useState(start.known || !!preset);
   const [animated, setAnimated] = useState(false);
   const [envChosen, setEnvChosen] = useState(start.known);
-  const [envFromGroup, setEnvFromGroup] = useState<string | null>(null);
   const [nameTouched, setNameTouched] = useState(start.known);
+  // G1: an untouched Group field follows the live profile at Save, so a rename made while the editor was open is kept.
+  const [groupTouched, setGroupTouched] = useState(false);
   // The engines this sidecar exposes; null until it answers (or when it cannot), which offers the fallback engines.
   const [engineInfo, setEngineInfo] = useState<EngineInfo[] | null>(null);
   useEffect(() => {
@@ -382,7 +399,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
   const fid = useId();
   const refs = {
     name: useRef<HTMLInputElement>(null), host: useRef<HTMLInputElement>(null), port: useRef<HTMLInputElement>(null), file: useRef<HTMLButtonElement>(null),
-    service: useRef<HTMLInputElement>(null),
+    service: useRef<HTMLInputElement>(null), groupName: useRef<HTMLInputElement>(null),
     engine: useRef<HTMLButtonElement>(null), environment: useRef<HTMLButtonElement>(null), ack: useRef<HTMLInputElement>(null),
     sshHost: useRef<HTMLInputElement>(null), sshUser: useRef<HTMLInputElement>(null),
   };
@@ -465,6 +482,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
     if (!envChosen) list.push({ key: "environment", text: "Choose the environment: Local, Dev, Test, Staging or Prod." });
     // A missing file is the reason there is no name yet: it is said once, at the file.
     if (errs.name && !errs.file) list.push({ key: "name", text: errs.name });
+    if (errs.groupName) list.push({ key: "groupName", text: errs.groupName });
     list.push(...sshProblems(d));
     // A pending connection string may have changed the transport since this render. An earlier acknowledgement
     // belongs only to the transport the checkbox displayed, never to newly parsed settings.
@@ -483,7 +501,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
   /** Shows these fields' messages and focuses the first one that has a message (opening its row if folded). */
   const reveal = (fieldsToShow: FieldKey[], bad: Focusable[]) => {
     setShown((cur) => new Set([...cur, ...fieldsToShow]));
-    const order: Focusable[] = ["host", "port", "service", "file", "environment", "name", "sshHost", "sshUser", "ack"];
+    const order: Focusable[] = ["host", "port", "service", "file", "environment", "name", "groupName", "sshHost", "sshUser", "ack"];
     const first = order.find((f) => bad.includes(f));
     if (!first) return;
     if (first === "ack") setOpen((o) => ({ ...o, enc: true }));
@@ -589,7 +607,9 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
     try {
       const d = await draft();
       if (!d) return;
-      const { p } = d;
+      // G1: a Group field the user never touched takes the profile's group as it is now (a rename while the editor was
+      // open must not write the old name back and split the group).
+      const p = groupTouched || !existing ? d.p : { ...d.p, groupName: useProfiles.getState().byId(existing.id)?.groupName ?? null };
       const list = problems(p);
       if (list.length) {
         setShowSummary(true);
@@ -608,7 +628,8 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
       const sshArg = sshNeeds ? (sshSecretTouched && sshSecret ? sshSecret : sshForget || sshKindChanged || endpointChanged ? "" : null) : "";
       await useProfiles.getState().save(p, secretArg, sshArg);
       onClose();
-      if (existing && useConnections.getState().servers[existing.id]) toast("info", "Saved. Reconnect to apply connection changes.");
+      // A new name or group changes nothing about the connection: no reconnect is needed for it.
+      if (existing && useConnections.getState().servers[existing.id] && !identityOnlyChange(existing, p)) toast("info", "Saved. Reconnect to apply connection changes.");
     } catch (e) {
       // A refusal about one field (the sidecar's invalidProfile with data.field) is shown at that field.
       const created = (e as { savedProfile?: Profile }).savedProfile;
@@ -747,19 +768,23 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
     if (was === "prod" && p.environment === "prod" && e !== "prod") return setLowerProd(e);
     set({ environment: e });
     setEnvChosen(true);
-    setEnvFromGroup(null);
   };
 
+  // A group never changes the environment (groups have no default environment): picking one only names it.
   const pickGroup = (value: string) => {
-    const g = groups.find((x) => x.name === value);
     set({ groupName: value || null });
-    // A group's default environment fills only an environment nobody chose (or one an earlier group filled).
-    if (g?.environment && (!envChosen || envFromGroup)) {
-      set({ environment: g.environment });
-      setEnvChosen(true);
-      setEnvFromGroup(g.name);
-    }
+    setGroupTouched(true);
   };
+  // On leaving the field the name takes the spelling the sidecar will store: "payments " joins "Payments".
+  const settleGroup = () => {
+    const clean = cleanGroupName(p.groupName);
+    if (clean.error) return setShown((cur) => new Set([...cur, "groupName"]));
+    const next = findGroup(groups, clean.name)?.name ?? clean.name;
+    if (next !== (p.groupName ?? null)) set({ groupName: next });
+  };
+  const choice = describeGroupChoice(groups, p.groupName, existing ? start.p.groupName : null);
+  const groupHint = choice && { joins: choice.joins, text: choice.joins ? choice.text : `${choice.text} when you save` };
+  const sortedGroups = useMemo(() => [...groups].sort((a, b) => compareGroupNames(a.name, b.name)), [groups]);
 
   const onHostPaste = (e: ClipboardEvent<HTMLInputElement>) => {
     const text = e.clipboardData.getData("text");
@@ -1172,7 +1197,6 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
                 invalid={summary.some((x) => x.key === "environment")} errorId={errId("environment")}
                 after={
                   <>
-                    {envFromGroup && <span className="q-profile-reveal block text-[11px] text-muted">Set from group “{envFromGroup}”. Change it if that’s wrong.</span>}
                     {envChosen && p.environment === "prod" && (
                       <p className="q-profile-reveal flex items-start gap-2 text-[11.5px] text-fg leading-snug">
                         <span className="mt-px shrink-0" style={{ color: "var(--q-env-prod)" }}><Icon d={ICON.shield} size={14} /></span>
@@ -1189,7 +1213,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
                     {lowerProd && (
                       <Offer warn>
                         <span className="text-fg">Lower this profile from Production to {envLabel[lowerProd]}? Its tabs lose the Production guards.</span>
-                        <button type="button" className={`${BTN} h-6`} onClick={() => { set({ environment: lowerProd }); setEnvChosen(true); setEnvFromGroup(null); setLowerProd(null); }}>Lower it</button>
+                        <button type="button" className={`${BTN} h-6`} onClick={() => { set({ environment: lowerProd }); setEnvChosen(true); setLowerProd(null); }}>Lower it</button>
                         <button type="button" className="min-h-6 text-accent hover:underline" onClick={() => setLowerProd(null)}>Keep Production</button>
                       </Offer>
                     )}
@@ -1207,14 +1231,25 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
                       {...invalidProps("name")}
                     />
                     <label htmlFor={`${fid}-group`} className={LABEL}>Group</label>
-                    <input id={`${fid}-group`} className={INPUT} list={`${fid}-groups`} value={p.groupName ?? ""} placeholder="No group" onChange={(e) => pickGroup(e.target.value)} />
+                    <input
+                      id={`${fid}-group`} ref={refs.groupName} className={INPUT} list={`${fid}-groups`} value={p.groupName ?? ""} placeholder="No group"
+                      onChange={(e) => pickGroup(e.target.value)} onBlur={settleGroup}
+                      {...invalidProps("groupName", groupHint ? `${fid}-group-hint` : undefined)}
+                    />
                     <datalist id={`${fid}-groups`}>
-                      {groups.map((g) => (
-                        <option key={g.name} value={g.name} />
+                      {sortedGroups.map((g) => (
+                        <option key={g.name} value={g.name} label={`${g.members} connection${g.members === 1 ? "" : "s"}`} />
                       ))}
                     </datalist>
                   </div>
                   {errorLine("name")}
+                  {errorLine("groupName")}
+                  {!fieldError("groupName") && groupHint && (
+                    <span id={`${fid}-group-hint`} className="flex items-center gap-1.5 mt-1.5 text-[11px] text-muted">
+                      <Icon d={groupHint.joins ? ICON.check : ICON.plus} size={12} />
+                      {groupHint.text}
+                    </span>
+                  )}
                 </div>
               </div>
             </Section>
@@ -1541,6 +1576,7 @@ function EngineTiles({ options, unavailable, recent, infoOf, onPick }: {
 // Lucide-style outline glyphs, inlined so the app stays offline.
 const ICON = {
   check: <path d="M20 6 9 17l-5-5" />,
+  plus: <path d="M12 5v14M5 12h14" />,
   chevronDown: <path d="m6 9 6 6 6-6" />,
   chevronRight: <path d="m9 18 6-6-6-6" />,
   search: <><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></>,

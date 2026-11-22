@@ -38,7 +38,6 @@ export function ToolTabPanel(props: IDockviewPanelProps<Params>) {
 export function ToolTabHeader(props: IDockviewPanelHeaderProps<Params>) {
   const tool = useToolTabs((s) => s.tools[props.params.toolId]);
   const profiles = useProfiles((s) => s.profiles);
-  const groups = useProfiles((s) => s.groups);
   const disconnected = useConnections((s) => s.disconnected);
   const layout = useSettings((s) => s.tabLayout);
   const single = isSingleLineLayout(layout);
@@ -52,7 +51,7 @@ export function ToolTabHeader(props: IDockviewPanelHeaderProps<Params>) {
   if (!tool || !facts) return null;
   // The band follows where the tool writes or watches: a compare into Prod is a Prod tab.
   const bandProfile = facts.target?.profile ?? facts.profile;
-  const band = bandProfile?.environment === "prod" ? bandColor(envColor(bandProfile, groups)) : undefined;
+  const band = bandProfile?.environment === "prod" ? bandColor(envColor(bandProfile)) : undefined;
   return (
     <div
       ref={root}

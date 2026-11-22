@@ -256,7 +256,6 @@ export function QueryTabHeader(props: IDockviewPanelHeaderProps<Params>) {
   const v = useTabs(useShallow((s) => headerFields(s.tabs[tabId])));
   const suffix = useTabs((s) => folderSuffix(s.tabs, tabId));
   const profile = useProfiles((s) => (v?.profileId ? s.profiles.find((p) => p.id === v.profileId) : undefined));
-  const groups = useProfiles((s) => s.groups);
   const disconnected = useConnections((s) => !!v?.profileId && !!s.disconnected[v.profileId]);
   const layout = useSettings((s) => s.tabLayout);
   const single = isSingleLineLayout(layout);
@@ -275,7 +274,7 @@ export function QueryTabHeader(props: IDockviewPanelHeaderProps<Params>) {
     // Focus goes back to the tab (D22), whichever way the rename started.
     tabEl.current?.focus();
   };
-  const band = profile?.environment === "prod" ? bandColor(envColor(profile, groups)) : undefined;
+  const band = profile?.environment === "prod" ? bandColor(envColor(profile)) : undefined;
   return (
     <div
       ref={root}

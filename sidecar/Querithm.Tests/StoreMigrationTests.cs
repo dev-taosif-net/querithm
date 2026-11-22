@@ -408,6 +408,56 @@ public class StoreMigrationTests : IDisposable
         _ = new LocalStore(path);
         Assert.Equal(99L, Scalar(path, "PRAGMA user_version"));
     }
+
+    /// <summary>A v11 file as 0.1.x wrote it: profiles with free-text group names, the old groups setting, no profile_group table.</summary>
+    string V11File()
+    {
+        var path = Path.Combine(_dir, $"v11-{Guid.NewGuid():N}.db");
+        _ = new LocalStore(path);
+        SqliteConnection.ClearAllPools();
+        Exec(path, """
+            DROP TABLE profile_group;
+            INSERT INTO profile (id, name, engine, environment, group_name) VALUES ('p1', 'Orders', 'mssql', 'prod', 'Payments');
+            INSERT INTO profile (id, name, engine, environment, group_name) VALUES ('p2', 'Ledger', 'pg', 'dev', 'payments ');
+            INSERT INTO setting VALUES ('profile.groups', '[{"name":"Ops","environment":"prod","color":"red"}]');
+            PRAGMA user_version = 11;
+            """);
+        return path;
+    }
+
+    [Fact]
+    public void A_v11_file_gains_the_group_table_and_its_free_text_groups_read_as_one_group()
+    {
+        var path = V11File();
+        var store = new LocalStore(path);
+        Assert.Equal(12L, Scalar(path, "PRAGMA user_version"));
+        Assert.True(HasTable(path, "profile_group"));
+        // Nothing was imported or rewritten: the old setting stays, the column keeps its spellings.
+        Assert.Equal(0L, Scalar(path, "SELECT count(*) FROM profile_group"));
+        Assert.Equal("payments ", Scalar(path, "SELECT group_name FROM profile WHERE id = 'p2'"));
+        Assert.NotNull(Scalar(path, "SELECT value_json FROM setting WHERE key = 'profile.groups'"));
+        var profiles = new ProfileStore(store);
+        Assert.All(profiles.List(), p => Assert.Equal("Payments", p.GroupName));
+        var group = Assert.Single(new GroupStore(store, profiles).List());
+        Assert.Equal(("Payments", 2), (group.Name, group.Members));
+    }
+
+    [Fact]
+    public void A_failed_step_12_leaves_the_file_at_v11_and_the_next_open_finishes_it()
+    {
+        var path = V11File();
+        LocalStore.AfterMigrationStep = (p, to) => { if (p == path && to == 12) throw new IOException("power cut"); };
+        try
+        {
+            Assert.Throws<IOException>(() => new LocalStore(path));
+        }
+        finally { LocalStore.AfterMigrationStep = null; }
+        Assert.Equal(11L, Scalar(path, "PRAGMA user_version"));
+        Assert.False(HasTable(path, "profile_group"));
+        _ = new LocalStore(path);
+        Assert.Equal(12L, Scalar(path, "PRAGMA user_version"));
+        Assert.True(HasTable(path, "profile_group"));
+    }
 }
 
 /// <summary>

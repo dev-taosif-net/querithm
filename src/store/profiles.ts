@@ -1,17 +1,16 @@
 import { create } from "zustand";
-import type { DatabaseInfo, Dialect, EnvironmentKind, Profile, ProfileGroup } from "../ipc/contract";
+import type { DatabaseInfo, Dialect, EnvironmentKind, GroupChangeResult, Profile, ProfileGroup } from "../ipc/contract";
 import { rpc, RpcError, shell } from "../ipc/client";
 import { endpointKey } from "../connections/auth";
 import { dialectOf, engineTraits } from "../engines";
+import { toast } from "./ui";
 
 export const envLabel: Record<EnvironmentKind, string> = { local: "Local", dev: "Dev", test: "Test", staging: "Stage", prod: "Prod" };
 
-/** §6 Environment safety: Prod defaults to red; a profile color or its group's color overrides. */
-export function envColor(p: Pick<Profile, "environment" | "color" | "groupName"> | undefined, groups: ProfileGroup[] = []): string {
+/** §6 Environment safety: Prod defaults to red; a profile's own color overrides. Groups have no color (they never change an environment cue). */
+export function envColor(p: Pick<Profile, "environment" | "color"> | undefined): string {
   if (!p) return "var(--q-accent)";
   if (p.color) return p.color;
-  const g = groups.find((x) => x.name === p.groupName);
-  if (g?.color) return g.color;
   return `var(--q-env-${p.environment})`;
 }
 
@@ -31,18 +30,43 @@ interface ProfilesState {
   /** `secret` / `sshSecret`: null = keep the remembered secret, "" = remove, else store (§13 rule 1). */
   save(p: Profile, secret?: string | null, sshSecret?: string | null): Promise<Profile>;
   remove(id: string): Promise<void>;
-  saveGroup(g: ProfileGroup): Promise<void>;
-  removeGroup(name: string): Promise<void>;
+  /** Reads the groups again; never rejects (a failure keeps the list shown and says so). */
+  refreshGroups(): Promise<void>;
+  /** One empty group (the group manager's New). */
+  createGroup(name: string): Promise<void>;
+  renameGroup(from: string, to: string): Promise<GroupChangeResult>;
+  /** `expectedMembers`: the count the user was shown; a different count is refused (appCode groupChanged). */
+  deleteGroup(name: string, expectedMembers?: number): Promise<GroupChangeResult>;
+  /** Moves profiles into a group (a new name makes it) or, with null, out of their group. */
+  assignGroup(profileIds: string[], name: string | null): Promise<GroupChangeResult>;
   byId(id: string | undefined): Profile | undefined;
 }
 
-export const useProfiles = create<ProfilesState>((set, get) => ({
+export const useProfiles = create<ProfilesState>((set, get) => {
+  /** A group write's reply, applied in one step: the groups and the profiles it moved. */
+  const apply = (r: GroupChangeResult) => {
+    const changed = new Map(r.profiles.map((p) => [p.id, p]));
+    set({ groups: r.groups, profiles: get().profiles.map((p) => changed.get(p.id) ?? p) });
+    return r;
+  };
+  return {
   profiles: [],
   groups: [],
   loaded: false,
   async load() {
-    const [profiles, groups] = await Promise.all([rpc("profile.list"), rpc("group.list")]);
-    set({ profiles, groups, loaded: true });
+    // Groups are an extra: profiles still load (grouped by their own names) when group.list fails.
+    const [profiles, groups] = await Promise.allSettled([rpc("profile.list"), rpc("group.list")]);
+    if (profiles.status === "rejected") throw profiles.reason;
+    if (groups.status === "rejected") toast("warn", "Could not read the connection groups; connections still show under their group names.");
+    set({ profiles: profiles.value, groups: groups.status === "fulfilled" ? groups.value : get().groups, loaded: true });
+  },
+  async refreshGroups() {
+    try {
+      const groups = await rpc("group.list");
+      if (Array.isArray(groups)) set({ groups });
+    } catch {
+      toast("warn", "Could not read the connection groups again; the list may be out of date until the next change.");
+    }
   },
   async save(p, secret, sshSecret) {
     // A group's default environment applies to new profiles that did not pick one explicitly.
@@ -58,6 +82,8 @@ export const useProfiles = create<ProfilesState>((set, get) => ({
     // The profile exists from here on, whatever the keyring does next: the list shows it, and a keyring failure carries
     // it (savedProfile) so the editor saves the same profile again instead of creating a second one.
     set({ profiles: [...get().profiles.filter((x) => x.id !== saved.id), saved].sort((a, b) => a.name.localeCompare(b.name)) });
+    // A typed group name may have made a group (or emptied one): best effort, never failing the save (G2).
+    await get().refreshGroups();
     try {
       if (secret != null) {
         // §13 rule 1: the secret goes to the shell under the profile’s retention policy, never through profile.save.
@@ -78,25 +104,36 @@ export const useProfiles = create<ProfilesState>((set, get) => ({
     // L2: the sidecar closes the profile's sessions (refused with appCode profileBusy while one has an open transaction or
     // a running query) and the shell then deletes every keyring entry of it; a keyring failure there comes back as
     // secretsNotDeleted, with the profile already gone.
-    const drop = () => set({ profiles: get().profiles.filter((p) => p.id !== id) });
+    const drop = async () => {
+      set({ profiles: get().profiles.filter((p) => p.id !== id) });
+      // Its group may have lost its last member: best effort, never reporting a delete that happened as failed (G2).
+      await get().refreshGroups();
+    };
     try {
       await rpc("profile.delete", { profileId: id });
     } catch (e) {
-      if (e instanceof RpcError && e.appCode === "secretsNotDeleted") drop();
+      if (e instanceof RpcError && e.appCode === "secretsNotDeleted") await drop();
       throw e;
     }
-    drop();
+    await drop();
   },
-  async saveGroup(g) {
-    set({ groups: await rpc("group.save", g) });
+  async createGroup(name) {
+    set({ groups: await rpc("group.create", { name }) });
   },
-  async removeGroup(name) {
-    set({ groups: await rpc("group.delete", { name }) });
+  async renameGroup(from, to) {
+    return apply(await rpc("group.rename", { from, to }));
+  },
+  async deleteGroup(name, expectedMembers) {
+    return apply(await rpc("group.delete", { name, expectedMembers: expectedMembers ?? null }));
+  },
+  async assignGroup(profileIds, name) {
+    return apply(await rpc("group.assign", { profileIds, name }));
   },
   byId(id) {
     return id ? get().profiles.find((p) => p.id === id) : undefined;
   },
-}));
+  };
+});
 
 export type { DatabaseInfo };
 

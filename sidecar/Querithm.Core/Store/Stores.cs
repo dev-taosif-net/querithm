@@ -33,15 +33,29 @@ public sealed class ProfileStore(LocalStore store)
 
     const string Columns = "id, name, engine, host, port, auth, username, database_default, environment, color, group_name, tls_mode, trust_cert, timeout_s, options_json, created_at, updated_at, location, file_grant_id";
 
+    /// <summary>
+    /// Every stored profile, its group name in the group's one spelling (<see cref="GroupNames"/>): variants an older build
+    /// wrote ("payments ") read as the group's name, and a stored name that breaks the rules reads as no group. Reads never
+    /// write; the column changes when the profile is saved or its group renamed.
+    /// </summary>
     public Profile[] List()
     {
         using var c = store.Open();
-        using var cmd = c.Cmd($"SELECT {Columns} FROM profile ORDER BY group_name, name");
-        using var r = cmd.ExecuteReader();
+        using var tx = c.BeginTransaction(deferred: true);
         var list = new List<Profile>();
-        while (r.Read()) list.Add(Read(r));
-        return list.ToArray();
+        using (var cmd = c.Cmd($"SELECT {Columns} FROM profile ORDER BY group_name, name", tx))
+        using (var r = cmd.ExecuteReader())
+            while (r.Read()) list.Add(Read(r));
+        var groups = GroupNames.Resolve(GroupStore.RowNames(c, tx), list.Where(p => p.GroupName != null).Select(p => (p.GroupName!, 1)), out _);
+        tx.Commit();
+        return list.Select(p => p.GroupName == null ? p : p with
+        {
+            GroupName = GroupNames.CleanOrNull(p.GroupName) is { } n && groups.TryGetValue(GroupNames.Key(n), out var g) ? g.Name : null,
+        }).ToArray();
     }
+
+    /// <summary>Raises <see cref="Changed"/> for a profile another store rewrote (a group rename, delete or move).</summary>
+    internal void NotifyChanged(string id) => Changed?.Invoke(id);
 
     public Profile? Get(string id)
     {
@@ -58,6 +72,7 @@ public sealed class ProfileStore(LocalStore store)
             throw new ArgumentException("Invalid password retention.");
         if (p.PasswordRetention == "duration" && p.PasswordRetentionMinutes is not (>= 1 and <= 525600))
             throw new ArgumentException("Password duration must be between 1 and 525600 minutes.");
+        if (GroupNames.Clean(p.GroupName, out var group) is { } badGroup) throw new ArgumentException(badGroup.Message);
         var now = Time.NowMs();
         var saved = p with
         {
@@ -68,12 +83,16 @@ public sealed class ProfileStore(LocalStore store)
             CommandTimeoutS = p.CommandTimeoutS ?? 0,
         };
         using var c = store.Open();
+        // One write transaction: the group's spelling is read under the write lock, so a rename running at the same time
+        // either sees this profile or this save sees the new name.
+        using var tx = c.BeginTransaction(deferred: false);
+        saved = saved with { GroupName = group == null ? null : GroupStore.Canonical(c, tx, group, saved.Id) };
         using var cmd = c.Cmd($"""
             INSERT INTO profile ({Columns}) VALUES ($id,$name,$engine,$host,$port,$auth,$user,$db,$env,$color,$group,$tls,$trust,$timeout,$options,$created,$updated,$location,$grant)
             ON CONFLICT(id) DO UPDATE SET name=$name, engine=$engine, host=$host, port=$port, auth=$auth, username=$user,
               database_default=$db, environment=$env, color=$color, group_name=$group, tls_mode=$tls, trust_cert=$trust,
               timeout_s=$timeout, options_json=$options, updated_at=$updated, location=$location, file_grant_id=$grant
-            """, null,
+            """, tx,
             ("$id", saved.Id), ("$name", saved.Name), ("$engine", EnumText.Of(saved.Engine)), ("$host", saved.Host), ("$port", saved.Port),
             ("$auth", EnumText.Of(saved.Auth)), ("$user", saved.Username), ("$db", saved.DatabaseDefault), ("$env", EnumText.Of(saved.Environment)),
             ("$color", saved.Color), ("$group", saved.GroupName), ("$tls", EnumText.Of(saved.TlsMode)), ("$trust", saved.TrustCert ? 1 : 0),
@@ -83,6 +102,7 @@ public sealed class ProfileStore(LocalStore store)
             // Server stays NULL: what every profile before Phase D reads as.
             ("$location", saved.Location is { } loc and not LocationKind.Server ? EnumText.Of(loc) : null), ("$grant", saved.File?.GrantId));
         cmd.ExecuteNonQuery();
+        tx.Commit();
         Changed?.Invoke(saved.Id);
         return saved;
     }

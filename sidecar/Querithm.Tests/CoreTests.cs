@@ -132,12 +132,14 @@ public class JsonWireFormatTests
     [Fact]
     public void Source_generated_context_matches_the_reflection_options()
     {
-        ProfileGroup[] groups = [new() { Name = "Ops", Environment = EnvironmentKind.Prod }, new() { Name = "Dev" }];
+        ProfileGroup[] groups = [new() { Name = "Ops", Members = 2 }, new() { Name = "Dev" }];
         FkColumnPair[] fks = [new() { Parent = "a", Referenced = "b" }];
+        var profile = new Profile { Id = "p", Name = "Ops", Engine = Engine.Pg, Environment = EnvironmentKind.Prod, GroupName = "Team" };
         Assert.Equal(JsonSerializer.Serialize(groups, Json.Options), JsonSerializer.Serialize(groups, Json.Context.ProfileGroupArray));
         Assert.Equal(JsonSerializer.Serialize(fks, Json.Options), JsonSerializer.Serialize(fks, Json.Context.FkColumnPairArray));
-        Assert.Equal(EnvironmentKind.Prod, JsonSerializer.Deserialize("""{"NAME":"x","environment":"prod"}""", Json.Context.ProfileGroup)!.Environment);
-        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize("""{"name":"x","environment":3}""", Json.Context.ProfileGroup));
+        Assert.Equal(JsonSerializer.Serialize(profile, Json.Options), JsonSerializer.Serialize(profile, Json.Context.Profile));
+        Assert.Equal(EnvironmentKind.Prod, JsonSerializer.Deserialize("""{"ID":"p","NAME":"x","engine":"pg","environment":"prod"}""", Json.Context.Profile)!.Environment);
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize("""{"id":"p","name":"x","engine":"pg","environment":3}""", Json.Context.Profile));
     }
 }
 

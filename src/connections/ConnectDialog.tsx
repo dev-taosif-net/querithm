@@ -7,28 +7,80 @@ import { envColor, envLabel, useProfiles } from "../store/profiles";
 import { EngineLogo } from "./EngineLogo";
 import { useConnections } from "../store/connections";
 import { useSettings } from "../store/settings";
-import { useUi } from "../store/ui";
+import { ask, toast, useUi } from "../store/ui";
 import { activateTab, changeConnection, newQueryTab } from "../app/actions";
 import { tabForNewConnection } from "../app/tabActions";
 import { useTabs } from "../store/tabs";
 import { buildSections, ENV_FILTERS, envCounts, filterProfiles, togglePin, type EnvFilter } from "./profileList";
 import { confirmDeleteProfile } from "./deleteProfile";
 
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
 export function ConnectDialog({ onClose }: { onClose: () => void }) {
   const profiles = useProfiles((s) => s.profiles);
-  const groups = useProfiles((s) => s.groups);
   const servers = useConnections((s) => s.servers);
   const pinned = useSettings((s) => s.pinnedProfiles);
+  const showGroups = useSettings((s) => s.showGroups);
   const ui = useUi.getState();
   const [text, setText] = useState("");
   const [env, setEnv] = useState<EnvFilter>("all");
   const [activeId, setActiveId] = useState<string>();
   const listRef = useRef<HTMLDivElement>(null);
+  // Select mode (bulk move, §6): rows tick instead of connecting; the selection survives filtering.
+  const [selecting, setSelecting] = useState(false);
+  const [chosen, setChosen] = useState<ReadonlySet<string>>(new Set());
+  const anchor = useRef<string | null>(null);
 
   const counts = useMemo(() => envCounts(profiles), [profiles]);
   const filtered = useMemo(() => filterProfiles(profiles, text, env), [profiles, text, env]);
-  const { sections, flat } = useMemo(() => buildSections(filtered, pinned), [filtered, pinned]);
+  const { sections, flat } = useMemo(() => buildSections(filtered, pinned, showGroups), [filtered, pinned, showGroups]);
   const active = flat.find((p) => p.id === activeId) ?? flat[0];
+  // Ids of profiles deleted meanwhile drop out of the selection.
+  const picked = useMemo(() => profiles.filter((p) => chosen.has(p.id)), [profiles, chosen]);
+  const hidden = picked.filter((p) => !flat.includes(p)).length;
+  const pickedProd = picked.filter((p) => p.environment === "prod").length;
+
+  const check = (p: Profile, range = false) => {
+    setActiveId(p.id);
+    setChosen((cur) => {
+      const next = new Set(cur);
+      const from = range && anchor.current ? flat.findIndex((x) => x.id === anchor.current) : -1;
+      const to = flat.indexOf(p);
+      if (from >= 0 && to >= 0) {
+        // Shift: the range takes the anchor's state, as in a file list.
+        const on = cur.has(anchor.current!);
+        for (const x of flat.slice(Math.min(from, to), Math.max(from, to) + 1)) on ? next.add(x.id) : next.delete(x.id);
+      } else if (!next.delete(p.id)) next.add(p.id);
+      return next;
+    });
+    if (!range) anchor.current = p.id;
+  };
+  const checkAll = (ps: readonly Profile[], on: boolean) =>
+    setChosen((cur) => {
+      const next = new Set(cur);
+      for (const p of ps) on ? next.add(p.id) : next.delete(p.id);
+      return next;
+    });
+  const stopSelecting = () => {
+    setSelecting(false);
+    setChosen(new Set());
+    anchor.current = null;
+  };
+  const moveChosen = () => ui.openDialog({ kind: "moveToGroup", profileIds: picked.map((p) => p.id) });
+  const ungroupChosen = async () => {
+    const ids = picked.filter((p) => p.groupName).map((p) => p.id);
+    if (!ids.length) return;
+    const prod = picked.filter((p) => p.groupName && p.environment === "prod").length;
+    if (prod && !(await ask<boolean>((resolve) => ({
+      kind: "confirm", title: `Remove ${plural(ids.length, "connection")} from their group?`, ok: "Remove from group", resolve,
+      body: `${plural(prod, "Production connection")} ${prod === 1 ? "is" : "are"} among them. They go back to their usual place in the list; environment, passwords and open tabs don’t change.`,
+    })))) return;
+    try {
+      await useProfiles.getState().assignGroup(ids, null);
+    } catch (e) {
+      toast("error", e instanceof Error ? e.message : String(e));
+    }
+  };
 
   useEffect(() => {
     if (active) listRef.current?.querySelector(`[data-profile="${CSS.escape(active.id)}"]`)?.scrollIntoView({ block: "nearest" });
@@ -61,6 +113,10 @@ export function ConnectDialog({ onClose }: { onClose: () => void }) {
       e.preventDefault();
       const next = e.key === "ArrowDown" ? Math.min(flat.length - 1, i + 1) : Math.max(0, i - 1);
       setActiveId(flat[next].id);
+    } else if (e.key === "Enter" && active && selecting) {
+      // In Select mode Enter ticks the row; it never connects.
+      e.preventDefault();
+      check(active, e.shiftKey);
     } else if (e.key === "Enter" && active && servers[active.id]?.status !== "connected") {
       e.preventDefault();
       void connect(active);
@@ -74,31 +130,56 @@ export function ConnectDialog({ onClose }: { onClose: () => void }) {
       title="Connect to database profile"
       subtitle="Connected and pinned servers appear in the Object Explorer"
       onClose={onClose}
+      // Esc leaves Select mode before it closes the dialog.
+      onEscape={() => {
+        if (!selecting) return false;
+        stopSelecting();
+        return true;
+      }}
       width={620}
       bodyClassName="flex flex-col min-h-0"
       footer={
-        <>
-          <span className="mr-auto self-center text-[10.5px] text-muted">
-            {filtering ? `${flat.length} of ${profiles.length} profiles` : `${profiles.length} profile${profiles.length === 1 ? "" : "s"}`} · ↑↓ select · Enter connect
-          </span>
-          <button className="q-btn" onClick={onClose}>Close</button>
-          <button className="q-btn q-btn-primary" onClick={() => { onClose(); ui.openDialog({ kind: "profile" }); }}>+ New Profile</button>
-        </>
+        selecting ? (
+          <div role="toolbar" aria-label="Selection" className="w-full flex items-center gap-2">
+            <span className="self-center font-semibold">{picked.length} selected</span>
+            {pickedProd > 0 && <span className="self-center text-[11px]" style={{ color: "var(--q-env-prod)" }}>{pickedProd} Production</span>}
+            {hidden > 0 && <span className="self-center text-[11px] text-muted">{hidden} hidden by filter</span>}
+            <button className="text-accent text-[11px] hover:underline" onClick={() => checkAll(flat, true)}>Select all shown</button>
+            <span className="mr-auto" />
+            <button className="q-btn" disabled={!picked.some((p) => p.groupName)} onClick={() => void ungroupChosen()}>Remove from group</button>
+            <button className="q-btn q-btn-primary" disabled={!picked.length} onClick={moveChosen}>Move to group…</button>
+            <button className="q-btn" onClick={stopSelecting}>Cancel</button>
+          </div>
+        ) : (
+          <>
+            <span className="mr-auto self-center text-[10.5px] text-muted">
+              {filtering ? `${flat.length} of ${profiles.length} profiles` : `${profiles.length} profile${profiles.length === 1 ? "" : "s"}`} · ↑↓ select · Enter connect
+            </span>
+            <button className="q-btn" onClick={() => ui.openDialog({ kind: "groups" })}>Groups…</button>
+            <button className="q-btn" onClick={onClose}>Close</button>
+            <button className="q-btn q-btn-primary" onClick={() => { onClose(); ui.openDialog({ kind: "profile" }); }}>+ New Profile</button>
+          </>
+        )
       }
     >
       {profiles.length > 0 && (
         <div className="px-4 pt-3 pb-2 space-y-2 border-b border-line">
-          <div className="relative">
-            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-muted pointer-events-none"><SearchIcon /></span>
-            <input
-              autoFocus
-              className="q-input w-full h-7 pl-7"
-              placeholder="Search name, host, group, database or engine…"
-              aria-label="Search profiles"
-              value={text}
-              onChange={(e) => { setText(e.target.value); setActiveId(undefined); }}
-              onKeyDown={onSearchKey}
-            />
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-muted pointer-events-none"><SearchIcon /></span>
+              <input
+                autoFocus
+                className="q-input w-full h-7 pl-7"
+                placeholder="Search name, host, group, database or engine…"
+                aria-label="Search profiles"
+                value={text}
+                onChange={(e) => { setText(e.target.value); setActiveId(undefined); }}
+                onKeyDown={onSearchKey}
+              />
+            </div>
+            <button className={`q-btn ${selecting ? "q-btn-primary" : ""}`} aria-pressed={selecting} title="Select connections to move them into a group" onClick={() => (selecting ? stopSelecting() : setSelecting(true))}>
+              Select
+            </button>
           </div>
           <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="Filter by environment">
             <EnvChip label="All" count={profiles.length} on={env === "all"} onClick={() => setEnv("all")} />
@@ -116,64 +197,101 @@ export function ConnectDialog({ onClose }: { onClose: () => void }) {
             <button className="q-btn" onClick={() => { setText(""); setEnv("all"); }}>Clear filters</button>
           </div>
         )}
-        {sections.map((s) => (
-          <div key={`${env}:${s.key}`} className="q-settings-page-in space-y-1">
-            <div className="text-[10px] font-bold text-muted uppercase px-1 flex items-center gap-1">
-              {s.key === "pinned" && <PinIcon filled />}
-              {s.title}
+        {sections.map((s) => {
+          const members = s.groups.flatMap((g) => g.profiles);
+          const allOn = members.length > 0 && members.every((p) => chosen.has(p.id));
+          return (
+            <div key={`${env}:${s.key}`} className="q-settings-page-in space-y-1" role="group" aria-label={s.connectionGroup ? `Group ${s.title}` : s.title}>
+              {s.connectionGroup ? (
+                // A connection group: its name as written, the count and the Production count (§6); no colour of its own.
+                <div className="px-1 flex items-center gap-1.5 text-[12px]">
+                  {selecting && (
+                    <input type="checkbox" aria-label={`Select all in ${s.title}`} checked={allOn} onChange={() => checkAll(members, !allOn)} />
+                  )}
+                  <FolderIcon />
+                  <span className="font-bold text-fg truncate">{s.title}</span>
+                  <span className="text-[11px] text-muted shrink-0">
+                    {s.connectionGroup.count}
+                    {s.connectionGroup.prod ? <span style={{ color: "var(--q-env-prod)" }}> · {s.connectionGroup.prod} Production</span> : null}
+                  </span>
+                </div>
+              ) : (
+                <div className="text-[10px] font-bold text-muted uppercase px-1 flex items-center gap-1">
+                  {s.key === "pinned" && <PinIcon filled />}
+                  {s.title}
+                </div>
+              )}
+              {s.groups.map(({ group, profiles: ps }) => (
+                <div key={group} className={`space-y-1 ${s.connectionGroup ? "pl-5" : ""}`}>
+                  {group && <div className={`text-[10px] text-muted px-1 ${s.connectionGroup ? "font-bold uppercase" : ""}`}>{group}</div>}
+                  {ps.map((p) => (
+                    <ProfileRow
+                      key={p.id}
+                      p={p}
+                      color={envColor(p)}
+                      status={servers[p.id]?.status}
+                      pinned={pinned.includes(p.id)}
+                      active={p.id === active?.id}
+                      selecting={selecting}
+                      checked={chosen.has(p.id)}
+                      onCheck={(range) => check(p, range)}
+                      onSelect={() => setActiveId(p.id)}
+                      onConnect={() => void connect(p)}
+                      onEdit={() => edit(p)}
+                      onDelete={() => void confirmDeleteProfile(p)}
+                      onPin={() => pin(p)}
+                    />
+                  ))}
+                </div>
+              ))}
             </div>
-            {s.groups.map(({ group, profiles: ps }) => (
-              <div key={group} className="space-y-1">
-                {group && <div className="text-[10px] text-muted px-1">{group}</div>}
-                {ps.map((p) => (
-                  <ProfileRow
-                    key={p.id}
-                    p={p}
-                    color={envColor(p, groups)}
-                    status={servers[p.id]?.status}
-                    pinned={pinned.includes(p.id)}
-                    active={p.id === active?.id}
-                    onSelect={() => setActiveId(p.id)}
-                    onConnect={() => void connect(p)}
-                    onEdit={() => edit(p)}
-                    onDelete={() => void confirmDeleteProfile(p)}
-                    onPin={() => pin(p)}
-                  />
-                ))}
-              </div>
-            ))}
-          </div>
-        ))}
+          );
+        })}
       </div>
     </Modal>
   );
 }
 
 function ProfileRow({
-  p, color, status, pinned, active, onSelect, onConnect, onEdit, onDelete, onPin,
+  p, color, status, pinned, active, selecting = false, checked = false, onCheck, onSelect, onConnect, onEdit, onDelete, onPin,
 }: {
   p: Profile; color: string; status?: string; pinned: boolean; active: boolean;
+  /** Select mode: the row ticks (Shift: a range) instead of connecting. */
+  selecting?: boolean; checked?: boolean; onCheck?: (range: boolean) => void;
   onSelect: () => void; onConnect: () => void; onEdit: () => void; onDelete: () => void; onPin: () => void;
 }) {
   const connected = status === "connected";
   return (
     <div
       data-profile={p.id}
-      className={`group h-9 pl-1 pr-1.5 rounded-md border flex items-center justify-between gap-2 transition-colors duration-150 hover:bg-raised ${active ? "ring-1 ring-accent/60" : ""}`}
-      style={{ borderColor: connected ? `color-mix(in srgb, ${color} 45%, transparent)` : "var(--q-line)", background: connected ? "var(--q-raised)" : undefined }}
-      onClick={onSelect}
-      onDoubleClick={() => !connected && status !== "connecting" && onConnect()}
+      className={`group h-9 pl-1 pr-1.5 rounded-md border flex items-center justify-between gap-2 transition-colors duration-150 hover:bg-raised ${active ? "ring-1 ring-accent/60" : ""} ${checked ? "bg-accent/10" : ""}`}
+      style={{ borderColor: connected ? `color-mix(in srgb, ${color} 45%, transparent)` : "var(--q-line)", background: connected && !checked ? "var(--q-raised)" : undefined }}
+      onClick={(e) => (selecting ? onCheck?.(e.shiftKey) : onSelect())}
+      onDoubleClick={() => !selecting && !connected && status !== "connecting" && onConnect()}
     >
       <div className="flex items-center gap-1.5 min-w-0">
-        <IconButton title={pinned ? "Unpin" : "Pin to top"} onClick={onPin} className={pinned ? "text-accent" : "text-muted opacity-0 group-hover:opacity-100 focus:opacity-100"}>
-          <PinIcon filled={pinned} />
-        </IconButton>
+        {selecting ? (
+          <span className="w-7 h-7 inline-flex items-center justify-center">
+            <input
+              type="checkbox" aria-label={`Select ${p.name}`} checked={checked}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => onCheck?.((e.nativeEvent as MouseEvent).shiftKey ?? false)}
+            />
+          </span>
+        ) : (
+          <IconButton title={pinned ? "Unpin" : "Pin to top"} onClick={onPin} className={pinned ? "text-accent" : "text-muted opacity-0 group-hover:opacity-100 focus:opacity-100"}>
+            <PinIcon filled={pinned} />
+          </IconButton>
+        )}
         <EngineLogo engine={p.engine} size={15} />
         <span className="font-bold text-[11px]" style={{ color }}>{envLabel[p.environment]}</span>
         <span className="text-muted">-</span>
         <span className="font-semibold text-fg truncate">{p.name}</span>
         <span className="text-muted truncate q-mono text-[10.5px]">{p.host}{p.port ? `:${p.port}` : ""}</span>
       </div>
+      {selecting ? (
+        <span className="shrink-0 text-[10.5px] text-muted pr-1">{p.groupName ? `in ${p.groupName}` : "no group"}</span>
+      ) : (
       <div className="flex items-center gap-1 shrink-0">
         <IconButton title="Edit profile" onClick={onEdit} className="text-muted hover:text-fg">
           <EditIcon />
@@ -191,8 +309,13 @@ function ProfileRow({
           )}
         </div>
       </div>
+      )}
     </div>
   );
+}
+
+function FolderIcon() {
+  return <svg {...svg} width={13} height={13} className="text-muted shrink-0"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>;
 }
 
 function EnvChip({ label, count, color, on, disabled, onClick }: { label: string; count: number; color?: string; on: boolean; disabled?: boolean; onClick: () => void }) {

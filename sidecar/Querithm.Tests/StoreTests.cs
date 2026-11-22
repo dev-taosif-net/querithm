@@ -162,9 +162,12 @@ public class SettingsStoreTests
     [Fact]
     public void Typed_read_and_write_use_the_wire_format()
     {
-        _settings.Write("g", new ProfileGroup { Name = "Ops", Environment = EnvironmentKind.Prod }, Json.Context.ProfileGroup);
-        Assert.Equal("""{"name":"Ops","environment":"prod"}""", Assert.Single(_settings.Get(["g"])).ValueJson);
-        Assert.Equal(EnvironmentKind.Prod, _settings.Read("g", Json.Context.ProfileGroup)!.Environment);
+        _settings.Write("g", new ProfileGroup { Name = "Ops", Members = 2 }, Json.Context.ProfileGroup);
+        Assert.Equal("""{"name":"Ops","members":2}""", Assert.Single(_settings.Get(["g"])).ValueJson);
+        Assert.Equal(2, _settings.Read("g", Json.Context.ProfileGroup)!.Members);
+        _settings.Write("p", new Profile { Id = "p", Name = "Ops", Engine = Engine.Pg, Environment = EnvironmentKind.Prod }, Json.Context.Profile);
+        Assert.Contains("\"environment\":\"prod\"", Assert.Single(_settings.Get(["p"])).ValueJson);
+        Assert.Equal(EnvironmentKind.Prod, _settings.Read("p", Json.Context.Profile)!.Environment);
         Assert.Null(_settings.Read("missing", Json.Context.ProfileGroup));
         Assert.Null(_settings.Read("missing", Json.Context.ProfileGroupArray));
     }
@@ -401,28 +404,6 @@ public class ProfileRpcTests
         var ex = await Assert.ThrowsAsync<QuerithmException>(() => h.Rpc.ProfileSave(new Profile { Id = "", Name = name, Engine = Engine.Mssql }));
         Assert.Equal("invalid", ex.Code);
         Assert.Empty(await h.Rpc.ProfileList());
-    }
-
-    [Fact]
-    public async Task Groups_replace_by_name_ignoring_case_and_stay_sorted()
-    {
-        await using var h = new TestHost();
-        Assert.Empty(await h.Rpc.GroupList());
-        await h.Rpc.GroupSave(new ProfileGroup { Name = "Zeta" });
-        await h.Rpc.GroupSave(new ProfileGroup { Name = "alpha", Color = "red" });
-        var list = await h.Rpc.GroupSave(new ProfileGroup { Name = "ALPHA", Color = "blue" });
-        Assert.Equal(["ALPHA", "Zeta"], list.Select(g => g.Name));
-        Assert.Equal("blue", list[0].Color);
-        Assert.Equal(list, await h.Rpc.GroupList());
-    }
-
-    [Fact]
-    public async Task Deleting_a_group_ignores_case_and_unknown_names()
-    {
-        await using var h = new TestHost();
-        await h.Rpc.GroupSave(new ProfileGroup { Name = "Ops" });
-        Assert.Single(await h.Rpc.GroupDelete(new ProfileGroup { Name = "unknown" }));
-        Assert.Empty(await h.Rpc.GroupDelete(new ProfileGroup { Name = "ops" }));
     }
 
     [Fact]

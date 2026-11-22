@@ -18,6 +18,7 @@ import { openDataCompare, openSchemaCompare } from "../compare/compareActions";
 import { openActivityMonitor } from "../monitor/monitorActions";
 import { findUsagesOf, renameOf } from "../refactor/refactorActions";
 import { isFileProfile, repickFile, revokeFileAccess } from "../connections/fileAccess";
+import { confirmDeleteGroup } from "../connections/groupActions";
 import { rpc } from "../ipc/client";
 import { toast } from "../store/ui";
 import { bindActiveTab, columnName, connectFromExplorer, copyText, insertName, insertText, modifyTrigger, openObject, qualified, ref, scriptDml } from "./objectActions";
@@ -165,15 +166,29 @@ async function countRows(profileId: string, db: string, o: SnapObject) {
   }
 }
 
+/** A group row (§6): rename and the rest in the group manager, move its connections elsewhere, or delete it. */
+export function groupMenu(row: RowOf<"group">): MenuEntry[] {
+  const ids = useProfiles.getState().profiles.filter((p) => p.groupName === row.name).map((p) => p.id);
+  return [
+    item("Rename group…", () => useUi.getState().openDialog({ kind: "groups", focus: row.name })),
+    item("Move all connections to…", () => useUi.getState().openDialog({ kind: "moveToGroup", profileIds: ids }), { unavailable: ids.length ? undefined : "The group is empty" }),
+    item("Delete group…", () => void confirmDeleteGroup(row.name), { detail: "connections stay" }),
+    "sep",
+    item("Manage groups…", () => useUi.getState().openDialog({ kind: "groups", focus: row.name })),
+  ];
+}
+
 export function serverMenu(row: RowOf<"server">): MenuEntry[] {
   const id = row.profileId;
   const settings = useSettings.getState();
   const pinned = settings.pinnedProfiles.includes(id);
   const pin = item("Pin to top", () => settings.set({ pinnedProfiles: pinned ? settings.pinnedProfiles.filter((x) => x !== id) : [...settings.pinnedProfiles, id] }), { checked: pinned, detail: "stays in the Explorer" });
+  const profile = useProfiles.getState().byId(id);
   const edit = item("Edit profile…", () => useUi.getState().openDialog({ kind: "profile", profileId: id }));
+  // Bulk move with one connection: the same dialog the Connect dialog's Select mode opens.
+  const move = item("Move to group…", () => useUi.getState().openDialog({ kind: "moveToGroup", profileIds: [id] }), { detail: profile?.groupName ? `in ${profile.groupName}` : undefined });
   const duplicate = item("Duplicate profile…", () => useUi.getState().openDialog({ kind: "profile", copyOf: id }));
   const off = row.status !== "connected" ? "Not connected" : undefined;
-  const profile = useProfiles.getState().byId(id);
   const traits = engineTraits(profile?.engine);
   // A database file (Phase D0c): pick it again, or take Querithm's access to it away.
   const file: MenuEntry[] = isFileProfile(profile)
@@ -189,10 +204,10 @@ export function serverMenu(row: RowOf<"server">): MenuEntry[] {
   const sessions = Object.values(useTabs.getState().tabs).filter((t) => t.profileId === id && t.sessionId).length;
   const disconnect = item("Disconnect", () => void disconnectServer(id), { detail: row.status === "error" ? "stops retrying" : row.status === "connecting" ? "stops connecting" : sessions ? `closes ${sessions} tab session${sessions === 1 ? "" : "s"}` : undefined });
   if (row.status === "off")
-    return [item("Connect", () => void connectFromExplorer(id), { bold: true, hint: "Enter" }), item("New query", () => void connectFromExplorer(id, { newQuery: true }), { detail: "connects first" }), edit, duplicate, ...file, "sep", ...tools, "sep", pin];
+    return [item("Connect", () => void connectFromExplorer(id), { bold: true, hint: "Enter" }), item("New query", () => void connectFromExplorer(id, { newQuery: true }), { detail: "connects first" }), edit, move, duplicate, ...file, "sep", ...tools, "sep", pin];
   if (row.status === "error")
-    return [item("Reconnect", () => void connectFromExplorer(id), { bold: true, hint: "Enter" }), edit, duplicate, ...file, item("Copy error", () => void copyText(row.error ?? "")), "sep", item("New query", () => {}, { unavailable: "Not connected" }), ...tools, "sep", pin, "sep", disconnect];
-  return [item("New query", () => newQueryTab({ profileId: id }), { unavailable: row.status === "connecting" ? "Connecting" : undefined }), ...tools, edit, duplicate, ...file, "sep", pin, "sep", disconnect];
+    return [item("Reconnect", () => void connectFromExplorer(id), { bold: true, hint: "Enter" }), edit, move, duplicate, ...file, item("Copy error", () => void copyText(row.error ?? "")), "sep", item("New query", () => {}, { unavailable: "Not connected" }), ...tools, "sep", pin, "sep", disconnect];
+  return [item("New query", () => newQueryTab({ profileId: id }), { unavailable: row.status === "connecting" ? "Connecting" : undefined }), ...tools, edit, move, duplicate, ...file, "sep", pin, "sep", disconnect];
 }
 
 export function dbMenu(row: RowOf<"db">): MenuEntry[] {
@@ -258,6 +273,7 @@ export function leafMenu(row: RowOf<"leaf">): MenuEntry[] {
 /** The menu of any row, or null (notes, headers). */
 export function menuFor(row: TreeRow, ctx: MenuContext = {}): MenuEntry[] | null {
   switch (row.t) {
+    case "group": return groupMenu(row);
     case "server": return serverMenu(row);
     case "db": return dbMenu(row);
     case "schema": return schemaMenu(row);

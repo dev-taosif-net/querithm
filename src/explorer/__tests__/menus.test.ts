@@ -254,7 +254,7 @@ describe("server, database, folder and saved menus", () => {
   it("connected: new query, refresh, activity monitor, edit, pin, and a neutral Disconnect that says what it closes", () => {
     useTabs.setState({ tabs: { t1: { id: "t1", profileId: "p", sessionId: "x" } }, order: ["t1"] } as never);
     const menu = serverMenu(server("connected"));
-    expect(labels(menu)).toEqual(["New query", "Refresh databases", "Activity monitor", "Edit profile…", "Duplicate profile…", "Pin to top", "Disconnect"]);
+    expect(labels(menu)).toEqual(["New query", "Refresh databases", "Activity monitor", "Edit profile…", "Move to group…", "Duplicate profile…", "Pin to top", "Disconnect"]);
     expect(find(menu, "Disconnect")).toMatchObject({ detail: "closes 1 tab session" });
     expect(find(menu, "Disconnect").unavailable).toBeUndefined();
     find(menu, "Disconnect").run();

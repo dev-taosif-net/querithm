@@ -29,6 +29,8 @@ const RenameDialog = lazyDialog(async () => { const m = await import("../refacto
 const SnippetsPanel = lazyDialog(async () => { const m = await import("../snippets/SnippetsPanel"); return { default: m.SnippetsPanel }; });
 const SnippetEditor = lazyDialog(async () => { const m = await import("../snippets/SnippetsPanel"); return { default: m.SnippetEditor }; });
 const SettingsDialog = lazyDialog(async () => { const m = await import("../settings/SettingsDialog"); return { default: m.SettingsDialog }; });
+const GroupManagerDialog = lazyDialog(async () => { const m = await import("../connections/GroupManager"); return { default: m.GroupManagerDialog }; });
+const MoveToGroupDialog = lazyDialog(async () => { const m = await import("../connections/MoveToGroup"); return { default: m.MoveToGroupDialog }; });
 
 export function Dialogs() {
   const dialogs = useUi((s) => s.dialogs);
@@ -124,6 +126,10 @@ function DialogView({ d }: { d: Dialog }) {
       return (
         <SnippetsPanel loadingTitle="Snippets" onLoadClose={close} close={close} />
       );
+    case "groups":
+      return <GroupManagerDialog loadingTitle="Groups" onLoadClose={close} focus={d.focus} onClose={close} />;
+    case "moveToGroup":
+      return <MoveToGroupDialog loadingTitle="Move to a group" onLoadClose={close} profileIds={d.profileIds} onClose={close} />;
     case "snippetEdit":
       return (
         <SnippetEditor loadingTitle="Edit snippet" onLoadClose={close} snippet={d.snippet} close={close} />

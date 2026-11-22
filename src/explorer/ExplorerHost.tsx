@@ -7,7 +7,7 @@ import { envColor, envLabel, useProfiles } from "../store/profiles";
 import { useSettings } from "../store/settings";
 import { Icon } from "../app/icons";
 import { menuTriggerOf } from "../app/ToolbarMenu";
-import { shownServers } from "./tree";
+import { orderedServers } from "./tree";
 import { useTabs } from "../store/tabs";
 import { useUi } from "../store/ui";
 import { editorForTab } from "../editor/editors";
@@ -179,11 +179,11 @@ function SideTab({ railRef, active, onEnter, onLeave, onClick }: SideTabProps) {
   const order = useConnections((s) => s.order);
   const servers = useConnections((s) => s.servers);
   const profiles = useProfiles((s) => s.profiles);
-  const groups = useProfiles((s) => s.groups);
   const pinned = useSettings((s) => s.pinnedProfiles);
   // One mark per server in use, in the tree's order, shaped by state (never color alone): a dot when connected, a
   // ring while connecting, a warning sign when it failed. Pinned profiles that are not connected have none.
-  const marks = shownServers({ profiles, servers, order, pinned, showAll: false }).filter((p) => servers[p.id]);
+  const showGroups = useSettings((s) => s.showGroups);
+  const marks = orderedServers({ profiles, servers, order, pinned, showAll: false, showGroups }).filter((p) => servers[p.id]);
   const count = (st: string) => marks.filter((p) => servers[p.id]?.status === st).length;
   const label = ["Object Explorer", count("connected") && `${count("connected")} connected`, count("connecting") && `${count("connecting")} connecting`, count("error") && `${count("error")} failed`]
     .filter(Boolean)
@@ -206,10 +206,10 @@ function SideTab({ railRef, active, onEnter, onLeave, onClick }: SideTabProps) {
         const st = servers[p.id]!.status;
         const title = `${envLabel[p.environment]} ${p.name}, ${st === "error" ? "connection failed" : st}`;
         if (st === "error") return <span key={p.id} title={title} data-mark="error" className="text-err"><Icon name="alert" size={11} strokeWidth={2.25} /></span>;
-        if (st === "connecting") return <span key={p.id} title={title} data-mark="connecting" className="w-[7px] h-[7px] rounded-full border-[1.5px]" style={{ borderColor: envColor(p, groups) }} />;
+        if (st === "connecting") return <span key={p.id} title={title} data-mark="connecting" className="w-[7px] h-[7px] rounded-full border-[1.5px]" style={{ borderColor: envColor(p) }} />;
         // Prod is a shield, not only a red dot (never color alone, and red is also the failed server's color).
-        if (p.environment === "prod") return <span key={p.id} title={title} data-mark="connected" style={{ color: envColor(p, groups) }}><Icon name="shield" size={11} strokeWidth={2.25} /></span>;
-        return <span key={p.id} title={title} data-mark="connected" className="w-[7px] h-[7px] rounded-full ring-1 ring-line-strong" style={{ background: envColor(p, groups) }} />;
+        if (p.environment === "prod") return <span key={p.id} title={title} data-mark="connected" style={{ color: envColor(p) }}><Icon name="shield" size={11} strokeWidth={2.25} /></span>;
+        return <span key={p.id} title={title} data-mark="connected" className="w-[7px] h-[7px] rounded-full ring-1 ring-line-strong" style={{ background: envColor(p) }} />;
       })}
     </div>
   );

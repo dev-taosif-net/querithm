@@ -176,7 +176,7 @@ public sealed class LocalStore
     }
 
     /// <summary>The schema version Schema.sql describes (PRAGMA user_version).</summary>
-    public const int Version = 11;
+    public const int Version = 12;
 
     /// <summary>
     /// Steps from version N-1 to N for files written by older builds, run before Schema.sql so its CREATE … IF NOT
@@ -278,6 +278,10 @@ public sealed class LocalStore
         // Completion usage ranking: the completion_usage table, created by Schema.sql's CREATE TABLE IF NOT EXISTS in the same
         // transaction. Additive: an older build ignores the table.
         (11, (_, _, _) => { }),
+        // Connection groups: the profile_group table, created by Schema.sql's CREATE TABLE IF NOT EXISTS in the same
+        // transaction. Additive: an older build ignores the table and keeps reading profile.group_name as before. Nothing is
+        // imported from the old "profile.groups" setting (no released build wrote it from the UI).
+        (12, (_, _, _) => { }),
     ];
 
     static bool HasTable(SqliteConnection c, SqliteTransaction tx, string table)

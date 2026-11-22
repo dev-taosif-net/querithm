@@ -76,3 +76,32 @@ describe("connect dialog: pins", () => {
     expect(buildSections([prof("a")], ["b"]).sections.map((s) => s.key)).toEqual(["dev+local"]);
   });
 });
+
+// Connection groups (§6, owner decisions 2026-11-22): Show groups puts grouped profiles first, one section per group
+// with its environment buckets inside; profiles without a group keep today's sections.
+describe.each<Engine>(["mssql", "pg", "sqlite", "mySql", "duckDb", "oracle"])("connect dialog: groups (%s)", (engine) => {
+  const list = [
+    prof("orders", { engine, environment: "prod", groupName: "Payments" }),
+    prof("ledger", { engine, groupName: "Payments" }),
+    prof("payStage", { engine, environment: "staging", groupName: "Payments" }),
+    prof("t10", { engine, groupName: "Team 10" }),
+    prof("t2", { engine, groupName: "team 2" }),
+    prof("scratch", { engine, environment: "local" }),
+    prof("billing", { engine, environment: "prod" }),
+  ];
+
+  it("groups A–Z first with Production → Staging & QA → Development inside, then today's sections for the rest", () => {
+    const { sections, flat } = buildSections(list, ["t10"], true);
+    expect(sections.map((s) => s.title)).toEqual(["Pinned", "Payments", "team 2", "Production profiles", "Development profiles"]);
+    expect(sections[1].connectionGroup).toEqual({ name: "Payments", count: 3, prod: 1 });
+    expect(sections[1].groups.map((g) => [g.group, g.profiles.map((p) => p.id)])).toEqual([["Production", ["orders"]], ["Staging & QA", ["payStage"]], ["Development", ["ledger"]]]);
+    expect(sections.some((s) => /no group/i.test(s.title))).toBe(false);
+    expect(flat.map((p) => p.id)).toEqual(["t10", "orders", "payStage", "ledger", "t2", "billing", "scratch"]);
+  });
+
+  it("with no grouped profile, or Show groups off, the sections are today's", () => {
+    const plain = list.map((p) => ({ ...p, groupName: null }));
+    expect(buildSections(plain, [], true)).toEqual(buildSections(plain, [], false));
+    expect(buildSections(list, [], false).sections.every((s) => !s.connectionGroup)).toBe(true);
+  });
+});

@@ -9,6 +9,7 @@ import { snapKey } from "../store/snapshots";
 import { schemaGroupKey } from "../store/settings";
 import { MEMORY_NOTE } from "../store/connections";
 import { engineTraits } from "../engines";
+import { compareGroupNames } from "../connections/groupNames";
 
 export type { Engine };
 export type CatId = "tables" | "views" | "procs" | "funcs" | "types" | "sequences" | "synonyms" | "packages";
@@ -59,7 +60,8 @@ interface Base {
 }
 export type TreeRow = Base &
   (
-    | { t: "env"; env: EnvironmentKind; count: number }
+    | { t: "group"; name: string; count: number; prod: number; failed: number }
+    | { t: "env"; env: EnvironmentKind; count: number; group?: string }
     | { t: "server"; profileId: string; status: ServerStatus; error?: string; pinned: boolean; memory?: boolean; refreshing?: boolean }
     | { t: "note"; text: string; tone: "muted" | "warn" | "err"; busy?: boolean }
     | { t: "action"; action: "reconnect" | "editProfile" | "repick" | "retryMeta" | "retryDetails"; label: string; profileId: string; db?: string; objKey?: string; obj?: SnapObject }
@@ -91,6 +93,10 @@ export interface TreeInput {
   showAll: boolean;
   groupByEnv: boolean;
   collapsedEnvs: ReadonlySet<EnvironmentKind>;
+  /** Grouped connections sit under group rows (Group › Environment › Server); the others stay as they are (§6). */
+  showGroups?: boolean;
+  /** Collapsed group rows and environment rows inside a group (groupRowKey / groupEnvKey). */
+  collapsedGroups?: ReadonlySet<string>;
   expanded: ReadonlySet<string>;
   entries: Readonly<Record<string, SnapEntry>>;
   details: Readonly<Record<string, DetailsCell>>;
@@ -216,56 +222,113 @@ export function statusOf(conn: ServerConn | undefined): ServerStatus {
 
 // ------------------------------------------------------------------------------------------------- the tree
 
+/** A group row's key. Group names are never empty, and "g:" is no other row's prefix. */
+export const groupRowKey = (name: string) => `g:${name}`;
+/** An environment row inside a group; the environment comes first because it never holds ":". */
+export const groupEnvKey = (env: EnvironmentKind, name: string) => `ge:${env}:${name}`;
+
+/** The group the tree shows a server under, or undefined (no group, or groups are off). */
+export const shownGroup = (p: Pick<Profile, "groupName">, showGroups: boolean | undefined) => (showGroups && p.groupName ? p.groupName : undefined);
+
+/**
+ * The collapsed header keys that hide a server: its group row and the environment row inside it, or (ungrouped) its
+ * environment row. Reveal and a user connect open them.
+ */
+export function headsOf(p: Pick<Profile, "groupName" | "environment">, flags: { showGroups?: boolean; groupByEnv: boolean }): { groups: string[]; env?: EnvironmentKind } {
+  const group = shownGroup(p, flags.showGroups);
+  if (!group) return { groups: [], env: flags.groupByEnv ? p.environment : undefined };
+  return { groups: flags.groupByEnv ? [groupRowKey(group), groupEnvKey(p.environment, group)] : [groupRowKey(group)] };
+}
+
+/** The servers in the order the tree draws them: grouped ones first (groups A–Z), then the others as before. */
+export function orderedServers(i: Pick<TreeInput, "profiles" | "servers" | "order" | "pinned" | "showAll" | "showGroups">): Profile[] {
+  const servers = shownServers(i);
+  if (!i.showGroups) return servers;
+  const names = [...new Set(servers.map((p) => p.groupName).filter((g): g is string => !!g))].sort(compareGroupNames);
+  return [...names.flatMap((g) => servers.filter((p) => p.groupName === g)), ...servers.filter((p) => !p.groupName)];
+}
+
 export function buildTree(i: TreeInput): TreeResult {
   const rows: TreeRow[] = [];
   const need: Need = { details: [], catalog: [] };
   const add = (r: TreeRow) => rows.push(r) - 1;
-  const servers = shownServers(i);
-  let envParent = -1;
+  const servers = orderedServers(i);
+  const collapsedGroups = i.collapsedGroups ?? new Set<string>();
+  // Grouped servers first, each group a row; the servers without a group keep exactly today's rows (no "No group" row).
+  let at = 0;
+  while (at < servers.length && shownGroup(servers[at], i.showGroups)) {
+    const name = servers[at].groupName!;
+    const members: Profile[] = [];
+    while (at < servers.length && servers[at].groupName === name) members.push(servers[at++]);
+    const key = groupRowKey(name);
+    const open = !collapsedGroups.has(key);
+    const gIdx = add({
+      t: "group", key, level: 1, parent: -1, expandable: true, expanded: open, name, count: members.length,
+      prod: members.filter((p) => p.environment === "prod").length, failed: members.filter((p) => statusOf(i.servers[p.id]) === "error").length,
+    });
+    if (open) addServers(i, rows, need, members, 1, gIdx, name);
+  }
+  addServers(i, rows, need, servers.slice(at), 0, -1, undefined);
+  numberSiblings(rows);
+  return { rows, needDetails: need.details, needCatalog: need.catalog, shown: servers.map((p) => p.id) };
+}
+
+/** Servers at `base` + 1 (under environment rows when grouping by environment), as the tree always drew them. */
+function addServers(i: TreeInput, rows: TreeRow[], need: Need, servers: readonly Profile[], base: number, parent: number, group: string | undefined) {
+  const add = (r: TreeRow) => rows.push(r) - 1;
+  const collapsedGroups = i.collapsedGroups ?? new Set<string>();
+  let envParent = parent;
   let lastEnv: EnvironmentKind | undefined;
+  let envOpen = true;
   for (const p of servers) {
     if (i.groupByEnv && p.environment !== lastEnv) {
       lastEnv = p.environment;
-      const open = !i.collapsedEnvs.has(p.environment);
-      envParent = add({ t: "env", key: `env:${p.environment}`, level: 1, parent: -1, expandable: true, expanded: open, env: p.environment, count: servers.filter((x) => x.environment === p.environment).length });
+      const key = group == null ? `env:${p.environment}` : groupEnvKey(p.environment, group);
+      envOpen = group == null ? !i.collapsedEnvs.has(p.environment) : !collapsedGroups.has(key);
+      envParent = add({
+        t: "env", key, level: base + 1, parent, expandable: true, expanded: envOpen, env: p.environment,
+        count: servers.filter((x) => x.environment === p.environment).length, ...(group == null ? {} : { group }),
+      });
     }
-    if (i.groupByEnv && i.collapsedEnvs.has(p.environment)) continue;
-    const base = i.groupByEnv ? 1 : 0;
-    const conn = i.servers[p.id];
-    const status = statusOf(conn);
-    const sKey = serverKey(p.id);
-    const open = i.expanded.has(sKey);
-    const sIdx = add({ t: "server", key: sKey, level: base + 1, parent: i.groupByEnv ? envParent : -1, expandable: true, expanded: open && status !== "off", profileId: p.id, status, error: conn?.error, ...(conn?.refreshing ? { refreshing: true } : {}), pinned: i.pinned.includes(p.id), ...(conn?.memory ? { memory: true } : {}) });
-    if (!open || status === "off") continue;
-    if (status === "error") {
-      add({ t: "note", key: `${sKey}:why`, level: base + 2, parent: sIdx, expandable: false, expanded: false, text: firstSentence(conn?.error) ?? "Connection failed.", tone: "err" });
-      add({ t: "action", key: `${sKey}:reconnect`, level: base + 2, parent: sIdx, expandable: false, expanded: false, action: "reconnect", label: "Reconnect", profileId: p.id });
-      // A file whose grant is gone (revoked, moved, replaced, missing) is picked again here, straight through the dialog.
-      if (conn?.repick) add({ t: "action", key: `${sKey}:repick`, level: base + 2, parent: sIdx, expandable: false, expanded: false, action: "repick", label: "Re-pick file…", profileId: p.id });
-      else add({ t: "action", key: `${sKey}:edit`, level: base + 2, parent: sIdx, expandable: false, expanded: false, action: "editProfile", label: "Edit profile…", profileId: p.id });
-      continue;
-    }
-    if (conn?.memory) {
-      add({ t: "note", key: `${sKey}:memory`, level: base + 2, parent: sIdx, expandable: false, expanded: false, text: MEMORY_NOTE, tone: "muted" });
-      continue;
-    }
-    // A reconnect after an engine restart keeps the databases it knew; a first connect has none yet.
-    if (!conn!.databases.length) {
-      if (status === "connecting") add({ t: "note", key: `${sKey}:wait`, level: base + 2, parent: sIdx, expandable: false, expanded: false, text: "Connecting…", tone: "muted", busy: true });
-      continue;
-    }
-    const system = conn!.databases.filter((d) => d.isSystem && d.name.toLowerCase() !== (p.databaseDefault ?? "").toLowerCase());
-    const user = conn!.databases.filter((d) => !system.includes(d));
-    for (const d of user) addDb(i, rows, need, p, d.name, d.state, base + 2, sIdx);
-    if (system.length) {
-      const yKey = sysKey(p.id);
-      const yOpen = i.expanded.has(yKey);
-      const yIdx = add({ t: "sysdbs", key: yKey, level: base + 2, parent: sIdx, expandable: true, expanded: yOpen, profileId: p.id, count: system.length });
-      if (yOpen) for (const d of system) addDb(i, rows, need, p, d.name, d.state, base + 3, yIdx);
-    }
+    if (i.groupByEnv && !envOpen) continue;
+    addServer(i, rows, need, p, base + (i.groupByEnv ? 1 : 0), i.groupByEnv ? envParent : parent);
   }
-  numberSiblings(rows);
-  return { rows, needDetails: need.details, needCatalog: need.catalog, shown: servers.map((p) => p.id) };
+}
+
+function addServer(i: TreeInput, rows: TreeRow[], need: Need, p: Profile, base: number, parent: number) {
+  const add = (r: TreeRow) => rows.push(r) - 1;
+  const conn = i.servers[p.id];
+  const status = statusOf(conn);
+  const sKey = serverKey(p.id);
+  const open = i.expanded.has(sKey);
+  const sIdx = add({ t: "server", key: sKey, level: base + 1, parent, expandable: true, expanded: open && status !== "off", profileId: p.id, status, error: conn?.error, ...(conn?.refreshing ? { refreshing: true } : {}), pinned: i.pinned.includes(p.id), ...(conn?.memory ? { memory: true } : {}) });
+  if (!open || status === "off") return;
+  if (status === "error") {
+    add({ t: "note", key: `${sKey}:why`, level: base + 2, parent: sIdx, expandable: false, expanded: false, text: firstSentence(conn?.error) ?? "Connection failed.", tone: "err" });
+    add({ t: "action", key: `${sKey}:reconnect`, level: base + 2, parent: sIdx, expandable: false, expanded: false, action: "reconnect", label: "Reconnect", profileId: p.id });
+    // A file whose grant is gone (revoked, moved, replaced, missing) is picked again here, straight through the dialog.
+    if (conn?.repick) add({ t: "action", key: `${sKey}:repick`, level: base + 2, parent: sIdx, expandable: false, expanded: false, action: "repick", label: "Re-pick file…", profileId: p.id });
+    else add({ t: "action", key: `${sKey}:edit`, level: base + 2, parent: sIdx, expandable: false, expanded: false, action: "editProfile", label: "Edit profile…", profileId: p.id });
+    return;
+  }
+  if (conn?.memory) {
+    add({ t: "note", key: `${sKey}:memory`, level: base + 2, parent: sIdx, expandable: false, expanded: false, text: MEMORY_NOTE, tone: "muted" });
+    return;
+  }
+  // A reconnect after an engine restart keeps the databases it knew; a first connect has none yet.
+  if (!conn!.databases.length) {
+    if (status === "connecting") add({ t: "note", key: `${sKey}:wait`, level: base + 2, parent: sIdx, expandable: false, expanded: false, text: "Connecting…", tone: "muted", busy: true });
+    return;
+  }
+  const system = conn!.databases.filter((d) => d.isSystem && d.name.toLowerCase() !== (p.databaseDefault ?? "").toLowerCase());
+  const user = conn!.databases.filter((d) => !system.includes(d));
+  for (const d of user) addDb(i, rows, need, p, d.name, d.state, base + 2, sIdx);
+  if (system.length) {
+    const yKey = sysKey(p.id);
+    const yOpen = i.expanded.has(yKey);
+    const yIdx = add({ t: "sysdbs", key: yKey, level: base + 2, parent: sIdx, expandable: true, expanded: yOpen, profileId: p.id, count: system.length });
+    if (yOpen) for (const d of system) addDb(i, rows, need, p, d.name, d.state, base + 3, yIdx);
+  }
 }
 
 interface Need { details: TreeResult["needDetails"]; catalog: TreeResult["needCatalog"] }

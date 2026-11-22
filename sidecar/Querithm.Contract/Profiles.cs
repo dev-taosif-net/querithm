@@ -77,11 +77,68 @@ public sealed record SshHostKey
     public string? PreviousFingerprint { get; init; }
 }
 
+/// <summary>
+/// A connection group: a stored row (made with New in the group manager) or a name at least one profile carries. Names
+/// match ignoring case, spacing and Unicode form; the sidecar returns one canonical spelling per group.
+/// </summary>
 public sealed record ProfileGroup
 {
     public required string Name { get; init; }
-    public EnvironmentKind? Environment { get; init; }
-    public string? Color { get; init; }
+    /// <summary>How many stored profiles carry this group.</summary>
+    public int Members { get; init; }
+}
+
+/// <summary>The limits every group method enforces at the RPC boundary (§13 PT8-3).</summary>
+public static class GroupLimits
+{
+    /// <summary>The longest group name, after trimming and collapsing spaces.</summary>
+    public const int MaxNameLength = 256;
+    /// <summary>The most stored group rows (groups known only from profile names do not count).</summary>
+    public const int MaxStored = 1000;
+    /// <summary>The most profiles one group.assign may move.</summary>
+    public const int MaxAssign = 1000;
+}
+
+public sealed record GroupCreateParams
+{
+    public required string Name { get; init; }
+}
+
+public sealed record GroupRenameParams
+{
+    /// <summary>The group's current name, in any spelling that matches it.</summary>
+    public required string From { get; init; }
+    public required string To { get; init; }
+}
+
+public sealed record GroupDeleteParams
+{
+    public required string Name { get; init; }
+    /// <summary>The member count the UI showed; a different count refuses the delete with code groupChanged.</summary>
+    public int? ExpectedMembers { get; init; }
+}
+
+public sealed record GroupAssignParams
+{
+    public required string[] ProfileIds { get; init; }
+    /// <summary>The group to move the profiles into; null removes them from their group.</summary>
+    public string? Name { get; init; }
+}
+
+public sealed record GroupRenamed
+{
+    public required string From { get; init; }
+    public required string To { get; init; }
+}
+
+/// <summary>The groups after a change and the profiles it changed (their new group name), so the UI applies both at once.</summary>
+public sealed record GroupChangeResult
+{
+    public required ProfileGroup[] Groups { get; init; }
+    public required Profile[] Profiles { get; init; }
+    public GroupRenamed? Renamed { get; init; }
+    /// <summary>group.assign: ids that name no stored profile (deleted meanwhile); the others were moved.</summary>
+    public string[]? Missing { get; init; }
 }
 
 public sealed record ProfileRef

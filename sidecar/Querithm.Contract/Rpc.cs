@@ -38,8 +38,14 @@ public interface IQuerithmRpc
     [RpcMethod("profile.parseConnectionString")] Task<ParseConnectionStringResult> ProfileParseConnectionString(ParseConnectionStringParams p);
     [RpcMethod("ssh.trustHostKey")] Task SshTrustHostKey(SshHostKey p);
     [RpcMethod("group.list")] Task<ProfileGroup[]> GroupList();
-    [RpcMethod("group.save")] Task<ProfileGroup[]> GroupSave(ProfileGroup g);
-    [RpcMethod("group.delete")] Task<ProfileGroup[]> GroupDelete(ProfileGroup g);
+    /// <summary>One empty group (the group manager's New); an existing name is refused with groupExists.</summary>
+    [RpcMethod("group.create")] Task<ProfileGroup[]> GroupCreate(GroupCreateParams p);
+    /// <summary>Renames a group and every profile in it, in one transaction; onto another existing group is refused (groupExists).</summary>
+    [RpcMethod("group.rename")] Task<GroupChangeResult> GroupRename(GroupRenameParams p);
+    /// <summary>Deletes a group: its profiles become ungrouped, none is deleted.</summary>
+    [RpcMethod("group.delete")] Task<GroupChangeResult> GroupDelete(GroupDeleteParams p);
+    /// <summary>Moves profiles into a group (a new name makes the group), or out of their group with a null name.</summary>
+    [RpcMethod("group.assign")] Task<GroupChangeResult> GroupAssign(GroupAssignParams p);
 
     [RpcMethod("session.open")] Task<SessionOpenResult> SessionOpen(SessionOpenParams p);
     /// <summary>Phase D0c: closes the profile's sessions and forgets its file grant; refused while one has an open or unknown transaction or a running query. The shell then removes the grant.</summary>

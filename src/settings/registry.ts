@@ -230,8 +230,13 @@ export const settingDefs: SettingDef[] = [
     disabledWhy: (s) => (modeOf({ visible: s.explorerVisible, autoHide: s.explorerAutoHide }) === "autoHide" ? null : "Only used while the explorer auto hides."),
   },
   {
+    id: "showGroups", keys: ["showGroups"], page: "explorer", group: "Servers", label: "Show groups",
+    description: "Connections in a group sit under it in the Object Explorer and the Connect dialog; the others stay where they are.",
+    control: { kind: "switch" }, keywords: ["group", "folder", "connection groups"],
+  },
+  {
     id: "explorerGroupByEnv", keys: ["explorerGroupByEnv"], page: "explorer", group: "Servers", label: "Group servers by environment",
-    description: "Servers sit under Prod, Staging, Test, Dev and Local group rows.",
+    description: "Servers sit under environment rows, Local to Prod.",
     control: { kind: "switch" }, keywords: ["environment", "prod"],
   },
   {

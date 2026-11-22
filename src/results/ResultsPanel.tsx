@@ -766,8 +766,7 @@ function focusEditToggle() {
 /** The 3 px environment rule under the row while editing: the environment's color, its word in the pill beside. */
 function EnvRule({ profileId }: { profileId?: string }) {
   const profile = useProfiles((s) => s.profiles.find((p) => p.id === profileId));
-  const groups = useProfiles((s) => s.groups);
-  return <div aria-hidden className="h-[3px] shrink-0" style={{ background: envColor(profile, groups) }} data-q-env-rule />;
+  return <div aria-hidden className="h-[3px] shrink-0" style={{ background: envColor(profile) }} data-q-env-rule />;
 }
 
 /** Edit mode replaces the tool row (no extra height) and keeps the filter, which is how people find the row to change. */
