@@ -686,7 +686,15 @@ try {
       .catch(() => errors.push("groups: the Explorer shows no 'Smoke Group' row after the move"));
     if (await page.evaluate(() => [...document.querySelectorAll('[data-q-explorer] [role="treeitem"]')].some((x) => /no group/i.test(x.getAttribute("aria-label") ?? ""))))
       errors.push("groups: the Explorer shows a 'No group' row");
+    // Esc goes one step at a time (ConnectDialog): the first leaves Select mode, the second closes the dialog. One Esc
+    // left the dialog open over the editor, and every later step typed into nothing (CI run 45020780717).
     await page.keyboard.press("Escape");
+    await sleep(200);
+    if (await page.evaluate(() => !!document.querySelector('[role="dialog"] [role="toolbar"][aria-label="Selection"]')))
+      errors.push("groups: Esc did not leave Select mode");
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !document.querySelector('[role="dialog"] input[aria-label="Search profiles"]'), { timeout: 5_000 })
+      .catch(() => errors.push("groups: a second Esc did not close the Connect dialog"));
     await sleep(200);
     await shot("02e-explorer-groups");
     // Undo through the group row's menu: Delete group… ungroups the fixture (no connection is deleted).
