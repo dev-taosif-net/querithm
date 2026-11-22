@@ -12,6 +12,7 @@ mod keyring;
 mod native;
 mod shell_log;
 mod sidecar;
+mod theme;
 mod updater;
 mod window_state;
 
@@ -38,8 +39,10 @@ fn main() {
             if let Ok(data) = &data {
                 shell_log::init(data.join("logs"));
             }
-            // The window was created hidden: it shows where it was closed, before the slower steps below (§16).
+            // The window was created hidden: it takes the kept theme's background, then shows where it was closed,
+            // before the slower steps below (§16).
             if let Some(window) = app.get_webview_window(close::MAIN) {
+                theme::apply(&window, app.path().app_config_dir().ok().as_deref());
                 window_state::restore(&window);
             }
             // M23: the first instance owns the saved tabs; a second window starts with a new tab.
@@ -70,6 +73,7 @@ fn main() {
             updater::update_install,
             close::app_close_ack,
             close::app_close_answer,
+            theme::app_theme_keep,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the Querithm shell");

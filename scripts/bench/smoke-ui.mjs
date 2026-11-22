@@ -96,8 +96,27 @@ try {
     errors.push(`pageerror: ${e.message}`);
     console.log(`[pageerror] ${e.stack ?? e.message}`);
   });
+  // §16 start screen: the first frame the page draws by itself (the app's scripts held back, so nothing boots here) is
+  // the start screen in the theme the window last had; with nothing kept, the default.
+  for (const [kept, expected] of [["light", "light"], [null, "dark"]]) {
+    const first = await browser.newPage();
+    await first.evaluateOnNewDocument((t) => (t ? localStorage.setItem("querithm.theme", t) : localStorage.removeItem("querithm.theme")), kept);
+    await first.setRequestInterception(true);
+    first.on("request", (r) => (/\/assets\/.*\.js$/.test(new URL(r.url()).pathname) ? r.abort() : r.continue()));
+    await first.goto(`http://127.0.0.1:${uiPort}/`, { waitUntil: "domcontentloaded" });
+    const frame = await first.evaluate(() => {
+      const s = document.getElementById("splash");
+      return { theme: document.documentElement.dataset.theme, shown: !!s && !s.hidden && s.getBoundingClientRect().width > 0, bg: s ? getComputedStyle(s).backgroundColor : "" };
+    });
+    const bg = expected === "light" ? "rgb(255, 255, 255)" : "rgb(15, 17, 23)";
+    if (frame.theme !== expected || !frame.shown || frame.bg !== bg) errors.push(`start screen, theme kept ${kept}: first frame was ${JSON.stringify(frame)}, expected ${expected} on ${bg}`);
+    if (kept) await first.screenshot({ path: path.join(out, "00-start-screen-light.png") });
+    await first.close();
+  }
   await page.goto(`http://127.0.0.1:${uiPort}/?bench`, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => window.__bench?.ready === true, { timeout: 30_000 });
+  // The start screen is gone once the app is ready.
+  await page.waitForFunction(() => document.getElementById("splash")?.hidden === true, { timeout: 5_000 }).catch(() => errors.push("the start screen was still shown after the app was ready"));
   await page.waitForSelector(".monaco-editor", { timeout: 30_000 });
   // Layout audit at every screenshot, in both themes (the second one toggled and restored), plus the minimum window
   // (960×560, tauri.conf.json) for the screens in NARROW. Screens with findings are saved again as layout-<screen>-<theme>-<width>.png, findings marked.

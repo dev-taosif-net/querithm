@@ -5,10 +5,63 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Querithm</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- Start screen (§16): the theme and the loader are there for the first frame, before the app's bundle runs.
+         Files, never an inline script or style element: see public/boot-splash.css. -->
+    <script src="/boot-theme.js"></script>
+    <link rel="stylesheet" href="/boot-splash.css" />
   </head>
   <body>
     <div id="root"></div>
     <div id="portal" style="position: fixed; left: 0; top: 0; z-index: 9999"></div>
+    <!-- Shown until the app has started (src/app/splash.ts sets data-stage and the line of text). -->
+    <div id="splash" data-stage="1">
+      <svg class="splash-mark" viewBox="62 70 388 356" aria-hidden="true">
+        <defs>
+          <linearGradient id="splash-ring" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" class="splash-ra" />
+            <stop offset=".55" class="splash-rb" />
+            <stop offset="1" class="splash-rc" />
+          </linearGradient>
+          <linearGradient id="splash-plat" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" class="splash-pa" />
+            <stop offset=".5" class="splash-pb" />
+            <stop offset="1" class="splash-pc" />
+          </linearGradient>
+          <linearGradient id="splash-pulse" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" class="splash-ua" />
+            <stop offset="1" class="splash-ub" />
+          </linearGradient>
+        </defs>
+        <path class="splash-track" d="M398 292 C402 278 404 264 404 248 C404 166.3 337.7 100 256 100 C174.3 100 108 166.3 108 248 C108 329.7 174.3 396 256 396 C286 396 314 387 337.5 371.5" />
+        <path class="splash-ring" pathLength="100" stroke="url(#splash-ring)" d="M398 292 C402 278 404 264 404 248 C404 166.3 337.7 100 256 100 C174.3 100 108 166.3 108 248 C108 329.7 174.3 396 256 396 C286 396 314 387 337.5 371.5" />
+        <g class="splash-t1">
+          <path class="splash-idle" d="M180 184 V212 C180 227 214 238 256 238 C298 238 332 227 332 212 V184 Z" />
+          <ellipse class="splash-idle-cap" cx="256" cy="184" rx="76" ry="24" />
+          <g class="splash-lit">
+            <path fill="url(#splash-plat)" d="M180 184 V212 C180 227 214 238 256 238 C298 238 332 227 332 212 V184 Z" />
+            <ellipse class="splash-cap" cx="256" cy="184" rx="76" ry="24" />
+          </g>
+          <circle class="splash-led" cx="206" cy="216" r="8" />
+        </g>
+        <g class="splash-t2">
+          <path class="splash-idle" d="M180 232 V262 C180 277 214 288 256 288 C298 288 332 277 332 262 V232 C316 244 288 250 256 250 C224 250 196 244 180 232 Z" />
+          <g class="splash-lit">
+            <path fill="url(#splash-plat)" d="M180 232 V262 C180 277 214 288 256 288 C298 288 332 277 332 262 V232 C316 244 288 250 256 250 C224 250 196 244 180 232 Z" />
+          </g>
+          <circle class="splash-led" cx="206" cy="266" r="8" />
+        </g>
+        <g class="splash-t3">
+          <path class="splash-idle" d="M180 282 V312 C180 327 214 338 256 338 C275 338 292 335 306 330 L332 282 C316 294 288 300 256 300 C224 300 196 294 180 282 Z" />
+          <g class="splash-lit">
+            <path fill="url(#splash-plat)" d="M180 282 V312 C180 327 214 338 256 338 C275 338 292 335 306 330 L332 282 C316 294 288 300 256 300 C224 300 196 294 180 282 Z" />
+          </g>
+          <circle class="splash-led" cx="206" cy="316" r="8" />
+        </g>
+        <path class="splash-pulse" pathLength="100" stroke="url(#splash-pulse)" d="M276 314 L318 314 L344 262 L374 366 L402 302 L430 338" />
+      </svg>
+      <div class="splash-name">Querithm</div>
+      <div class="splash-stage" role="status"><span id="splash-text">Starting the engine…</span><span id="splash-elapsed"></span></div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

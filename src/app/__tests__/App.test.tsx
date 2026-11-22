@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -18,10 +20,11 @@ const h = vi.hoisted(() => ({
   restart: vi.fn(async () => {}),
   whyEngineDown: vi.fn(async (e: unknown) => e),
   setZoom: vi.fn(async (_z: number) => {}),
+  themeKeep: vi.fn(async (_t: string) => {}),
 }));
 
 vi.mock("../../ipc/contract", () => ({ CONTRACT_VERSION: "1" }));
-vi.mock("../../ipc/client", () => ({ rpc: (...a: any[]) => h.rpc(...a), shell: { appInfo: () => h.appInfo(), restart: () => h.restart() } }));
+vi.mock("../../ipc/client", () => ({ rpc: (...a: any[]) => h.rpc(...a), shell: { appInfo: () => h.appInfo(), restart: () => h.restart(), themeKeep: (t: string) => h.themeKeep(t) } }));
 vi.mock("../../ipc/transport", () => ({ get isTauri() { return h.tauri; } }));
 vi.mock("../../editor/monaco", () => ({ initMonaco: () => h.calls.push("initMonaco"), applyMonacoTheme: () => h.applyTheme() }));
 vi.mock("../../editor/providers", () => ({ installProviders: () => h.calls.push("providers") }));
@@ -84,7 +87,22 @@ beforeEach(() => {
   history.replaceState(null, "", "/");
 });
 let restoreLocation = () => {};
-afterEach(() => { restoreLocation(); restoreLocation = () => {}; cleanup(); document.documentElement.removeAttribute("data-theme"); });
+afterEach(() => {
+  restoreLocation();
+  restoreLocation = () => {};
+  cleanup();
+  document.documentElement.removeAttribute("data-theme");
+  document.getElementById("splash")?.remove();
+  localStorage.removeItem("querithm.theme");
+});
+
+/** index.html's start screen (§16), as the page holds it before the app renders. */
+function startScreen() {
+  const html = readFileSync(resolve(process.cwd(), "index.html"), "utf8");
+  const el = document.importNode(new DOMParser().parseFromString(html, "text/html").getElementById("splash")!, true);
+  document.body.appendChild(el);
+  return el;
+}
 
 describe("App", () => {
   // Profile (React render count, this test): before the fix the root App subscribed to the editor settings, so every
@@ -101,11 +119,62 @@ describe("App", () => {
     expect(h.topBarRenders).toBe(before);
   });
 
-  it("shows the starting screen, boots, and renders every region", async () => {
+  it("shows the start screen, boots, and renders every region", async () => {
+    const splash = startScreen();
     const App = await loadApp();
     render(<App />);
-    expect(screen.getByText("Starting Querithm…")).toBeInTheDocument();
+    expect(splash.hidden).toBe(false);
+    expect(screen.getByText("Starting the engine…")).toBeInTheDocument();
     for (const t of ["topbar", "banner", "explorer", "workspace", "statusbar", "dialogs", "palette", "switcher", "toasts"]) expect(await screen.findByText(t)).toBeInTheDocument();
+    // Ready: the last step was named and the screen is leaving, then gone.
+    expect(splash.dataset.stage).toBe("4");
+    await waitFor(() => expect(splash.hidden).toBe(true));
+  });
+
+  it("the start screen follows the boot: engine, then settings, then workspace (§16)", async () => {
+    const splash = startScreen();
+    const gate: Record<string, (v: unknown) => void> = {};
+    const held = (m: string) => new Promise((r) => (gate[m] = r));
+    h.rpc.mockImplementation(async (m: string) => (m === "system.ping" || m === "settings.get" ? held(m) : m === "profile.list" || m === "group.list" ? [] : undefined));
+    const App = await loadApp();
+    render(<App />);
+    await waitFor(() => expect(gate["system.ping"]).toBeDefined());
+    expect(splash.dataset.stage).toBe("1");
+    gate["system.ping"]({ version: "1" });
+    await waitFor(() => expect(gate["settings.get"]).toBeDefined());
+    expect(splash.dataset.stage).toBe("2");
+    expect(screen.getByText("Loading your settings…")).toBeInTheDocument();
+    gate["settings.get"]([]);
+    await screen.findByText("workspace");
+    expect(splash.dataset.stage).toBe("4");
+  });
+
+  it("an engine that did not start takes the start screen away for the reason, and Restart engine brings it back", async () => {
+    const splash = startScreen();
+    const App = await loadApp();
+    const { EngineDown } = await import("../engineStatus");
+    let ping: ((v: unknown) => void) | undefined;
+    let started = false;
+    h.rpc.mockImplementation(async (m: string) => {
+      if (m === "system.ping") {
+        if (!started) throw { code: -32003, message: "down" };
+        return new Promise((r) => (ping = r));
+      }
+      return m === "profile.list" || m === "group.list" || m === "settings.get" ? [] : undefined;
+    });
+    h.whyEngineDown.mockImplementation(async () => new EngineDown("The Querithm engine did not start"));
+    h.restart.mockImplementation(async () => { started = true; });
+    render(<App />);
+    await screen.findByText("Querithm could not start its engine");
+    await waitFor(() => expect(splash.hidden).toBe(true));
+    await userEvent.setup().click(screen.getByRole("button", { name: "Restart engine" }));
+    await waitFor(() => expect(ping).toBeDefined());
+    expect(splash.hidden).toBe(false);
+    expect(splash.dataset.stage).toBe("1");
+    ping!({ version: "1" });
+    await screen.findByText("workspace");
+    await waitFor(() => expect(splash.hidden).toBe(true));
+    h.whyEngineDown.mockImplementation(async (e: unknown) => e);
   });
 
   it("boots in order: Monaco, providers, ping, stores, listeners; opens a new tab when nothing is restored", async () => {
@@ -252,6 +321,59 @@ describe("App", () => {
       expect(document.documentElement.dataset.theme).toBe("dark");
       act(() => useSettings.setState({ theme: "light" } as any));
       await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
+    });
+
+    // Regression (§16 start screen): the store's default (dark) was applied while the settings loaded, so a light
+    // window started dark and jumped to light once the engine had answered.
+    it("keeps the theme the window last had while the settings load, then the setting", async () => {
+      localStorage.setItem("querithm.theme", "light");
+      document.documentElement.dataset.theme = "light"; // public/boot-theme.js, before the first paint
+      let loaded: ((v: unknown) => void) | undefined;
+      h.rpc.mockImplementation(async (m: string) =>
+        m === "system.ping" ? { version: "1" } : m === "settings.get" ? new Promise((r) => (loaded = r)) : m === "profile.list" || m === "group.list" ? [] : undefined,
+      );
+      const seen: (string | undefined)[] = [];
+      const mo = new MutationObserver(() => seen.push(document.documentElement.dataset.theme));
+      mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+      const App = await loadApp();
+      render(<App />);
+      await waitFor(() => expect(loaded).toBeDefined());
+      expect(document.documentElement.dataset.theme).toBe("light");
+      loaded!([{ key: "ui.settings", valueJson: JSON.stringify({ theme: "light" }) }]);
+      await screen.findByText("workspace");
+      expect(document.documentElement.dataset.theme).toBe("light");
+      mo.disconnect();
+      expect(seen).not.toContain("dark");
+    });
+
+    it("keeps the loaded setting for the next start, in the webview and in the shell", async () => {
+      h.tauri = true;
+      h.rpc.mockImplementation(async (m: string) =>
+        m === "system.ping" ? { version: "1" } : m === "settings.get" ? [{ key: "ui.settings", valueJson: JSON.stringify({ theme: "light" }) }] : m === "profile.list" || m === "group.list" ? [] : undefined,
+      );
+      const App = await loadApp();
+      render(<App />);
+      await screen.findByText("workspace");
+      await waitFor(() => expect(localStorage.getItem("querithm.theme")).toBe("light"));
+      expect(h.themeKeep.mock.calls).toEqual([["light"]]);
+      act(() => useSettings.getState().set({ theme: "system" }));
+      await waitFor(() => expect(localStorage.getItem("querithm.theme")).toBe("system"));
+      expect(h.themeKeep.mock.calls).toEqual([["light"], ["system"]]);
+    });
+
+    it("settings that could not be read never replace the kept theme with the default", async () => {
+      h.tauri = true;
+      localStorage.setItem("querithm.theme", "light");
+      h.rpc.mockImplementation(async (m: string) => {
+        if (m === "settings.get") throw new Error("store busy");
+        return m === "system.ping" ? { version: "1" } : m === "profile.list" || m === "group.list" ? [] : undefined;
+      });
+      const App = await loadApp();
+      render(<App />);
+      await screen.findByText("workspace");
+      expect(useSettings.getState().loaded).toBe(true);
+      expect(localStorage.getItem("querithm.theme")).toBe("light");
+      expect(h.themeKeep).not.toHaveBeenCalled();
     });
 
     it("names the syntax theme on the document and re-applies the editor theme when it changes", async () => {

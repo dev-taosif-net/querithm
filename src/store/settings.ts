@@ -311,8 +311,10 @@ export const useSettings = create<SettingsStore>((set) => ({
       useSettingsStatus.setState({ loadFailed: false });
     } catch {
       // Run on defaults, but keep what is on disk: it is read again before the first write.
-      set({ loaded: true });
+      // loadFailed first: what follows `loaded` (the theme kept for the next start, App.tsx) must not take the
+      // defaults for the saved settings.
       useSettingsStatus.setState({ loadFailed: true });
+      set({ loaded: true });
     }
   },
   set(patch) {

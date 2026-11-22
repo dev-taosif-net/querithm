@@ -102,6 +102,8 @@ export const shell = {
   closeAck: () => transport().invoke<void>("app_close_ack"),
   /** H4: the answer to the close request: true closes the window, false keeps it. */
   closeAnswer: (close: boolean) => transport().invoke<void>("app_close_answer", { close }),
+  /** §16 start screen: the shell keeps the theme for the colour of the window at the next start (src/app/theme.ts). */
+  themeKeep: (theme: "dark" | "light" | "system") => transport().invoke<void>("app_theme_keep", { theme }),
 };
 
 /** A newer signed release found by the shell's updater (§13 rule 10). */

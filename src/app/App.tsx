@@ -1,4 +1,3 @@
-import { LoadingStatus } from "./LoadingStatus";
 import { useEffect, useLayoutEffect, useState } from "react";
 import { CONTRACT_VERSION } from "../ipc/contract";
 import { rpc } from "../ipc/client";
@@ -6,7 +5,7 @@ import { isTauri } from "../ipc/transport";
 import { initMonaco, applyMonacoTheme } from "../editor/monaco";
 import { installProviders } from "../editor/providers";
 import { refreshEditorOptions } from "../editor/editors";
-import { useSettings } from "../store/settings";
+import { useSettings, useSettingsStatus } from "../store/settings";
 import { useProfiles } from "../store/profiles";
 import { installSnapshotListeners } from "../store/snapshots";
 import { installDiagListeners } from "../store/diag";
@@ -32,13 +31,22 @@ import { installBench, runAppBench } from "./bench";
 import { installUpdateChecks } from "../store/updates";
 import { getAppInfo } from "./appInfo";
 import { applyUiScale } from "./uiScale";
+import { cachedTheme, isDark, keepTheme } from "./theme";
+import { hideSplash, showSplash, splashStage } from "./splash";
 
 let booted: Promise<void> | null = null;
 let prepared = false;
 
-function syncDocumentTheme(theme = useSettings.getState().theme, syntax = useSettings.getState().syntaxTheme) {
-  const dark = theme === "dark" || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
-  document.documentElement.dataset.theme = dark ? "dark" : "light";
+/**
+ * The theme to show: the setting once it has loaded; before that the one the window last had (§16 start screen), which
+ * public/boot-theme.js already named on the document. Applying the store's default here made a light window start dark.
+ */
+function themeToShow(s = useSettings.getState()) {
+  return s.loaded ? s.theme : (cachedTheme() ?? s.theme);
+}
+
+function syncDocumentTheme(theme = themeToShow(), syntax = useSettings.getState().syntaxTheme) {
+  document.documentElement.dataset.theme = isDark(theme) ? "dark" : "light";
   document.documentElement.dataset.syntax = syntax;
   applyMonacoTheme();
 }
@@ -58,10 +66,12 @@ async function boot() {
   } catch (e) {
     throw await whyEngineDown(e);
   }
+  splashStage(2);
   // §5 Versioning: refuse to run against a sidecar built from a different contract.
   if (ping.version !== CONTRACT_VERSION) throw new Error(`Engine contract ${ping.version} does not match the UI (${CONTRACT_VERSION}). Rebuild the sidecar.`);
   await Promise.all([useSettings.getState().load(), useProfiles.getState().load()]);
   syncDocumentTheme();
+  splashStage(3);
   installExecutionListeners();
   installSnapshotListeners();
   installDiagListeners();
@@ -73,6 +83,7 @@ async function boot() {
   installAnnouncements();
   if (!(await restoreWorkspace())) newQueryTab();
   installAutosave();
+  splashStage(4);
   const info = await getAppInfo().catch(() => null);
   // window.__bench only for a harness (L10): the shell or the dev bridge reports bench when launched with QUERITHM_BENCH=1;
   // ?bench is honoured in the browser (dev bridge) only, never in the shell's webview.
@@ -87,8 +98,13 @@ async function boot() {
  * font-size step re-rendered the whole shell (App.test "re-renders no part of the shell").
  */
 function SettingsEffects() {
-  const theme = useSettings((s) => s.theme);
+  const theme = useSettings(themeToShow);
   const syntax = useSettings((s) => s.syntaxTheme);
+  // Kept for the next start only when it is the saved setting: not the default before the settings have loaded, and
+  // not the default they fall back to when they could not be read.
+  const loaded = useSettings((s) => s.loaded);
+  const unread = useSettingsStatus((s) => s.loadFailed);
+  useLayoutEffect(() => void (loaded && !unread && keepTheme(theme)), [loaded, unread, theme]);
   useLayoutEffect(() => {
     const apply = () => syncDocumentTheme(theme, syntax);
     apply();
@@ -123,6 +139,9 @@ export function App() {
     });
   }, [attempt]);
 
+  // The start screen (index.html, §16) covers the window while the app boots, and again after Restart engine.
+  useLayoutEffect(() => (state === "booting" ? showSplash() : hideSplash()), [state]);
+
   /** M18: the engine did not start; Restart spawns it again, then the boot goes on from the ping. */
   const restart = async () => {
     setState("booting");
@@ -149,9 +168,8 @@ export function App() {
   }
   if (state === "booting")
     return (
-      <div className="h-full flex items-center justify-center text-muted text-xs bg-bg">
+      <div className="h-full bg-bg">
         <SettingsEffects />
-        <LoadingStatus label="Starting Querithm…" />
       </div>
     );
 

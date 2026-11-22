@@ -1,0 +1,216 @@
+/* Start screen (§16): drawn by index.html itself, so it is on screen from the first frame, in the theme boot-theme.js
+   named. A file of its own, not a <style> in index.html: Tauri gives every inline <style> a nonce and adds it to
+   style-src, and a nonce there makes the webview ignore 'unsafe-inline', which Monaco's injected styles need.
+   The two backgrounds are --q-bg of each theme (src/theme/tokens.css) and the shell's start colours
+   (src-tauri/src/theme.rs); scripts/__tests__/startScreen.test.ts keeps the three in step. */
+html {
+  background: #0f1117;
+}
+html[data-theme="light"] {
+  background: #ffffff;
+}
+
+#splash {
+  --s-bg: #0f1117;
+  --s-fg: #e6edf3;
+  --s-muted: #8c949e;
+  --s-ring-a: #38bdf8;
+  --s-ring-b: #2563eb;
+  --s-ring-c: #4f46e5;
+  --s-plat-a: #60a5fa;
+  --s-plat-b: #38bdf8;
+  --s-plat-c: #2563eb;
+  --s-cap: #7dd3fc;
+  --s-pulse-a: #10b981;
+  --s-pulse-b: #34d399;
+  --s-track: #1b1f2a;
+  --s-idle: #1e222e;
+  --s-idle-cap: #272c39;
+  --s-led: #4b5260;
+  --s-led-on: #ffffff;
+  --s-ok: #34d399;
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 5px;
+  background: var(--s-bg);
+  color: var(--s-fg);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", sans-serif;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+}
+html[data-theme="light"] #splash {
+  --s-bg: #ffffff;
+  --s-fg: #1f2328;
+  --s-muted: #59636e;
+  --s-ring-a: #0ea5e9;
+  --s-plat-a: #3b82f6;
+  --s-plat-b: #0ea5e9;
+  --s-cap: #93c5fd;
+  --s-pulse-a: #059669;
+  --s-pulse-b: #10b981;
+  --s-track: #e9edf3;
+  --s-idle: #e3e8ef;
+  --s-idle-cap: #eef1f6;
+  --s-led: #a3acb8;
+  --s-ok: #a7f3d0;
+}
+#splash[hidden] {
+  display: none;
+}
+/* The app is ready under it: it fades out and lets every click through meanwhile. */
+#splash[data-leaving] {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease;
+}
+
+.splash-mark {
+  display: block;
+  width: 104px;
+  height: auto;
+  overflow: visible;
+}
+.splash-name {
+  margin-top: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.splash-stage {
+  min-height: 18px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--s-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.splash-ra { stop-color: var(--s-ring-a); }
+.splash-rb { stop-color: var(--s-ring-b); }
+.splash-rc { stop-color: var(--s-ring-c); }
+.splash-pa { stop-color: var(--s-plat-a); }
+.splash-pb { stop-color: var(--s-plat-b); }
+.splash-pc { stop-color: var(--s-plat-c); }
+.splash-ua { stop-color: var(--s-pulse-a); }
+.splash-ub { stop-color: var(--s-pulse-b); }
+
+.splash-track,
+.splash-ring {
+  fill: none;
+  stroke-width: 34;
+  stroke-linecap: round;
+}
+.splash-track {
+  stroke: var(--s-track);
+}
+.splash-ring {
+  stroke-dasharray: 100 100;
+  stroke-dashoffset: 100;
+  animation: splash-ring 0.9s cubic-bezier(0.3, 0.7, 0.2, 1) forwards;
+}
+@keyframes splash-ring {
+  to { stroke-dashoffset: 0; }
+}
+
+/* The three tiers are the three steps of the start (src/app/splash.ts): engine, settings, workspace. */
+.splash-idle { fill: var(--s-idle); }
+.splash-idle-cap { fill: var(--s-idle-cap); }
+.splash-cap { fill: var(--s-cap); }
+.splash-lit {
+  opacity: 0;
+  transition: opacity 0.35s ease;
+}
+.splash-led {
+  fill: var(--s-led);
+  transition: fill 0.25s ease;
+}
+.splash-t1 { --o: 0.95; }
+.splash-t2 { --o: 0.82; }
+.splash-t3 { --o: 0.7; }
+
+/* A finished step: the tier stays lit and its light turns green. */
+#splash:is([data-stage="2"], [data-stage="3"], [data-stage="4"]) .splash-t1 .splash-lit,
+#splash:is([data-stage="3"], [data-stage="4"]) .splash-t2 .splash-lit,
+#splash[data-stage="4"] .splash-t3 .splash-lit {
+  opacity: var(--o);
+}
+#splash:is([data-stage="2"], [data-stage="3"], [data-stage="4"]) .splash-t1 .splash-led,
+#splash:is([data-stage="3"], [data-stage="4"]) .splash-t2 .splash-led,
+#splash[data-stage="4"] .splash-t3 .splash-led {
+  fill: var(--s-ok);
+}
+
+/* The step in progress: the tier breathes and its light blinks. */
+#splash[data-stage="1"] .splash-t1 .splash-lit,
+#splash[data-stage="2"] .splash-t2 .splash-lit,
+#splash[data-stage="3"] .splash-t3 .splash-lit {
+  animation: splash-breathe 0.9s ease-in-out infinite alternate;
+}
+#splash[data-stage="1"] .splash-t1 .splash-led,
+#splash[data-stage="2"] .splash-t2 .splash-led,
+#splash[data-stage="3"] .splash-t3 .splash-led {
+  fill: var(--s-led-on);
+  animation: splash-blink 0.9s ease-in-out infinite;
+}
+@keyframes splash-breathe {
+  from { opacity: 0.2; }
+  to { opacity: 0.62; }
+}
+@keyframes splash-blink {
+  50% { opacity: 0.3; }
+}
+
+/* The pulse (the Q's tail) beats while the app starts and holds once it is ready. */
+.splash-pulse {
+  fill: none;
+  stroke-width: 26;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 100 100;
+  stroke-dashoffset: 100;
+  opacity: 0;
+}
+#splash:is([data-stage="1"], [data-stage="2"], [data-stage="3"]) .splash-pulse {
+  animation: splash-beat 1.5s ease-in-out infinite;
+}
+#splash[data-stage="4"] .splash-pulse {
+  stroke-dashoffset: 0;
+  opacity: 1;
+}
+@keyframes splash-beat {
+  0% { stroke-dashoffset: 100; opacity: 1; }
+  45%, 70% { stroke-dashoffset: 0; opacity: 1; }
+  100% { stroke-dashoffset: 0; opacity: 0; }
+}
+
+/* Reduce motion: nothing moves; the tiers still change with the steps. */
+@media (prefers-reduced-motion: reduce) {
+  #splash[data-leaving],
+  .splash-lit,
+  .splash-led {
+    transition: none;
+  }
+  #splash .splash-ring,
+  #splash .splash-lit,
+  #splash .splash-led,
+  #splash .splash-pulse {
+    animation: none;
+  }
+  #splash .splash-ring {
+    stroke-dashoffset: 0;
+  }
+  #splash .splash-pulse {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  #splash[data-stage="1"] .splash-t1 .splash-lit,
+  #splash[data-stage="2"] .splash-t2 .splash-lit,
+  #splash[data-stage="3"] .splash-t3 .splash-lit {
+    opacity: 0.5;
+  }
+}
