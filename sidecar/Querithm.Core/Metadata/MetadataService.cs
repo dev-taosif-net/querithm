@@ -457,6 +457,11 @@ public sealed class MetadataService
         {
             SnapshotStatus.Error => Logging.LogScrubber.Scrub(row.Error ?? "the metadata could not be read"),
             SnapshotStatus.Stale when session.RefreshDeferred => "it is read when the open transaction ends (commit or roll back, then run the query again)",
+            // A pooled tab's open transaction: the read ran on another connection, which does not see that transaction's
+            // uncommitted DDL (PostgreSQL, SQL Server). Not a final answer — so not settled, and the run after the commit
+            // checks again — instead of "checked against freshly read metadata".
+            _ when !session.SessionOwned && session.TxState != TxState.None =>
+                "this tab's transaction is open and another connection does not see its uncommitted changes (commit or roll back, then run the query again)",
             _ => null,
         };
     }

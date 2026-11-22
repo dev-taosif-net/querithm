@@ -289,8 +289,10 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
         if (credentialsChanged) s.Sessions.ForgetCredentials(before!.Id);
         var saved = s.Profiles.Save(profile);
         // The schema read through the old connection is not the new one's: the edited profile shows what a new profile
-        // would (nothing until it refreshes), never the old server's objects in its explorer and completion.
-        if (credentialsChanged) s.Metadata.ForgetConnection(saved.Id);
+        // would (nothing until it refreshes), never the old server's objects in its explorer and completion. Only when the
+        // connection goes elsewhere: a TLS or certificate setting changes how it connects, not to what, and dropping every
+        // loaded database's schema for it cost minutes of catalog reads on a large server.
+        if (credentialsChanged && Repointed(before!, saved)) s.Metadata.ForgetConnection(saved.Id);
         // A running monitor keeps the profile it started with (host, options) while kills read the environment fresh: when
         // the connection would now be built differently it stops first (not for a rename or a password-retention change).
         if (before != null && ConnectionChanged(before, saved))
@@ -303,6 +305,15 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
         s.Objects.InvalidateCapabilities();
         return saved;
     }
+
+    /// <summary>
+    /// The edit may point the connection at other objects: another engine, server, file, login (what it may see), tunnel,
+    /// or driver option (an Oracle SID, a read-only intent). TLS mode, trust and the CA file are left out.
+    /// </summary>
+    static bool Repointed(Profile a, Profile b) =>
+        a.Engine != b.Engine || (a.Location ?? LocationKind.Server) != (b.Location ?? LocationKind.Server) || a.File != b.File || a.Host != b.Host
+        || a.Port != b.Port || a.Auth != b.Auth || a.Username != b.Username || a.Ssh != b.Ssh
+        || !(a.Options ?? []).OrderBy(kv => kv.Key, StringComparer.Ordinal).SequenceEqual((b.Options ?? []).OrderBy(kv => kv.Key, StringComparer.Ordinal));
 
     /// <summary>The settings a connection is built from (the environment is read fresh wherever it matters).</summary>
     static bool ConnectionChanged(Profile a, Profile b) =>

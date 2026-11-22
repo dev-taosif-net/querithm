@@ -64,6 +64,27 @@ public class ProfileEditMetadataTests
         Assert.Contains(h.Notifier.Of<MetaUpdatedEvent>(), e => e.ProfileId == moved.Id && e.Database == "db" && e.Status == SnapshotStatus.Empty && e.Full);
     }
 
+    [Theory]
+    [InlineData(Engine.Mssql)]
+    [InlineData(Engine.Pg)]
+    [InlineData(Engine.MySql)]
+    [InlineData(Engine.Oracle)]
+    public async Task A_tls_or_certificate_edit_keeps_the_schema_it_still_connects_to(Engine engine)
+    {
+        // Regression: every connection-setting edit dropped every loaded database's schema, though TLS mode, trust and the
+        // CA file change how the profile connects, not to which server (file engines have no TLS settings).
+        await using var h = Host();
+        var p = await h.Rpc.ProfileSave(Make(engine));
+        Seed(h, p.Id);
+        // Oracle takes neither trust nor Mandatory: its driver always checks the chain over TCPS.
+        p = await h.Rpc.ProfileSave(engine == Engine.Oracle ? p with { TlsMode = TlsMode.VerifyCa } : p with { TlsMode = TlsMode.Mandatory, TrustCert = true });
+        Assert.Equal("old_orders", Assert.Single((await Snapshot(h, p.Id)).Objects).Name);
+        Assert.DoesNotContain(h.Notifier.Of<MetaUpdatedEvent>(), e => e.ProfileId == p.Id && e.Status == SnapshotStatus.Empty);
+        // A login of its own may see other objects: that edit still starts afresh.
+        await h.Rpc.ProfileSave(p with { Username = "someone_else" });
+        Assert.Empty((await Snapshot(h, p.Id)).Objects);
+    }
+
     /// <summary>A catalog whose read waits until released: a refresh caught reading the old server.</summary>
     sealed class GatedCatalog : IMetadataProvider
     {

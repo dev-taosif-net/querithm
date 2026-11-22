@@ -206,6 +206,27 @@ public sealed class SqliteEditImportTests
     }
 
     [Fact]
+    public async Task A_select_list_subquery_of_the_same_table_is_not_editable_as_that_tables_column()
+    {
+        // Regression: SQLite reports the subquery's column as the result column's origin, so next_name was an editable
+        // orders.name of the outer row (unlocked, editable=True): an edit wrote row 2's name into row 1's.
+        var (h, _, sid, path) = await OpenAsync(Orders);
+        await using var _ = h;
+        var (_, _, exec) = await h.RunAsync(sid, "SELECT id, (SELECT name FROM orders p WHERE p.id = orders.id + 1) AS next_name FROM orders ORDER BY id");
+        var edit = ResultSet(h, exec).Edit!;
+        Assert.Equal((false, false), (edit.Editable, edit.Rechecking));
+        Assert.Equal("Read-only: the same table (orders) appears more than once in the query", edit.Reason);
+        // The sidecar refuses the write too, whatever the UI shows.
+        var refused = await Assert.ThrowsAsync<Querithm.Core.QuerithmException>(() => h.Rpc.DataApplyPatch(new GridPatchParams
+        {
+            SessionId = sid, ExecutionId = exec,
+            Updates = [new GridRowUpdate { RowIndex = 0, Key = [V("1")], Changes = new() { ["next_name"] = V("x") }, Original = new() { ["next_name"] = V("two") } }],
+        }));
+        Assert.Contains("appears more than once", refused.Message);
+        Assert.Equal("one", Scalar(path, "SELECT name FROM orders WHERE id = 1"));
+    }
+
+    [Fact]
     public async Task A_result_no_refresh_can_make_editable_says_so_once_and_is_not_checked_on_every_run()
     {
         var (h, _, sid, _) = await OpenAsync(Orders);

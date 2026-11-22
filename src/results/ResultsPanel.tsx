@@ -29,6 +29,7 @@ import { useThrottledVersion } from "./useThrottledVersion";
 import { useSettings } from "../store/settings";
 import { chosenLayout, LAYOUT_LABEL, MAX_SIDE, pinUnavailable, samePin, setResultLayout, shownLayout, sideColumns, togglePin, type ResultLayout } from "./resultLayout";
 import { SideSets, StackedSets, paneTitle, type PaneModel, type StackItem } from "./ResultLayouts";
+import { plural } from "../app/plural";
 
 // The cell viewer side panel (Phase C2) loads the first time a cell is opened in it.
 const CellViewerPanel = lazy(() => import("./viewers/CellViewerPanel").then((m) => ({ default: m.CellViewerPanel })));
@@ -755,8 +756,6 @@ function EditAction({ label, icon, title, disabled, onClick, className = "", min
     </button>
   );
 }
-
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /** After leaving edit mode the Edit button is where focus belongs (the button that had it is gone). */
 function focusEditToggle() {

@@ -781,7 +781,10 @@ cursor DECLARE / OPEN / CLOSE, a loop of updates) cost nothing, an OUTPUT clause
 RETURN ends the list. The shape check shared by PostgreSQL, SQLite, DuckDB and Oracle (`ResultShape`) leaves out a
 subquery used as a value or a condition of a SELECT whose FROM list has ended: it feeds no result column and adds no
 rows, so `SELECT * FROM t WHERE v = (SELECT max(v) FROM t)` is editable; a subquery inside the FROM list, a CTE body and
-a statement that is not a SELECT are read as before. DuckDB's token predictor reads parentheses in the WHERE / ORDER BY /
+a statement that is not a SELECT are read as before. On SQLite a subquery in the select list still counts: its driver
+reports that subquery's column as the result column's origin (`(SELECT name FROM t p WHERE p.id = t.id + 1)` came back
+as t.name, editable, and an edit wrote the next row's name into this one), so only its WHERE / HAVING / ORDER BY
+subqueries are left out. DuckDB's token predictor reads parentheses in the WHERE / ORDER BY /
 LIMIT tail and in select items (an item with them is an expression); Oracle's takes MODEL, SAMPLE, PARTITION, WINDOW,
 FULL, LEFT, RIGHT, VERSIONS as column names where they stand as operands (they are not reserved). Edits are staged in the webview
 (`src/results/staging.ts`: cell edits, new rows, deletions, undo/redo) and never sent on blur.

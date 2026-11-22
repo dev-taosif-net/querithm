@@ -183,6 +183,15 @@ public class MetadataRefreshTests
         var why = await broken.RefreshedAsync(session, "db", limit.Token);
         Assert.StartsWith("no route to host", why);
         Assert.DoesNotContain("hunter2", why);
+
+        // A pooled tab with its transaction open: the read on another connection cannot see that transaction's DDL, so it is
+        // no final answer (regression: BEGIN; CREATE TABLE x …; SELECT * FROM x stayed read-only, "checked against freshly
+        // read metadata", for the settle window after the COMMIT).
+        session.TxState = TxState.Open;
+        var open = await metadata.RefreshedAsync(session, "db", limit.Token);
+        Assert.Contains("transaction is open", open);
+        session.TxState = TxState.None;
+        Assert.Null(await metadata.RefreshedAsync(session, "db", limit.Token));
     }
 
     [Fact]

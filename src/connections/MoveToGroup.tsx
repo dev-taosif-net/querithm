@@ -6,9 +6,8 @@ import type { Profile } from "../ipc/contract";
 import { Modal } from "../app/Modal";
 import { envColor, envLabel, useProfiles } from "../store/profiles";
 import { toast } from "../store/ui";
+import { plural } from "../app/plural";
 import { cleanGroupName, compareGroupNames, describeGroupChoice } from "./groupNames";
-
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 export function MoveToGroupDialog({ profileIds, onClose }: { profileIds: string[]; onClose: () => void }) {
   const all = useProfiles((s) => s.profiles);

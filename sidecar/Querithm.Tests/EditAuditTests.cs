@@ -143,8 +143,6 @@ public class EditAuditTests
     [InlineData("SELECT * FROM t WHERE (id IN (SELECT a.id FROM t a JOIN t b ON b.id = a.id))")]
     [InlineData("SELECT * FROM t WHERE id IN (SELECT id FROM t UNION SELECT id FROM u)")]
     [InlineData("SELECT * FROM t WHERE id IN (SELECT id FROM (SELECT id FROM t) d)")]
-    [InlineData("SELECT id, (SELECT count(*) FROM t) AS n FROM t")]
-    [InlineData("SELECT id, coalesce((SELECT max(v) FROM t), 0) AS top FROM t")]
     [InlineData("SELECT * FROM t WHERE ((SELECT max(v) FROM t)) = v")]
     [InlineData("SELECT * FROM t ORDER BY (SELECT count(*) FROM t y WHERE y.v < t.v)")]
     [InlineData("SELECT * FROM t GROUP BY id, v HAVING v > (SELECT avg(v) FROM t)")]
@@ -156,6 +154,24 @@ public class EditAuditTests
         Assert.Null(SqliteResultShape.EditRefusal(sql));
         Assert.Null(new DuckDbProvider().ResultEditRefusal(sql, 0, null));
         Assert.Null(Querithm.Intelligence.Oracle.OracleResultSources.EditRefusal(sql, null));
+    }
+
+    [Theory]
+    // A subquery in the select list: PostgreSQL, DuckDB and Oracle report no origin for it, so it costs no edit there.
+    // SQLite reports the subquery's column as the result column's origin — (SELECT name FROM t p WHERE p.id = t.id + 1)
+    // came back as t.name, an editable column that wrote the next row's name into this row — so there it counts.
+    [InlineData("SELECT id, (SELECT count(*) FROM t) AS n FROM t")]
+    [InlineData("SELECT id, coalesce((SELECT max(v) FROM t), 0) AS top FROM t")]
+    [InlineData("SELECT id, (SELECT v FROM t p WHERE p.id = t.id + 1) AS next_v FROM t")]
+    [InlineData("SELECT id, ((SELECT v FROM t p WHERE p.id = t.id + 1)) AS next_v FROM t WHERE v > 0")]
+    [InlineData("SELECT * FROM (SELECT id, (SELECT v FROM t p WHERE p.id = t.id + 1) AS next_v FROM t) d")]
+    public void A_select_list_subquery_costs_the_edit_only_where_the_driver_traces_it(string sql)
+    {
+        Assert.Null(PgResultShape.EditRefusal(sql));
+        Assert.Null(new DuckDbProvider().ResultEditRefusal(sql, 0, null));
+        Assert.Null(Querithm.Intelligence.Oracle.OracleResultSources.EditRefusal(sql, null));
+        Assert.Equal("the same table (t) appears more than once in the query", SqliteResultShape.EditRefusal(sql));
+        Assert.Equal("the same table (t) appears more than once in the query", new SqliteProvider().ResultEditRefusal(sql, 0, null));
     }
 
     [Theory]

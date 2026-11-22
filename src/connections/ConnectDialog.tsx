@@ -19,12 +19,11 @@ import { ask, toast, useUi } from "../store/ui";
 import { locationOf } from "./auth";
 import { confirmDeleteProfile } from "./deleteProfile";
 import { EngineLogo } from "./EngineLogo";
+import { plural } from "../app/plural";
 import {
   buildSections, defaultActiveId, ENV_FILTERS, ENV_NAMES, envCounts, filterProfiles, matchParts, nameSuffix, prodNameHint,
   profileAddress, ROW_ACTION, rowState, searchTerms, togglePin, type ProfileSection, type RowState,
 } from "./profileList";
-
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /** Row and sticky header heights: the list's height is set from them once, when the dialog opens. */
 const ROW_H = 32;

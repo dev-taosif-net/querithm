@@ -2,8 +2,7 @@
 import { RpcError } from "../ipc/client";
 import { useProfiles } from "../store/profiles";
 import { ask, toast } from "../store/ui";
-
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+import { plural } from "../app/plural";
 
 /**
  * Deletes a group after saying what happens to its connections (they leave the group; none is deleted). The count the

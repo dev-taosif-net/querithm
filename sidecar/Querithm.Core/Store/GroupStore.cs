@@ -70,9 +70,12 @@ public sealed class GroupStore(LocalStore store, ProfileStore profiles)
             // Renaming a group known only from its profiles stores it: the user acted on it on purpose.
             c.Cmd("INSERT INTO profile_group (name_key, name, created_at, updated_at) VALUES ($k, $n, $c, $u)", tx,
                 ("$k", toKey), ("$n", name), ("$c", created ?? now), ("$u", now)).ExecuteNonQuery();
-            // Every spelling of the old name moves, an older build's variants included.
-            changed = Members(c, tx, fromKey).Where(m => m.Raw != name).Select(m => m.Id).ToArray();
-            foreach (var id in changed) SetGroup(c, tx, id, name);
+            // Every spelling of the old name moves, an older build's variants included. The reply names every member: one
+            // whose stored spelling already is the new name was shown under the old one (profile.list shows the group's
+            // spelling), so leaving it out kept a second, stale group in the UI until a reload.
+            var members = Members(c, tx, fromKey);
+            foreach (var m in members.Where(m => m.Raw != name)) SetGroup(c, tx, m.Id, name);
+            changed = members.Select(m => m.Id).ToArray();
             tx.Commit();
             renamed = new GroupRenamed { From = old.Name, To = name };
         }

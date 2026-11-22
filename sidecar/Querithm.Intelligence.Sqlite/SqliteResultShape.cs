@@ -5,8 +5,11 @@ namespace Querithm.Intelligence.Sqlite;
 /// <summary>SQLite tokens for the grid-edit shape check (<see cref="ResultShape"/>).</summary>
 public static class SqliteResultShape
 {
-    /// <summary>Why a result of this SQLite statement cannot be edited (self-join, compound SELECT), or null.</summary>
-    public static string? EditRefusal(string statement) => ResultShape.EditRefusal(Shape(SqliteTokenizer.Tokenize(statement)));
+    /// <summary>
+    /// Why a result of this SQLite statement cannot be edited (self-join, compound SELECT), or null. SQLite reports a
+    /// select-list subquery's column as that column's origin, so the subquery's tables count there.
+    /// </summary>
+    public static string? EditRefusal(string statement) => ResultShape.EditRefusal(Shape(SqliteTokenizer.Tokenize(statement)), selectListTraced: true);
 
     public static List<ShapeToken> Shape(IEnumerable<SqliteToken> tokens) =>
         tokens.Where(t => !t.IsTrivia).Select(t => t.Kind switch

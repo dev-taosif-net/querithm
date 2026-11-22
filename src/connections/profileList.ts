@@ -264,11 +264,19 @@ export const ROW_ACTION: Record<RowState, string | null> = { idle: "Connect", fa
 
 /** `text` cut into the runs that match a search word and the runs that do not, for underlining the matches. */
 export function matchParts(text: string, terms: readonly string[]): { text: string; hit: boolean }[] {
-  const low = text.toLowerCase();
+  // Lower-cased one character at a time with each position's source: a character whose lower case is longer ("İ" is two
+  // code units) shifted every later highlight when the whole text was lower-cased at once.
+  let low = "";
+  const from: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const l = text[i].toLowerCase();
+    low += l;
+    for (let k = 0; k < l.length; k++) from.push(i);
+  }
   const hit = new Array<boolean>(text.length).fill(false);
   for (const t of terms) {
     if (!t) continue;
-    for (let i = low.indexOf(t); i >= 0; i = low.indexOf(t, i + t.length)) hit.fill(true, i, i + t.length);
+    for (let i = low.indexOf(t); i >= 0; i = low.indexOf(t, i + t.length)) hit.fill(true, from[i], from[i + t.length - 1] + 1);
   }
   const out: { text: string; hit: boolean }[] = [];
   for (let i = 0; i < text.length; i++) {

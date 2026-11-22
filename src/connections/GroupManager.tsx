@@ -8,10 +8,10 @@ import { Modal } from "../app/Modal";
 import { envColor, envLabel, useProfiles } from "../store/profiles";
 import { useSettings } from "../store/settings";
 import { toast } from "../store/ui";
+import { plural } from "../app/plural";
 import { confirmDeleteGroup } from "./groupActions";
 import { cleanGroupName, compareGroupNames, findGroup } from "./groupNames";
 
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const byName = (a: Profile, b: Profile) => a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true });
 

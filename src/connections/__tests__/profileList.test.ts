@@ -85,6 +85,12 @@ describe("connect dialog: search ranking", () => {
     expect(matchParts("orders-prod-replica", ["prod", "orders"])).toEqual([{ text: "orders", hit: true }, { text: "-", hit: false }, { text: "prod", hit: true }, { text: "-replica", hit: false }]);
     expect(matchParts("abc", [])).toEqual([{ text: "abc", hit: false }]);
   });
+
+  it("underlines the match itself after a character whose lower case is longer", () => {
+    // Regression: "İ" lower-cases to two code units, so the whole-text indices ran one place late ("rod-…").
+    expect(matchParts("İstanbul-prod", ["prod"])).toEqual([{ text: "İstanbul-", hit: false }, { text: "prod", hit: true }]);
+    expect(matchParts("İstanbul-prod", ["i̇stan"])).toEqual([{ text: "İstan", hit: true }, { text: "bul-prod", hit: false }]);
+  });
 });
 
 describe("connect dialog: environment filter", () => {

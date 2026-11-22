@@ -177,6 +177,24 @@ public sealed class GroupStoreTests : IDisposable
     }
 
     [Fact]
+    public void A_case_only_rename_reports_every_member_also_one_already_stored_in_the_new_spelling()
+    {
+        // Regression: the reply named only the profiles it rewrote, so one an older build stored as "Payments" kept showing
+        // under "payments" (profile.list shows the group's spelling) — a second, stale group in the UI until a reload.
+        _groups.Create("payments");
+        var a = Save("a", "payments");
+        var b = Save("b", "payments");
+        Exec($"UPDATE profile SET group_name = 'Payments' WHERE id = '{b.Id}'");
+        Assert.All(_profiles.List(), p => Assert.Equal("payments", p.GroupName));
+
+        var result = _groups.Rename("payments", "Payments");
+
+        Assert.Equal(new[] { a.Id, b.Id }.Order(), result.Changed.Order());
+        Assert.All(_profiles.List(), p => Assert.Equal("Payments", p.GroupName));
+        Assert.Equal(["Payments"], _groups.List().Select(g => g.Name));
+    }
+
+    [Fact]
     public void A_rename_retried_after_it_committed_succeeds_without_changing_anything()
     {
         Save("a", "Payments");

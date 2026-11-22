@@ -30,7 +30,8 @@ public readonly record struct ShapeToken(ShapeTokenKind Kind, string Text)
 /// <para>
 /// One thing is left out, because it cannot change which row a result row is: a subquery used as a value or a condition
 /// — in the select list, or after WHERE, HAVING, ORDER BY — of a SELECT whose FROM list has ended. Its tables feed no
-/// result column (the drivers report no origin for an expression) and add no rows, so
+/// result column (the drivers report no origin for an expression; SQLite's does for a select-list subquery, see
+/// <c>selectListTraced</c>) and add no rows, so
 /// <c>SELECT * FROM t WHERE v = (SELECT max(v) FROM t)</c> is as editable as <c>SELECT * FROM t</c>. A subquery inside the
 /// FROM list (a derived table, a join condition), a CTE body, and a statement that is not a SELECT are still read as before.
 /// </para>
@@ -49,13 +50,21 @@ public static class ResultShape
     static readonly HashSet<string> Opens = new(["SELECT", "WITH", "VALUES", "FROM", "TABLE"], StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Why a result of <paramref name="code"/> cannot be edited (without the "Read-only: " prefix), or null.</summary>
-    public static string? EditRefusal(IReadOnlyList<ShapeToken> code)
+    /// <param name="code">The statement's tokens, trivia left out.</param>
+    /// <param name="selectListTraced">
+    /// The driver traces a subquery in the select list to that subquery's column, so it names its table as FROM does and
+    /// is not set aside. SQLite does: <c>SELECT id, (SELECT name FROM t p WHERE p.id = t.id + 1) FROM t</c> reports the
+    /// second column as t.name, and the grid wrote the next row's name into this row's (regression). Its WHERE, HAVING
+    /// and ORDER BY subqueries feed no column and stay aside.
+    /// </param>
+    public static string? EditRefusal(IReadOnlyList<ShapeToken> code, bool selectListTraced = false)
     {
         // Per open parenthesis: does it hold a query (so FROM there lists tables, not EXTRACT(x FROM y)), and is a FROM
         // list open at that level (so a comma starts another table).
         // Selecting: the level has read its SELECT keyword. Aside: the level is, or lies inside, a subquery used as a value
-        // or a condition, whose tables and set operators say nothing about the rows of the result.
-        var frames = new List<Frame> { new(true, false, false, false) };
+        // or a condition, whose tables and set operators say nothing about the rows of the result. FromSeen: the level's
+        // select list has ended (its FROM came).
+        var frames = new List<Frame> { new(true, false, false, false, false) };
         var seen = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         for (var i = 0; i < code.Count; i++)
         {
@@ -69,14 +78,14 @@ public static class ResultShape
                 var here = frames[^1];
                 // Where a table may stand: FROM (a JOIN b), JOIN (…), a comma or another parenthesis inside a FROM list.
                 var slot = here.Query && (prev.Is("FROM") || prev.Is("JOIN") || prev.Is("LATERAL") || (here.InFrom && (prev.IsPunct(",") || prev.IsPunct("("))));
-                if (next.Kind == ShapeTokenKind.Word && Opens.Contains(next.Text)) frames.Add(new(true, false, false, here.Aside || AsAValue(frames)));
+                if (next.Kind == ShapeTokenKind.Word && Opens.Contains(next.Text)) frames.Add(new(true, false, false, here.Aside || AsAValue(frames, selectListTraced), false));
                 else if (slot)
                 {
-                    frames.Add(new(true, true, false, here.Aside));
+                    frames.Add(new(true, true, false, here.Aside, true));
                     if (!here.Aside && Seen(seen, TableAt(code, i + 1)) is { } again) return again;
                 }
                 // Parentheses around an operand, ((SELECT …)) or f((SELECT …)): the query inside is a value wherever these are.
-                else frames.Add(new(next.IsPunct("("), false, next.IsPunct("(") && AsAValue(frames), here.Aside));
+                else frames.Add(new(next.IsPunct("("), false, next.IsPunct("(") && AsAValue(frames, selectListTraced), here.Aside, true));
                 continue;
             }
             if (t.IsPunct(")"))
@@ -87,10 +96,10 @@ public static class ResultShape
             var frame = frames[^1];
             if (!frame.Query) continue;
             string? table = null;
-            if (t.Is("SELECT")) frames[^1] = frame with { Selecting = true, InFrom = false };
+            if (t.Is("SELECT")) frames[^1] = frame with { Selecting = true, InFrom = false, FromSeen = false };
             else if (t.Is("FROM") || t.Is("JOIN"))
             {
-                if (t.Is("FROM")) frames[^1] = frame with { InFrom = true };
+                if (t.Is("FROM")) frames[^1] = frame with { InFrom = true, FromSeen = true };
                 table = TableAt(code, i + 1);
             }
             else if (frame.InFrom && t.IsPunct(",")) table = TableAt(code, i + 1);
@@ -101,18 +110,19 @@ public static class ResultShape
     }
 
     /// <summary>One open parenthesis (the first is the statement itself).</summary>
-    readonly record struct Frame(bool Query, bool InFrom, bool Selecting, bool Aside);
+    readonly record struct Frame(bool Query, bool InFrom, bool Selecting, bool Aside, bool FromSeen);
 
     /// <summary>
     /// Whether a query opening here is a value or a condition of the SELECT around it: that SELECT — looking out through
     /// the parentheses of expressions and function calls — has read its SELECT keyword and is not inside its FROM list.
     /// A CTE body comes before the SELECT keyword, a derived table inside the FROM list, and a statement that begins with
-    /// a parenthesis or is not a SELECT never reads the keyword: none of them is one.
+    /// a parenthesis or is not a SELECT never reads the keyword: none of them is one. With <paramref name="selectListTraced"/>
+    /// a query in the select list (before its FROM) is not one either.
     /// </summary>
-    static bool AsAValue(List<Frame> frames)
+    static bool AsAValue(List<Frame> frames, bool selectListTraced)
     {
         for (var k = frames.Count - 1; k >= 0; k--)
-            if (frames[k].Query) return frames[k].Selecting && !frames[k].InFrom;
+            if (frames[k].Query) return frames[k].Selecting && !frames[k].InFrom && (!selectListTraced || frames[k].FromSeen);
         return false;
     }
 
