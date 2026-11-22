@@ -29,6 +29,14 @@ describe.each<Engine>(["mssql", "pg"])("confirmDeleteProfile (%s)", (engine) => 
     expect(useProfiles.getState().profiles).toEqual([]);
   });
 
+  it("opens the body with the profile's identity when the caller gives one (the Connect dialog)", async () => {
+    const pending = confirmDeleteProfile({ id: "p", name: "Prod DB" }, "Production · db-prod-01.example:1433 · Billing");
+    const dlg = useUi.getState().dialogs.at(-1) as Confirm;
+    expect(dlg.body).toBe(`Production · db-prod-01.example:1433 · Billing. ${DELETE_PROFILE_BODY}`);
+    dlg.resolve(false);
+    expect(await pending).toBe(false);
+  });
+
   it("keeps the profile when the user cancels", async () => {
     const pending = confirmDeleteProfile({ id: "p", name: "Prod DB" });
     (useUi.getState().dialogs.at(-1) as Confirm).resolve(false);

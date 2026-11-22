@@ -256,9 +256,9 @@ export const settingDefs: SettingDef[] = [
 /**
  * Settings keys deliberately not shown as rows: keybindings has its own page; the others are saved state rather than
  * preferences (pins, per-database grouping, the Explorer window flags behind explorerMode, where the results panel is
- * docked), or have no reader yet.
+ * docked, the Connect dialog's recent profiles and its muted "name says prod" hints), or have no reader yet.
  */
-export const notRows: (keyof Settings)[] = ["keybindings", "explorerSchemaGroups", "pinnedProfiles", "formatOnSave", "panelDock"];
+export const notRows: (keyof Settings)[] = ["keybindings", "explorerSchemaGroups", "pinnedProfiles", "recentProfiles", "prodHintMuted", "formatOnSave", "panelDock"];
 
 export const defOf = (id: SettingDef["id"]) => settingDefs.find((d) => d.id === id)!;
 

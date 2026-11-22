@@ -27,8 +27,10 @@ export function toastDuration(kind: Toast["kind"], text: string): number {
 }
 
 export type Dialog =
-  | { kind: "connect" }
-  | { kind: "profile"; profileId?: string; preset?: Engine; copyOf?: string }
+  /** `focus`: the profile the list opens on (one just saved in the editor). */
+  | { kind: "connect"; focus?: string }
+  /** `fromConnect`: opened from the Connect dialog, which comes back after a save with the saved profile active. */
+  | { kind: "profile"; profileId?: string; preset?: Engine; copyOf?: string; fromConnect?: boolean }
   | { kind: "password"; profileId: string; resolve: (secret: string | null) => void; error?: string; ssh?: boolean }
   | { kind: "hostKey"; hostKey: SshHostKey; resolve: (trust: boolean) => void }
   | { kind: "guard"; block: GuardBlock; resolve: (ok: boolean) => void }

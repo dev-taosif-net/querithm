@@ -16,9 +16,13 @@ import type { Profile } from "../ipc/contract";
 export const DELETE_PROFILE_BODY =
   "This removes the profile and all data kept for it: its saved password (OS keyring), cached schema metadata, query history and pin. Open tabs using it are disconnected; a tab with a running query or an open transaction asks first. This cannot be undone.";
 
-/** Asks first (danger confirm), then deletes. True when the profile was deleted. */
-export async function confirmDeleteProfile(p: Pick<Profile, "id" | "name">): Promise<boolean> {
-  const ok = await ask<boolean>((resolve) => ({ kind: "confirm", title: `Delete profile “${p.name}”?`, body: DELETE_PROFILE_BODY, danger: true, ok: "Delete", resolve }));
+/**
+ * Asks first (danger confirm), then deletes. True when the profile was deleted. `identity` ("Production ·
+ * db-prod-01:1433 · Billing") opens the body, so a list of look-alike names still says which one goes.
+ */
+export async function confirmDeleteProfile(p: Pick<Profile, "id" | "name">, identity?: string): Promise<boolean> {
+  const body = identity ? `${identity}. ${DELETE_PROFILE_BODY}` : DELETE_PROFILE_BODY;
+  const ok = await ask<boolean>((resolve) => ({ kind: "confirm", title: `Delete profile “${p.name}”?`, body, danger: true, ok: "Delete", resolve }));
   return ok && (await deleteProfile(p.id));
 }
 
@@ -54,9 +58,14 @@ export async function deleteProfile(profileId: string): Promise<boolean> {
   const settings = useSettings.getState();
   const prefix = `${profileId}|`;
   const pinnedProfiles = settings.pinnedProfiles.filter((id) => id !== profileId);
+  const recentProfiles = settings.recentProfiles.filter((id) => id !== profileId);
+  const prodHintMuted = settings.prodHintMuted.filter((id) => id !== profileId);
   const explorerSchemaGroups = settings.explorerSchemaGroups.filter((k) => !k.startsWith(prefix));
-  if (pinnedProfiles.length !== settings.pinnedProfiles.length || explorerSchemaGroups.length !== settings.explorerSchemaGroups.length)
-    settings.set({ pinnedProfiles, explorerSchemaGroups });
+  if (
+    pinnedProfiles.length !== settings.pinnedProfiles.length || recentProfiles.length !== settings.recentProfiles.length ||
+    prodHintMuted.length !== settings.prodHintMuted.length || explorerSchemaGroups.length !== settings.explorerSchemaGroups.length
+  )
+    settings.set({ pinnedProfiles, recentProfiles, prodHintMuted, explorerSchemaGroups });
   if (keyringError) toast("error", keyringError);
   return true;
 }

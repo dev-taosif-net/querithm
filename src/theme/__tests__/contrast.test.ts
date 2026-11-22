@@ -165,6 +165,35 @@ describe("Object Explorer row contrast (tokens.css)", () => {
   });
 });
 
+// ---- Connect dialog rows: the dialog is --q-panel, a hovered row --q-raised, the active row --q-row-sel and the footer
+// --q-panel-2. Environment words are text there (4.5:1); the PROD tag is white on --q-env-prod-fill, and the Production
+// stripe is the --q-env-prod mark (3:1 against every row surface; the darker fill is 2.99:1 on the dark active row).
+const CONNECT_SURFACES = ["--q-panel", "--q-raised", "--q-row-sel", "--q-panel-2"] as const;
+const ENV_TEXT = ["--q-env-local-fg", "--q-env-dev-fg", "--q-env-test-fg", "--q-env-staging-fg", "--q-env-prod-fg"] as const;
+
+describe("Connect dialog row contrast (tokens.css)", () => {
+  it.each(Object.entries(themes))("%s: environment words, names and muted text reach 4.5:1 on every row surface", (theme, vars) => {
+    const failures: string[] = [];
+    for (const s of CONNECT_SURFACES)
+      for (const t of [...ENV_TEXT, "--q-fg", "--q-muted", "--q-ok", "--q-err", "--q-warn"]) {
+        const r = ratio(color(`var(${t})`, vars), color(`var(${s})`, vars));
+        if (r < MIN) failures.push(`${t} on ${s}: ${r.toFixed(2)}`);
+      }
+    expect(failures, theme).toEqual([]);
+  });
+
+  it.each(Object.entries(themes))("%s: the PROD tag's white text reaches 4.5:1 and the Production stripe 3:1 on every row surface", (theme, vars) => {
+    expect(ratio(NAMED.white, color("var(--q-env-prod-fill)", vars)), theme).toBeGreaterThanOrEqual(MIN);
+    const stripe = color("var(--q-env-prod)", vars);
+    const failures = CONNECT_SURFACES.map((s) => [s, ratio(stripe, color(`var(${s})`, vars))] as const).filter(([, r]) => r < NON_TEXT).map(([s, r]) => `${s}: ${r.toFixed(2)}`);
+    expect(failures, theme).toEqual([]);
+  });
+
+  it.each(Object.entries(themes))("%s: the active row's ring (accent) reaches 3:1 on the active row and on its neighbours", (theme, vars) => {
+    for (const s of CONNECT_SURFACES) expect(ratio(color("var(--q-accent)", vars), color(`var(${s})`, vars)), `${theme} ${s}`).toBeGreaterThanOrEqual(NON_TEXT);
+  });
+});
+
 // ---- WCAG 1.4.11: control boundaries and the focus ring reach 3:1 against the surface they sit on.
 const NON_TEXT = 3;
 

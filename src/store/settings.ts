@@ -48,6 +48,13 @@ export interface Settings {
   explorerSchemaGroups: string[];
   /** Profile ids pinned to the top of the Connect dialog, in pin order. */
   pinnedProfiles: string[];
+  /**
+   * Profile ids by last successful connect, newest first (at most RECENT_PROFILES_MAX). The Connect dialog opens on the
+   * newest one that is listed and breaks search ties with it; it has no Recent section of its own.
+   */
+  recentProfiles: string[];
+  /** Profiles whose "name says prod, tag says otherwise" hint the user turned off in the Connect dialog. */
+  prodHintMuted: string[];
   /** Open-tabs list (Ctrl+P) groups tabs under their connection. */
   tabListGroupByConnection: boolean;
   /** Ask the release server for a newer version at start and every 6 hours (§16 updater). */
@@ -90,6 +97,14 @@ export const PROD_GUARD_KEY = "guard.prodConfirmations";
 
 export const schemaGroupKey = (profileId: string, database: string) => `${profileId}|${database}`;
 
+/** How many profiles `recentProfiles` remembers. */
+export const RECENT_PROFILES_MAX = 20;
+
+/** `recent` with `id` moved to the front, capped at RECENT_PROFILES_MAX. */
+export function touchRecent(recent: readonly string[], id: string): string[] {
+  return [id, ...recent.filter((x) => x !== id)].slice(0, RECENT_PROFILES_MAX);
+}
+
 export const defaultSettings: Settings = {
   theme: "dark",
   syntaxTheme: DEFAULT_SYNTAX_THEME,
@@ -118,6 +133,8 @@ export const defaultSettings: Settings = {
   explorerShowAll: false,
   explorerSchemaGroups: [],
   pinnedProfiles: [],
+  recentProfiles: [],
+  prodHintMuted: [],
   tabListGroupByConnection: false,
   autoUpdateCheck: true,
   announceBackground: true,
@@ -168,6 +185,7 @@ function clean<K extends keyof Settings>(key: K, v: unknown): Settings[K] | unde
     }
     return out as Settings[K];
   }
+  if (key === "recentProfiles") return (Array.isArray(v) && v.every((x) => typeof x === "string") ? [...new Set(v)].slice(0, RECENT_PROFILES_MAX) : undefined) as Settings[K] | undefined;
   if (Array.isArray(d)) return (Array.isArray(v) && v.every((x) => typeof x === "string") ? v : undefined) as Settings[K] | undefined;
   return (typeof v === typeof d ? v : undefined) as Settings[K] | undefined;
 }

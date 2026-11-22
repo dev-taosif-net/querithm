@@ -312,7 +312,11 @@ type Draft = { p: Profile; secret: string; touched: boolean };
 /** Problems found on Save that live outside profileFieldErrors (UI-only choices). */
 type Focusable = FieldKey | "environment" | "ack" | "sshHost" | "sshUser";
 
-export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileId?: string; preset?: Engine; copyOf?: string; onClose: () => void }) {
+export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
+  profileId?: string; preset?: Engine; copyOf?: string; onClose: () => void;
+  /** After a successful save, once the editor has closed (the Connect dialog comes back with the profile active). */
+  onSaved?: (saved: Profile) => void;
+}) {
   const existing = useProfiles((s) => s.profiles.find((p) => p.id === profileId));
   const groups = useProfiles((s) => s.groups);
   const allProfiles = useProfiles((s) => s.profiles);
@@ -626,8 +630,9 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose }: { profileI
       // was chosen or the saved one is of another kind (a password is not a token).
       const secretArg = needs ? (d.touched && d.secret ? d.secret : forget || kindChanged || endpointChanged ? "" : null) : existing ? "" : null;
       const sshArg = sshNeeds ? (sshSecretTouched && sshSecret ? sshSecret : sshForget || sshKindChanged || endpointChanged ? "" : null) : "";
-      await useProfiles.getState().save(p, secretArg, sshArg);
+      const saved = await useProfiles.getState().save(p, secretArg, sshArg);
       onClose();
+      onSaved?.(saved);
       // A new name or group changes nothing about the connection: no reconnect is needed for it.
       if (existing && useConnections.getState().servers[existing.id] && !identityOnlyChange(existing, p)) toast("info", "Saved. Reconnect to apply connection changes.");
     } catch (e) {

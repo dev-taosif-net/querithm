@@ -13,6 +13,7 @@ vi.mock("../ui", () => ({ ask: (make: (r: (v: unknown) => void) => unknown) => n
 
 import { needsSecret, obtainSecret, useConnections } from "../connections";
 import { useProfiles } from "../profiles";
+import { useSettings } from "../settings";
 
 const c = () => useConnections.getState();
 const prof = (o: Record<string, unknown> = {}) => ({ id: "p1", name: "L", engine: "mssql", auth: "sql", ...o }) as never;
@@ -115,6 +116,31 @@ describe("connect", () => {
     });
     await c().connect("p1");
     expect(c().servers.p1.error).toBe("plain");
+  });
+
+  // The Connect dialog opens on the most recently connected profile (§16 Connect dialog).
+  it.each(["mssql", "pg", "mySql", "oracle"])("a connect the user asked for makes the %s profile the most recent; a quiet one or a failure does not", async (engine) => {
+    setup(prof({ auth: "integrated", engine }));
+    useSettings.setState({ recentProfiles: ["other", "p1-old"] });
+    rpc.mockImplementation(async (m: string) => {
+      if (m === "session.open") return { sessionId: "s1" };
+      if (m === "session.state") return { serverVersion: "1" };
+      if (m === "meta.databases") return [];
+      if (m === "session.capabilities") return {};
+    });
+    expect(await c().connect("p1", { quiet: true })).toBe(true);
+    await Promise.resolve();
+    expect(useSettings.getState().recentProfiles).toEqual(["other", "p1-old"]);
+    expect(await c().connect("p1")).toBe(true);
+    await Promise.resolve();
+    expect(useSettings.getState().recentProfiles).toEqual(["p1", "other", "p1-old"]);
+    useSettings.setState({ recentProfiles: [] });
+    rpc.mockImplementation(async (m: string) => {
+      if (m === "session.open") throw new Error("unreachable");
+    });
+    expect(await c().connect("p1")).toBe(false);
+    await Promise.resolve();
+    expect(useSettings.getState().recentProfiles).toEqual([]);
   });
 });
 

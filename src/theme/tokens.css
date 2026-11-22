@@ -30,6 +30,12 @@
   --color-env-test: var(--q-env-test);
   --color-env-staging: var(--q-env-staging);
   --color-env-prod: var(--q-env-prod);
+  --color-env-local-fg: var(--q-env-local-fg);
+  --color-env-dev-fg: var(--q-env-dev-fg);
+  --color-env-test-fg: var(--q-env-test-fg);
+  --color-env-staging-fg: var(--q-env-staging-fg);
+  --color-env-prod-fg: var(--q-env-prod-fg);
+  --color-env-prod-fill: var(--q-env-prod-fill);
   --color-obj-table: var(--q-obj-table);
   --color-obj-view: var(--q-obj-view);
   --color-obj-proc: var(--q-obj-proc);
@@ -78,6 +84,15 @@
   --q-env-test: #8b5cf6;
   --q-env-staging: #f59e0b;
   --q-env-prod: #ef4444;
+  /* Environment words as text (the Connect dialog's tags): 4.5:1 on the dialog's surfaces, its hovered row and its
+     selected row (contrast.test.ts). The colours above stay for marks: dots, stripes, borders. */
+  --q-env-local-fg: #94a3b8;
+  --q-env-dev-fg: #34d399;
+  --q-env-test-fg: #a78bfa;
+  --q-env-staging-fg: #fbbf24;
+  --q-env-prod-fg: #f87171;
+  /* The one filled environment tag (PROD); white text on it reaches 4.5:1. The Production stripe is --q-env-prod. */
+  --q-env-prod-fill: #dc2626;
   --q-obj-table: #38bdf8;
   --q-obj-view: #c084fc;
   --q-obj-proc: #fbbf24;
@@ -151,6 +166,12 @@
   --q-env-test: #7c3aed;
   --q-env-staging: #d97706;
   --q-env-prod: #dc2626;
+  --q-env-local-fg: #475569;
+  --q-env-dev-fg: #065f46;
+  --q-env-test-fg: #6d28d9;
+  --q-env-staging-fg: #92400e;
+  --q-env-prod-fg: #b91c1c;
+  --q-env-prod-fill: #b91c1c;
   --q-obj-table: #0369a1;
   --q-obj-view: #9333ea;
   --q-obj-proc: #b45309;
@@ -385,6 +406,67 @@ select {
   }
   .q-tree-row[aria-selected="true"] {
     --q-row-bg: var(--q-row-sel);
+  }
+  /* Connect dialog rows (§16 Connect dialog): the active row (the Enter target) is --q-row-sel with a 2 px accent ring
+     that starts right of the 3 px stripe gutter, and carries the solid button. A hovered row shows its own Edit, ⋯ and
+     an outline button but never becomes the target. While the keyboard moves the active row ([data-kbd] on the list),
+     hover waits for the pointer to move, so rows scrolling under a still pointer don't light up. */
+  .q-crow {
+    --q-row-bg: var(--q-panel);
+  }
+  .q-clist:not([data-kbd]) .q-crow:hover {
+    --q-row-bg: var(--q-raised);
+    background: var(--q-raised);
+  }
+  .q-crow[data-active] {
+    --q-row-bg: var(--q-row-sel);
+    background: var(--q-row-sel);
+  }
+  .q-crow[data-active]::after {
+    content: "";
+    position: absolute;
+    inset: 0 0 0 3px;
+    border: 2px solid var(--q-accent);
+    border-radius: 0 6px 6px 0;
+    pointer-events: none;
+  }
+  .q-crow-actions {
+    visibility: hidden;
+  }
+  .q-crow-btn {
+    display: none;
+  }
+  .q-clist:not([data-kbd]) .q-crow:hover .q-crow-actions,
+  .q-crow[data-active] .q-crow-actions {
+    visibility: visible;
+  }
+  .q-clist:not([data-kbd]) .q-crow:hover .q-crow-btn,
+  .q-crow[data-active] .q-crow-btn {
+    display: inline-flex;
+  }
+  .q-clist:not([data-kbd]) .q-crow:hover .q-crow-word[data-yields],
+  .q-crow[data-active] .q-crow-word[data-yields] {
+    display: none;
+  }
+  .q-crow[data-selecting] .q-crow-actions,
+  .q-crow[data-selecting] .q-crow-btn {
+    display: none;
+  }
+  .q-crow[data-selecting] .q-crow-word[data-yields] {
+    display: inline;
+  }
+  @media (forced-colors: active) {
+    .q-crow[data-active]::after {
+      border-color: Highlight;
+    }
+    /* Backgrounds are dropped under forced colours: the stripe becomes a real edge and the PROD tag keeps its box. */
+    .q-crow-stripe[data-prod] {
+      forced-color-adjust: none;
+      background: CanvasText;
+    }
+    .q-env-tag[data-env="prod"] {
+      border-color: CanvasText;
+    }
   }
   /* On/off switch (Settings): a native checkbox with role="switch". Off is an outline with a muted knob; on is a
      solid --q-fg track (§12 keeps the accent for focus and selection). Both edges reach 3:1 on every surface. */

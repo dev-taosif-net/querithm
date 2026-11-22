@@ -47,7 +47,7 @@ describe.each<Engine>(["mssql", "pg", "mySql", "sqlite", "duckDb"])("deleting a 
         "kept|db": { key: "kept|db", profileId: "kept", database: "db", status: "fresh", version: 1 },
       },
     });
-    useSettings.setState({ pinnedProfiles: ["kept", "gone"], explorerSchemaGroups: ["gone|db", "kept|db"] });
+    useSettings.setState({ pinnedProfiles: ["kept", "gone"], recentProfiles: ["gone", "kept"], prodHintMuted: ["gone"], explorerSchemaGroups: ["gone|db", "kept|db"] });
     useTabs.setState({
       order: ["t1", "t2", "t3", "t4"],
       tabs: {
@@ -74,12 +74,14 @@ describe.each<Engine>(["mssql", "pg", "mySql", "sqlite", "duckDb"])("deleting a 
     expect(useProfiles.getState().profiles.map((p) => p.id)).toEqual(["kept"]);
   });
 
-  it("drops its snapshots, pin, explorer settings and disconnect marker", async () => {
+  it("drops its snapshots, pin, recent entry, muted hint, explorer settings and disconnect marker", async () => {
     await deleteProfile("gone");
     expect(Object.keys(useConnections.getState().servers)).toEqual([]);
     expect(useConnections.getState().disconnected).toEqual({});
     expect(Object.keys(useSnapshots.getState().entries)).toEqual(["kept|db"]);
     expect(useSettings.getState().pinnedProfiles).toEqual(["kept"]);
+    expect(useSettings.getState().recentProfiles).toEqual(["kept"]);
+    expect(useSettings.getState().prodHintMuted).toEqual([]);
     expect(useSettings.getState().explorerSchemaGroups).toEqual(["kept|db"]);
   });
 

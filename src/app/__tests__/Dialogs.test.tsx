@@ -37,8 +37,15 @@ vi.mock("../../editor/monaco", () => ({
   initMonaco: vi.fn(),
   monaco: { editor: { createDiffEditor: (...a: any[]) => { h.createDiff(...a); return h.diff; }, createModel: (...a: any[]) => h.createModel(...(a as [string])), create: (...a: any[]) => { h.create(...a); return h.ed; } } },
 }));
-vi.mock("../../connections/ConnectDialog", () => ({ ConnectDialog: ({ onClose }: any) => <button onClick={onClose}>connect-dialog</button> }));
-vi.mock("../../connections/ProfileEditor", () => ({ ProfileEditor: ({ profileId, preset, onClose }: any) => <button onClick={onClose}>profile-editor {profileId ?? "new"} {preset ?? ""}</button> }));
+vi.mock("../../connections/ConnectDialog", () => ({ ConnectDialog: ({ onClose, focus }: any) => <button onClick={onClose}>connect-dialog {focus ?? ""}</button> }));
+vi.mock("../../connections/ProfileEditor", () => ({
+  ProfileEditor: ({ profileId, preset, onClose, onSaved }: any) => (
+    <>
+      <button onClick={onClose}>profile-editor {profileId ?? "new"} {preset ?? ""}</button>
+      <button onClick={() => { onClose(); onSaved?.({ id: "saved1" }); }}>save-profile</button>
+    </>
+  ),
+}));
 vi.mock("../../results/GridDialogs", () => ({
   GridPreviewDialog: () => <div>grid-preview</div>, GridConflictsDialog: () => <div>grid-conflicts</div>, GridPendingDialog: () => <div>grid-pending</div>,
 }));
@@ -85,6 +92,18 @@ describe("Dialogs host", () => {
     expect(screen.getByText("connect-dialog").closest("[inert][data-q-exiting]")).not.toBeNull();
     await waitFor(() => expect(screen.queryByText("connect-dialog")).toBeNull());
     expect(screen.getByText(/profile-editor/)).toBeInTheDocument();
+  });
+  it("an editor opened from the Connect dialog brings it back after a save, on the saved profile; others don't", async () => {
+    render(<Dialogs />);
+    show({ kind: "profile", profileId: "ms1", fromConnect: true });
+    await userEvent.setup().click(screen.getByText("save-profile"));
+    expect(useUi.getState().dialogs).toEqual([{ kind: "connect", focus: "saved1" }]);
+    cleanup();
+    act(() => useUi.setState({ dialogs: [] }));
+    render(<Dialogs />);
+    show({ kind: "profile", profileId: "ms1" });
+    await userEvent.setup().click(screen.getByText("save-profile"));
+    expect(useUi.getState().dialogs).toEqual([]);
   });
   it("routes grid dialogs and lazily loaded wizards", async () => {
     render(<Dialogs />);

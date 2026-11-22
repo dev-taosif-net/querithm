@@ -81,6 +81,28 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+// Opened from the Connect dialog (§16 Connect dialog): after a save the dialog comes back with the saved profile active.
+describe.each<Engine>(["mssql", "pg"])("ProfileEditor: onSaved (%s)", (engine) => {
+  it("runs after a successful save, once the editor has closed, with the saved profile", async () => {
+    useProfiles.setState({ profiles: [base("a", engine)] });
+    const order: string[] = [];
+    const onSaved = vi.fn((p: Profile) => order.push(`saved:${p.id}`));
+    render(<ProfileEditor profileId="a" onClose={() => order.push("close")} onSaved={onSaved} />);
+    await userEvent.click(saveBtn());
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({ id: "a" })));
+    expect(order).toEqual(["close", "saved:a"]);
+  });
+
+  it("does not run when the save fails", async () => {
+    useProfiles.setState({ profiles: [base("a", engine)], save: vi.fn(async () => { throw new Error("disk full"); }) as never });
+    const onSaved = vi.fn();
+    render(<ProfileEditor profileId="a" onClose={() => {}} onSaved={onSaved} />);
+    await userEvent.click(saveBtn());
+    await waitFor(() => expect(toasts()).toContain("error:disk full"));
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+});
+
 describe("ProfileEditor: a new profile preselects nothing", () => {
   it("names no server type and no environment, offers the engines as tiles, and hides the fields, Test and Save until a type is chosen", async () => {
     render(<ProfileEditor onClose={() => {}} />);

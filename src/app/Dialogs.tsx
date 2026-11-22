@@ -43,9 +43,17 @@ function DialogView({ d }: { d: Dialog }) {
   const close = () => useUi.getState().closeDialog(d);
   switch (d.kind) {
     case "connect":
-      return <ConnectDialog onClose={close} />;
+      return <ConnectDialog onClose={close} focus={d.focus} />;
     case "profile":
-      return <ProfileEditor profileId={d.profileId} preset={d.preset} copyOf={d.copyOf} onClose={close} />;
+      return (
+        <ProfileEditor
+          profileId={d.profileId}
+          preset={d.preset}
+          copyOf={d.copyOf}
+          onClose={close}
+          onSaved={d.fromConnect ? (saved) => useUi.getState().openDialog({ kind: "connect", focus: saved.id }) : undefined}
+        />
+      );
     case "password":
       return <PasswordDialog d={d} />;
     case "hostKey":

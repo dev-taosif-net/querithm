@@ -3,6 +3,7 @@ import type { Capabilities, CapabilityInfo, DatabaseInfo, Profile, SshHostKey } 
 import { rpc, RpcError, shell } from "../ipc/client";
 import { ask } from "./ui";
 import { useProfiles } from "./profiles";
+import { touchRecent, useSettings } from "./settings";
 import { locationOf, needsSecretFor } from "../connections/auth";
 import { needsRepick } from "../connections/fileGrants";
 
@@ -208,6 +209,12 @@ export const useConnections = create<ConnStore>((set, get) => {
       inflight.set(profileId, run);
       const clear = () => void (inflight.get(profileId) === run && inflight.delete(profileId));
       run.then(clear, clear);
+      // A connect the user asked for (not a quiet background reconnect) makes the profile the most recent one: the
+      // Connect dialog opens on it next time.
+      if (!opts?.quiet)
+        void run.then((ok) => {
+          if (ok) useSettings.getState().set({ recentProfiles: touchRecent(useSettings.getState().recentProfiles, profileId) });
+        }, () => {});
       return run;
     },
     async disconnect(profileId) {

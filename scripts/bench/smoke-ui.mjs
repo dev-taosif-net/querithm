@@ -657,12 +657,20 @@ try {
     await page.evaluate(() => window.__bench.explorerWidth(280));
     await sleep(300);
   }
-  // Connection groups (§6): Connect dialog › Select › tick the fixture › Move to group… › a new name; the Explorer then
-  // shows Group › Server with no "No group" row, and the move is undone so the rest of the run sees today's tree.
+  // Connection groups (§6): Connect dialog › Organize › Select profiles… › tick the fixture › Move to group… › a new
+  // name; the Explorer then shows Group › Server with no "No group" row, and the move is undone so the rest of the run
+  // sees today's tree. On the way, the dialog (§16 Connect dialog) shows no subtitle and no key-hint line.
   {
     await page.evaluate(() => [...document.querySelectorAll('[data-q-explorer] button')].find((b) => b.getAttribute("aria-label") === "Connect…")?.click());
     await page.waitForSelector('[role="dialog"] input[aria-label="Search profiles"]', { timeout: 5_000 }).catch(() => errors.push("groups: the Connect dialog did not open"));
-    await clickButton("Select");
+    if (await page.evaluate(() => /appear in the Object Explorer|Enter connect/.test(document.querySelector('[role="dialog"]')?.textContent ?? "")))
+      errors.push("connect dialog: the old subtitle or key-hint line is back");
+    if (!(await page.evaluate(() => !!document.querySelector('[role="dialog"] [role="listbox"] [role="option"][data-profile]'))))
+      errors.push("connect dialog: no profile rows (role=option) in the list");
+    await shot("02e0-connect-dialog");
+    await clickButton("Organize");
+    await page.waitForSelector('[role="menu"][aria-label="Organize"]', { timeout: 5_000 }).catch(() => errors.push("groups: Organize opened no menu"));
+    await page.evaluate(() => [...document.querySelectorAll('[role="menu"] [role^="menuitem"]')].find((b) => b.getAttribute("aria-label")?.startsWith("Select profiles…"))?.click());
     await sleep(200);
     const ticked = await page.evaluate(() => {
       const box = document.querySelector('[role="dialog"] input[aria-label="Select Bench fixture"]');
