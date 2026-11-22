@@ -12,8 +12,7 @@ import { schemaGroupKey, useSettings } from "../store/settings";
 import { useTabs } from "../store/tabs";
 import { toast, useUi } from "../store/ui";
 import { EngineLogo } from "../connections/EngineLogo";
-import { DEFAULT_ENGINE, engineTraits, ENGINES } from "../engines";
-import { offeredEngines } from "../connections/engineInfo";
+import { DEFAULT_ENGINE, engineNames, engineTraits, ENGINES, ENGINES_BY_PLACE, LOCAL_ENGINES, SERVER_ENGINES } from "../engines";
 import { Icon, type IconName } from "../app/icons";
 import { DropMenu, type MenuEntry } from "../app/ToolbarMenu";
 import { readableOnAll, useThemeKey } from "../app/tabStyle";
@@ -847,22 +846,22 @@ function SearchMessage({ scope, profiles }: { scope: ReturnType<typeof searchSco
 
 const sentence = (t: string) => (/[.!?…]$/.test(t.trim()) ? t.trim() : `${t.trim()}.`);
 
-/** "SQL Server or PostgreSQL": every engine this build connects to. */
 /**
- * The engines every build offers (SQLite and MySQL stay behind the developer setting, so the empty Explorer does not
- * name them): "SQL Server or PostgreSQL".
+ * Every engine Querithm works with (engines.ts), servers first: "Connect to SQL Server, …, or open a SQLite or DuckDB
+ * file." A new engine is named here as soon as it joins the engine table.
  */
-const FIRST_RUN_ENGINES = offeredEngines(null);
-const ENGINE_NAMES = new Intl.ListFormat("en", { type: "disjunction" }).format(FIRST_RUN_ENGINES.map((e) => ENGINES[e].shortLabel));
+const FIRST_RUN_TEXT =
+  `Connect to ${engineNames(SERVER_ENGINES, "or", { wholeNames: true })}, or open a ${engineNames(LOCAL_ENGINES, "or", { wholeNames: true })} file. ` +
+  "Passwords stay in your OS keyring.";
 
 function FirstRun() {
   return (
     <div className="flex-1 flex flex-col items-center justify-center gap-2.5 px-5 py-6 text-center">
-      <div className="flex gap-2.5 text-muted">
-        {FIRST_RUN_ENGINES.map((e) => <EngineLogo key={e} engine={e} size={26} mono />)}
+      <div className="flex flex-wrap justify-center gap-2.5 text-muted max-w-[240px]">
+        {ENGINES_BY_PLACE.map((e) => <EngineLogo key={e} engine={e} size={26} mono />)}
       </div>
       <div className="text-[13px] font-semibold text-fg">No connections yet</div>
-      <div className="text-[11.5px] leading-snug text-muted max-w-[220px]">Add a {ENGINE_NAMES} connection. Passwords stay in your OS keyring.</div>
+      <div className="text-[11.5px] leading-snug text-muted max-w-[240px] text-balance">{FIRST_RUN_TEXT}</div>
       <button className="q-btn q-btn-primary h-[28px] px-3.5 text-[12px]" onClick={() => useUi.getState().openDialog({ kind: "profile" })}>
         New connection…
       </button>

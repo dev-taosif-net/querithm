@@ -2,7 +2,7 @@
   "name": "querithm",
   "private": true,
   "version": "0.1.5",
-  "description": "Querithm — a cross-platform SQL IDE for SQL Server, PostgreSQL, MySQL / MariaDB, SQLite and DuckDB",
+  "description": "Querithm — a cross-platform SQL IDE for SQL Server, PostgreSQL, MySQL / MariaDB, Oracle, SQLite and DuckDB",
   "type": "module",
   "license": "MIT",
   "scripts": {

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("../../ipc/client", () => ({ rpc: vi.fn(async () => undefined) }));
 
 import { defaultSettings, type Settings } from "../../store/settings";
+import { ENGINE_LIST, ENGINES } from "../../engines";
 import { defaultsOf, defOf, isModified, notRows, pages, searchPages, searchSettings, settingDefs } from "../registry";
 
 const s = (over: Partial<Settings> = {}): Settings => ({ ...defaultSettings, ...over });
@@ -26,10 +27,17 @@ describe("settings registry", () => {
     }
   });
 
-  it("settings that act on SQL Server only say so and name the PostgreSQL alternative", () => {
+  it("settings that act on SQL Server only say so and what the other engines do instead", () => {
     const only = settingDefs.filter((d) => d.engine).map((d) => d.id).sort();
     expect(only).toEqual(["leadingCommas", "newlineBeforeJoin", "statisticsIo", "statisticsTime"]);
-    for (const id of only) expect(defOf(id).engine!.other).toMatch(/PostgreSQL/);
+    expect(defOf("leadingCommas").engine!.other).toMatch(/^On the other engines, Format document keeps commas/);
+    expect(defOf("newlineBeforeJoin").engine!.other).toMatch(/^On the other engines, Format document decides JOIN/);
+    // Every engine with Explain analyze… is named, by the menu item it really has (not "Actual plan").
+    const analyze = ENGINE_LIST.filter((e) => ENGINES[e].actualPlan === "explainAnalyze");
+    expect(analyze).toEqual(expect.arrayContaining(["pg", "duckDb", "oracle"]));
+    for (const e of analyze) expect(defOf("statisticsTime").engine!.other).toContain(ENGINES[e].listLabel);
+    expect(defOf("statisticsTime").engine!.other).toBe("PostgreSQL, Oracle and DuckDB: use Plan ▸ Explain analyze… for server timings.");
+    expect(defOf("statisticsIo").engine!.other).toBe("PostgreSQL and Oracle: use Plan ▸ Explain analyze… for reads.");
   });
 
   it("dependent rows say why they are off", () => {
@@ -52,6 +60,7 @@ describe("settings registry", () => {
 
   it("SQL Server's Preserve keyword case is described honestly", () => {
     expect(defOf("keywordCase").note!(s({ keywordCase: "preserve" }))).toMatch(/Pascal case/);
+    expect(defOf("keywordCase").note!(s({ keywordCase: "preserve" }))).toMatch(/The other engines keep them as typed/);
     expect(defOf("keywordCase").note!(s())).toBeNull();
   });
 

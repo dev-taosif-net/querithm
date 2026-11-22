@@ -3,7 +3,7 @@
 // React and no app imports beyond the settings store and the pure Explorer layout rules.
 import { defaultSettings, settingLimits, type Settings } from "../store/settings";
 import { modeOf } from "../explorer/layoutState";
-import { ENGINES } from "../engines";
+import { engineNames, ENGINES, ENGINES_BY_PLACE } from "../engines";
 import type { Engine } from "../ipc/contract";
 
 export type PageId = "appearance" | "editor" | "formatting" | "execution" | "tabs" | "explorer" | "keyboard" | "about";
@@ -57,6 +57,11 @@ export interface SettingDef {
 }
 
 const ROW_LIMIT_WARN = 1_000_000;
+
+/** Engines whose Plan ▾ has Explain analyze… (an actual plan with timings), named in the SQL Server-only rows. */
+const EXPLAIN_ANALYZE = engineNames(ENGINES_BY_PLACE.filter((e) => ENGINES[e].actualPlan === "explainAnalyze"));
+/** Engines whose actual plan reports reads: PostgreSQL's buffers, Oracle's buffer gets and disk reads (DuckDB's has none). */
+const PLAN_READS = engineNames(["pg", "oracle"]);
 
 export const settingDefs: SettingDef[] = [
   // Appearance
@@ -122,7 +127,7 @@ export const settingDefs: SettingDef[] = [
     description: "Used by Format document, by completions and while typing.",
     control: { kind: "segmented", options: [{ value: "upper", label: "UPPER" }, { value: "lower", label: "lower" }, { value: "preserve", label: "Preserve" }] },
     keywords: ["uppercase", "lowercase", "capital"],
-    note: (s) => (s.keywordCase === "preserve" ? "SQL Server: Format document writes keywords in Pascal case (Select). PostgreSQL keeps them as typed." : null),
+    note: (s) => (s.keywordCase === "preserve" ? "SQL Server: Format document writes keywords in Pascal case (Select). The other engines keep them as typed." : null),
   },
   {
     id: "keywordCaseOnType", keys: ["keywordCaseOnType"], page: "formatting", group: "Keywords", label: "Change keyword case as I type",
@@ -138,12 +143,12 @@ export const settingDefs: SettingDef[] = [
   {
     id: "leadingCommas", keys: ["leadingCommas"], page: "formatting", group: "Layout", label: "Commas at line start",
     description: "Format document puts each comma at the start of the next line.",
-    control: { kind: "switch" }, engine: { only: "mssql", other: "PostgreSQL formatting keeps commas at the end of the line." },
+    control: { kind: "switch" }, engine: { only: "mssql", other: "On the other engines, Format document keeps commas at the end of the line." },
   },
   {
     id: "newlineBeforeJoin", keys: ["newlineBeforeJoin"], page: "formatting", group: "Layout", label: "JOIN on its own line",
     description: "Format document starts every JOIN on a new line.",
-    control: { kind: "switch" }, engine: { only: "mssql", other: "PostgreSQL formatting decides JOIN line breaks itself." },
+    control: { kind: "switch" }, engine: { only: "mssql", other: "On the other engines, Format document decides JOIN line breaks itself." },
   },
   // Query execution
   {
@@ -175,13 +180,13 @@ export const settingDefs: SettingDef[] = [
   {
     id: "statisticsTime", keys: ["statisticsTime"], page: "execution", group: "Server statistics", label: "Server CPU and elapsed time",
     description: "Runs SET STATISTICS TIME ON, so the status bar and Messages show the time the server spent.",
-    control: { kind: "switch" }, engine: { only: "mssql", other: "PostgreSQL: use Plan ▸ Actual plan for server timings." },
+    control: { kind: "switch" }, engine: { only: "mssql", other: `${EXPLAIN_ANALYZE}: use Plan ▸ Explain analyze… for server timings.` },
     keywords: ["set statistics time", "timing", "cpu"],
   },
   {
     id: "statisticsIo", keys: ["statisticsIo"], page: "execution", group: "Server statistics", label: "Reads per table",
     description: "Runs SET STATISTICS IO ON, so Messages show logical and physical reads for every table.",
-    control: { kind: "switch" }, engine: { only: "mssql", other: "PostgreSQL: use Plan ▸ Actual plan (buffers) for reads." },
+    control: { kind: "switch" }, engine: { only: "mssql", other: `${PLAN_READS}: use Plan ▸ Explain analyze… for reads.` },
     keywords: ["set statistics io", "reads", "logical reads"],
   },
   {

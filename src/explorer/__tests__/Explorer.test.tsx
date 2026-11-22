@@ -131,6 +131,8 @@ describe("Explorer: first run and empty states", () => {
     render(<Explorer />);
     expect(screen.getByText("No connections yet")).toBeTruthy();
     expect(screen.getByText(/Passwords stay in your OS keyring/)).toBeTruthy();
+    // Every engine, servers then files: not only SQL Server and PostgreSQL.
+    expect(screen.getByText(/^Connect to SQL Server, PostgreSQL, MySQL \/ MariaDB or Oracle, or open a SQLite or DuckDB file\./)).toBeTruthy();
     expect(screen.queryByRole("textbox")).toBeNull();
     fireEvent.click(within(screen.getByText("No connections yet").parentElement!).getByRole("button", { name: "New connection…" }));
     expect(useUi.getState().dialogs.at(-1)).toMatchObject({ kind: "profile" });

@@ -70,6 +70,9 @@ describe("ConnectDialog: layout", () => {
     expect(screen.getByText("No saved profiles yet")).toBeTruthy();
     expect(screen.queryByLabelText("Search profiles")).toBeNull();
     expect(screen.queryByText("+ New profile")).toBeNull();
+    // Each path names its engines from the engine table.
+    expect(screen.getByText("SQL Server · PostgreSQL · MySQL / MariaDB · Oracle")).toBeTruthy();
+    expect(screen.getByText("SQLite · DuckDB")).toBeTruthy();
     await userEvent.click(screen.getByText("Open a database file…"));
     expect(onClose).toHaveBeenCalled();
     expect(useUi.getState().dialogs).toEqual([{ kind: "profile", preset: "sqlite", fromConnect: true }]);

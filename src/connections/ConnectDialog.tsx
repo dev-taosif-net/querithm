@@ -9,7 +9,7 @@ import { Modal } from "../app/Modal";
 import { DropMenu, type MenuEntry } from "../app/ToolbarMenu";
 import { activateTab, changeConnection, disconnectServer, newQueryTab } from "../app/actions";
 import { tabForNewConnection } from "../app/tabActions";
-import { ENGINES, knownEngine } from "../engines";
+import { ENGINES, knownEngine, LOCAL_ENGINES, SERVER_ENGINES } from "../engines";
 import { announce } from "../store/announce";
 import { useConnections } from "../store/connections";
 import { envLabel, useProfiles } from "../store/profiles";
@@ -635,6 +635,12 @@ function TargetLine({ id, p, state, error, hint, listed }: { id: string; p: Prof
   );
 }
 
+/**
+ * The engines under each first-run choice, from the engine table (engines.ts), so a new engine is listed in its place.
+ * No-break spaces keep each name on one line ("MySQL / MariaDB" never splits at its slash).
+ */
+const dotted = (engines: Engine[]) => engines.map((e) => ENGINES[e].listLabel.replaceAll(" ", "\u00a0")).join(" · ");
+
 function FirstRun({ onServer, onFile }: { onServer: () => void; onFile: () => void }) {
   return (
     <div className="flex flex-col items-center justify-center text-center gap-2 px-6 py-10">
@@ -645,12 +651,12 @@ function FirstRun({ onServer, onFile }: { onServer: () => void; onFile: () => vo
         <button type="button" autoFocus className="flex flex-col items-start gap-1 p-3.5 rounded-lg border border-accent-solid bg-panel text-left hover:bg-hover" onClick={onServer}>
           <span className="text-accent"><ServerIcon /></span>
           <span className="text-[13px] font-semibold text-fg">Connect to a server…</span>
-          <span className="text-[11px] text-muted">SQL Server · PostgreSQL · MySQL / MariaDB · Oracle</span>
+          <span className="text-[11px] text-muted">{dotted(SERVER_ENGINES)}</span>
         </button>
         <button type="button" className="flex flex-col items-start gap-1 p-3.5 rounded-lg border border-line-strong bg-panel text-left hover:bg-hover" onClick={onFile}>
           <span className="text-accent"><FileIcon /></span>
           <span className="text-[13px] font-semibold text-fg">Open a database file…</span>
-          <span className="text-[11px] text-muted">SQLite · DuckDB</span>
+          <span className="text-[11px] text-muted">{dotted(LOCAL_ENGINES)}</span>
         </button>
       </div>
     </div>

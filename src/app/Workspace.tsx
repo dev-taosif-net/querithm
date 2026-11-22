@@ -22,6 +22,7 @@ import { useStripLayout } from "./hiddenTabs";
 import { Icon } from "./icons";
 import { displayKeys, keysFor, commands } from "./commands";
 import { withBoundary } from "./ErrorBoundary";
+import { engineNames, ENGINES_BY_PLACE } from "../engines";
 
 // M17: one panel's render error shows "This panel failed" in that panel; the shell and the other tabs keep working.
 const components = { query: withBoundary(QueryTabPanel, "Query tab"), tool: withBoundary(ToolTabPanel, "Tool tab"), notebook: withBoundary(NotebookTabPanel, "Notebook") };
@@ -44,6 +45,9 @@ const stripActions: StripActions = {
 };
 const theme = { name: "querithm", className: "dockview-theme-querithm", gap: 0 };
 
+/** Every engine Querithm works with, from the engine table (engines.ts), so a new engine is named here too. */
+const TAGLINE = `A SQL IDE for ${engineNames(ENGINES_BY_PLACE, "and", { wholeNames: true })}.`;
+
 function Watermark(_: IWatermarkPanelProps) {
   const profiles = useProfiles((s) => s.profiles);
   return (
@@ -53,7 +57,7 @@ function Watermark(_: IWatermarkPanelProps) {
         <div className="text-2xl font-bold text-fg tracking-tight" data-contrast="logotype">
           Que<span className="text-[#38BDF8]">rithm</span>
         </div>
-        <div className="text-muted text-xs">A SQL IDE for SQL Server and PostgreSQL.</div>
+        <div className="text-muted text-xs text-balance">{TAGLINE}</div>
         <div className="flex gap-2 justify-center">
           <button className="q-btn q-btn-primary" onClick={() => newQueryTab()}>+ New Query <span className="q-kbd text-accent-fg">Ctrl+N</span></button>
           <button className="q-btn" onClick={() => useUi.getState().openDialog({ kind: profiles.length ? "connect" : "profile" })}>

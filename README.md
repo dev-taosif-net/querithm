@@ -19,15 +19,18 @@ Free code signing provided by [SignPath.io](https://about.signpath.io), certific
 - Engines: SQL Server, PostgreSQL, MySQL / MariaDB and Oracle Database servers; SQLite and DuckDB files (read-only until
   you allow writes) or in-memory databases. A feature an engine lacks stays in place and says why. Oracle connects over
   TCPS by default with a password; its driver has no Intel macOS build, so there it is listed but disabled with the reason.
-- Multi-tab SQL editor (Monaco): T-SQL and PostgreSQL highlighting, folding from the AST, diagnostics, formatting.
-- Two-tier autocomplete: a tolerant tokenizer answers in ~1–3 ms from the cached schema; ScriptDom refines
-  (CTE/derived-table columns, temp tables, table variables, OUTPUT, MERGE, EXEC parameters, signatures).
+- Multi-tab SQL editor (Monaco): highlighting, folding and formatting in each engine's dialect (T-SQL, PostgreSQL,
+  MySQL, Oracle SQL and PL/SQL, SQLite, DuckDB); syntax diagnostics for T-SQL.
+- Two-tier autocomplete: a tolerant tokenizer answers in ~1–3 ms from the cached schema; each engine's own parser
+  refines it (ScriptDom for T-SQL: CTE/derived-table columns, temp tables, table variables, OUTPUT, MERGE, EXEC
+  parameters, signatures).
 - Many simultaneous connections; per-tab sessions; SQL Server database switch in one roundtrip.
 - Streaming results (Arrow, 10k-row batches) in a canvas grid: 1M rows, sort, filter, copy, CSV/TSV/JSON export.
 - Stored procedures: Modify (CREATE OR ALTER), Apply with server-side change detection and a diff, Compare,
   Execute with a parameter form, Script as CREATE/ALTER/DROP/EXEC, dependencies.
-- Plans: estimated/actual (SQL Server ShowPlanXML, PostgreSQL EXPLAIN [ANALYZE]) as a DAG with cost badges,
-  warnings and missing-index suggestions; STATISTICS IO/TIME tables.
+- Plans: estimated on every engine; actual on SQL Server (ShowPlanXML), PostgreSQL and DuckDB (EXPLAIN ANALYZE) and
+  Oracle (run statistics), drawn as a DAG with costs and warnings where the engine reports them. SQL Server adds
+  missing-index suggestions and STATISTICS IO/TIME tables.
 - SQL Server **Trace** (Extended Events timeline). PostgreSQL **step debugger** (pldebugger: breakpoints,
   step over/into, variables, call stack).
 - Safety: environments (Dev/Staging/Prod) with colors; first-run-on-Prod and destructive-statement (AST) guards

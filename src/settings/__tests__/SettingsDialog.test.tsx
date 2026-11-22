@@ -170,11 +170,12 @@ describe("Settings: rows", () => {
     expect(screen.getByText(/It is not TOP or LIMIT/)).toBeInTheDocument();
   });
 
-  it("SQL Server-only settings carry the chip and say what to use on PostgreSQL", () => {
+  it("SQL Server-only settings carry the chip and say what to use on the engines that have an alternative", () => {
     open({ page: "execution" });
     const row = screen.getByRole("switch", { name: "Reads per table" }).closest("[data-setting]") as HTMLElement;
     expect(within(row).getByText("SQL Server")).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "Reads per table" })).toHaveAccessibleDescription(/PostgreSQL: use Plan/);
+    expect(screen.getByRole("switch", { name: "Reads per table" })).toHaveAccessibleDescription(/PostgreSQL and Oracle: use Plan ▸ Explain analyze… for reads/);
+    expect(screen.getByRole("switch", { name: "Server CPU and elapsed time" })).toHaveAccessibleDescription(/PostgreSQL, Oracle and DuckDB: use Plan ▸ Explain analyze…/);
   });
 
   it("a dependent row stays focusable, says why it is off, and ignores changes", async () => {

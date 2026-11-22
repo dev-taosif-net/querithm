@@ -158,6 +158,11 @@ export interface EngineTraits {
   label: string;
   /** Short name for chips and screen-reader text ("SQL Server"). */
   shortLabel: string;
+  /**
+   * The name where Querithm lists the engines it works with (welcome screen, empty states, settings notes): short, and
+   * naming every product the engine covers ("MySQL / MariaDB"). `engineNames` joins these.
+   */
+  listLabel: string;
   /** Two-letter badge for compact lists. */
   badge: string;
   dialect: Dialect;
@@ -218,6 +223,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
   mssql: {
     label: "Microsoft SQL Server",
     shortLabel: "SQL Server",
+    listLabel: "SQL Server",
     badge: "MS",
     dialect: "tsql",
     language: DIALECTS.tsql.language,
@@ -244,6 +250,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
   pg: {
     label: "PostgreSQL",
     shortLabel: "PostgreSQL",
+    listLabel: "PostgreSQL",
     badge: "PG",
     dialect: "pg",
     language: DIALECTS.pg.language,
@@ -271,6 +278,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
   sqlite: {
     label: "SQLite",
     shortLabel: "SQLite",
+    listLabel: "SQLite",
     badge: "SL",
     dialect: "sqlite",
     language: DIALECTS.sqlite.language,
@@ -297,6 +305,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
   mySql: {
     label: "MySQL / MariaDB",
     shortLabel: "MySQL",
+    listLabel: "MySQL / MariaDB",
     badge: "MY",
     dialect: "mySql",
     language: DIALECTS.mySql.language,
@@ -323,6 +332,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
   duckDb: {
     label: "DuckDB",
     shortLabel: "DuckDB",
+    listLabel: "DuckDB",
     badge: "DK",
     dialect: "duckDb",
     language: DIALECTS.duckDb.language,
@@ -354,6 +364,7 @@ export const ENGINES: Record<Engine, EngineTraits> = {
   oracle: {
     label: "Oracle Database",
     shortLabel: "Oracle",
+    listLabel: "Oracle",
     badge: "OR",
     dialect: "oracle",
     language: DIALECTS.oracle.language,
@@ -389,6 +400,27 @@ export const ENGINES: Record<Engine, EngineTraits> = {
 /** Engines in display order (the profile editor's picker, the empty explorer). */
 export const ENGINE_LIST = Object.keys(ENGINES) as Engine[];
 export const DIALECT_LIST = Object.keys(DIALECTS) as Dialect[];
+
+/** Engines whose databases live on a server, in display order. */
+export const SERVER_ENGINES: Engine[] = ENGINE_LIST.filter((e) => ENGINES[e].locations.includes("server"));
+/** Engines whose databases live on this computer (a file, or memory), in display order. */
+export const LOCAL_ENGINES: Engine[] = ENGINE_LIST.filter((e) => !ENGINES[e].locations.includes("server"));
+/**
+ * Every engine Querithm works with, servers first: the one list the welcome screen, the empty Explorer and the product
+ * description name, so a new engine shows up in all of them at once.
+ */
+export const ENGINES_BY_PLACE: Engine[] = [...SERVER_ENGINES, ...LOCAL_ENGINES];
+
+/**
+ * Engines as an English list of their `listLabel`, without a serial comma (the house style):
+ * "SQL Server, PostgreSQL and Oracle", or with "or". `wholeNames` joins the words of each name with no-break spaces, so
+ * wrapped text breaks between engines and never inside one ("MySQL" / "/ MariaDB" on two lines).
+ */
+export function engineNames(engines: readonly Engine[], conjunction: "and" | "or" = "and", { wholeNames = false } = {}): string {
+  const names = engines.map((e) => (wholeNames ? ENGINES[e].listLabel.replaceAll(" ", "\u00a0") : ENGINES[e].listLabel));
+  if (names.length < 2) return names.join("");
+  return `${names.slice(0, -1).join(", ")} ${conjunction} ${names[names.length - 1]}`;
+}
 
 /**
  * The engine assumed where none is known yet: a tab without a connection, a new profile. Its dialect is the editor's

@@ -239,7 +239,8 @@ describe("Watermark", () => {
     expect(h.newQueryTab).toHaveBeenCalled();
     fireEvent.click(screen.getByText("+ New connection profile"));
     expect(useUi.getState().dialogs[0]).toEqual({ kind: "profile" });
-    expect(screen.getByText(/SQL Server and PostgreSQL/)).toBeInTheDocument();
+    // Every engine Querithm works with, not only the first two it shipped with.
+    expect(screen.getByText("A SQL IDE for SQL Server, PostgreSQL, MySQL / MariaDB, Oracle, SQLite and DuckDB.")).toBeInTheDocument();
   });
   it("with profiles it offers Connect…", () => {
     useProfiles.setState({ profiles: [{ id: "ms1" } as any] });

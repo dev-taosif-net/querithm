@@ -4,13 +4,13 @@ import { describe, expect, it } from "vitest";
 import { DialectValues, EngineValues, type Dialect, type Engine } from "../ipc/contract";
 import {
   actualPlanWithRun, assertNever, DEFAULT_DIALECT, DEFAULT_ENGINE, DELIMIT, DIALECT_LIST, DIALECTS, dialectForLanguage, dialectOf,
-  dialectOfLanguage, ENGINE_LIST, ENGINES, engineTraits, foldIdentifier, isDialect, isEngine, isLocalEngine, knownDialect, knownEngine, languageOf,
-  type DialectTraits, type EngineTraits,
+  dialectOfLanguage, ENGINE_LIST, engineNames, ENGINES, ENGINES_BY_PLACE, engineTraits, foldIdentifier, isDialect, isEngine, isLocalEngine, knownDialect,
+  knownEngine, languageOf, LOCAL_ENGINES, SERVER_ENGINES, type DialectTraits, type EngineTraits,
 } from "../engines";
 
 // One name per trait: a trait added to the interfaces without a test fails `satisfies` below.
 const ENGINE_TRAITS = {
-  label: "string", shortLabel: "string", badge: "string", dialect: "string", language: "string", defaultSchema: "string|null",
+  label: "string", shortLabel: "string", listLabel: "string", badge: "string", dialect: "string", language: "string", defaultSchema: "string|null",
   defaultPort: "number|null", defaultAuth: "string", defaultUser: "string|null", defaultDatabase: "string|null", statisticsIo: "boolean",
   statisticsTime: "boolean", actualPlan: "string", actualPlanConfirm: "string|null", actualPlanRun: "string|null", trace: "boolean", debugger: "boolean", synonyms: "boolean", packages: "boolean", triggerFunctions: "boolean",
   procedures: "boolean", monitor: "boolean", serverOutput: "boolean", locations: "object",
@@ -56,13 +56,13 @@ describe("engine table", () => {
 
   it("keeps today's SQL Server and PostgreSQL facts", () => {
     expect(ENGINES.mssql).toMatchObject({
-      label: "Microsoft SQL Server", shortLabel: "SQL Server", badge: "MS", dialect: "tsql", language: "tsql", defaultSchema: "dbo",
+      label: "Microsoft SQL Server", shortLabel: "SQL Server", listLabel: "SQL Server", badge: "MS", dialect: "tsql", language: "tsql", defaultSchema: "dbo",
       defaultPort: 1433, defaultAuth: "sql", defaultUser: "sa", defaultDatabase: null, statisticsIo: true, statisticsTime: true,
       actualPlan: "withRun", trace: true, debugger: false, synonyms: true, triggerFunctions: false, procedures: true, monitor: true,
       locations: ["server"],
     });
     expect(ENGINES.pg).toMatchObject({
-      label: "PostgreSQL", shortLabel: "PostgreSQL", badge: "PG", dialect: "pg", language: "pgsql", defaultSchema: "public",
+      label: "PostgreSQL", shortLabel: "PostgreSQL", listLabel: "PostgreSQL", badge: "PG", dialect: "pg", language: "pgsql", defaultSchema: "public",
       defaultPort: 5432, defaultAuth: "password", defaultUser: "postgres", defaultDatabase: "postgres", statisticsIo: false,
       statisticsTime: false, actualPlan: "explainAnalyze", trace: false, debugger: true, synonyms: false, triggerFunctions: true,
       procedures: true, monitor: true, locations: ["server"],
@@ -71,7 +71,7 @@ describe("engine table", () => {
 
   it("SQLite: a database file or memory, no sign-in, no actual plans, procedures, monitor, trace or debugger", () => {
     expect(ENGINES.sqlite).toEqual({
-      label: "SQLite", shortLabel: "SQLite", badge: "SL", dialect: "sqlite", language: "sqlite", defaultSchema: "main", defaultPort: null,
+      label: "SQLite", shortLabel: "SQLite", listLabel: "SQLite", badge: "SL", dialect: "sqlite", language: "sqlite", defaultSchema: "main", defaultPort: null,
       defaultAuth: "none", defaultUser: null, defaultDatabase: "main", statisticsIo: false, statisticsTime: false, actualPlan: "none",
       actualPlanConfirm: null, actualPlanRun: null, trace: false, debugger: false, synonyms: false, packages: false, triggerFunctions: false, procedures: false, monitor: false, serverOutput: false, locations: ["file", "memory"],
     });
@@ -79,7 +79,7 @@ describe("engine table", () => {
 
   it("MySQL / MariaDB: a server engine with procedures; no default schema (the database is the schema), no actual plans yet", () => {
     expect(ENGINES.mySql).toEqual({
-      label: "MySQL / MariaDB", shortLabel: "MySQL", badge: "MY", dialect: "mySql", language: "mysql", defaultSchema: null, defaultPort: 3306,
+      label: "MySQL / MariaDB", shortLabel: "MySQL", listLabel: "MySQL / MariaDB", badge: "MY", dialect: "mySql", language: "mysql", defaultSchema: null, defaultPort: 3306,
       defaultAuth: "password", defaultUser: "root", defaultDatabase: null, statisticsIo: false, statisticsTime: false, actualPlan: "none",
       actualPlanConfirm: null, actualPlanRun: null, trace: false, debugger: false, synonyms: false, packages: false, triggerFunctions: false, procedures: true, monitor: false, serverOutput: false, locations: ["server"],
     });
@@ -89,7 +89,7 @@ describe("engine table", () => {
 describe("Oracle (Phase D4, hidden engine)", () => {
   it("is a server engine on the TCPS port with every not-yet-implemented feature off", () => {
     expect(ENGINES.oracle).toEqual({
-      label: "Oracle Database", shortLabel: "Oracle", badge: "OR", dialect: "oracle", language: "oracle", defaultSchema: null,
+      label: "Oracle Database", shortLabel: "Oracle", listLabel: "Oracle", badge: "OR", dialect: "oracle", language: "oracle", defaultSchema: null,
       defaultPort: 2484, defaultAuth: "password", defaultUser: "system", defaultDatabase: null, statisticsIo: false,
       statisticsTime: false, actualPlan: "explainAnalyze", actualPlanConfirm: ENGINES.oracle.actualPlanConfirm, actualPlanRun: "Run for the actual plan",
       trace: false, debugger: false, synonyms: false, packages: true, triggerFunctions: false, procedures: true, monitor: true, serverOutput: true,
@@ -130,6 +130,32 @@ describe("Oracle (Phase D4, hidden engine)", () => {
     expect(foldIdentifier("Emp", false, "pg")).toBe("emp");
     expect(foldIdentifier("Emp", true, "pg")).toBe("Emp");
     for (const d of ["tsql", "sqlite", "mySql", "duckDb"] as const) expect(foldIdentifier("Emp", false, d)).toBe("Emp");
+  });
+});
+
+describe("naming the engines Querithm works with", () => {
+  it("lists every engine once, servers first, then databases on this computer", () => {
+    expect(SERVER_ENGINES).toEqual(["mssql", "pg", "mySql", "oracle"]);
+    expect(LOCAL_ENGINES).toEqual(["sqlite", "duckDb"]);
+    expect([...ENGINES_BY_PLACE].sort()).toEqual([...ENGINE_LIST].sort());
+    for (const e of ENGINE_LIST) expect(SERVER_ENGINES.includes(e)).toBe(!isLocalEngine(e));
+  });
+
+  it("joins list labels without a serial comma, with and / or", () => {
+    expect(engineNames(ENGINES_BY_PLACE)).toBe("SQL Server, PostgreSQL, MySQL / MariaDB, Oracle, SQLite and DuckDB");
+    expect(engineNames(SERVER_ENGINES, "or")).toBe("SQL Server, PostgreSQL, MySQL / MariaDB or Oracle");
+    expect(engineNames(["sqlite", "duckDb"], "or")).toBe("SQLite or DuckDB");
+    expect(engineNames(["pg"])).toBe("PostgreSQL");
+    expect(engineNames([])).toBe("");
+  });
+
+  it("wholeNames keeps each name on one line: no-break spaces inside names, ordinary ones between them", () => {
+    expect(engineNames(["mssql", "mySql", "duckDb"], "or", { wholeNames: true })).toBe("SQL\u00a0Server, MySQL\u00a0/\u00a0MariaDB or DuckDB");
+  });
+
+  it("names MariaDB beside MySQL wherever engines are listed", () => {
+    expect(ENGINES.mySql.listLabel).toBe("MySQL / MariaDB");
+    for (const e of ENGINE_LIST) expect(ENGINES[e].listLabel.length).toBeLessThanOrEqual(ENGINES[e].label.length);
   });
 });
 
