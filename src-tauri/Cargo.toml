@@ -16,6 +16,9 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 # No `zip` feature: v2 updater artifacts are raw installers/AppImages, and zip 4.x has RUSTSEC-2026-0367..0369.
 tauri-plugin-updater = { version = "2.14", default-features = false, features = ["rustls-tls", "system-proxy"] }
+# The window opens where it was closed (§16). Driven from Rust only: the webview holds no window-state permission.
+# 2.4.x: the same Rust code as 2.5, which only raises the MSRV past this crate's rust-version.
+tauri-plugin-window-state = "~2.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "sync", "time"] }

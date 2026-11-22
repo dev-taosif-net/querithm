@@ -13,6 +13,7 @@ mod native;
 mod shell_log;
 mod sidecar;
 mod updater;
+mod window_state;
 
 use tauri::{Manager, RunEvent, WindowEvent};
 
@@ -23,6 +24,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(window_state::plugin())
         .manage(ipc::Relay::default())
         .manage(sidecar::Supervisor::default())
         .manage(files::PickedFiles::default())
@@ -35,6 +37,10 @@ fn main() {
             let data = app.path().data_dir().map(|d| d.join("querithm"));
             if let Ok(data) = &data {
                 shell_log::init(data.join("logs"));
+            }
+            // The window was created hidden: it shows where it was closed, before the slower steps below (§16).
+            if let Some(window) = app.get_webview_window(close::MAIN) {
+                window_state::restore(&window);
             }
             // M23: the first instance owns the saved tabs; a second window starts with a new tab.
             app.manage(data.as_deref().map(instance::claim).unwrap_or(instance::Workspace::UNCLAIMED));

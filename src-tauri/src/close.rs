@@ -128,10 +128,12 @@ pub fn on_request(app: &AppHandle, prevent: impl FnOnce()) {
 }
 
 /// Closes the main window without another close request (the guard already allowed it); the app then exits (§4 step 5).
+/// Its place is written first, while it still exists: maximized or not is read from the live window (§16).
 fn close_now(app: &AppHandle) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || match handle.get_webview_window(MAIN) {
         Some(w) => {
+            crate::window_state::save(&handle);
             let _ = w.destroy();
         }
         None => handle.exit(0),

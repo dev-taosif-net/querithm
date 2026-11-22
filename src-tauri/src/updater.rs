@@ -144,6 +144,8 @@ pub async fn update_install(app: AppHandle, updates: State<'_, Updates>) -> Resu
     // The installer replaces the sidecar binary, which Windows keeps locked while it runs (§4 step 5 shutdown).
     let handle = app.clone();
     let installed = tauri::async_runtime::spawn_blocking(move || {
+        // Windows exits inside `install`, before `RunEvent::Exit` would save the window's place (§16).
+        crate::window_state::save_from_worker(&handle);
         handle.state::<Supervisor>().shutdown();
         update.install(bytes) // Windows: starts the installer and exits the app here.
     })
