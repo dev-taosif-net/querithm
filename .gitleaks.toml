@@ -29,3 +29,14 @@ id = "generic-api-key"
   condition = "AND"
   paths = ['''^scripts/bench/docker/compose\.yml$''']
   regexes = ['''^Querithm_Mon_2026$''']
+
+# The private-key rule, for one test file and one fake body only: SshSignInMatrixTests writes an encrypted PEM header
+# over a body that is not base64 ("not*base64*at*all"), which never parses as a key — the test checks that such a file
+# still asks for, or blames, the passphrase. Any real key, there or anywhere else, still fails the scan.
+[[rules]]
+id = "private-key"
+  [[rules.allowlists]]
+  description = "Fake encrypted PEM keys with an unparsable body in the SSH sign-in tests"
+  condition = "AND"
+  paths = ['''^sidecar/Querithm\.Tests/SshSignInMatrixTests\.cs$''']
+  regexes = ['''not\*base64\*at\*all''']
