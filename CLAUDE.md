@@ -57,6 +57,15 @@ Read `docs/ARCHITECTURE.md` first (§2, §4, §5, §12, §13, §15 before writin
    - **Never claim tests passed without running them in this session.** Report which suites ran; name any that were skipped (e.g. Docker fixture not up) and why, instead of implying they passed.
 4. **Keep Spec in Sync:** If implementation requires deviating from `docs/ARCHITECTURE.md`, document the deviation and rationale in `docs/ARCHITECTURE.md §16` in the same change.
 
+## 6. Release Notes: Human-Friendly, Easy English
+Release notes (`docs/release-notes/vX.Y.Z.md`, published as the GitHub release text by `release.yml`) are written for the people who use Querithm, not for its developers.
+- **Easy English:** short sentences, everyday words, active voice. One change per bullet; start with what the user gets or notices ("Edit now appears on a table you just created"), not with how it was built.
+- **No internal jargon:** no class, method, file, RPC or setting-key names, no phase or plan codes (`D4 S13`, `§16`, `PT10-1`), no CI run ids, commit hashes or test names. Say "the background service", not "the sidecar"; name engines the way users know them ("SQL Server:", "PostgreSQL:").
+- **Group by what users recognize:** short headings for the area (Connections, Editor, Results grid, Production safety, …); new features first, then improvements, then fixes.
+- **Fixes in the user's terms:** say what went wrong and what happens now ("A second run on Production no longer asks you to confirm again"), never only "fixed a race in X".
+- **Call out what matters:** anything that needs the user to act, changes a default, touches production safety or security, or removes something gets its own clear line.
+- **Facts only:** no "faster" or "improved" without the measured number (§4 "No Unsupported Claims"); keep numbers simple ("about 1.8 MB down to about 90 KB").
+
 ## Useful Commands
 - Test all: `pnpm test`
 - Integration tests (Docker): `QUERITHM_IT=1 dotnet test sidecar`
