@@ -8,7 +8,7 @@ import { useSettings } from "../store/settings";
 import { useDiag } from "../store/diag";
 import { explorerAction } from "../explorer/explorerWindow";
 import { stepDebug, stopDebug } from "../debug/DebugPanel";
-import { commentLines, expandWildcardAtCursor, goToDefinition, insertPrintForVariable } from "../editor/editorActions";
+import { commentLines, duplicateLine, expandWildcardAtCursor, goToDefinition, insertPrintForVariable } from "../editor/editorActions";
 import { openFile, saveAs, saveFile } from "./persistence";
 import { activePanelId, closeTabs, gotoTab, moveTabBy, nextTab, reopenClosed, switchTab, togglePin } from "./tabActions";
 import { useToolTabs } from "../store/toolTabs";
@@ -33,8 +33,8 @@ export interface Command {
   category?: string;
   run: () => void | Promise<void>;
   enabled?: () => boolean;
-  /** Only while focus is inside the results panel (its keys mean something else in the editor). */
-  scope?: "results";
+  /** Only while focus is inside the matching area (its keys mean something else elsewhere). */
+  scope?: "results" | "editor";
 }
 
 const withTab = (f: (id: string) => unknown) => () => {
@@ -65,6 +65,7 @@ export const commands: Command[] = [
   { id: "editor.comment", title: "Comment selected lines", keys: ["Ctrl+K Ctrl+C"], category: "Editor", run: withTab((id) => commentLines(id, "add")) },
   { id: "editor.uncomment", title: "Uncomment selected lines", keys: ["Ctrl+K Ctrl+U"], category: "Editor", run: withTab((id) => commentLines(id, "remove")) },
   { id: "editor.blockComment", title: "Toggle block comment", keys: ["Shift+Alt+A"], category: "Editor", run: withTab((id) => commentLines(id, "block")) },
+  { id: "editor.duplicateLine", title: "Duplicate line", keys: ["Ctrl+D"], category: "Editor", scope: "editor", run: () => duplicateLine(activeTabState()?.id) },
   { id: "results.toggle", title: "Toggle results panel", keys: ["Ctrl+R"], category: "View", run: withTab(toggleBottom) },
   { id: "results.grid", title: "Show the result as a grid", keys: ["Ctrl+1"], category: "View", run: withTab((id) => showResultAs(id, "grid")) },
   { id: "results.chart", title: "Show the result as a chart", keys: ["Ctrl+2"], category: "View", run: withTab((id) => showResultAs(id, "chart")) },
@@ -230,6 +231,7 @@ export function installKeybindings() {
     for (const c of commands) {
       if (!keysFor(c).some((k) => !isChord(k) && canonical(k) === sc)) continue;
       if (c.scope === "results" && !target?.closest?.('[data-focus-region="results"]')) continue;
+      if (c.scope === "editor" && (!inMonaco || target?.closest?.(".find-widget"))) continue;
       // In plain inputs only function keys and Ctrl chords are app shortcuts.
       if (inField && !/^(Ctrl|F\d)/.test(sc)) return;
       e.preventDefault();

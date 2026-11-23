@@ -3,17 +3,17 @@ import { FakeEditor, FakeModel } from "./fakeMonaco";
 import { IDX, PG_IDX } from "../completion/__tests__/fixture";
 import { useTabs } from "../../store/tabs";
 
-const state = vi.hoisted(() => ({ editor: undefined as unknown, model: undefined as unknown, ctx: null as unknown }));
+const state = vi.hoisted(() => ({ editor: undefined as unknown, focused: undefined as unknown, model: undefined as unknown, ctx: null as unknown }));
 const toast = vi.hoisted(() => vi.fn());
 const openDefinition = vi.hoisted(() => vi.fn());
 const scriptObject = vi.hoisted(() => vi.fn());
 
-vi.mock("../editors", () => ({ editorForTab: () => state.editor, getModel: () => state.model }));
+vi.mock("../editors", () => ({ editorForTab: () => state.editor, focusedEditor: () => state.focused, getModel: () => state.model }));
 vi.mock("../providers", () => ({ docContext: () => state.ctx }));
 vi.mock("../../app/actions", () => ({ openDefinition, scriptObject }));
 vi.mock("../../store/ui", () => ({ toast }));
 
-const { commentLines, goToDefinition, insertPrintForVariable } = await import("../editorActions");
+const { commentLines, duplicateLine, goToDefinition, insertPrintForVariable } = await import("../editorActions");
 
 function setup(text: string, cursor: number, lang: "tsql" | "pgsql", ctx: unknown) {
   const model = new FakeModel(text, lang, { toString: () => "u" });
@@ -25,7 +25,7 @@ function setup(text: string, cursor: number, lang: "tsql" | "pgsql", ctx: unknow
 
 beforeEach(() => {
   vi.clearAllMocks();
-  state.editor = state.model = undefined; state.ctx = null;
+  state.editor = state.focused = state.model = undefined; state.ctx = null;
 });
 
 describe("goToDefinition", () => {
@@ -157,5 +157,30 @@ describe("commentLines", () => {
       "querithm:editor.action.removeCommentLine",
       "querithm:editor.action.blockComment",
     ]);
+  });
+});
+
+describe("duplicateLine", () => {
+  it("does nothing without an editor", () => expect(() => duplicateLine("t")).not.toThrow());
+
+  it("refocuses the active tab editor and triggers Monaco's copyLinesDownAction", () => {
+    const { ed } = setup("select 1", 0, "tsql", null);
+    const focus = vi.fn();
+    Object.assign(ed, { focus });
+    duplicateLine("t");
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(ed.triggered).toEqual(["querithm:editor.action.copyLinesDownAction"]);
+  });
+
+  it("prefers the focused editor over the tab editor (so notebook cells duplicate in place)", () => {
+    const { ed: tabEd } = setup("select 1", 0, "tsql", null);
+    const cellEd = new FakeEditor(null, {});
+    const cellFocus = vi.fn();
+    Object.assign(cellEd, { focus: cellFocus });
+    state.focused = cellEd;
+    duplicateLine("t");
+    expect(cellFocus).toHaveBeenCalledTimes(1);
+    expect(cellEd.triggered).toEqual(["querithm:editor.action.copyLinesDownAction"]);
+    expect(tabEd.triggered).toEqual([]);
   });
 });

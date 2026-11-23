@@ -25,7 +25,7 @@ vi.mock("../persistence", () => ({ openFile: vi.fn(), saveAs: vi.fn(), saveFile:
 vi.mock("../tabActions", () => tabActions);
 vi.mock("../../debug/DebugPanel", () => ({ stepDebug: vi.fn(), stopDebug: vi.fn() }));
 const { editorActions } = vi.hoisted(() => ({
-  editorActions: { goToDefinition: vi.fn(), insertPrintForVariable: vi.fn(), expandWildcardAtCursor: vi.fn(), commentLines: vi.fn() },
+  editorActions: { goToDefinition: vi.fn(), insertPrintForVariable: vi.fn(), expandWildcardAtCursor: vi.fn(), commentLines: vi.fn(), duplicateLine: vi.fn() },
 }));
 vi.mock("../../editor/editorActions", () => editorActions);
 vi.mock("../../erd/erdActions", () => ({ openErdFromActiveTab: vi.fn() }));
@@ -391,6 +391,28 @@ describe("commands: keyboard dispatch", () => {
     void cmd("editor.comment").run();
     void cmd("editor.uncomment").run();
     expect(editorActions.commentLines.mock.calls).toEqual([["t1", "add"], ["t1", "remove"]]);
+  });
+  it("Ctrl+D duplicates the line inside the editor, but ignores the find widget, plain inputs, and editable grids", () => {
+    editorActions.duplicateLine.mockClear();
+    const monaco = { tagName: "TEXTAREA", closest: (s: string) => (s === ".monaco-editor" ? {} : null) };
+    const inEditor = key({ key: "d", code: "KeyD", ctrlKey: true, target: monaco });
+    handler(inEditor);
+    expect(inEditor.preventDefault).toHaveBeenCalled();
+    expect(editorActions.duplicateLine).toHaveBeenCalledWith("t1");
+
+    editorActions.duplicateLine.mockClear();
+    const findInput = { tagName: "TEXTAREA", closest: (s: string) => (s === ".monaco-editor" || s === ".find-widget" ? {} : null) };
+    const plainInput = { tagName: "INPUT", closest: () => null };
+    const grid = { tagName: "CANVAS", closest: (s: string) => (s === "[data-q-grid-edit]" ? {} : null) };
+    for (const target of [findInput, plainInput, grid]) {
+      const e = key({ key: "d", code: "KeyD", ctrlKey: true, target });
+      handler(e);
+      expect(e.preventDefault).not.toHaveBeenCalled();
+    }
+    expect(editorActions.duplicateLine).not.toHaveBeenCalled();
+
+    void cmd("editor.duplicateLine").run();
+    expect(editorActions.duplicateLine).toHaveBeenCalledWith("t1");
   });
   it("Monaco's hidden textarea is not a plain field", () => {
     const monaco = { tagName: "TEXTAREA", closest: (sel: string) => (sel === ".monaco-editor" ? {} : null) };

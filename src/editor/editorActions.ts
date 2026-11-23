@@ -1,6 +1,6 @@
 // Editor commands that need the schema: go to definition (F12), and the Trace helper that inserts a PRINT for a
 // variable (§11: variable values are not available in Trace; this is the supported way to inspect state).
-import { editorForTab, getModel } from "./editors";
+import { editorForTab, focusedEditor, getModel } from "./editors";
 import { identifierAt, resolveObjectAt } from "./completion";
 import { docContext } from "./providers";
 import { openDefinition } from "../app/actions";
@@ -67,6 +67,14 @@ export function commentLines(tabId: string, mode: keyof typeof COMMENT_ACTIONS) 
   if (!ed) return;
   ed.focus();
   ed.trigger("querithm", COMMENT_ACTIONS[mode], null);
+}
+
+/** Duplicates the cursor line (or selected lines) directly below. Uses the focused editor first so notebook cells work too. */
+export function duplicateLine(tabId?: string) {
+  const ed = focusedEditor() ?? (tabId ? editorForTab(tabId) : undefined);
+  if (!ed) return;
+  ed.focus();
+  ed.trigger("querithm", "editor.action.copyLinesDownAction", null);
 }
 
 export function expandWildcardAtCursor(tabId: string) {
