@@ -145,12 +145,20 @@ public class SshIntegrationTests
         var p = await h.Rpc.ProfileSave(Target("pg", Bastion()));
         await TrustAsync(h, p, "pg");
         var sid = (await h.Rpc.SessionOpen(new SessionOpenParams { ProfileId = p.Id, Secret = TestHost.PgPassword })).SessionId;
-        Assert.Equal(1, await SelectOneAsync(h, sid));
+        var (firstDone, _, firstId) = await h.RunAsync(sid, "SELECT 1 AS one");
+        Assert.Equal(ExecState.Done, firstDone.State);
+        // No metadata is loaded for this database: the result's edit verdict reads it after the run, on a pool connection
+        // opened through the tunnel. Dropping the tunnel under that read raced the next query (CI run 45107267450: a
+        // 15 s connect timeout to a tunnel port); this test is about the query after the drop, so the read ends first.
+        await h.Notifier.SettledAsync(firstId);
         var (host, port, _) = h.Services.Sessions.Get(sid).Provider.TunnelTarget(p);
         var tunnel = await h.Services.Sessions.Tunnels!.EnsureAsync(p, null, host, port, CancellationToken.None);
+        var oldPort = tunnel.Local.Port;
         tunnel.Dispose(); // the bastion went away
         // The pooled connection that used the old tunnel is dropped, not handed to the next query.
-        Assert.Equal(1, await SelectOneAsync(h, sid));
+        var (done, batches, id) = await h.RunAsync(sid, "SELECT 1 AS one");
+        Assert.True(done.State == ExecState.Done, $"after the drop of the tunnel on port {oldPort}: {done.Error?.Message} {string.Join(" | ", h.Messages(id))}");
+        Assert.Equal(1, ((Int32Array)batches[0].Column(0)).GetValue(0));
         var reopened = await h.Services.Sessions.Tunnels.EnsureAsync(p, null, host, port, CancellationToken.None);
         Assert.NotSame(tunnel, reopened);
         Assert.True(reopened.Alive);
