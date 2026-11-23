@@ -89,6 +89,11 @@ export function applyMonacoTheme() {
       "editor.selectionBackground": hex("--q-sel"),
       // A selection keeps its fill when Run takes the focus (Monaco's default pales it), so what Run runs stays plain.
       "editor.inactiveSelectionBackground": hex("--q-sel"),
+      // Subtle snippet tabstop tint; hide the final-tabstop border (Monaco's default bar looks like a stray cursor).
+      "editor.snippetTabstopHighlightBackground": `${hex("--q-accent").slice(0, 7)}14`,
+      "editor.snippetTabstopHighlightBorder": `${hex("--q-accent").slice(0, 7)}40`,
+      "editor.snippetFinalTabstopHighlightBackground": "#00000000",
+      "editor.snippetFinalTabstopHighlightBorder": "#00000000",
       "editorCursor.foreground": hex("--q-fg"),
       "editorWidget.background": hex("--q-raised"),
       "editorWidget.border": hex("--q-line"),

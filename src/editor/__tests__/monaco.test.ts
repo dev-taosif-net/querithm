@@ -110,6 +110,11 @@ describe("monaco bootstrap", () => {
     // The selection looks the same unfocused (Run takes the focus).
     expect(t.colors["editor.inactiveSelectionBackground"]).toBe("#2563eb26");
     expect(t.colors["editorWidget.border"]).toBe("#aabbccdd");
+    // Snippet tabstops use a subtle accent tint and hide the final-tabstop cursor-like bar.
+    expect(t.colors["editor.snippetFinalTabstopHighlightBackground"]).toBe("#00000000");
+    expect(t.colors["editor.snippetFinalTabstopHighlightBorder"]).toBe("#00000000");
+    expect(t.colors["editor.snippetTabstopHighlightBackground"]).toMatch(/^#[0-9a-f]{6}14$/i);
+    expect(t.colors["editor.snippetTabstopHighlightBorder"]).toMatch(/^#[0-9a-f]{6}40$/i);
   });
 
   it("token colors come from the syntax theme named by data-syntax, in the document's mode; brackets cycle its three colors", () => {

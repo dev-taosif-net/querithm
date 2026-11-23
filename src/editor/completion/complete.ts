@@ -89,13 +89,13 @@ const RULES: Record<Dialect, CompletionRules> = {
   tsql: {
     plainName: /^[A-Za-z_#@][A-Za-z0-9_@#$]*$/,
     qualifyScalarFunctions: true,
-    call: { label: "EXEC …", insertText: "EXEC ${1:procedure_name} ${2:@params};", filter: "EXEC", match: ["EXEC", "EXECUTE"] },
+    call: { label: "EXEC …", insertText: "EXEC ${1:procedure_name} $0;", filter: "EXEC", match: ["EXEC", "EXECUTE"] },
     namedArguments: "assign",
   },
   pg: {
     plainName: DIALECTS.pg.regularIdentifier,
     qualifyScalarFunctions: false,
-    call: { label: "CALL …", insertText: "CALL ${1:procedure_name}(${2:args});", filter: "CALL", match: ["CALL"] },
+    call: { label: "CALL …", insertText: "CALL ${1:procedure_name}($0);", filter: "CALL", match: ["CALL"] },
     namedArguments: "arrow",
   },
   sqlite: {
@@ -108,7 +108,7 @@ const RULES: Record<Dialect, CompletionRules> = {
     // User variables (`@x`, `@@x`) are inserted as written.
     plainName: /^@{0,2}[A-Za-z_$][A-Za-z0-9_$]*$/,
     qualifyScalarFunctions: false,
-    call: { label: "CALL …", insertText: "CALL ${1:procedure_name}(${2:args});", filter: "CALL", match: ["CALL"] },
+    call: { label: "CALL …", insertText: "CALL ${1:procedure_name}($0);", filter: "CALL", match: ["CALL"] },
     namedArguments: null,
   },
   duckDb: {
@@ -496,7 +496,7 @@ class Builder {
 
   private paramsSnippet(o: SnapObject): string {
     const ps = (o.params ?? []).filter((p) => p.name && !p.output).sort((a, b) => a.ordinal - b.ordinal);
-    return ps.map((p, i) => `\${${i + 1}:${escSnippet(p.name)}}`).join(", ") || "$1";
+    return ps.map((p, i) => `\${${i + 1}:${escSnippet(p.name)}}`).join(", ") || "$0";
   }
 
   // ---- item groups ----
@@ -658,7 +658,7 @@ class Builder {
     }
     if (schema === undefined) {
       for (const f of builtinFunctions(this.dialect)) {
-        this.cands.push({ label: f, kind: "func", detail: "built-in function", group: group + 1, insertText: `${f}($1)`, isSnippet: true });
+        this.cands.push({ label: f, kind: "func", detail: "built-in function", group: group + 1, insertText: `${f}($0)`, isSnippet: true });
       }
     }
   }
@@ -785,13 +785,13 @@ class Builder {
       if (word === undefined) return;
       this.cands.push({ label, kind: "snippet", detail: "statement template", insertText, isSnippet: true, filterText: word, group: 0, match });
     };
-    add("INSERT INTO … VALUES …", "INSERT INTO ${1:table} (${2:columns})\nVALUES (${3:values});", ["INSERT", "INSERT INTO", "ins"]);
-    add("UPDATE … SET … WHERE …", "UPDATE ${1:table}\nSET ${2:column} = ${3:value}\nWHERE ${4:condition};", ["UPDATE", "upd"]);
+    add("INSERT INTO … VALUES …", "INSERT INTO ${1:table} (${2:columns})\nVALUES ($0);", ["INSERT", "INSERT INTO", "ins"]);
+    add("UPDATE … SET … WHERE …", "UPDATE ${1:table}\nSET ${2:column} = ${3:value}\nWHERE $0;", ["UPDATE", "upd"]);
     const call = RULES[this.dialect].call;
     if (call) add(call.label, call.insertText, call.match);
-    add("ALTER TABLE …", "ALTER TABLE ${1:table_name} ${2:ADD column_name data_type};", ["ALTER", "ALTER TABLE", "alt"]);
-    add("SELECT … FROM …", "SELECT ${1:*} FROM ${2:table_name};", ["SELECT", "ssf"]);
-    add("DELETE FROM … WHERE …", "DELETE FROM ${1:table_name} WHERE ${2:condition};", ["DELETE", "del"]);
+    add("ALTER TABLE …", "ALTER TABLE ${1:table_name} $0;", ["ALTER", "ALTER TABLE", "alt"]);
+    add("SELECT … FROM …", "SELECT * FROM $0;", ["SELECT", "ssf"]);
+    add("DELETE FROM … WHERE …", "DELETE FROM ${1:table_name} WHERE $0;", ["DELETE", "del"]);
   }
 
   private expression(clause: string): void {

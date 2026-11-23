@@ -196,6 +196,18 @@ describe("completion: DML clauses (review regressions)", () => {
       const tpl = run("ins|", d).find((i) => i.label.startsWith("INSERT INTO"));
       expect(tpl?.filterText).toBe("INSERT");
     });
+    it(`${d}: statement templates exit snippet mode at $0 so highlights do not linger`, () => {
+      const sel = run("sele|", d).find((i) => i.label === "SELECT … FROM …");
+      expect(sel?.insertText).toBe("SELECT * FROM $0;");
+      const del = run("del|", d).find((i) => i.label === "DELETE FROM … WHERE …");
+      expect(del?.insertText).toBe("DELETE FROM ${1:table_name} WHERE $0;");
+      const upd = run("upd|", d).find((i) => i.label === "UPDATE … SET … WHERE …");
+      expect(upd?.insertText).toBe("UPDATE ${1:table}\nSET ${2:column} = ${3:value}\nWHERE $0;");
+      const ins = run("ins|", d).find((i) => i.label === "INSERT INTO … VALUES …");
+      expect(ins?.insertText).toBe("INSERT INTO ${1:table} (${2:columns})\nVALUES ($0);");
+      const alt = run("alt|", d).find((i) => i.label === "ALTER TABLE …");
+      expect(alt?.insertText).toBe("ALTER TABLE ${1:table_name} $0;");
+    });
   }
 });
 
