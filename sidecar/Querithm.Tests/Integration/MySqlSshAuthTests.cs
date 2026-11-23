@@ -33,8 +33,11 @@ public sealed class MySqlSshAuthTests
 
     static async Task<string> SelectOneAsync(MyHost h, string sid)
     {
-        var (done, batches, _) = await Run(h, sid, "SELECT 1 AS one");
+        var (done, batches, id) = await Run(h, sid, "SELECT 1 AS one");
         Assert.Null(done.Error);
+        // With no metadata loaded the edit verdict reads it after the run, on a pool connection through the tunnel: a test
+        // that drops the tunnel next lets that read end first (CI run 45113126689: "Connect Timeout expired" after the drop).
+        await h.Notifier.SettledAsync(id);
         return Text(batches[0], "one")!;
     }
 

@@ -45,6 +45,9 @@ public sealed class OracleSshAuthTests
     {
         var (done, batches, id) = await h.RunAsync(sid, "SELECT LOWER(SYS_CONTEXT('USERENV', 'NETWORK_PROTOCOL')) AS proto FROM dual");
         Assert.True(done.State == ExecState.Done, string.Join("\n", h.Messages(id)) + done.Error?.Message);
+        // As in the MySQL and PostgreSQL tunnel tests: the edit verdict's metadata read after the run goes through the
+        // tunnel, and a test that drops the tunnel next lets it end first.
+        await h.Notifier.SettledAsync(id);
         return ((Apache.Arrow.StringArray)batches[0].Column(0)).GetString(0);
     }
 
