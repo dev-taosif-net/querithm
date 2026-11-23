@@ -235,13 +235,24 @@ public sealed class SshTunnelManager(KnownHosts known, ILogger log) : IAsyncDisp
         var info = new FileInfo(path);
         if (!info.Exists) throw new QuerithmException("sshKey", $"The SSH key file {Path.GetFileName(path)} does not exist.");
         if (info.Length > 256 * 1024) throw new QuerithmException("sshKey", $"{Path.GetFileName(path)} is too large to be an SSH private key.");
+        QuerithmException NeedsPassphrase() => new("sshNeedsSecret", $"The SSH key {Path.GetFileName(path)} is protected by a passphrase. Enter it to connect.");
+        QuerithmException WrongPassphrase() => new("sshKey", $"The SSH key {Path.GetFileName(path)} could not be used: the passphrase is wrong, or the key is damaged or in a format that is not supported.");
+        bool encrypted;
+        try { encrypted = EncryptedPem(path); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new QuerithmException("sshKey", $"The SSH key {Path.GetFileName(path)} could not be used: {LogScrubber.Scrub(ex.Message)}");
+        }
+        // An encrypted PEM key says so in its header: without a passphrase it is never decrypted with an empty one, whose
+        // result was garbage that failed in whichever parser met it first (CI: "sshKey" instead of the passphrase prompt).
+        if (encrypted && string.IsNullOrEmpty(passphrase)) throw NeedsPassphrase();
         try
         {
             return string.IsNullOrEmpty(passphrase) ? new PrivateKeyFile(path) : new PrivateKeyFile(path, passphrase);
         }
         catch (SshPassPhraseNullOrEmptyException)
         {
-            throw new QuerithmException("sshNeedsSecret", $"The SSH key {Path.GetFileName(path)} is protected by a passphrase. Enter it to connect.");
+            throw NeedsPassphrase();
         }
         // An encrypted PKCS#8 or legacy PEM ("ssh-keygen -m PEM") key decrypted with no or the wrong passphrase: the cipher
         // reports bad padding ("pad block corrupted", "Padding is invalid…"), which says nothing to the user. About one wrong
@@ -249,15 +260,27 @@ public sealed class SshTunnelManager(KnownHosts known, ILogger log) : IAsyncDisp
         // parse (AsnContentException, seen on CI) instead.
         catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException or Org.BouncyCastle.Crypto.CryptoException or System.Formats.Asn1.AsnContentException)
         {
-            if (string.IsNullOrEmpty(passphrase))
-                throw new QuerithmException("sshNeedsSecret", $"The SSH key {Path.GetFileName(path)} is protected by a passphrase. Enter it to connect.");
-            throw new QuerithmException("sshKey", $"The SSH key {Path.GetFileName(path)} could not be used: the passphrase is wrong, or the key is damaged or in a format that is not supported.");
+            throw string.IsNullOrEmpty(passphrase) ? NeedsPassphrase() : WrongPassphrase();
         }
         catch (Exception ex) when (ex is SshException or InvalidOperationException or ArgumentException or FormatException or NotSupportedException or IOException)
         {
-            // Wrong passphrase, unsupported format: the message names the problem, never the key.
+            // An encrypted key decrypted with the wrong passphrase can fail any of these parsers too (garbage bytes).
+            if (encrypted) throw WrongPassphrase();
+            // Unsupported format: the message names the problem, never the key.
             throw new QuerithmException("sshKey", $"The SSH key {Path.GetFileName(path)} could not be used: {LogScrubber.Scrub(ex.Message)}");
         }
+    }
+
+    /// <summary>
+    /// An encrypted PEM key: PKCS#8 ("BEGIN ENCRYPTED PRIVATE KEY") or legacy OpenSSL ("Proc-Type: 4,ENCRYPTED"). OpenSSH-format
+    /// keys keep it inside their body; SSH.NET reports those itself (SshPassPhraseNullOrEmptyException).
+    /// </summary>
+    static bool EncryptedPem(string path)
+    {
+        foreach (var line in File.ReadLines(path).Take(4))
+            if (line.Contains("-----BEGIN ENCRYPTED PRIVATE KEY-----", StringComparison.Ordinal) || line.StartsWith("Proc-Type: 4,ENCRYPTED", StringComparison.Ordinal))
+                return true;
+        return false;
     }
 
     void Admit(Tunnel t, string host, uint port)

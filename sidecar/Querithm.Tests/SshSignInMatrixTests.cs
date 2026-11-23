@@ -151,6 +151,23 @@ public sealed class SshSignInMatrixTests : IDisposable
         Assert.DoesNotContain(_dir, ex.Message);
     }
 
+    [Theory]
+    [InlineData("-----BEGIN ENCRYPTED PRIVATE KEY-----\nnot*base64*at*all\n-----END ENCRYPTED PRIVATE KEY-----\n")]
+    [InlineData("-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,00000000000000000000000000000000\n\nnot*base64*at*all\n-----END RSA PRIVATE KEY-----\n")]
+    public async Task An_encrypted_key_whose_body_fails_to_parse_still_asks_for_or_blames_the_passphrase(string pem)
+    {
+        // Regression (CI windows-latest, 1 run in ~256): decrypted with an empty or wrong passphrase, the garbage sometimes
+        // passes the padding check and fails a later parser (ArgumentException, FormatException…), which came back as
+        // "sshKey" with that parser's words instead of the passphrase prompt. Garbage that fails parsing stands in for it.
+        var key = Path.Combine(_dir, $"id_enc_garbage_{Guid.NewGuid():N}");
+        File.WriteAllText(key, pem);
+        var none = await Open(Pg(Ssh(SshAuthKind.PrivateKey, key)), null);
+        Assert.Equal(("sshNeedsSecret", $"The SSH key {Path.GetFileName(key)} is protected by a passphrase. Enter it to connect."), (none.Code, none.Message));
+        var wrong = await Open(Pg(Ssh(SshAuthKind.PrivateKey, key)), "wrong-phrase-42");
+        Assert.Equal("sshKey", wrong.Code);
+        Assert.StartsWith($"The SSH key {Path.GetFileName(key)} could not be used: the passphrase is wrong", wrong.Message);
+    }
+
     /// <summary>"ssh-keygen -m PEM": a legacy "Proc-Type: 4,ENCRYPTED" key, when this machine has ssh-keygen.</summary>
     string? LegacyPemKey(string passphrase)
     {
