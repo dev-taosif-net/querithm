@@ -29,7 +29,7 @@ const profile = (o: Partial<Profile>): Profile =>
 const tree = (p: Profile) =>
   buildTree({
     profiles: [p], servers: c().servers, order: c().order, entries: {}, details: {}, expanded: new Set([`s:${p.id}`]), collapsedEnvs: new Set(),
-    pinned: [], kind: "all", folderFilters: {}, schemaGroups: [], groupByEnv: false, showAll: true, active: undefined,
+    kind: "all", folderFilters: {}, schemaGroups: [], groupByEnv: false, showAll: true, active: undefined,
   } as never).rows;
 
 beforeEach(() => {

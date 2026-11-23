@@ -179,11 +179,13 @@ function SideTab({ railRef, active, onEnter, onLeave, onClick }: SideTabProps) {
   const order = useConnections((s) => s.order);
   const servers = useConnections((s) => s.servers);
   const profiles = useProfiles((s) => s.profiles);
-  const pinned = useSettings((s) => s.pinnedProfiles);
+  const groupOrder = useSettings((s) => s.groupOrder);
+  const profileOrder = useSettings((s) => s.profileOrder);
+  const groupByEnv = useSettings((s) => s.explorerGroupByEnv);
   // One mark per server in use, in the tree's order, shaped by state (never color alone): a dot when connected, a
-  // ring while connecting, a warning sign when it failed. Pinned profiles that are not connected have none.
+  // ring while connecting, a warning sign when it failed.
   const showGroups = useSettings((s) => s.showGroups);
-  const marks = orderedServers({ profiles, servers, order, pinned, showAll: false, showGroups }).filter((p) => servers[p.id]);
+  const marks = orderedServers({ profiles, servers, order, showAll: false, showGroups, groupByEnv, groupOrder, profileOrder }).filter((p) => servers[p.id]);
   const count = (st: string) => marks.filter((p) => servers[p.id]?.status === st).length;
   const label = ["Object Explorer", count("connected") && `${count("connected")} connected`, count("connecting") && `${count("connecting")} connecting`, count("error") && `${count("error")} failed`]
     .filter(Boolean)

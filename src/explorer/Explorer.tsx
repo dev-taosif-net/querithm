@@ -10,7 +10,8 @@ import { refreshServer, sessionParam, tabScope, useSnapshots } from "../store/sn
 import { repickFile } from "../connections/fileAccess";
 import { schemaGroupKey, useSettings } from "../store/settings";
 import { useTabs } from "../store/tabs";
-import { toast, useUi } from "../store/ui";
+import { ask, toast, useUi } from "../store/ui";
+import { reorderList } from "../connections/order";
 import { EngineLogo } from "../connections/EngineLogo";
 import { DEFAULT_ENGINE, engineNames, engineTraits, ENGINES, ENGINES_BY_PLACE, LOCAL_ENGINES, SERVER_ENGINES } from "../engines";
 import { Icon, type IconName } from "../app/icons";
@@ -51,6 +52,13 @@ function rowName(r: TreeRow, profiles: Map<string, Profile>): string {
   }
 }
 
+const MIME_GROUP = "application/x-querithm-group";
+const MIME_PROFILE = "application/x-querithm-profile";
+
+type DragItem = { kind: "group"; name: string; key: string } | { kind: "profile"; id: string; key: string };
+type DropEdge = "before" | "after" | "inside";
+type DropHint = { rowKey: string; edge: DropEdge };
+
 interface Handlers {
   select(i: number): void;
   click(i: number, e: MouseEvent): void;
@@ -58,6 +66,10 @@ interface Handlers {
   activate(i: number): void;
   menu(i: number, x: number, y: number): void;
   drag(i: number, e: DragEvent): void;
+  dragOver(i: number, e: DragEvent): void;
+  drop(i: number, e: DragEvent): void;
+  dragEnd(e: DragEvent): void;
+  clearDropHint(): void;
   clearFilter(catKey: string): void;
   showAll(kind: KindFilter): void;
 }
@@ -69,6 +81,7 @@ interface RowView {
   narrow: boolean;
   wide: boolean;
   indent: number;
+  canReorder: boolean;
 }
 
 export function Explorer() {
@@ -76,7 +89,8 @@ export function Explorer() {
   const servers = useConnections((s) => s.servers);
   const order = useConnections((s) => s.order);
   const entries = useSnapshots((s) => s.entries);
-  const pinned = useSettings((s) => s.pinnedProfiles);
+  const groupOrder = useSettings((s) => s.groupOrder);
+  const profileOrder = useSettings((s) => s.profileOrder);
   const showAll = useSettings((s) => s.explorerShowAll);
   const groupByEnv = useSettings((s) => s.explorerGroupByEnv);
   const showGroups = useSettings((s) => s.showGroups);
@@ -96,6 +110,9 @@ export function Explorer() {
   const [popup, setPopup] = useState<"view" | "kind" | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuEntry[]; header: { env?: EnvironmentKind; profileId?: string; text: string }; label: string } | null>(null);
   const menuAnchor = useRef<HTMLElement | null>(null);
+  const dragRef = useRef<DragItem | null>(null);
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  const [dropHint, setDropHint] = useState<DropHint | null>(null);
   const compact = width < 260, narrow = width < 240, wide = width >= 400;
 
   const profiles = useMemo(() => new Map(profilesList.map((p) => [p.id, p])), [profilesList]);
@@ -142,9 +159,9 @@ export function Explorer() {
 
   const active = activeProfile && activeDb ? { profileId: activeProfile, db: activeDb } : undefined;
   const tree = useMemo(
-    () => buildTree({ profiles: profilesList, servers, order, pinned, showAll, groupByEnv, collapsedEnvs: ex.collapsedEnvs, showGroups, collapsedGroups: ex.collapsedGroups, expanded: ex.expanded, entries, details: ex.details, schemaGroups, kind: ex.kind, folderFilters: ex.folderFilters, active }),
+    () => buildTree({ profiles: profilesList, servers, order, groupOrder, profileOrder, showAll, groupByEnv, collapsedEnvs: ex.collapsedEnvs, showGroups, collapsedGroups: ex.collapsedGroups, expanded: ex.expanded, entries, details: ex.details, schemaGroups, kind: ex.kind, folderFilters: ex.folderFilters, active }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [profilesList, servers, order, pinned, showAll, groupByEnv, ex.collapsedEnvs, showGroups, ex.collapsedGroups, ex.expanded, entries, ex.details, schemaGroups, ex.kind, ex.folderFilters, active?.profileId, active?.db],
+    [profilesList, servers, order, groupOrder, profileOrder, showAll, groupByEnv, ex.collapsedEnvs, showGroups, ex.collapsedGroups, ex.expanded, entries, ex.details, schemaGroups, ex.kind, ex.folderFilters, active?.profileId, active?.db],
   );
 
   // Keys and indexes of expanded objects are read lazily, again after a refresh replaced the object's record.
@@ -197,6 +214,10 @@ export function Explorer() {
 
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
+  const shownRef = useRef(tree.shown);
+  shownRef.current = tree.shown;
+  const searchingRef = useRef(searching);
+  searchingRef.current = searching;
   const reveal = useRef<string | null>(null);
 
   const select = useCallback((i: number) => {
@@ -337,6 +358,17 @@ export function Explorer() {
     drag(i, e) {
       const r = rowsRef.current[i];
       if (!r) return;
+      if (!searchingRef.current && (r.t === "group" || r.t === "server")) {
+        // Keep reorder drags inside the Explorer so an auto-hide flyout stays interactive and open.
+        e.stopPropagation();
+        const item: DragItem = r.t === "group" ? { kind: "group", name: r.name, key: r.key } : { kind: "profile", id: r.profileId, key: r.key };
+        dragRef.current = item;
+        setDragKey(r.key);
+        setDropHint(null);
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData(r.t === "group" ? MIME_GROUP : MIME_PROFILE, r.t === "group" ? r.name : r.profileId);
+        return;
+      }
       const engine = r.t === "obj" || r.t === "sub" ? useProfiles.getState().byId(r.profileId)?.engine : r.t === "leaf" && r.profileId ? useProfiles.getState().byId(r.profileId)?.engine : undefined;
       let text = "";
       if (r.t === "obj") text = e.altKey ? columnList(r.obj, engine) : qualified(r.obj, engine);
@@ -344,6 +376,44 @@ export function Explorer() {
       else if (r.t === "leaf" && r.drag) text = r.drag;
       if (text) e.dataTransfer.setData("text/plain", text);
       else e.preventDefault();
+    },
+    dragOver(i, e) {
+      const drag = dragRef.current;
+      if (!drag || searchingRef.current) return;
+      const r = rowsRef.current[i];
+      if (!r) return;
+      const edge = computeDropEdge(drag, r, e);
+      if (!edge) {
+        setDropHint(null);
+        return;
+      }
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      setDropHint((prev) => (prev?.rowKey === r.key && prev.edge === edge ? prev : { rowKey: r.key, edge }));
+    },
+    drop(i, e) {
+      const drag = dragRef.current;
+      dragRef.current = null;
+      setDragKey(null);
+      setDropHint(null);
+      if (!drag || searchingRef.current) return;
+      const r = rowsRef.current[i];
+      if (!r) return;
+      const edge = computeDropEdge(drag, r, e);
+      if (!edge) return;
+      e.preventDefault();
+      e.stopPropagation();
+      void applyDrop(drag, r, edge, rowsRef.current, shownRef.current);
+    },
+    dragEnd(e) {
+      // Only attached to reorderable rows (group/server): keep dragend inside Explorer so auto-hide flyout stays open.
+      e.stopPropagation();
+      dragRef.current = null;
+      setDragKey(null);
+      setDropHint(null);
+    },
+    clearDropHint() {
+      if (dragRef.current) setDropHint(null);
     },
     clearFilter(key) {
       const st = useExplorer.getState();
@@ -505,7 +575,7 @@ export function Explorer() {
     }
   };
 
-  const view = useMemo<RowView>(() => ({ profiles, envText, compact, narrow, wide, indent: narrow ? 8 : 12 }), [profiles, envText, compact, narrow, wide]);
+  const view = useMemo<RowView>(() => ({ profiles, envText, compact, narrow, wide, indent: narrow ? 8 : 12, canReorder: !searching }), [profiles, envText, compact, narrow, wide, searching]);
   const noProfiles = !profilesList.length;
   const noServers = !noProfiles && !tree.shown.length && !searching;
   const engines = new Set(tree.shown.map((id) => profiles.get(id)?.engine));
@@ -570,7 +640,7 @@ export function Explorer() {
       ) : searching && results && !results.rows.length ? (
         <Message icon="search" title={`No ${ex.kind === "all" ? "objects match" : `${kindLabel(ex.kind).toLowerCase()} match`} “${query.trim()}”`} sub={`Searched ${scopeName(scope, profiles)}.`} action={ex.kind !== "all" ? { label: "Search all kinds", run: () => useExplorer.getState().set({ kind: "all" }) } : undefined} />
       ) : (
-        <TreeView rows={rows} selIndex={selIndex} view={view} handlers={handlers} treeRef={treeRef} onKeyDown={onTreeKey} label={searching ? `Search results in ${scopeName(scope, profiles)}` : "Object Explorer"} />
+        <TreeView rows={rows} selIndex={selIndex} view={view} handlers={handlers} treeRef={treeRef} onKeyDown={onTreeKey} label={searching ? `Search results in ${scopeName(scope, profiles)}` : "Object Explorer"} dragKey={dragKey} dropHint={dropHint} />
       )}
       {menu && (
         <DropMenu
@@ -874,7 +944,7 @@ function NoServers({ saved }: { saved: number }) {
     <Message
       icon="plug"
       title="No servers in use"
-      sub={`${saved.toLocaleString("en-US")} saved connection${saved === 1 ? "" : "s"}. Connect one, or pin a profile to keep it here.`}
+      sub={`${saved.toLocaleString("en-US")} saved connection${saved === 1 ? "" : "s"}. Connect one, or enable Show all saved profiles in View options.`}
       action={{ label: "Connect…", run: () => useUi.getState().openDialog({ kind: "connect" }) }}
     />
   );
@@ -885,8 +955,8 @@ function NoServers({ saved }: { saved: number }) {
 /** Renders of the tree view, read by the bench (§14 metric 33: scrolling must not render per frame). */
 export const treeStats = { renders: 0 };
 
-function TreeView({ rows, selIndex, view, handlers, treeRef, onKeyDown, label }: {
-  rows: TreeRow[]; selIndex: number; view: RowView; handlers: Handlers; treeRef: React.RefObject<HTMLDivElement | null>; onKeyDown: (e: KeyboardEvent) => void; label: string;
+function TreeView({ rows, selIndex, view, handlers, treeRef, onKeyDown, label, dragKey, dropHint }: {
+  rows: TreeRow[]; selIndex: number; view: RowView; handlers: Handlers; treeRef: React.RefObject<HTMLDivElement | null>; onKeyDown: (e: KeyboardEvent) => void; label: string; dragKey: string | null; dropHint: DropHint | null;
 }) {
   treeStats.renders++;
   const [block, setBlock] = useState(0);
@@ -960,6 +1030,12 @@ function TreeView({ rows, selIndex, view, handlers, treeRef, onKeyDown, label }:
         style={{ outline: "none" }}
         onScroll={sync}
         onKeyDown={onKeyDown}
+        onDragOver={(e) => {
+          if (!e.defaultPrevented) handlers.clearDropHint();
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) handlers.clearDropHint();
+        }}
         onPointerDown={() => (pointer.current = true)}
         onPointerUp={() => (pointer.current = false)}
         onFocus={(e) => {
@@ -976,7 +1052,18 @@ function TreeView({ rows, selIndex, view, handlers, treeRef, onKeyDown, label }:
       >
         <div style={{ height: rows.length * ROW, position: "relative" }}>
           {indices.map((i) => (
-            <Row key={rows[i].key} row={rows[i]} index={i} selected={i === selIndex} focused={focused && i === selIndex} fresh={!!freshKeys?.has(rows[i].key)} view={view} handlers={handlers} />
+            <Row
+              key={rows[i].key}
+              row={rows[i]}
+              index={i}
+              selected={i === selIndex}
+              focused={focused && i === selIndex}
+              fresh={!!freshKeys?.has(rows[i].key)}
+              dragging={dragKey === rows[i].key}
+              dropEdge={dropHint?.rowKey === rows[i].key ? dropHint.edge : undefined}
+              view={view}
+              handlers={handlers}
+            />
           ))}
         </div>
       </div>
@@ -1012,8 +1099,8 @@ const OBJ_COLOR: Record<string, string> = {
 };
 const TONE: Record<string, string> = { warn: "text-warn", muted: "text-muted", ident: "text-ident", "obj.index": "text-obj-index", "obj.table": "text-obj-table" };
 
-const Row = memo(function Row({ row: r, index: i, selected, focused, fresh, view, handlers }: {
-  row: TreeRow; index: number; selected: boolean; focused: boolean; fresh?: boolean; view: RowView; handlers: Handlers;
+const Row = memo(function Row({ row: r, index: i, selected, focused, fresh, dragging, dropEdge, view, handlers }: {
+  row: TreeRow; index: number; selected: boolean; focused: boolean; fresh?: boolean; dragging?: boolean; dropEdge?: DropEdge; view: RowView; handlers: Handlers;
 }) {
   const style: CSSProperties = { top: i * ROW, height: ROW, paddingLeft: 6 + (r.level - 1) * view.indent };
   const label = ariaLabelOf(r, view);
@@ -1037,7 +1124,7 @@ const Row = memo(function Row({ row: r, index: i, selected, focused, fresh, view
       handlers.menu(i, e.clientX, e.clientY);
     },
   };
-  const cls = `q-tree-row ${fresh ? "q-tree-row-reveal " : ""}group absolute left-0 right-0 flex items-center gap-1.5 pr-2 whitespace-nowrap overflow-hidden ${header ? "bg-panel-2" : selected ? "bg-row-sel q-hl shadow-[inset_2px_0_0_var(--q-accent)]" : "hover:bg-hover"} ${focused ? "outline outline-2 -outline-offset-2 outline-accent" : ""}`;
+  const cls = `q-tree-row ${fresh ? "q-tree-row-reveal " : ""}group absolute left-0 right-0 flex items-center gap-1.5 pr-2 whitespace-nowrap overflow-hidden ${header ? "bg-panel-2" : dropEdge === "inside" ? "bg-accent/15 outline outline-1 -outline-offset-1 outline-accent" : selected ? "bg-row-sel q-hl shadow-[inset_2px_0_0_var(--q-accent)]" : "hover:bg-hover"} ${focused ? "outline outline-2 -outline-offset-2 outline-accent" : ""} ${dragging ? "opacity-45" : ""}`;
   const caret = r.expandable || (r.t === "server" && r.status === "off") ? (
     <span aria-hidden className="w-3 shrink-0 flex items-center justify-center text-muted" onClick={(e) => { e.stopPropagation(); handlers.select(i); handlers.caret(i); }}>
       <Icon name="chevron" size={10} strokeWidth={2.5} className={`q-tree-caret ${r.expanded ? "" : "-rotate-90"}`} />
@@ -1045,9 +1132,22 @@ const Row = memo(function Row({ row: r, index: i, selected, focused, fresh, view
   ) : (
     <span aria-hidden className="w-3 shrink-0" />
   );
-  const draggable = r.t === "obj" || (r.t === "leaf" && !!r.drag) || (r.t === "sub" && r.sub === "columns");
+  const reorderable = view.canReorder && (r.t === "group" || r.t === "server");
+  const draggable = reorderable || r.t === "obj" || (r.t === "leaf" && !!r.drag) || (r.t === "sub" && r.sub === "columns");
   return (
-    <div {...common} className={cls} draggable={draggable || undefined} onDragStart={draggable ? (e) => handlers.drag(i, e) : undefined}>
+    <div
+      {...common}
+      className={cls}
+      data-dragging={dragging || undefined}
+      data-drop-edge={dropEdge || undefined}
+      draggable={draggable || undefined}
+      onDragStart={draggable ? (e) => handlers.drag(i, e) : undefined}
+      onDragOver={reorderable ? (e) => handlers.dragOver(i, e) : undefined}
+      onDrop={reorderable ? (e) => handlers.drop(i, e) : undefined}
+      onDragEnd={reorderable ? (e) => handlers.dragEnd(e) : undefined}
+    >
+      {dropEdge === "before" && <span aria-hidden className="pointer-events-none absolute left-1 right-1 top-0 h-[2px] bg-accent z-20" />}
+      {dropEdge === "after" && <span aria-hidden className="pointer-events-none absolute left-1 right-1 bottom-0 h-[2px] bg-accent z-20" />}
       {header ? null : caret}
       <RowBody r={r} view={view} handlers={handlers} />
     </div>
@@ -1231,7 +1331,7 @@ function ariaLabelOf(r: TreeRow, view: RowView): string {
     case "server": {
       const p = view.profiles.get(r.profileId);
       const st = r.status === "error" ? `connection failed: ${r.error ?? ""}` : r.status === "off" ? "not connected" : r.status;
-      return `${p ? ENV_TEXT[p.environment] : ""}, ${p?.name ?? r.profileId}, ${engineTraits(p?.engine).shortLabel}, ${st}${r.pinned ? ", pinned" : ""}`;
+      return `${p ? ENV_TEXT[p.environment] : ""}, ${p?.name ?? r.profileId}, ${engineTraits(p?.engine).shortLabel}, ${st}`;
     }
     case "db":
       return `Database ${r.db}${r.active ? ", active in tab" : ""}${r.state === "stale" ? ", refresh failed, cached catalog" : r.state === "offline" ? `, ${(r.dbState ?? "offline").toLowerCase()}` : r.state === "loading" ? ", loading" : ""}`;
@@ -1264,5 +1364,107 @@ function WindowButtons() {
       </button>
     </>
   );
+}
+
+function edgeOf(e: DragEvent): "before" | "after" {
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  return e.clientY < rect.top + rect.height / 2 ? "before" : "after";
+}
+
+function computeDropEdge(drag: DragItem, target: TreeRow, e: DragEvent): DropEdge | null {
+  if (drag.kind === "group") {
+    if (target.t !== "group" || target.name === drag.name) return null;
+    return edgeOf(e);
+  }
+  const src = useProfiles.getState().byId(drag.id);
+  if (!src) return null;
+  const s = useSettings.getState();
+  if (target.t === "group") {
+    if (!s.showGroups || src.groupName === target.name) return null;
+    return "inside";
+  }
+  if (target.t !== "server" || target.profileId === drag.id) return null;
+  const dst = useProfiles.getState().byId(target.profileId);
+  if (!dst) return null;
+  const sameGroup = !s.showGroups || (src.groupName ?? null) === (dst.groupName ?? null);
+  if (sameGroup && s.explorerGroupByEnv && src.environment !== dst.environment) return null;
+  return edgeOf(e);
+}
+
+async function applyDrop(drag: DragItem, target: TreeRow, edge: DropEdge, rows: readonly TreeRow[], visibleProfiles: readonly string[]): Promise<void> {
+  if (drag.kind === "group" && target.t === "group" && (edge === "before" || edge === "after")) {
+    const visibleGroups = rows.filter((x): x is RowOf<"group"> => x.t === "group").map((x) => x.name);
+    const cur = useSettings.getState().groupOrder;
+    useSettings.getState().set({ groupOrder: reorderList(cur, visibleGroups, drag.name, target.name, edge) });
+    return;
+  }
+  if (drag.kind !== "profile") return;
+  const src = useProfiles.getState().byId(drag.id);
+  if (!src) return;
+  const settings = useSettings.getState();
+  const srcGroup = settings.showGroups ? (src.groupName ?? null) : null;
+
+  if (target.t === "group" && edge === "inside") {
+    const dstGroup = target.name;
+    if (srcGroup === dstGroup) return;
+    const ok = await ask<boolean>((resolve) => ({
+      kind: "confirm",
+      title: `Move “${src.name}” to “${dstGroup}”?`,
+      body: srcGroup
+        ? `This moves “${src.name}” from “${srcGroup}” to “${dstGroup}”. Environment, passwords and open tabs don’t change.`
+        : `This moves “${src.name}” into “${dstGroup}”. Environment, passwords and open tabs don’t change.`,
+      ok: "Move",
+      resolve,
+    }));
+    if (!ok) return;
+    try {
+      await useProfiles.getState().assignGroup([src.id], dstGroup);
+    } catch (e) {
+      toast("error", e instanceof Error ? e.message : String(e));
+      return;
+    }
+    const members = visibleProfiles.filter((id) => useProfiles.getState().byId(id)?.groupName === dstGroup && id !== src.id);
+    const anchor = members[members.length - 1];
+    if (anchor) {
+      const cur = useSettings.getState().profileOrder;
+      useSettings.getState().set({ profileOrder: reorderList(cur, visibleProfiles, src.id, anchor, "after") });
+    }
+    return;
+  }
+
+  if (target.t !== "server" || (edge !== "before" && edge !== "after")) return;
+  const dst = useProfiles.getState().byId(target.profileId);
+  if (!dst || dst.id === src.id) return;
+  const dstGroup = settings.showGroups ? (dst.groupName ?? null) : null;
+  if (srcGroup !== dstGroup) {
+    const ok = await ask<boolean>((resolve) =>
+      dstGroup
+        ? {
+            kind: "confirm",
+            title: `Move “${src.name}” to “${dstGroup}”?`,
+            body: srcGroup
+              ? `This moves “${src.name}” from “${srcGroup}” to “${dstGroup}”. Environment, passwords and open tabs don’t change.`
+              : `This moves “${src.name}” into “${dstGroup}”. Environment, passwords and open tabs don’t change.`,
+            ok: "Move",
+            resolve,
+          }
+        : {
+            kind: "confirm",
+            title: `Remove “${src.name}” from “${srcGroup}”?`,
+            body: `This removes “${src.name}” from “${srcGroup}”. Environment, passwords and open tabs don’t change.`,
+            ok: "Remove from group",
+            resolve,
+          },
+    );
+    if (!ok) return;
+    try {
+      await useProfiles.getState().assignGroup([src.id], dstGroup);
+    } catch (e) {
+      toast("error", e instanceof Error ? e.message : String(e));
+      return;
+    }
+  }
+  const cur = useSettings.getState().profileOrder;
+  useSettings.getState().set({ profileOrder: reorderList(cur, visibleProfiles, src.id, dst.id, edge) });
 }
 

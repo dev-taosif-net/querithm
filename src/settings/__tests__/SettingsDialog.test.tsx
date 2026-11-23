@@ -49,7 +49,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   resetAppInfo();
   h.tauri = true;
-  useSettings.setState({ ...defaultSettings, pinnedProfiles: ["p1"], loaded: true });
+  useSettings.setState({ ...defaultSettings, profileOrder: ["p1"], loaded: true });
   useSettingsStatus.setState({ save: "saved", error: undefined, loadFailed: false });
   useUpdates.setState({ phase: "idle", info: null, error: null, checkedAt: null, checkError: null });
   useUi.setState({ dialogs: [], toasts: [] });
@@ -208,14 +208,14 @@ describe("Settings: rows", () => {
     expect(document.activeElement).toBe(screen.getByRole("switch", { name: "Wrap long lines" }));
   });
 
-  it("Restore defaults asks once, resets only that page, and never touches pins", async () => {
+  it("Restore defaults asks once, resets only that page, and never touches custom order", async () => {
     useSettings.setState({ wordWrap: true, editorFontSize: 18, theme: "light" });
     open({ page: "editor" });
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Restore defaults" }));
     expect(screen.getByText("Reset 2 settings on this page?")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Reset" }));
-    expect(useSettings.getState()).toMatchObject({ wordWrap: false, editorFontSize: 13, theme: "light", pinnedProfiles: ["p1"] });
+    expect(useSettings.getState()).toMatchObject({ wordWrap: false, editorFontSize: 13, theme: "light", profileOrder: ["p1"] });
     expect(screen.queryByRole("button", { name: "Restore defaults" })).toBeNull();
   });
 

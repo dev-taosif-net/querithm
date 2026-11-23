@@ -116,7 +116,7 @@ beforeEach(() => {
   useConnections.setState({ servers: {}, order: [], disconnected: {} });
   useSnapshots.setState({ entries: {} });
   useTabs.setState({ activeId: undefined, tabs: {}, order: [] } as never);
-  useSettings.setState({ explorerGroupByEnv: false, explorerSchemaGroups: [], explorerVisible: true, explorerAutoHide: false, explorerShowAll: false, pinnedProfiles: [], explorerHoverOpen: true });
+  useSettings.setState({ explorerGroupByEnv: false, explorerSchemaGroups: [], explorerVisible: true, explorerAutoHide: false, explorerShowAll: false, groupOrder: [], profileOrder: [], showGroups: true, explorerHoverOpen: true });
   useUi.setState({ dialogs: [], toasts: [], explorerWidth: 280 });
   useExplorer.setState({ expanded: new Set(), collapsedEnvs: new Set(), details: {}, kind: "all", folderFilters: {}, query: "", uncapped: new Set(), selected: undefined });
   Object.defineProperty(navigator, "clipboard", { value: { writeText: vi.fn(async () => {}) }, configurable: true });
@@ -467,12 +467,10 @@ describe.each<Engine>(["mssql", "pg"])("Explorer tree (%s)", (engine) => {
     expect(connect).toHaveBeenCalledTimes(2);
   });
 
-  it("a pinned profile that is not connected stays as a row; the rest of the saved profiles get no row (the header's Connect… opens them)", () => {
+  it("with Show all saved profiles off and no connected server, shows the empty state and Connect… opens the Connect dialog", () => {
     useProfiles.setState({ profiles: [{ id: "a", name: "A", engine, environment: "dev" }, { id: "b", name: "B", engine, environment: "prod" }, { id: "c", name: "C", engine, environment: "test" }] as never });
-    useSettings.setState({ pinnedProfiles: ["b"] });
     render(<Explorer />);
-    expect(names()).toEqual([`PROD, B, ${engineName}, not connected, pinned`]);
-    expect(screen.queryByText(/saved connection/)).toBeNull();
+    expect(screen.getByText(/3 saved connections/)).toBeTruthy();
     fireEvent.click(header().getByRole("button", { name: "Connect…" }));
     expect(useUi.getState().dialogs.at(-1)).toMatchObject({ kind: "connect" });
   });
@@ -577,12 +575,12 @@ describe.each<Engine>(["mssql", "pg"])("Explorer search (%s)", (engine) => {
 });
 
 describe("Explorer environment grouping and ordering", () => {
-  it("orders servers Local to Prod, pinned first within an environment, and groups them under collapsible environment rows", () => {
+  it("orders servers by custom profileOrder (or Local to Prod), and groups them under collapsible environment rows", () => {
     seed("mssql", { id: "p1", env: "prod" });
     seed("pg", { id: "p2", env: "dev" });
     seed("pg", { id: "p3", env: "local" });
     seed("mssql", { id: "p4", env: "dev" });
-    useSettings.setState({ pinnedProfiles: ["p4"] });
+    useSettings.setState({ profileOrder: ["p3", "p4", "p2", "p1"] });
     useConnections.setState((s) => ({ servers: Object.fromEntries(Object.entries(s.servers).map(([k, v]) => [k, { ...v, quiet: true }])) }));
     const { rerender } = render(<Explorer />);
     expect(names().map((n) => n!.split(",").slice(0, 2).join(","))).toEqual(["LOCAL, Srv-p3", "DEV, Srv-p4", "DEV, Srv-p2", "PROD, Srv-p1"]);
@@ -591,6 +589,64 @@ describe("Explorer environment grouping and ordering", () => {
     expect(names()[0]).toBe("Local, 1 server");
     click("Dev, 2 servers");
     expect(names().some((n) => n?.includes("Srv-p2"))).toBe(false);
+  });
+
+  it("drags groups and servers to reorder them, and asks confirmation before moving a server across groups", async () => {
+    const drag = (from: Element, to: Element, clientY: number) => {
+      const store: Record<string, string> = {};
+      const dataTransfer = { effectAllowed: "move", dropEffect: "move", setData: (k: string, v: string) => { store[k] = v; }, getData: (k: string) => store[k] ?? "" };
+      const mk = (type: string) => Object.assign(new Event(type, { bubbles: true, cancelable: true }), { dataTransfer, clientY });
+      fireEvent(from, mk("dragstart"));
+      fireEvent(to, mk("dragover"));
+      fireEvent(to, mk("drop"));
+    };
+    useProfiles.setState({
+      profiles: [
+        { id: "a", name: "dev", engine: "mssql", environment: "dev", groupName: "Alpha" },
+        { id: "b", name: "Production", engine: "mssql", environment: "prod", groupName: "Alpha" },
+        { id: "c", name: "Remarks", engine: "mssql", environment: "prod", groupName: "Beta" },
+      ] as never,
+      groups: [{ name: "Alpha", members: 2 }, { name: "Beta", members: 1 }],
+    });
+    useSettings.setState({ explorerShowAll: true, showGroups: true });
+    m.rpc.mockImplementation(async (method: unknown, params: unknown) => {
+      if (method === "group.assign") {
+        const p = params as { profileIds: string[]; name: string | null };
+        const updated = useProfiles.getState().profiles.filter((x) => p.profileIds.includes(x.id)).map((x) => ({ ...x, groupName: p.name }));
+        return { groups: useProfiles.getState().groups, profiles: updated };
+      }
+      return details;
+    });
+    render(<Explorer />);
+
+    // 1. Reorder groups: drag Beta before Alpha
+    const alphaRow = item(/^Group Alpha/);
+    const betaRow = item(/^Group Beta/);
+    vi.spyOn(alphaRow, "getBoundingClientRect").mockReturnValue({ top: 0, height: 24, bottom: 24, left: 0, right: 200, width: 200, x: 0, y: 0, toJSON: () => {} });
+    drag(betaRow, alphaRow, 2);
+    expect(useSettings.getState().groupOrder).toEqual(["Beta", "Alpha"]);
+
+    // 2. Reorder servers within Alpha: drag Production before dev (no confirmation)
+    const devRow = item(/^DEV, dev,/);
+    const prodRow = item(/^PROD, Production,/);
+    vi.spyOn(devRow, "getBoundingClientRect").mockReturnValue({ top: 48, height: 24, bottom: 72, left: 0, right: 200, width: 200, x: 0, y: 48, toJSON: () => {} });
+    drag(prodRow, devRow, 50);
+    expect(useUi.getState().dialogs).toHaveLength(0);
+    expect(useSettings.getState().profileOrder).toEqual(["c", "b", "a"]);
+
+    // 3. Drag dev onto Group Beta: asks confirmation; cancel leaves it in Alpha
+    drag(item(/^DEV, dev,/), item(/^Group Beta/), 12);
+    expect(useUi.getState().dialogs).toHaveLength(1);
+    const cancelDlg = useUi.getState().dialogs[0] as { kind: "confirm"; title: string; resolve: (v: boolean) => void };
+    expect(cancelDlg.title).toBe("Move “dev” to “Beta”?");
+    await act(async () => { cancelDlg.resolve(false); useUi.setState({ dialogs: [] }); });
+    expect(useProfiles.getState().byId("a")?.groupName).toBe("Alpha");
+
+    // 4. Drag dev onto Group Beta again and confirm: moves to Beta
+    drag(item(/^DEV, dev,/), item(/^Group Beta/), 12);
+    const okDlg = useUi.getState().dialogs[0] as { kind: "confirm"; resolve: (v: boolean) => void };
+    await act(async () => { okDlg.resolve(true); useUi.setState({ dialogs: [] }); });
+    expect(useProfiles.getState().byId("a")?.groupName).toBe("Beta");
   });
 });
 

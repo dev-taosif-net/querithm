@@ -9,7 +9,7 @@ import { snapKey } from "../store/snapshots";
 import { schemaGroupKey } from "../store/settings";
 import { MEMORY_NOTE } from "../store/connections";
 import { engineTraits } from "../engines";
-import { compareGroupNames } from "../connections/groupNames";
+import { orderMap, orderRank, sortGroupNames } from "../connections/order";
 
 export type { Engine };
 export type CatId = "tables" | "views" | "procs" | "funcs" | "types" | "sequences" | "synonyms" | "packages";
@@ -62,7 +62,7 @@ export type TreeRow = Base &
   (
     | { t: "group"; name: string; count: number; prod: number; failed: number }
     | { t: "env"; env: EnvironmentKind; count: number; group?: string }
-    | { t: "server"; profileId: string; status: ServerStatus; error?: string; pinned: boolean; memory?: boolean; refreshing?: boolean }
+    | { t: "server"; profileId: string; status: ServerStatus; error?: string; memory?: boolean; refreshing?: boolean }
     | { t: "note"; text: string; tone: "muted" | "warn" | "err"; busy?: boolean }
     | { t: "action"; action: "reconnect" | "editProfile" | "repick" | "retryMeta" | "retryDetails"; label: string; profileId: string; db?: string; objKey?: string; obj?: SnapObject }
     | { t: "db"; profileId: string; db: string; active: boolean; state: DbState; refreshedAt?: number | null; error?: string | null; dbState?: string | null }
@@ -89,7 +89,10 @@ export interface TreeInput {
   servers: Readonly<Record<string, ServerConn>>;
   /** Servers in the order they joined the Explorer. */
   order: readonly string[];
-  pinned: readonly string[];
+  /** Custom display order of connection groups (group names). */
+  groupOrder?: readonly string[];
+  /** Custom display order of profiles/connections (profile ids). */
+  profileOrder?: readonly string[];
   showAll: boolean;
   groupByEnv: boolean;
   collapsedEnvs: ReadonlySet<EnvironmentKind>;
@@ -199,21 +202,22 @@ export function objKey(profileId: string, db: string, o: SnapObject, parent?: Sn
 
 // ------------------------------------------------------------------------------------------------- servers
 
-/** The servers the tree lists: those in use (connected, connecting, failed), pinned profiles, and with "Show all saved
- *  profiles" every profile — Local → Prod, pinned first within an environment, then in the order they joined. */
-export function shownServers(i: Pick<TreeInput, "profiles" | "servers" | "order" | "pinned" | "showAll">): Profile[] {
+/** The servers the tree lists: those in use (connected, connecting, failed), and with "Show all saved profiles" every
+ *  profile — in custom drag order (or Local → Prod when grouped by environment), then in the order they joined. */
+export function shownServers(i: Pick<TreeInput, "profiles" | "servers" | "order" | "showAll" | "profileOrder"> & { groupByEnv?: boolean }): Profile[] {
   const byId = new Map(i.profiles.map((p) => [p.id, p]));
   const ids = new Set<string>();
   for (const id of i.order) if (i.servers[id] && byId.has(id)) ids.add(id);
-  for (const id of i.pinned) if (byId.has(id)) ids.add(id);
   if (i.showAll) for (const p of i.profiles) ids.add(p.id);
-  const pin = (id: string) => (i.pinned.includes(id) ? i.pinned.indexOf(id) : Infinity);
+  const rank = orderMap(i.profileOrder);
   const joined = (id: string) => (i.order.includes(id) ? i.order.indexOf(id) : Infinity);
   return [...ids]
     .map((id) => byId.get(id)!)
-    .sort((a, b) =>
-      ENV_ORDER.indexOf(a.environment) - ENV_ORDER.indexOf(b.environment) || pin(a.id) - pin(b.id) || joined(a.id) - joined(b.id) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
-    );
+    .sort((a, b) => {
+      const envCmp = ENV_ORDER.indexOf(a.environment) - ENV_ORDER.indexOf(b.environment);
+      const customCmp = orderRank(rank, a.id) - orderRank(rank, b.id);
+      return (i.groupByEnv ? envCmp || customCmp : customCmp || envCmp) || joined(a.id) - joined(b.id) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    });
 }
 
 export function statusOf(conn: ServerConn | undefined): ServerStatus {
@@ -240,11 +244,11 @@ export function headsOf(p: Pick<Profile, "groupName" | "environment">, flags: { 
   return { groups: flags.groupByEnv ? [groupRowKey(group), groupEnvKey(p.environment, group)] : [groupRowKey(group)] };
 }
 
-/** The servers in the order the tree draws them: grouped ones first (groups A–Z), then the others as before. */
-export function orderedServers(i: Pick<TreeInput, "profiles" | "servers" | "order" | "pinned" | "showAll" | "showGroups">): Profile[] {
+/** The servers in the order the tree draws them: grouped ones first (custom group order, then A–Z), then the others as before. */
+export function orderedServers(i: Pick<TreeInput, "profiles" | "servers" | "order" | "showAll" | "showGroups" | "groupOrder" | "profileOrder"> & { groupByEnv?: boolean }): Profile[] {
   const servers = shownServers(i);
   if (!i.showGroups) return servers;
-  const names = [...new Set(servers.map((p) => p.groupName).filter((g): g is string => !!g))].sort(compareGroupNames);
+  const names = sortGroupNames([...new Set(servers.map((p) => p.groupName).filter((g): g is string => !!g))], i.groupOrder);
   return [...names.flatMap((g) => servers.filter((p) => p.groupName === g)), ...servers.filter((p) => !p.groupName)];
 }
 
@@ -301,7 +305,7 @@ function addServer(i: TreeInput, rows: TreeRow[], need: Need, p: Profile, base: 
   const status = statusOf(conn);
   const sKey = serverKey(p.id);
   const open = i.expanded.has(sKey);
-  const sIdx = add({ t: "server", key: sKey, level: base + 1, parent, expandable: true, expanded: open && status !== "off", profileId: p.id, status, error: conn?.error, ...(conn?.refreshing ? { refreshing: true } : {}), pinned: i.pinned.includes(p.id), ...(conn?.memory ? { memory: true } : {}) });
+  const sIdx = add({ t: "server", key: sKey, level: base + 1, parent, expandable: true, expanded: open && status !== "off", profileId: p.id, status, error: conn?.error, ...(conn?.refreshing ? { refreshing: true } : {}), ...(conn?.memory ? { memory: true } : {}) });
   if (!open || status === "off") return;
   if (status === "error") {
     add({ t: "note", key: `${sKey}:why`, level: base + 2, parent: sIdx, expandable: false, expanded: false, text: firstSentence(conn?.error) ?? "Connection failed.", tone: "err" });

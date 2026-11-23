@@ -22,7 +22,7 @@ import { EngineLogo } from "./EngineLogo";
 import { plural } from "../app/plural";
 import {
   buildSections, defaultActiveId, ENV_FILTERS, ENV_NAMES, envCounts, filterProfiles, matchParts, nameSuffix, prodNameHint,
-  profileAddress, ROW_ACTION, rowState, searchTerms, togglePin, type ProfileSection, type RowState,
+  profileAddress, ROW_ACTION, rowState, searchTerms, type ProfileSection, type RowState,
 } from "./profileList";
 
 /** Row and sticky header heights: the list's height is set from them once, when the dialog opens. */
@@ -42,7 +42,8 @@ export function ConnectDialog({ onClose, focus }: { onClose: () => void; focus?:
   const profiles = useProfiles((s) => s.profiles);
   const loaded = useProfiles((s) => s.loaded);
   const servers = useConnections((s) => s.servers);
-  const pinned = useSettings((s) => s.pinnedProfiles);
+  const groupOrder = useSettings((s) => s.groupOrder);
+  const profileOrder = useSettings((s) => s.profileOrder);
   const showGroups = useSettings((s) => s.showGroups);
   const muted = useSettings((s) => s.prodHintMuted);
   const ui = useUi.getState();
@@ -52,7 +53,7 @@ export function ConnectDialog({ onClose, focus }: { onClose: () => void; focus?:
   const [chipEnvs] = useState(() => ENV_FILTERS.filter((e) => useProfiles.getState().profiles.some((p) => p.environment === e)));
   const [listHeight] = useState(() => {
     const s = useSettings.getState();
-    const all = buildSections(useProfiles.getState().profiles, s.pinnedProfiles, { showGroups: s.showGroups });
+    const all = buildSections(useProfiles.getState().profiles, { showGroups: s.showGroups, groupOrder: s.groupOrder, profileOrder: s.profileOrder });
     return Math.max(220, all.flat.length * ROW_H + (all.sections.length > 1 ? all.sections.length * HEAD_H : 0) + 16);
   });
   const [text, setText] = useState("");
@@ -80,8 +81,8 @@ export function ConnectDialog({ onClose, focus }: { onClose: () => void; focus?:
   const filtering = searching || envs.length > 0;
   const counts = useMemo(() => envCounts(profiles), [profiles]);
   const filtered = useMemo(() => filterProfiles(profiles, text, envs), [profiles, text, envs]);
-  const { sections, flat } = useMemo(() => buildSections(filtered, pinned, { showGroups, query: text, recent }), [filtered, pinned, showGroups, text, recent]);
-  const fallback = useMemo(() => (searching ? flat[0]?.id : defaultActiveId(flat, { recent, pinned, focus })), [searching, flat, recent, pinned, focus]);
+  const { sections, flat } = useMemo(() => buildSections(filtered, { showGroups, query: text, recent, groupOrder, profileOrder }), [filtered, showGroups, text, recent, groupOrder, profileOrder]);
+  const fallback = useMemo(() => (searching ? flat[0]?.id : defaultActiveId(flat, { recent, focus })), [searching, flat, recent, focus]);
   // A pick the filter hid leaves no active row: Enter never jumps to a row the user did not choose.
   const activeId = picked === undefined ? fallback : flat.some((p) => p.id === picked) ? picked : undefined;
   const active = activeId ? flat.find((p) => p.id === activeId) : undefined;
@@ -197,7 +198,6 @@ export function ConnectDialog({ onClose, focus }: { onClose: () => void; focus?:
     onClose();
     ui.openDialog({ kind: "profile", ...d, fromConnect: true });
   };
-  const pin = (p: Profile) => useSettings.getState().set({ pinnedProfiles: togglePin(useSettings.getState().pinnedProfiles, p.id) });
   const identity = (p: Profile) => [ENV_NAMES[p.environment], profileAddress(p).full, p.groupName].filter(Boolean).join(" · ");
   const copy = (value: string) => void navigator.clipboard.writeText(value).then(() => toast("success", "Copied."), () => toast("error", "Could not copy to the clipboard."));
   const openMenu = (p: Profile, at: { x: number; y: number }) => {
@@ -213,7 +213,6 @@ export function ConnectDialog({ onClose, focus }: { onClose: () => void; focus?:
   const rowMenu = (p: Profile): MenuEntry[] => {
     const state = stateOf(p);
     const where = locationOf(p);
-    const isPinned = pinned.includes(p.id);
     const items: MenuEntry[] = [];
     if (state === "connecting") items.push({ label: "Cancel connecting", run: () => cancelConnect(p), bold: true });
     else if (state === "unavailable") items.push({ label: "Connect", run: () => {}, unavailable: p.unsupported ?? "Not available in this version" });
@@ -223,7 +222,6 @@ export function ConnectDialog({ onClose, focus }: { onClose: () => void; focus?:
       "sep",
       { label: "Edit…", run: () => openEditor({ profileId: p.id }), hint: "F2" },
       { label: "Duplicate…", run: () => openEditor({ copyOf: p.id }) },
-      { label: isPinned ? "Unpin" : "Pin", run: () => { pin(p); backToSearch(); }, detail: isPinned ? undefined : "first here and kept in Object Explorer" },
       { label: p.groupName ? "Move to group…" : "Add to group…", run: () => ui.openDialog({ kind: "moveToGroup", profileIds: [p.id] }) },
     );
     if (where !== "memory") items.push({ label: where === "file" ? "Copy file name" : "Copy address", run: () => { copy(profileAddress(p).full); backToSearch(); } });
@@ -435,7 +433,6 @@ export function ConnectDialog({ onClose, focus }: { onClose: () => void; focus?:
                     state={stateOf(p)}
                     error={servers[p.id]?.error}
                     active={p.id === activeId}
-                    pinned={pinned.includes(p.id)}
                     suffix={nameSuffix(p, profiles, s.kind === "group")}
                     hint={prodNameHint(p) && !muted.includes(p.id)}
                     terms={searchTerms(text)}
@@ -475,7 +472,7 @@ export function ConnectDialog({ onClose, focus }: { onClose: () => void; focus?:
 function Section({ s, showHead, selecting, allChosen, onCheckAll, children }: {
   s: ProfileSection; showHead: boolean; selecting: boolean; allChosen: boolean; onCheckAll: (on: boolean) => void; children: ReactNode;
 }) {
-  const counted = s.kind === "pinned" || s.kind === "group";
+  const counted = s.kind === "group";
   const label = s.kind === "matches" ? s.title : `${s.title}, ${plural(s.profiles.length, "profile")}${counted && s.prod ? `, ${s.prod} Production` : ""}`;
   return (
     <div className="q-settings-page-in mt-1.5" role="group" aria-label={label} data-section={s.kind}>
@@ -484,7 +481,6 @@ function Section({ s, showHead, selecting, allChosen, onCheckAll, children }: {
           {selecting && s.kind === "group" && (
             <input type="checkbox" aria-label={`Select all in ${s.title}`} checked={allChosen} onChange={() => onCheckAll(!allChosen)} />
           )}
-          {s.kind === "pinned" && <PinIcon filled />}
           {s.kind === "group" && <FolderIcon />}
           <span className="truncate">{s.title}</span>
           {s.kind !== "matches" && (
@@ -500,8 +496,8 @@ function Section({ s, showHead, selecting, allChosen, onCheckAll, children }: {
   );
 }
 
-function ProfileRow({ p, id, state, error, active, pinned, suffix, hint, terms, selecting, checked, onCheck, onPick, onRun, onCancel, onEdit, onMenu }: {
-  p: Profile; id: string; state: RowState; error?: string; active: boolean; pinned: boolean; suffix: string; hint: boolean; terms: string[];
+function ProfileRow({ p, id, state, error, active, suffix, hint, terms, selecting, checked, onCheck, onPick, onRun, onCancel, onEdit, onMenu }: {
+  p: Profile; id: string; state: RowState; error?: string; active: boolean; suffix: string; hint: boolean; terms: string[];
   /** Select mode: the row ticks (Shift: a range) instead of connecting. */
   selecting: boolean; checked: boolean; onCheck: (range: boolean) => void;
   onPick: () => void; onRun: () => void; onCancel: () => void; onEdit: () => void; onMenu: (at: { x: number; y: number }) => void;
@@ -554,7 +550,6 @@ function ProfileRow({ p, id, state, error, active, pinned, suffix, hint, terms, 
       <span className="flex-1 min-w-0 flex items-center gap-2.5 @max-[540px]:flex-col @max-[540px]:items-start @max-[540px]:gap-0 @max-[540px]:py-1">
         <span className="min-w-0 max-w-[62%] @max-[540px]:max-w-full flex items-center gap-1.5">
           <span className="font-semibold truncate"><Marked text={p.name} terms={terms} /></span>
-          {pinned && <span className="text-muted shrink-0 inline-flex" title="Pinned: first here and kept in Object Explorer"><PinIcon filled size={11} /></span>}
           {hint && (
             <span className="text-warn shrink-0 inline-flex" title={`The name says prod, but this profile is tagged ${envLabel[p.environment].toUpperCase()}. Edit it to change the environment.`}>
               <WarnIcon size={13} />
@@ -737,14 +732,6 @@ function MoreIcon() {
 }
 function FolderIcon() {
   return <svg {...svg} width={13} height={13} className="shrink-0"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>;
-}
-function PinIcon({ filled = false, size = 12 }: { filled?: boolean; size?: number }) {
-  return (
-    <svg {...svg} width={size} height={size} className="shrink-0">
-      <path d="M9 4h6l-1 6 3 3H7l3-3Z" fill={filled ? "currentColor" : "none"} />
-      <path d="M12 16v5" />
-    </svg>
-  );
 }
 function WarnIcon({ size = 16 }: { size?: number }) {
   return <svg {...svg} width={size} height={size} strokeWidth={2.2} className="shrink-0 text-warn"><path d="M12 3 2 20h20L12 3Z" /><path d="M12 10v4M12 17h.01" /></svg>;

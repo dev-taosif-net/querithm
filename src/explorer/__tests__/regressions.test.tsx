@@ -70,7 +70,7 @@ beforeEach(() => {
   useConnections.setState({ servers: {}, order: [], disconnected: {} });
   useSnapshots.setState({ entries: {} });
   useTabs.setState({ activeId: undefined, tabs: {}, order: [] } as never);
-  useSettings.setState({ explorerGroupByEnv: false, explorerSchemaGroups: [], explorerVisible: true, explorerAutoHide: false, pinnedProfiles: [] });
+  useSettings.setState({ explorerGroupByEnv: false, explorerSchemaGroups: [], explorerVisible: true, explorerAutoHide: false, groupOrder: [], profileOrder: [] });
   useUi.setState({ dialogs: [], toasts: [], explorerWidth: 280 });
   // The Explorer's view state lives in a store (it outlives a mount: the workspace saves the expansion).
   useExplorer.setState({ expanded: new Set(), collapsedEnvs: new Set(), details: {}, kind: "all", folderFilters: {}, query: "", uncapped: new Set(), selected: undefined });
@@ -184,12 +184,12 @@ describe.each<Engine>(["mssql", "pg"])("Explorer regressions (%s)", (engine) => 
     expect(onRender).not.toHaveBeenCalled();
   });
 
-  it("B14 / B16: a pinned profile stays in the tree, and a failed server says so on its collapsed row", () => {
+  it("B14 / B16: Show all saved profiles lists disconnected profiles, and a failed server says so on its collapsed row", () => {
     useProfiles.setState({ profiles: [profile("p1", engine), profile("p2", engine, { environment: "staging" })] });
-    useSettings.setState({ pinnedProfiles: ["p1"] });
+    useSettings.setState({ explorerShowAll: true });
     connect("p2", null, "error");
     render(<Explorer />);
-    expect(textEl("Srv-p1")).toBeTruthy(); // pinned, not connected
+    expect(textEl("Srv-p1")).toBeTruthy(); // saved, not connected
     expect(screen.getByText("Failed")).toBeTruthy();
   });
 

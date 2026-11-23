@@ -1,5 +1,5 @@
 // Deleting a profile removes everything kept for it: sessions, keyring secrets, the sidecar's metadata cache and query
-// history (profile.delete), in-memory snapshots, pins and per-database explorer settings; open tabs fall back to "Not connected".
+// history (profile.delete), in-memory snapshots, custom order and per-database explorer settings; open tabs fall back to "Not connected".
 // Each tab on the profile is settled first, as closing it would (a running query, staged edits, an open transaction ask);
 // the sidecar then closes the profile's sessions itself and refuses (profileBusy) while one still has a transaction or a
 // running query, and the shell deletes the keyring entries (L2).
@@ -14,7 +14,7 @@ import { ask, toast } from "../store/ui";
 import type { Profile } from "../ipc/contract";
 
 export const DELETE_PROFILE_BODY =
-  "This removes the profile and all data kept for it: its saved password (OS keyring), cached schema metadata, query history and pin. Open tabs using it are disconnected; a tab with a running query or an open transaction asks first. This cannot be undone.";
+  "This removes the profile and all data kept for it: its saved password (OS keyring), cached schema metadata and query history. Open tabs using it are disconnected; a tab with a running query or an open transaction asks first. This cannot be undone.";
 
 /**
  * Asks first (danger confirm), then deletes. True when the profile was deleted. `identity` ("Production ·
@@ -57,15 +57,15 @@ export async function deleteProfile(profileId: string): Promise<boolean> {
   useConnections.setState((s) => ({ disconnected: Object.fromEntries(Object.entries(s.disconnected).filter(([k]) => k !== profileId)) }));
   const settings = useSettings.getState();
   const prefix = `${profileId}|`;
-  const pinnedProfiles = settings.pinnedProfiles.filter((id) => id !== profileId);
+  const profileOrder = settings.profileOrder.filter((id) => id !== profileId);
   const recentProfiles = settings.recentProfiles.filter((id) => id !== profileId);
   const prodHintMuted = settings.prodHintMuted.filter((id) => id !== profileId);
   const explorerSchemaGroups = settings.explorerSchemaGroups.filter((k) => !k.startsWith(prefix));
   if (
-    pinnedProfiles.length !== settings.pinnedProfiles.length || recentProfiles.length !== settings.recentProfiles.length ||
+    profileOrder.length !== settings.profileOrder.length || recentProfiles.length !== settings.recentProfiles.length ||
     prodHintMuted.length !== settings.prodHintMuted.length || explorerSchemaGroups.length !== settings.explorerSchemaGroups.length
   )
-    settings.set({ pinnedProfiles, recentProfiles, prodHintMuted, explorerSchemaGroups });
+    settings.set({ profileOrder, recentProfiles, prodHintMuted, explorerSchemaGroups });
   if (keyringError) toast("error", keyringError);
   return true;
 }

@@ -2,7 +2,9 @@ import { create } from "zustand";
 import type { DatabaseInfo, Dialect, EnvironmentKind, GroupChangeResult, Profile, ProfileGroup } from "../ipc/contract";
 import { rpc, RpcError, shell } from "../ipc/client";
 import { endpointKey } from "../connections/auth";
+import { removeFromOrder, renameInOrder } from "../connections/order";
 import { dialectOf, engineTraits } from "../engines";
+import { useSettings } from "./settings";
 import { toast } from "./ui";
 
 export const envLabel: Record<EnvironmentKind, string> = { local: "Local", dev: "Dev", test: "Test", staging: "Stage", prod: "Prod" };
@@ -121,10 +123,18 @@ export const useProfiles = create<ProfilesState>((set, get) => {
     set({ groups: await rpc("group.create", { name }) });
   },
   async renameGroup(from, to) {
-    return apply(await rpc("group.rename", { from, to }));
+    const r = apply(await rpc("group.rename", { from, to }));
+    const s = useSettings.getState();
+    const next = renameInOrder(s.groupOrder, r.renamed?.from ?? from, r.renamed?.to ?? to);
+    if (next.length !== s.groupOrder.length || next.some((x, i) => x !== s.groupOrder[i])) s.set({ groupOrder: next });
+    return r;
   },
   async deleteGroup(name, expectedMembers) {
-    return apply(await rpc("group.delete", { name, expectedMembers: expectedMembers ?? null }));
+    const r = apply(await rpc("group.delete", { name, expectedMembers: expectedMembers ?? null }));
+    const s = useSettings.getState();
+    const next = removeFromOrder(s.groupOrder, name, true);
+    if (next.length !== s.groupOrder.length) s.set({ groupOrder: next });
+    return r;
   },
   async assignGroup(profileIds, name) {
     return apply(await rpc("group.assign", { profileIds, name }));

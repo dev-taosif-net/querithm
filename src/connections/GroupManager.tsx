@@ -11,6 +11,7 @@ import { toast } from "../store/ui";
 import { plural } from "../app/plural";
 import { confirmDeleteGroup } from "./groupActions";
 import { cleanGroupName, compareGroupNames, findGroup } from "./groupNames";
+import { orderMap, orderRank } from "./order";
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const byName = (a: Profile, b: Profile) => a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true });
@@ -23,16 +24,25 @@ export function GroupManagerDialog({ focus, onClose }: { focus?: string; onClose
   const groups = useProfiles((s) => s.groups);
   const profiles = useProfiles((s) => s.profiles);
   const showGroups = useSettings((s) => s.showGroups);
+  const groupOrder = useSettings((s) => s.groupOrder);
+  const profileOrder = useSettings((s) => s.profileOrder);
   const fid = useId();
   // The list as the sidecar has it now (another window may have changed it); a failure keeps what is shown.
   useEffect(() => void useProfiles.getState().refreshGroups(), []);
-  const sorted = useMemo(() => [...groups].sort((a, b) => compareGroupNames(a.name, b.name)), [groups]);
+  const sorted = useMemo(() => {
+    const rank = orderMap(groupOrder, true);
+    return [...groups].sort((a, b) => orderRank(rank, a.name, true) - orderRank(rank, b.name, true) || compareGroupNames(a.name, b.name));
+  }, [groups, groupOrder]);
   const [query, setQuery] = useState("");
   const shown = sorted.filter((g) => !query.trim() || g.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const [selected, setSelected] = useState<string | null>(focus ?? null);
   // A group renamed or deleted elsewhere falls back to the first one.
   const sel = sorted.find((g) => g.name === selected) ?? sorted[0];
-  const members = useMemo(() => (sel ? profiles.filter((p) => p.groupName === sel.name).sort(byName) : []), [profiles, sel]);
+  const members = useMemo(() => {
+    if (!sel) return [];
+    const rank = orderMap(profileOrder);
+    return profiles.filter((p) => p.groupName === sel.name).sort((a, b) => orderRank(rank, a.id) - orderRank(rank, b.id) || byName(a, b));
+  }, [profiles, sel, profileOrder]);
   const prodIn = (name: string) => profiles.filter((p) => p.groupName === name && p.environment === "prod").length;
 
   // ---- New

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Engine, EnvironmentKind, Profile } from "../../ipc/contract";
 import {
   buildSections, byEnvironment, defaultActiveId, ENGINE_TERMS, envCounts, filterProfiles, matchesProfile, matchParts, nameSuffix, prodNameHint,
-  profileAddress, rankProfiles, ROW_ACTION, rowState, splitPinned, togglePin,
+  profileAddress, rankProfiles, ROW_ACTION, rowState,
 } from "../profileList";
 
 const ENGINES: Engine[] = ["mssql", "pg"];
@@ -75,10 +75,10 @@ describe("connect dialog: search ranking", () => {
   });
 
   it("searching turns the sections into one 'N matches' list, each profile once", () => {
-    const { sections, flat } = buildSections(filterProfiles(list, "orders"), ["ordersProd"], { showGroups: true, query: "orders" });
+    const { sections, flat } = buildSections(filterProfiles(list, "orders"), { showGroups: true, query: "orders" });
     expect(sections.map((s) => [s.kind, s.title])).toEqual([["matches", "6 matches"]]);
     expect(new Set(ids(flat)).size).toBe(flat.length);
-    expect(buildSections([], [], { query: "x" }).sections).toEqual([]);
+    expect(buildSections([], { query: "x" }).sections).toEqual([]);
   });
 
   it("cuts text into matched and unmatched runs for underlining", () => {
@@ -109,17 +109,8 @@ describe("connect dialog: environment filter", () => {
   });
 });
 
-describe("connect dialog: pins and sections", () => {
-  it("toggles a pin on and off, appending new pins", () => {
-    expect(togglePin(["a"], "b")).toEqual(["a", "b"]);
-    expect(togglePin(["a", "b"], "a")).toEqual(["b"]);
-  });
-  it("puts pinned profiles first in pin order and ignores pins of missing or filtered-out profiles", () => {
-    const r = splitPinned([prof("a"), prof("b"), prof("c")], ["c", "gone", "a"]);
-    expect(ids(r.pinned)).toEqual(["c", "a"]);
-    expect(ids(r.rest)).toEqual(["b"]);
-  });
-  it("builds Pinned, Production, Staging & test and Development & local; rows Production first, A–Z; flat follows the screen", () => {
+describe("connect dialog: sections and custom order", () => {
+  it("builds Production, Staging & test and Development & local; rows Production first, A–Z; flat follows the screen", () => {
     const list = [
       prof("dev1", { environment: "dev", groupName: "G" }),
       prof("loc", { environment: "local", engine: "pg" }),
@@ -128,14 +119,15 @@ describe("connect dialog: pins and sections", () => {
       prof("stage", { environment: "staging" }),
       prof("dev2", { environment: "dev", groupName: "G" }),
     ];
-    const { sections, flat } = buildSections(list, ["dev2"]);
-    expect(sections.map((s) => [s.kind, s.title])).toEqual([["pinned", "Pinned"], ["env", "Production"], ["env", "Staging & test"], ["env", "Development & local"]]);
-    expect(ids(sections[2].profiles)).toEqual(["stage", "qa"]);
-    expect(ids(flat)).toEqual(["dev2", "prod1", "stage", "qa", "dev1", "loc"]);
+    const { sections, flat } = buildSections(list);
+    expect(sections.map((s) => [s.kind, s.title])).toEqual([["env", "Production"], ["env", "Staging & test"], ["env", "Development & local"]]);
+    expect(ids(sections[1].profiles)).toEqual(["stage", "qa"]);
+    expect(ids(flat)).toEqual(["prod1", "stage", "qa", "dev1", "dev2", "loc"]);
   });
-  it("has no Pinned section when no pinned profile is shown, and counts Production rows per section", () => {
-    expect(buildSections([prof("a")], ["b"]).sections.map((s) => s.key)).toEqual(["dev+local"]);
-    expect(buildSections([prof("p", { environment: "prod" }), prof("d")], ["p", "d"]).sections[0].prod).toBe(1);
+  it("respects custom profileOrder inside sections and counts Production rows per section", () => {
+    expect(buildSections([prof("a")]).sections.map((s) => s.key)).toEqual(["dev+local"]);
+    expect(buildSections([prof("p", { environment: "prod" }), prof("d")]).sections[0].prod).toBe(1);
+    expect(ids(byEnvironment([prof("b", { environment: "local" }), prof("z", { environment: "prod" }), prof("a", { environment: "prod" })], ["b", "z"]))).toEqual(["b", "z", "a"]);
   });
   it("sorts by environment, Production first, then name", () => {
     expect(ids(byEnvironment([prof("b", { environment: "local" }), prof("z", { environment: "prod" }), prof("a", { environment: "prod" })]))).toEqual(["a", "z", "b"]);
@@ -155,31 +147,34 @@ describe.each<Engine>(ALL_ENGINES)("connect dialog: groups (%s)", (engine) => {
     prof("billing", { engine, environment: "prod" }),
   ];
 
-  it("groups A–Z first with Production first inside, then the environment sections for the rest", () => {
-    const { sections, flat } = buildSections(list, ["t10"], { showGroups: true });
-    expect(sections.map((s) => s.title)).toEqual(["Pinned", "Payments", "team 2", "Production", "Development & local"]);
-    expect(sections[1]).toMatchObject({ kind: "group", prod: 1 });
-    expect(ids(sections[1].profiles)).toEqual(["orders", "payStage", "ledger"]);
+  it("groups A–Z first (or custom groupOrder) with custom profileOrder / Production first inside, then the environment sections for the rest", () => {
+    const { sections, flat } = buildSections(list, { showGroups: true });
+    expect(sections.map((s) => s.title)).toEqual(["Payments", "team 2", "Team 10", "Production", "Development & local"]);
+    expect(sections[0]).toMatchObject({ kind: "group", prod: 1 });
+    expect(ids(sections[0].profiles)).toEqual(["orders", "payStage", "ledger"]);
     expect(sections.some((s) => /no group/i.test(s.title))).toBe(false);
-    expect(ids(flat)).toEqual(["t10", "orders", "payStage", "ledger", "t2", "billing", "scratch"]);
+    expect(ids(flat)).toEqual(["orders", "payStage", "ledger", "t2", "t10", "billing", "scratch"]);
+
+    const custom = buildSections(list, { showGroups: true, groupOrder: ["Team 10", "Payments"], profileOrder: ["ledger", "orders"] });
+    expect(custom.sections.map((s) => s.title)).toEqual(["Team 10", "Payments", "team 2", "Production", "Development & local"]);
+    expect(ids(custom.sections[1].profiles)).toEqual(["ledger", "orders", "payStage"]);
   });
 
   it("with no grouped profile, or Show groups off, there are only environment sections", () => {
     const plain = list.map((p) => ({ ...p, groupName: null }));
-    expect(buildSections(plain, [], { showGroups: true })).toEqual(buildSections(plain, [], { showGroups: false }));
-    expect(buildSections(list, [], { showGroups: false }).sections.every((s) => s.kind === "env")).toBe(true);
+    expect(buildSections(plain, { showGroups: true })).toEqual(buildSections(plain, { showGroups: false }));
+    expect(buildSections(list, { showGroups: false }).sections.every((s) => s.kind === "env")).toBe(true);
   });
 });
 
 describe("connect dialog: the row it opens on", () => {
   const flat = [prof("prodPin", { environment: "prod" }), prof("devPin"), prof("other"), prof("old", { unsupported: "Saved by a newer version" })];
-  it("prefers a just-saved profile, then the most recent listed one, then the first pinned non-Production one", () => {
+  it("prefers a just-saved profile, then the most recent listed one", () => {
     expect(defaultActiveId(flat, { focus: "other", recent: ["devPin"] })).toBe("other");
-    expect(defaultActiveId(flat, { recent: ["gone", "old", "prodPin"], pinned: ["prodPin", "devPin"] })).toBe("prodPin");
-    expect(defaultActiveId(flat, { recent: ["gone"], pinned: ["prodPin", "devPin"] })).toBe("devPin");
+    expect(defaultActiveId(flat, { recent: ["gone", "old", "prodPin"] })).toBe("prodPin");
+    expect(defaultActiveId(flat, { recent: ["gone"] })).toBeUndefined();
   });
   it("never falls back to the first row (Production first by construction); a single usable profile is the default", () => {
-    expect(defaultActiveId(flat, { pinned: ["prodPin"] })).toBeUndefined();
     expect(defaultActiveId(flat)).toBeUndefined();
     expect(defaultActiveId([prof("only", { environment: "prod" })])).toBe("only");
     expect(defaultActiveId([prof("old", { unsupported: "x" })])).toBeUndefined();

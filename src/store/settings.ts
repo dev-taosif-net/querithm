@@ -42,12 +42,14 @@ export interface Settings {
   /** Grouped connections sit under their group (Group › Environment › Connection) in the Object Explorer and the Connect
    *  dialog; connections without a group stay where they are. Has no visible effect until a connection has a group. */
   showGroups: boolean;
-  /** List every saved profile in the Object Explorer, not only the servers in use and pinned ones (§12). */
+  /** List every saved profile in the Object Explorer, not only the servers in use (§12). */
   explorerShowAll: boolean;
   /** Databases whose tree is grouped by schema, as schemaGroupKey(profileId, database). */
   explorerSchemaGroups: string[];
-  /** Profile ids pinned to the top of the Connect dialog, in pin order. */
-  pinnedProfiles: string[];
+  /** Custom display order of connection groups (group names), set by dragging in the Object Explorer. */
+  groupOrder: string[];
+  /** Custom display order of profiles/connections (profile ids), set by dragging in the Object Explorer. */
+  profileOrder: string[];
   /**
    * Profile ids by last successful connect, newest first (at most RECENT_PROFILES_MAX). The Connect dialog opens on the
    * newest one that is listed and breaks search ties with it; it has no Recent section of its own.
@@ -132,7 +134,8 @@ export const defaultSettings: Settings = {
   showGroups: true,
   explorerShowAll: false,
   explorerSchemaGroups: [],
-  pinnedProfiles: [],
+  groupOrder: [],
+  profileOrder: [],
   recentProfiles: [],
   prodHintMuted: [],
   tabListGroupByConnection: false,

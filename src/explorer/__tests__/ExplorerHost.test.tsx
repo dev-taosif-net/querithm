@@ -26,7 +26,7 @@ beforeEach(() => {
   useTabs.setState({ activeId: "t1" } as never);
   useConnections.setState({ servers: {}, order: [], disconnected: {} });
   useProfiles.setState({ profiles: [], groups: [] });
-  useSettings.setState({ pinnedProfiles: [] });
+  useSettings.setState({ groupOrder: [], profileOrder: [] });
   setMode(true, false);
 });
 afterEach(() => {
@@ -241,7 +241,7 @@ describe("ExplorerHost", () => {
         { id: "e", name: "Archive", engine: "mssql", environment: "test" },
       ] as never,
     });
-    useSettings.setState({ pinnedProfiles: ["e"] }); // pinned, not connected: no mark
+    useSettings.setState({ groupOrder: [], profileOrder: [] });
     useConnections.setState({
       order: ["a", "b", "c", "d"],
       servers: {

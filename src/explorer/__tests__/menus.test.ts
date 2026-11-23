@@ -54,13 +54,13 @@ const sub = (menu: MenuEntry[], label: string) => labels(find(menu, label).sub!)
 const base = { level: 1, parent: -1, expandable: false, expanded: false };
 const obj = (kind: SnapObject["kind"], over: Partial<SnapObject> = {}): SnapObject => ({ id: 7, schema: "dbo", name: "Orders", kind, columns: kind === "table" || kind === "view" ? [{ name: "Id", type: "int", nullable: false, pk: true, identity: false, computed: false, ordinal: 1 }] : undefined, ...over });
 const objRow = (o: SnapObject): RowOf<"obj"> => ({ ...base, t: "obj", key: "o:p:AppDb:x", profileId: "p", db: "AppDb", obj: o, bare: true, leaf: false });
-const server = (status: RowOf<"server">["status"], error?: string): RowOf<"server"> => ({ ...base, t: "server", key: "s:p", profileId: "p", status, error, pinned: false });
+const server = (status: RowOf<"server">["status"], error?: string): RowOf<"server"> => ({ ...base, t: "server", key: "s:p", profileId: "p", status, error });
 
 beforeEach(() => {
   Object.values(m).forEach((f) => typeof f === "function" && f.mockClear());
   m.reuse = undefined;
   useConnections.setState({ servers: { p: { profileId: "p", status: "connected", sessionId: "s", databases: [] } }, order: ["p"], disconnected: {}, connect: m.connect } as never);
-  useSettings.setState({ pinnedProfiles: [], explorerSchemaGroups: [], explorerShowAll: false });
+  useSettings.setState({ groupOrder: [], profileOrder: [], explorerSchemaGroups: [], explorerShowAll: false });
   useUi.setState({ dialogs: [] });
   useTabs.setState({ tabs: {}, order: [], activeId: undefined } as never);
 });
@@ -251,10 +251,10 @@ describe("Oracle routine, trigger and table menus (D4 S11)", () => {
 describe("server, database, folder and saved menus", () => {
   beforeEach(() => useProfiles.setState({ profiles: [{ id: "p", name: "Srv", engine: "pg", environment: "staging" } as never] }));
 
-  it("connected: new query, refresh, activity monitor, edit, pin, and a neutral Disconnect that says what it closes", () => {
+  it("connected: new query, refresh, activity monitor, edit, and a neutral Disconnect that says what it closes", () => {
     useTabs.setState({ tabs: { t1: { id: "t1", profileId: "p", sessionId: "x" } }, order: ["t1"] } as never);
     const menu = serverMenu(server("connected"));
-    expect(labels(menu)).toEqual(["New query", "Refresh databases", "Activity monitor", "Edit profile…", "Move to group…", "Duplicate profile…", "Pin to top", "Disconnect"]);
+    expect(labels(menu)).toEqual(["New query", "Refresh databases", "Activity monitor", "Edit profile…", "Move to group…", "Duplicate profile…", "Disconnect"]);
     expect(find(menu, "Disconnect")).toMatchObject({ detail: "closes 1 tab session" });
     expect(find(menu, "Disconnect").unavailable).toBeUndefined();
     find(menu, "Disconnect").run();
@@ -278,14 +278,11 @@ describe("server, database, folder and saved menus", () => {
     expect(find(menu, "Disconnect").detail).toBe("stops retrying");
   });
 
-  it("not connected (pinned): Connect first; New query connects first; pinning is a checkbox shared with the Connect dialog", () => {
-    useSettings.setState({ pinnedProfiles: ["p"] });
+  it("not connected: Connect first; New query connects first; no Pin to top option", () => {
     const menu = serverMenu(server("off"));
     expect(items(menu)[0]).toMatchObject({ label: "Connect", bold: true });
     expect(find(menu, "New query").detail).toBe("connects first");
-    expect(find(menu, "Pin to top").checked).toBe(true);
-    find(menu, "Pin to top").run();
-    expect(useSettings.getState().pinnedProfiles).toEqual([]);
+    expect(labels(menu)).not.toContain("Pin to top");
     find(menu, "Connect").run();
     expect(m.connect).toHaveBeenCalledWith("p");
   });

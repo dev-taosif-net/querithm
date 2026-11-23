@@ -219,10 +219,10 @@ describe("settings store", () => {
 
   it("load cleans untrusted values: wrong types and unknown choices take defaults, numbers are clamped", async () => {
     rpc.mockResolvedValueOnce([
-      { key: "ui.settings", valueJson: JSON.stringify({ theme: "blue", editorFontSize: 0, indentSize: 99, maxRows: -5, minimap: "yes", pinnedProfiles: [1] }) },
+      { key: "ui.settings", valueJson: JSON.stringify({ theme: "blue", editorFontSize: 0, indentSize: 99, maxRows: -5, minimap: "yes", profileOrder: [1], groupOrder: [2] }) },
     ]);
     await useSettings.getState().load();
-    expect(useSettings.getState()).toMatchObject({ theme: "dark", editorFontSize: 9, indentSize: 8, maxRows: 0, minimap: true, pinnedProfiles: [] });
+    expect(useSettings.getState()).toMatchObject({ theme: "dark", editorFontSize: 9, indentSize: 8, maxRows: 0, minimap: true, profileOrder: [], groupOrder: [] });
   });
 
   it("the layout for several result sets: Tabs by default; an unknown value in store.db or from set() is refused", async () => {

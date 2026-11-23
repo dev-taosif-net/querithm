@@ -246,7 +246,7 @@ export const settingDefs: SettingDef[] = [
   },
   {
     id: "explorerShowAll", keys: ["explorerShowAll"], page: "explorer", group: "Servers", label: "Show all saved connections",
-    description: "Lists every saved connection, not only the servers in use and pinned ones.",
+    description: "Lists every saved connection, not only the servers in use.",
     control: { kind: "switch" }, keywords: ["profiles", "saved"],
   },
   // About (the rest of the page is drawn by the page itself)
@@ -260,10 +260,10 @@ export const settingDefs: SettingDef[] = [
 
 /**
  * Settings keys deliberately not shown as rows: keybindings has its own page; the others are saved state rather than
- * preferences (pins, per-database grouping, the Explorer window flags behind explorerMode, where the results panel is
+ * preferences (custom group/profile order, per-database grouping, the Explorer window flags behind explorerMode, where the results panel is
  * docked, the Connect dialog's recent profiles and its muted "name says prod" hints), or have no reader yet.
  */
-export const notRows: (keyof Settings)[] = ["keybindings", "explorerSchemaGroups", "pinnedProfiles", "recentProfiles", "prodHintMuted", "formatOnSave", "panelDock"];
+export const notRows: (keyof Settings)[] = ["keybindings", "explorerSchemaGroups", "groupOrder", "profileOrder", "recentProfiles", "prodHintMuted", "formatOnSave", "panelDock"];
 
 export const defOf = (id: SettingDef["id"]) => settingDefs.find((d) => d.id === id)!;
 

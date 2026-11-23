@@ -45,7 +45,7 @@ beforeEach(() => {
     loaded: true,
   });
   useConnections.setState({ servers: {}, order: [], disconnected: {} });
-  useSettings.setState({ pinnedProfiles: [], recentProfiles: [], prodHintMuted: [], showGroups: true });
+  useSettings.setState({ groupOrder: [], profileOrder: [], recentProfiles: [], prodHintMuted: [], showGroups: true });
   useUi.setState({ dialogs: [] });
   useTabs.setState({ activeId: undefined } as never);
 });
@@ -197,11 +197,7 @@ describe("ConnectDialog: the Enter target", () => {
     expect(connect).not.toHaveBeenCalled();
   });
 
-  it("falls back to the first pinned profile that is not Production; `focus` (just saved) wins", () => {
-    useSettings.setState({ pinnedProfiles: ["pg1", "ms1"] });
-    const { unmount } = render(<ConnectDialog onClose={() => {}} />);
-    expect(activeRow()).toBe("ms1");
-    unmount();
+  it("`focus` (just saved) wins as the initial active row", () => {
     render(<ConnectDialog onClose={() => {}} focus="pg1" />);
     expect(activeRow()).toBe("pg1");
   });
@@ -349,7 +345,7 @@ describe("ConnectDialog: row actions", () => {
     expect(useUi.getState().dialogs.at(-1)).toEqual({ kind: "profile", profileId: "pg1", fromConnect: true });
   });
 
-  it("the ⋯ menu pins, duplicates and deletes (with the profile's identity); Delete is not a row icon", async () => {
+  it("the ⋯ menu duplicates and deletes (with the profile's identity) and has no Pin item; Delete is not a row icon", async () => {
     useProfiles.setState({ profiles: [prof("pg1", "pg", { name: "Billing", environment: "prod", port: 5432, groupName: "Finance" }), prof("ms1", "mssql", { name: "Sales" })] });
     render(<ConnectDialog onClose={() => {}} />);
     expect(screen.queryByTitle(/Delete/)).toBeNull();
@@ -357,9 +353,7 @@ describe("ConnectDialog: row actions", () => {
     expect(activeRow()).toBe("pg1");
     const menu = screen.getByRole("menu", { name: "Actions for Billing" });
     expect(within(menu).getAllByRole("menuitem").map((b) => b.textContent)).toEqual(expect.arrayContaining(["ConnectEnter", "Edit…F2", "Duplicate…", "Copy address"]));
-    await userEvent.click(within(menu).getByRole("menuitem", { name: /^Pin/ }));
-    expect(useSettings.getState().pinnedProfiles).toEqual(["pg1"]);
-    await userEvent.click(within(row("pg1")).getByRole("button", { name: "More actions for Billing" }));
+    expect(within(menu).queryByRole("menuitem", { name: /^Pin/ })).toBeNull();
     await userEvent.click(screen.getByRole("menuitem", { name: "Delete profile…" }));
     expect(m.confirmDeleteProfile).toHaveBeenCalledWith(expect.objectContaining({ id: "pg1" }), "Production · h-pg1:5432 · Finance");
   });
@@ -377,18 +371,20 @@ describe("ConnectDialog: row actions", () => {
 });
 
 describe("ConnectDialog: telling rows apart", () => {
-  it("a pinned profile names its group; two rows with the same name, group and address add the user", () => {
+  it("two rows with the same name, group and address add the user; outside a group section, the group is named", () => {
     useProfiles.setState({
       profiles: [
         prof("a", "pg", { name: "orders-db", environment: "prod", groupName: "Billing", host: "pg-prod", port: 5432, username: "app_rw" }),
         prof("b", "pg", { name: "orders-db", environment: "prod", groupName: "Billing", host: "pg-prod", port: 5432, username: "admin" }),
       ],
     });
-    useSettings.setState({ pinnedProfiles: ["a"] });
-    render(<ConnectDialog onClose={() => {}} />);
-    expect(row("a").textContent).toContain("· Billing · app_rw");
+    const { rerender } = render(<ConnectDialog onClose={() => {}} />);
+    expect(row("a").textContent).toContain("· app_rw");
+    expect(row("a").textContent).not.toContain("· Billing");
     expect(row("b").textContent).toContain("· admin");
-    expect(row("b").textContent).not.toContain("· Billing");
+    useSettings.setState({ showGroups: false });
+    rerender(<ConnectDialog onClose={() => {}} />);
+    expect(row("a").textContent).toContain("· Billing · app_rw");
   });
 
   it("marks a DEV profile whose name says prod, until the user turns the hint off for it", async () => {

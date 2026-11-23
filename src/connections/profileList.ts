@@ -4,7 +4,7 @@ import type { Engine, EnvironmentKind, Profile } from "../ipc/contract";
 import type { ServerConn } from "../store/connections";
 import { envLabel } from "../store/profiles";
 import { locationOf } from "./auth";
-import { compareGroupNames } from "./groupNames";
+import { orderMap, orderRank, sortGroupNames } from "./order";
 
 /** The environments shown; empty shows every environment. Several combine with OR, and with the search by AND. */
 export type EnvFilter = readonly EnvironmentKind[];
@@ -66,21 +66,10 @@ export function envCounts(profiles: readonly Profile[]): Record<EnvironmentKind,
   return counts;
 }
 
-/** Pinned profiles first, in pin order; the rest keep their order. Pins of unknown ids are ignored. */
-export function splitPinned(list: readonly Profile[], pinned: readonly string[]): { pinned: Profile[]; rest: Profile[] } {
-  const byId = new Map(list.map((p) => [p.id, p]));
-  const top = pinned.map((id) => byId.get(id)).filter((p): p is Profile => !!p);
-  const set = new Set(top.map((p) => p.id));
-  return { pinned: top, rest: list.filter((p) => !set.has(p.id)) };
-}
-
-export function togglePin(pinned: readonly string[], id: string): string[] {
-  return pinned.includes(id) ? pinned.filter((x) => x !== id) : [...pinned, id];
-}
-
-/** Production first, then Staging, Test, Development, Local; A–Z inside each. */
-export function byEnvironment(list: readonly Profile[]): Profile[] {
-  return [...list].sort((a, b) => ENV_ORDER.indexOf(a.environment) - ENV_ORDER.indexOf(b.environment) || a.name.localeCompare(b.name));
+/** Custom drag order first, then Production → Staging → Test → Development → Local, then A–Z. */
+export function byEnvironment(list: readonly Profile[], profileOrder?: readonly string[]): Profile[] {
+  const rank = orderMap(profileOrder);
+  return [...list].sort((a, b) => orderRank(rank, a.id) - orderRank(rank, b.id) || ENV_ORDER.indexOf(a.environment) - ENV_ORDER.indexOf(b.environment) || a.name.localeCompare(b.name));
 }
 
 /** A row's address: host and port for a server (an IPv6 host in brackets), the file's name, or "In memory". */
@@ -137,14 +126,14 @@ export function rankProfiles(list: readonly Profile[], query: string, recent: re
     .map((x) => x.p);
 }
 
-export type SectionKind = "pinned" | "group" | "env" | "matches";
+export type SectionKind = "group" | "env" | "matches";
 
 export interface ProfileSection {
   key: string;
   kind: SectionKind;
   title: string;
   profiles: Profile[];
-  /** How many of `profiles` are Production (Pinned and group headers say it). */
+  /** How many of `profiles` are Production (group headers say it). */
   prod: number;
 }
 
@@ -161,6 +150,10 @@ export interface SectionOptions {
   query?: string;
   /** Profile ids by last connect, newest first: the search's tie-break. */
   recent?: readonly string[];
+  /** Custom display order of connection groups (group names). */
+  groupOrder?: readonly string[];
+  /** Custom display order of profiles (profile ids). */
+  profileOrder?: readonly string[];
 }
 
 const section = (key: string, kind: SectionKind, title: string, profiles: Profile[]): ProfileSection => ({
@@ -169,27 +162,25 @@ const section = (key: string, kind: SectionKind, title: string, profiles: Profil
 
 /**
  * The list as shown; `flat` is the on-screen order for keyboard moves, and every profile is in it once.
- * Searching: one ranked section, "N matches". Otherwise: Pinned (in pin order), then with `showGroups` one section per
- * connection group (A–Z, rows Production first), then Production, Staging & test and Development & local for the rest.
- * There is no "No group" section (§6).
+ * Searching: one ranked section, "N matches". Otherwise: with `showGroups` one section per connection group (custom
+ * group order, then A–Z; rows in custom profile order, then Production first), then Production, Staging & test and
+ * Development & local for the rest. There is no "No group" section (§6).
  */
-export function buildSections(list: readonly Profile[], pinned: readonly string[], opts: SectionOptions = {}): { sections: ProfileSection[]; flat: Profile[] } {
+export function buildSections(list: readonly Profile[], opts: SectionOptions = {}): { sections: ProfileSection[]; flat: Profile[] } {
   if (searchTerms(opts.query ?? "").length) {
     const ranked = rankProfiles(list, opts.query ?? "", opts.recent);
     const sections = ranked.length ? [section("matches", "matches", `${ranked.length} ${ranked.length === 1 ? "match" : "matches"}`, ranked)] : [];
     return { sections, flat: ranked };
   }
-  const split = splitPinned(list, pinned);
   const sections: ProfileSection[] = [];
-  if (split.pinned.length) sections.push(section("pinned", "pinned", "Pinned", split.pinned));
-  let rest = split.rest;
+  let rest = list;
   if (opts.showGroups) {
-    const names = [...new Set(rest.map((p) => p.groupName).filter((g): g is string => !!g))].sort(compareGroupNames);
-    for (const name of names) sections.push(section(`g:${name}`, "group", name, byEnvironment(rest.filter((p) => p.groupName === name))));
+    const names = sortGroupNames([...new Set(rest.map((p) => p.groupName).filter((g): g is string => !!g))], opts.groupOrder);
+    for (const name of names) sections.push(section(`g:${name}`, "group", name, byEnvironment(rest.filter((p) => p.groupName === name), opts.profileOrder)));
     rest = rest.filter((p) => !p.groupName);
   }
   for (const { envs, title } of ENV_SECTIONS) {
-    const ps = byEnvironment(rest.filter((p) => envs.includes(p.environment)));
+    const ps = byEnvironment(rest.filter((p) => envs.includes(p.environment)), opts.profileOrder);
     if (ps.length) sections.push(section(envs.join("+"), "env", title, ps));
   }
   return { sections, flat: sections.flatMap((s) => s.profiles) };
@@ -197,19 +188,14 @@ export function buildSections(list: readonly Profile[], pinned: readonly string[
 
 /**
  * The row the dialog opens on: `focus` (a profile just saved), else the most recently connected profile that is listed,
- * else the first pinned one that is not Production, else the only one, else none: Enter then does nothing until the
- * user picks a row. Never simply the first row, which is Production by construction. A profile this build cannot open
- * is never the default.
+ * else the only one, else none: Enter then does nothing until the user picks a row. Never simply the first row, which
+ * may be Production. A profile this build cannot open is never the default.
  */
-export function defaultActiveId(flat: readonly Profile[], opts: { recent?: readonly string[]; pinned?: readonly string[]; focus?: string } = {}): string | undefined {
+export function defaultActiveId(flat: readonly Profile[], opts: { recent?: readonly string[]; focus?: string } = {}): string | undefined {
   const byId = new Map(flat.map((p) => [p.id, p]));
   const usable = (p: Profile | undefined): p is Profile => !!p && !p.unsupported;
   if (opts.focus && byId.has(opts.focus)) return opts.focus;
   for (const id of opts.recent ?? []) if (usable(byId.get(id))) return id;
-  for (const id of opts.pinned ?? []) {
-    const p = byId.get(id);
-    if (usable(p) && p.environment !== "prod") return id;
-  }
   return flat.length === 1 && usable(flat[0]) ? flat[0].id : undefined;
 }
 

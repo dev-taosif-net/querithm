@@ -12,7 +12,7 @@ const profile = (id: string, engine: Engine, over: Partial<Profile> = {}): Profi
 const conn = (id: string, over: Partial<ServerConn> = {}): ServerConn => ({ profileId: id, status: "connected", sessionId: "s", databases: [{ name: "AppDb", isSystem: false }], ...over });
 function input(over: Partial<TreeInput> = {}): TreeInput {
   return {
-    profiles: [], servers: {}, order: [], pinned: [], showAll: true, groupByEnv: false, collapsedEnvs: new Set(), expanded: new Set(),
+    profiles: [], servers: {}, order: [], showAll: true, groupByEnv: false, collapsedEnvs: new Set(), expanded: new Set(),
     entries: {}, details: {}, schemaGroups: [], kind: "all", folderFilters: {}, showGroups: true, collapsedGroups: new Set(), ...over,
   };
 }
@@ -102,8 +102,9 @@ describe("Group › Environment › Connection", () => {
     expect(labels(rows)).toEqual(["group:Payments", "  env:prod", "    server:orders", "      db:AppDb"]);
   });
 
-  it("lists the servers in the order the tree draws them", () => {
-    expect(orderedServers({ profiles: ps, servers: {}, order: [], pinned: [], showAll: true, showGroups: true }).map((p) => p.id)).toEqual(["ledger", "billing", "orders", "t2", "t10", "scratch"]);
+  it("lists the servers in the order the tree draws them, respecting custom groupOrder and profileOrder", () => {
+    expect(orderedServers({ profiles: ps, servers: {}, order: [], showAll: true, showGroups: true }).map((p) => p.id)).toEqual(["ledger", "billing", "orders", "t2", "t10", "scratch"]);
+    expect(orderedServers({ profiles: ps, servers: {}, order: [], showAll: true, showGroups: true, groupOrder: ["Team 10", "Payments"], profileOrder: ["orders", "ledger"] }).map((p) => p.id)).toEqual(["t10", "orders", "ledger", "billing", "t2", "scratch"]);
   });
 });
 

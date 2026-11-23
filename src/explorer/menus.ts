@@ -180,9 +180,6 @@ export function groupMenu(row: RowOf<"group">): MenuEntry[] {
 
 export function serverMenu(row: RowOf<"server">): MenuEntry[] {
   const id = row.profileId;
-  const settings = useSettings.getState();
-  const pinned = settings.pinnedProfiles.includes(id);
-  const pin = item("Pin to top", () => settings.set({ pinnedProfiles: pinned ? settings.pinnedProfiles.filter((x) => x !== id) : [...settings.pinnedProfiles, id] }), { checked: pinned, detail: "stays in the Explorer" });
   const profile = useProfiles.getState().byId(id);
   const edit = item("Edit profile…", () => useUi.getState().openDialog({ kind: "profile", profileId: id }));
   // Bulk move with one connection: the same dialog the Connect dialog's Select mode opens.
@@ -204,10 +201,10 @@ export function serverMenu(row: RowOf<"server">): MenuEntry[] {
   const sessions = Object.values(useTabs.getState().tabs).filter((t) => t.profileId === id && t.sessionId).length;
   const disconnect = item("Disconnect", () => void disconnectServer(id), { detail: row.status === "error" ? "stops retrying" : row.status === "connecting" ? "stops connecting" : sessions ? `closes ${sessions} tab session${sessions === 1 ? "" : "s"}` : undefined });
   if (row.status === "off")
-    return [item("Connect", () => void connectFromExplorer(id), { bold: true, hint: "Enter" }), item("New query", () => void connectFromExplorer(id, { newQuery: true }), { detail: "connects first" }), edit, move, duplicate, ...file, "sep", ...tools, "sep", pin];
+    return [item("Connect", () => void connectFromExplorer(id), { bold: true, hint: "Enter" }), item("New query", () => void connectFromExplorer(id, { newQuery: true }), { detail: "connects first" }), edit, move, duplicate, ...file, "sep", ...tools];
   if (row.status === "error")
-    return [item("Reconnect", () => void connectFromExplorer(id), { bold: true, hint: "Enter" }), edit, move, duplicate, ...file, item("Copy error", () => void copyText(row.error ?? "")), "sep", item("New query", () => {}, { unavailable: "Not connected" }), ...tools, "sep", pin, "sep", disconnect];
-  return [item("New query", () => newQueryTab({ profileId: id }), { unavailable: row.status === "connecting" ? "Connecting" : undefined }), ...tools, edit, move, duplicate, ...file, "sep", pin, "sep", disconnect];
+    return [item("Reconnect", () => void connectFromExplorer(id), { bold: true, hint: "Enter" }), edit, move, duplicate, ...file, item("Copy error", () => void copyText(row.error ?? "")), "sep", item("New query", () => {}, { unavailable: "Not connected" }), ...tools, "sep", disconnect];
+  return [item("New query", () => newQueryTab({ profileId: id }), { unavailable: row.status === "connecting" ? "Connecting" : undefined }), ...tools, edit, move, duplicate, ...file, "sep", disconnect];
 }
 
 export function dbMenu(row: RowOf<"db">): MenuEntry[] {

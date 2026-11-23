@@ -13,7 +13,7 @@ const entry = (id: string, db: string, objects: SnapObject[], over: Partial<Snap
 
 function input(over: Partial<TreeInput> = {}): TreeInput {
   return {
-    profiles: [], servers: {}, order: [], pinned: [], showAll: false, groupByEnv: false, collapsedEnvs: new Set(), expanded: new Set(),
+    profiles: [], servers: {}, order: [], showAll: false, groupByEnv: false, collapsedEnvs: new Set(), expanded: new Set(),
     entries: {}, details: {}, schemaGroups: [], kind: "all", folderFilters: {}, ...over,
   };
 }
@@ -22,13 +22,12 @@ const labels = (rows: TreeRow[]) => rows.map((r) => `${"  ".repeat(r.level - 1)}
 describe("which servers the tree lists (owner decision, revised 2026-10-30)", () => {
   const ps = [profile("a", "mssql", { environment: "prod" }), profile("b", "pg"), profile("c", "pg", { environment: "local" }), profile("d", "mssql", { environment: "test" }), profile("e", "pg", { environment: "staging" })];
 
-  it("in use (connected, connecting, failed) and pinned; the other saved profiles are not listed, not even as a count row", () => {
-    const r = buildTree(input({ profiles: ps, servers: { a: conn("a"), b: conn("b", { status: "connecting", databases: [] }), e: conn("e", { status: "error", error: "x" }) }, order: ["a", "b", "e"], pinned: ["d"] }));
-    expect(r.shown).toEqual(["b", "d", "e", "a"]); // Local → Prod: dev, test, staging, prod
+  it("in use (connected, connecting, failed); the other saved profiles are not listed, not even as a count row", () => {
+    const r = buildTree(input({ profiles: ps, servers: { a: conn("a"), b: conn("b", { status: "connecting", databases: [] }), e: conn("e", { status: "error", error: "x" }) }, order: ["a", "b", "e"] }));
+    expect(r.shown).toEqual(["b", "e", "a"]); // Local → Prod: dev, staging, prod
     // The header's Connect… reaches the rest; a "N saved connections" row only repeated it (owner decision, 2026-11-02).
-    expect(r.rows.filter((x) => x.level === 1).map((x) => x.t)).toEqual(["server", "server", "server", "server"]);
+    expect(r.rows.filter((x) => x.level === 1).map((x) => x.t)).toEqual(["server", "server", "server"]);
     expect(r.rows.at(-1)).toMatchObject({ t: "server", profileId: "a" });
-    expect(r.rows.find((x) => x.t === "server" && x.profileId === "d")).toMatchObject({ status: "off", pinned: true, expanded: false });
   });
 
   it("Show all saved profiles lists every one", () => {
@@ -37,10 +36,16 @@ describe("which servers the tree lists (owner decision, revised 2026-10-30)", ()
     expect(r.rows.map((x) => x.t)).toEqual(["server", "server", "server", "server", "server"]);
   });
 
-  it("pinned profiles come first within their environment, never above a lower one; then the joining order", () => {
+  it("custom profileOrder controls server order and preserves slot across disconnect and reconnect", () => {
     const more = [...ps, profile("f", "pg"), profile("g", "mssql")];
-    const order = shownServers({ profiles: more, servers: { b: conn("b"), f: conn("f"), g: conn("g") }, order: ["b", "f", "g"], pinned: ["g", "a"], showAll: false }).map((p) => p.id);
-    expect(order).toEqual(["g", "b", "f", "a"]);
+    const order = shownServers({ profiles: more, servers: { b: conn("b"), f: conn("f"), g: conn("g"), a: conn("a") }, order: ["b", "f", "g", "a"], profileOrder: ["a", "g", "b", "f"], showAll: false }).map((p) => p.id);
+    expect(order).toEqual(["a", "g", "b", "f"]);
+    // Disconnect g: remaining keep order [a, b, f]
+    const withoutG = shownServers({ profiles: more, servers: { b: conn("b"), f: conn("f"), a: conn("a") }, order: ["b", "f", "a"], profileOrder: ["a", "g", "b", "f"], showAll: false }).map((p) => p.id);
+    expect(withoutG).toEqual(["a", "b", "f"]);
+    // Reconnect g: returns to its saved slot between a and b
+    const withG = shownServers({ profiles: more, servers: { b: conn("b"), f: conn("f"), a: conn("a"), g: conn("g") }, order: ["b", "f", "a", "g"], profileOrder: ["a", "g", "b", "f"], showAll: false }).map((p) => p.id);
+    expect(withG).toEqual(["a", "g", "b", "f"]);
   });
 
   it("a server whose profile was deleted is not listed", () => {
