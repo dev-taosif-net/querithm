@@ -30,8 +30,12 @@ const bridgePort = Number(process.env.QUERITHM_BRIDGE_PORT ?? 1421);
 const mssqlHost = process.env.QUERITHM_IT_MSSQL_HOST || "localhost";
 // --no-build reuses the bench's dist/; when there is none (CI skips the bench after a failed step) it builds anyway, or
 // vite preview exits at once and the run reports a busy port it never had.
-if (!process.argv.includes("--no-build") || !existsSync(path.join(root, "dist", "index.html")))
-  spawnSync("pnpm", ["build:web"], { cwd: root, stdio: "inherit", env: { ...process.env, VITE_BRIDGE_URL: `ws://127.0.0.1:${bridgePort}` } });
+// On Windows pnpm is pnpm.cmd, which only a shell finds: without one the build silently did not run and the page then
+// dialed the old bridge port. A build that fails stops the run here instead.
+if (!process.argv.includes("--no-build") || !existsSync(path.join(root, "dist", "index.html"))) {
+  const built = spawnSync("pnpm", ["build:web"], { cwd: root, stdio: "inherit", shell: process.platform === "win32", env: { ...process.env, VITE_BRIDGE_URL: `ws://127.0.0.1:${bridgePort}` } });
+  if (built.status !== 0) throw new Error(`pnpm build:web failed (${built.error?.message ?? `exit ${built.status}`})`);
+}
 
 const bridge = spawn(process.execPath, [path.join(root, "scripts", "dev-bridge.mjs")], {
   // QUERITHM_FAKE_UPDATE: the bridge offers a fake release whose install fails (see dev-bridge.mjs). No QUERITHM_DEV_ENGINES:

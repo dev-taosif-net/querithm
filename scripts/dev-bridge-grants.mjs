@@ -6,12 +6,23 @@
 import { randomBytes } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 
-/** "u:<dev>:<ino>" as the shell and the sidecar compute it (BigInt: inode numbers exceed 2^53). @param {string} path */
+/**
+ * The file's identity as the shell and the sidecar compute it (BigInt: inode numbers exceed 2^53): "u:<dev>:<ino>", or on
+ * Windows "w:<volume serial>:<file index>", which Node reports there as dev and ino. The bridge sent "u:" on Windows too,
+ * which the sidecar's own read ("w:") never matched. @param {string} path
+ */
 export function identityOf(path) {
   const s = statSync(path, { bigint: true });
   if (!s.isFile()) throw new Error("not a file");
-  return `u:${s.dev}:${s.ino}`;
+  return `${process.platform === "win32" ? "w" : "u"}:${s.dev}:${s.ino}`;
 }
+
+/**
+ * The canonical path as the shell gives it. On Windows the native call, which also expands 8.3 short names ("PARTHI~1" in
+ * a temp path): the sidecar compares a grant's path with its own full form and refused it as "not valid".
+ * @param {string} path
+ */
+export const canonicalPath = (path) => (process.platform === "win32" ? realpathSync.native(path) : realpathSync(path));
 
 /** @param {string} code @param {string} message */
 const refusal = (code, message) => ({ code: -32001, message, data: { code } });
@@ -28,7 +39,7 @@ export function createGrants() {
   return {
     /** A staged upload becomes a read-only grant. @param {string} path */
     register(path) {
-      const canonical = realpathSync(path);
+      const canonical = canonicalPath(path);
       const id = randomBytes(16).toString("hex");
       grants.set(id, { path: canonical, identity: identityOf(canonical), access: "readOnly", profileId: null });
       return id;
@@ -60,7 +71,7 @@ export function createGrants() {
       if (g.profileId && g.profileId !== profileId) return { error: refusal("fileGrantBound", "That file was picked for another connection. Pick it again for this one (Re-pick file…).") };
       let identity;
       try {
-        if (realpathSync(g.path) !== g.path) return { error: refusal("fileMoved", "The database file is no longer at the path it was picked from. Pick it again (Re-pick file…).") };
+        if (canonicalPath(g.path) !== g.path) return { error: refusal("fileMoved", "The database file is no longer at the path it was picked from. Pick it again (Re-pick file…).") };
         identity = identityOf(g.path);
       } catch {
         return { error: refusal("fileMissing", "The database file is gone. Pick it again (Re-pick file…).") };

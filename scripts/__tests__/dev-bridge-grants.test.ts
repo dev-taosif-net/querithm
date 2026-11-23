@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync, renameSync, rmSync, symlinkSync, statSync } from "node:fs";
+import { mkdtempSync, writeFileSync, renameSync, rmSync, symlinkSync, statSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -23,7 +23,18 @@ describe("dev bridge file grants (Phase D0c, mirrors the shell)", () => {
   it("computes the identity as the shell and sidecar do", () => {
     const p = db();
     const s = statSync(p, { bigint: true });
-    expect(identityOf(p)).toBe(`u:${s.dev}:${s.ino}`);
+    expect(identityOf(p)).toBe(`${process.platform === "win32" ? "w" : "u"}:${s.dev}:${s.ino}`);
+  });
+
+  it("registers the path in its long, canonical form (an 8.3 short name in a Windows temp path is expanded)", () => {
+    const g = createGrants();
+    const p = db();
+    const id = g.register(p);
+    g.remember(fileProfile("p1", id));
+    const params: any = { profileId: "p1" };
+    expect(g.inject("session.open", params)).toBeNull();
+    expect(params.fileGrant.path).toBe(realpathSync.native(p));
+    expect(params.fileGrant.path).not.toContain("~");
   });
 
   it("injects a file profile's grant read-only and drops a forged path", () => {
