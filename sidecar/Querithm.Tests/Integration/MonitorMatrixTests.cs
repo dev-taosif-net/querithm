@@ -367,18 +367,27 @@ public class MonitorMatrixTests
             var lim = Math.Clamp((int)(200 * 8_000 / Math.Max(1, sw.ElapsedMilliseconds)), 200, 100_000);
             var m = await StartAsync(MonitorPane.TopQueries, MonitorPane.Sessions);
             await WaitSnapshot(m.MonitorId, x => x.Status.Any(st => st.Pane == MonitorPane.TopQueries && st.State == PaneState.Ok), 30_000);
-            var tag = $"t9_{Guid.NewGuid():N}"[..18];
             var id = Spid(c);
-            sw.Restart();
-            var run = ScalarAsync(c, $"DECLARE @lim int = {lim}; SELECT COUNT_BIG(*) AS {tag} FROM dbo.monitor_nums a CROSS JOIN dbo.monitor_nums b WHERE a.n <= @lim AND (a.n * 7 + b.n) % 1000003 = 5 OPTION (MAXDOP 4)");
+            string tag;
+            long took;
             var refreshesWhileRunning = 0;
-            while (!run.IsCompleted)
+            // The calibration can run slow (CI run 45025756103: the "8 s" statement took 4.4 s and crossed no 5 s refresh):
+            // then the statement runs again, longer, under a new tag, so only the run that crossed a refresh is counted.
+            for (var attempt = 1; ; attempt++)
             {
-                await Task.Delay(200);
-                refreshesWhileRunning = Host.Notifier.Of<MonitorSnapshot>().Count(x => x.MonitorId == m.MonitorId && x.TopQueries != null && x.Sessions?.Any(r => r.Key.Id == id && r.ElapsedMs != null) == true);
+                tag = $"t9_{Guid.NewGuid():N}"[..18];
+                sw.Restart();
+                var run = ScalarAsync(c, $"DECLARE @lim int = {lim}; SELECT COUNT_BIG(*) AS {tag} FROM dbo.monitor_nums a CROSS JOIN dbo.monitor_nums b WHERE a.n <= @lim AND (a.n * 7 + b.n) % 1000003 = 5 OPTION (MAXDOP 4)");
+                while (!run.IsCompleted)
+                {
+                    await Task.Delay(200);
+                    refreshesWhileRunning = Host.Notifier.Of<MonitorSnapshot>().Count(x => x.MonitorId == m.MonitorId && x.TopQueries != null && x.Sessions?.Any(r => r.Key.Id == id && r.ElapsedMs != null) == true);
+                }
+                await run;
+                took = sw.ElapsedMilliseconds;
+                if (refreshesWhileRunning >= 1 || attempt == 3 || lim >= 100_000) break;
+                lim = Math.Clamp((int)((long)lim * 10_000 / Math.Max(1, took)), lim + 1, 100_000);
             }
-            await run;
-            var took = sw.ElapsedMilliseconds;
             Assert.True(refreshesWhileRunning >= 1, $"no top-queries refresh while the statement ran ({took} ms): calibrate longer");
             List<TopQueryRow> Rows() => Host.Notifier.Of<MonitorSnapshot>().Where(x => x.MonitorId == m.MonitorId && x.TopQueries != null)
                 .SelectMany(x => x.TopQueries!.Where(q => q.TextId != null && (Host.Rpc.MonitorTexts(new MonitorTextsParams { MonitorId = m.MonitorId, Ids = [q.TextId] }).Result.Texts.GetValueOrDefault(q.TextId) ?? "").Contains(tag))).ToList();

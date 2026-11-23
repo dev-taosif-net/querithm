@@ -1413,12 +1413,16 @@ try {
         // Grid edit on SQLite (dynamically typed column v): applied, then read from the file outside Querithm, on a result
         // of a run of its own.
         await sleep(1500);
+        const runBefore = await page.evaluate(() => document.querySelector("[data-q-run-picker]")?.getAttribute("aria-label") ?? "");
         await page.click(".monaco-editor .view-lines");
         await page.keyboard.down("Control"); await page.keyboard.press("A"); await page.keyboard.up("Control");
         await page.keyboard.type("SELECT id, v FROM t ORDER BY id;");
         await page.keyboard.press("Escape");
         await page.keyboard.press("F5");
-        await page.waitForFunction(() => !!document.querySelector("[data-q-edit-toggle]:not([aria-disabled])"), { timeout: 15_000 })
+        // The first run's Edit is enabled too (its verdict was decided again after it), so wait for this run to be the
+        // one shown first: Edit clicked on the first run's result ended as this run's arrived (CI run 45025756103, DuckDB).
+        await page.waitForFunction((before) => (document.querySelector("[data-q-run-picker]")?.getAttribute("aria-label") ?? "") !== before
+          && !!document.querySelector("[data-q-edit-toggle]:not([aria-disabled])"), { timeout: 15_000 }, runBefore)
           .catch(() => errors.push(`${e.key}: the grid Edit button did not appear (the keyed table should be editable)`));
         await page.evaluate(() => document.querySelector("[data-q-edit-toggle]:not([aria-disabled])")?.click());
         await page.waitForFunction(() => document.body.innerText.includes("Type or double-click to edit"), { timeout: 5_000 }).catch(() => errors.push(`${e.key}: grid edit bar did not appear`));

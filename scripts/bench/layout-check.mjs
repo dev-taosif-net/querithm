@@ -103,7 +103,11 @@ export function collectLayout() {
     const rect = r(el.getBoundingClientRect());
     const { vis, by } = clipOf(el, rect);
     const hits = [];
-    if (area(vis) > 0) {
+    // A control mostly scrolled out of its scroll box is not where anyone reaches it: the sliver left at the box's edge
+    // meets the box's neighbor by geometry alone (a switch at the foot of Settings › Object Explorer under the dialog's
+    // footer at 960×560, CI run 45025756103). Scrolled into view, it is checked like any other.
+    const scrolledOut = !!by?.scrollable && area(vis) < area(rect) * 0.5;
+    if (area(vis) > 0 && !scrolledOut) {
       const ys = [(vis.t + vis.b) / 2];
       for (const x of [vis.l + (vis.r - vis.l) * 0.2, (vis.l + vis.r) / 2, vis.r - (vis.r - vis.l) * 0.2])
         for (const y of ys) {
