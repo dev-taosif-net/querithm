@@ -57,6 +57,8 @@ public sealed class SessionManager : IAsyncDisposable
     readonly ConcurrentDictionary<string, string?> _secrets = new();
     readonly ConcurrentDictionary<string, string?> _sshSecrets = new();
     readonly ConcurrentDictionary<string, byte> _prodConfirmed = new();
+    /// <summary>Orders a first-run confirm against a session learning its database at its first connect (MarkConnected).</summary>
+    readonly Lock _prodGate = new();
     readonly Timer _sweeper;
 
     public int MaxPerProfile { get; set; } = 8;
@@ -622,7 +624,16 @@ public sealed class SessionManager : IAsyncDisposable
         s.Connected = true;
         s.ServerVersion ??= s.Provider.ServerVersion(conn.Db);
         s.Product ??= s.Provider.Product(conn.Db);
-        s.Database ??= s.Provider.CurrentDatabase(conn.Db);
+        if (s.Database == null && s.Provider.CurrentDatabase(conn.Db) is { } learned)
+            lock (_prodGate)
+            {
+                // No database was asked for: the server's default is the target a first-run confirm given before this
+                // connect was for (§6). Keyed by the database, that confirm was lost here and the second run on Prod asked
+                // again (a profile without a default database on SQL Server, MySQL or Oracle).
+                var confirmed = _prodConfirmed.ContainsKey(ProdTarget(s));
+                s.Database ??= learned;
+                if (confirmed) _prodConfirmed.TryAdd(ProdTarget(s), 0);
+            }
     }
 
     /// <summary>
@@ -1049,8 +1060,8 @@ public sealed class SessionManager : IAsyncDisposable
     }
 
     /// <summary>First execution on a Prod target per app launch needs confirmation (§6).</summary>
-    public bool IsProdConfirmed(Session s) => _prodConfirmed.ContainsKey(ProdTarget(s));
-    public void ConfirmProd(Session s) => _prodConfirmed.TryAdd(ProdTarget(s), 0);
+    public bool IsProdConfirmed(Session s) { lock (_prodGate) return _prodConfirmed.ContainsKey(ProdTarget(s)); }
+    public void ConfirmProd(Session s) { lock (_prodGate) _prodConfirmed.TryAdd(ProdTarget(s), 0); }
 
     /// <summary>A profile edit drops its first-run confirms (the new settings ask again).</summary>
     public void ForgetProdConfirms(string profileId)

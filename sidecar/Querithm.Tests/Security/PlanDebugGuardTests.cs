@@ -293,6 +293,24 @@ public class PlanDebugGuardTests
     }
 
     [Fact]
+    public async Task A_confirm_given_before_the_tabs_first_connect_holds_for_the_database_the_server_picked()
+    {
+        // Regression: with no default database the tab's database is the server's, learned at its first connect. The
+        // first-run confirm was keyed by "no database", so the second run on Prod asked again (and The_prod_guard_… above
+        // failed on CI when its Dev run connected only after the confirm).
+        await using var h = Host(Engine.Mssql);
+        var (profile, sid) = await Open(h, Engine.Mssql, EnvironmentKind.Prod);
+        Assert.Null(profile.DatabaseDefault);
+        async Task<QueryExecuteResult> Run(bool confirmed = false) =>
+            await h.Rpc.QueryExecute(new QueryExecuteParams { SessionId = sid, Sql = "SELECT 1", Options = new ExecuteOptions { ConfirmedProd = confirmed } });
+        Assert.Equal(GuardReason.ProdFirstRun, (await Run()).Blocked?.Reason);
+        var confirmed = await Run(confirmed: true);
+        Assert.Null(confirmed.Blocked);
+        Assert.Equal(ExecState.Done, (await h.Notifier.WaitDone(confirmed.ExecutionId!)).State);
+        Assert.Null((await Run()).Blocked); // the same target: not asked again
+    }
+
+    [Fact]
     public async Task The_guard_keeps_the_stored_profile_in_memory_and_reads_it_again_after_a_save_or_delete()
     {
         await using var h = Host(Engine.Mssql);
