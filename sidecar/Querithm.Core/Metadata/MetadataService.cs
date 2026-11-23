@@ -240,6 +240,18 @@ public sealed class MetadataService
     readonly ConcurrentDictionary<string, RefreshParams> _again = new();
     /// <summary>Keys with a refresh chain running; changed only under the _again lock, together with the queue.</summary>
     readonly HashSet<string> _active = [];
+    /// <summary>When each key's current read began (Stopwatch timestamp); changed only under the _again lock.</summary>
+    readonly Dictionary<string, long> _readStarted = [];
+
+    /// <summary>Keys whose current read is a full one (a request for a full read is not covered by an incremental one).</summary>
+    readonly HashSet<string> _lastFull = [];
+
+    /// <summary>Records the start of a key's next read. Called under the _again lock.</summary>
+    void Began(string key, RefreshParams p)
+    {
+        _readStarted[key] = Stopwatch.GetTimestamp();
+        if (p.Full) _lastFull.Add(key); else _lastFull.Remove(key);
+    }
 
     static string JobKey(RefreshParams p) => p.SessionId == null ? Key(p.ProfileId, p.Database) : $"{Key(p.ProfileId, p.Database)}|s:{p.SessionId}";
 
@@ -247,7 +259,14 @@ public sealed class MetadataService
     /// Starts a refresh, or — while one runs — queues exactly one more after it: the running one may have read the
     /// catalog before the change that asked for this one (DDL right after DDL), so it cannot stand in for it.
     /// </summary>
-    public JobRef Refresh(RefreshParams p)
+    public JobRef Refresh(RefreshParams p) => Refresh(p, null);
+
+    /// <param name="changedAt">
+    /// When the change that asks for this read happened (Stopwatch timestamp): a read that began after it already sees it,
+    /// so none is queued behind it. After a run with DDL both its own refresh and its edit recheck asked, and the second
+    /// was a whole catalog read more for nothing.
+    /// </param>
+    internal JobRef Refresh(RefreshParams p, long? changedAt)
     {
         if (p.SessionId != null && ScopeOf(p.ProfileId, p.SessionId) == null) p = p with { SessionId = null }; // a pooled session has no view of its own
         var key = JobKey(p);
@@ -255,10 +274,12 @@ public sealed class MetadataService
         {
             if (_active.Contains(key) && _running.TryGetValue(key, out var existing))
             {
-                _again.AddOrUpdate(key, p, (_, q) => q with { Full = q.Full || p.Full });
+                var current = _readStarted.TryGetValue(key, out var began) && changedAt is { } at && began > at && !(p.Full && !_lastFull.Contains(key));
+                if (!current) _again.AddOrUpdate(key, p, (_, q) => q with { Full = q.Full || p.Full });
                 return new JobRef { JobId = existing.JobId };
             }
             _active.Add(key);
+            Began(key, p);
             var jobId = Ulid.NewId();
             var task = Task.Run(() => RunChainAsync(p, key));
             _running[key] = (jobId, task);
@@ -275,8 +296,10 @@ public sealed class MetadataService
             catch (Exception ex) { _log.LogWarning("Metadata refresh failed for {Key}: {Message}", key, ex.Message); }
             lock (_again)
             {
-                if (_again.TryRemove(key, out next!)) continue;
+                if (_again.TryRemove(key, out next!)) { Began(key, next); continue; }
                 _active.Remove(key);
+                _readStarted.Remove(key);
+                _lastFull.Remove(key);
                 return;
             }
         }
@@ -445,10 +468,13 @@ public sealed class MetadataService
     /// and completes when that read (queued behind a running one) is done: null, or why the metadata is still not current.
     /// Grid editing decides a result set again after it (ExecutionService.RefreshMetadata).
     /// </summary>
-    public async Task<string?> RefreshedAsync(Session session, string database, CancellationToken ct)
+    public Task<string?> RefreshedAsync(Session session, string database, CancellationToken ct) => RefreshedAsync(session, database, null, ct);
+
+    /// <param name="changedAt">When the change to cover happened (see <see cref="Refresh(RefreshParams, long?)"/>).</param>
+    public async Task<string?> RefreshedAsync(Session session, string database, long? changedAt, CancellationToken ct)
     {
         var sessionId = session.SessionOwned ? session.Id : null;
-        Refresh(new RefreshParams { ProfileId = session.Profile.Id, Database = database, SessionId = sessionId });
+        Refresh(new RefreshParams { ProfileId = session.Profile.Id, Database = database, SessionId = sessionId }, changedAt);
         await WaitAsync(session.Profile.Id, database, sessionId).WaitAsync(ct).ConfigureAwait(false);
         var row = session.InMemory
             ? _cache.Ephemeral.GetSnapshotRow(session.Profile.Id, SchemaCache.SessionDatabase(database, session.Id))

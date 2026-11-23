@@ -195,6 +195,46 @@ public class MetadataRefreshTests
     }
 
     [Fact]
+    public async Task A_read_that_began_after_the_change_covers_it_and_none_is_queued_behind_it()
+    {
+        // Regression: after a run with DDL its own refresh and its edit recheck both asked for this database, and the second
+        // queued a whole catalog read more. The recheck now says when the run ended; a read begun after that covers it.
+        var store = LocalStore.InMemory();
+        var profiles = new ProfileStore(store);
+        var profile = profiles.Save(new Profile { Id = "", Name = "fake", Engine = Engine.Pg, Host = "h" });
+        var slow = new SlowMetadata();
+        var sessions = new SessionManager(profiles, new ProviderRegistry([new FakeProvider(slow)]), new CapturingNotifier(), Log.Null);
+        sessions.RememberSecret(profile.Id, "x");
+        var metaStore = new MetadataStore(store);
+        var metadata = new MetadataService(sessions, metaStore, new SchemaCache(metaStore), new CapturingNotifier(), Log.Null);
+        var session = sessions.Get(sessions.Open(new SessionOpenParams { ProfileId = profile.Id, Secret = "x" }).SessionId);
+        using var limit = new CancellationTokenSource(TestTime.Of(TimeSpan.FromSeconds(10)));
+
+        var runEnded = System.Diagnostics.Stopwatch.GetTimestamp();
+        metadata.Refresh(new RefreshParams { ProfileId = profile.Id, Database = "db" }); // the run's own refresh (DDL)
+        while (Volatile.Read(ref slow.Reads) == 0) await Task.Delay(5);
+        var covered = metadata.RefreshedAsync(session, "db", runEnded, limit.Token);
+        await Task.Delay(50);
+        Assert.False(covered.IsCompleted); // it waits for that read ...
+        slow.Gate.SetResult();
+        Assert.Null(await covered);
+        Assert.Equal(1, slow.Reads); // ... and adds none
+
+        // A change after the running read began is not covered by it: one more read is queued.
+        var second = new SlowMetadata();
+        var sessions2 = new SessionManager(profiles, new ProviderRegistry([new FakeProvider(second)]), new CapturingNotifier(), Log.Null);
+        sessions2.RememberSecret(profile.Id, "x");
+        var metadata2 = new MetadataService(sessions2, metaStore, new SchemaCache(metaStore), new CapturingNotifier(), Log.Null);
+        var session2 = sessions2.Get(sessions2.Open(new SessionOpenParams { ProfileId = profile.Id, Secret = "x" }).SessionId);
+        metadata2.Refresh(new RefreshParams { ProfileId = profile.Id, Database = "db" });
+        while (Volatile.Read(ref second.Reads) == 0) await Task.Delay(5);
+        var later = metadata2.RefreshedAsync(session2, "db", System.Diagnostics.Stopwatch.GetTimestamp(), limit.Token);
+        second.Gate.SetResult();
+        Assert.Null(await later);
+        Assert.Equal(2, second.Reads);
+    }
+
+    [Fact]
     public async Task A_refresh_asked_for_while_one_runs_is_queued_not_dropped()
     {
         // Regression: DDL right after DDL asked for a refresh while the first one ran; the request was dropped, and the

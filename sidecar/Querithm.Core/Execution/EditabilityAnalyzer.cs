@@ -21,8 +21,12 @@ public static class EditabilityAnalyzer
     public static ResultEditInfo Analyze(IDataEditDialect dialect, ResultColumn[] columns, ColumnOrigin?[]? origins, SchemaSnapshot? snapshot,
         Func<long, IndexInfo[]> indexes, string? why = null, bool stale = false)
     {
+        // A read snapshot that lists nothing is not "no metadata yet": after the recheck that said "… (open it in the explorer to
+        // load it) (checked against freshly read metadata)" about a database that had just been read and holds no tables.
         if (snapshot == null || snapshot.Objects.Length == 0)
-            return ReadOnly("Read-only: no cached metadata for this database yet (open it in the explorer to load it)", recheck: true);
+            return ReadOnly(snapshot is { Status: SnapshotStatus.Fresh or SnapshotStatus.Stale }
+                ? "Read-only: this database's cached metadata lists no tables"
+                : "Read-only: no cached metadata for this database yet (open it in the explorer to load it)", recheck: true);
         if (origins == null) return ReadOnly(why != null ? $"Read-only: {why}" : "Read-only: column origins unknown for this batch", stale);
         var visible = columns.Where(c => !c.Hidden && c.Ordinal >= 0).ToArray();
         var ids = visible.Select(c => At(origins, c.Ordinal)?.ObjectId).OfType<long>().Distinct().ToArray();

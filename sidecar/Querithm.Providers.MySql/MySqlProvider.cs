@@ -298,7 +298,9 @@ public sealed class MySqlProvider : IDbProvider
             var col = obj.Columns?.FirstOrDefault(x => string.Equals(x.Name, c.BaseColumnName, StringComparison.OrdinalIgnoreCase));
             origins[i] = new ColumnOrigin(obj.Id, col?.Name ?? c.BaseColumnName);
         }
-        return missing != null ? new TracedOrigins(origins, $"{missing} is not in this database's cached metadata", Stale: true) : new TracedOrigins(origins, elsewhere);
+        // MySQL lists no TEMPORARY table in information_schema, so none ever reaches the metadata: said, since the recheck
+        // cannot change that (the protocol does not tell a temporary table from one created since the metadata was read).
+        return missing != null ? new TracedOrigins(origins, $"{missing} is not in this database's cached metadata (a TEMPORARY table never is)", Stale: true) : new TracedOrigins(origins, elsewhere);
     }
 
     public async Task<DbConnection> OpenAsync(Profile profile, string? secret, string? database, FileGrant? file, CancellationToken ct)

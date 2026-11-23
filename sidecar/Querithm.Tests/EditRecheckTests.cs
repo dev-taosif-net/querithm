@@ -59,13 +59,17 @@ public class EditRecheckTests
     [Theory, MemberData(nameof(AllEngines))]
     public void A_missing_or_empty_snapshot_is_worth_reading_the_metadata_again(string engine)
     {
-        foreach (var snapshot in new[] { null, Snap() })
+        foreach (var snapshot in new[] { null, Snap() with { Status = SnapshotStatus.Empty } })
         {
             var e = EditabilityAnalyzer.Analyze(Dialect(engine), Columns("id", "v"), null, snapshot, _ => []);
             Assert.False(e.Editable);
             Assert.True(e.Rechecking);
             Assert.Equal("Read-only: no cached metadata for this database yet (open it in the explorer to load it)", e.Reason);
         }
+        // Read, and it lists no tables: said so, not "no metadata yet … open it in the explorer" (which the recheck then
+        // called "checked against freshly read metadata" about a database it had just read). A new table may still come.
+        var empty = EditabilityAnalyzer.Analyze(Dialect(engine), Columns("id", "v"), null, Snap(), _ => []);
+        Assert.Equal((false, true, "Read-only: this database's cached metadata lists no tables"), (empty.Editable, empty.Rechecking, empty.Reason));
     }
 
     [Theory, MemberData(nameof(AllEngines))]
@@ -156,7 +160,7 @@ public class EditRecheckTests
             {
                 Editability = (_, cols, o, snap) => EditabilityAnalyzer.Analyze(Dialect(engine), cols, o.Columns, snap, _ => [], o.Why, o.Stale),
             };
-            if (withRefresh) Executions.RefreshMetadata = async (_, _, ct) => { Interlocked.Increment(ref Refreshes); return await OnRefresh(ct); };
+            if (withRefresh) Executions.RefreshMetadata = async (_, _, _, ct) => { Interlocked.Increment(ref Refreshes); return await OnRefresh(ct); };
             SessionId = Sessions.Open(new SessionOpenParams { ProfileId = profile.Id, Secret = "x" }).SessionId;
         }
 

@@ -88,7 +88,7 @@ public sealed class MySqlEditImportTests
             var first = EditOf(h, exec);
             Assert.False(first.Editable);
             Assert.True(first.Rechecking, first.Reason);
-            Assert.Equal($"Read-only: {table} is not in this database's cached metadata", first.Reason);
+            Assert.Equal($"Read-only: {table} is not in this database's cached metadata (a TEMPORARY table never is)", first.Reason);
 
             var final = await h.Notifier.WaitEdit(exec);
             Assert.True(final.Editable, final.Reason);

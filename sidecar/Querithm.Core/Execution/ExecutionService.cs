@@ -232,9 +232,10 @@ public sealed class ExecutionService : IAsyncDisposable
     /// Reads a database's metadata again and completes once that is done: null, or why it could not be read (set by the
     /// composition root; null = verdicts are never decided again). A read-only verdict that out-of-date metadata may
     /// explain (<see cref="ResultEditInfo.Rechecking"/>) is decided again after it, so a table created or altered since
-    /// the snapshot was read becomes editable without the user refreshing anything.
+    /// the snapshot was read becomes editable without the user refreshing anything. The third argument is when the run
+    /// ended (Stopwatch timestamp): a read that began after it covers the run, so none is queued behind it.
     /// </summary>
-    public Func<Session, string, CancellationToken, Task<string?>>? RefreshMetadata { get; set; }
+    public Func<Session, string, long?, CancellationToken, Task<string?>>? RefreshMetadata { get; set; }
 
     /// <summary>The limit on that read (§4 No Unbounded Waits); past it the first verdict stands, with the reason. Settable for tests.</summary>
     internal TimeSpan RecheckLimit { get; set; } = TimeSpan.FromSeconds(30);
@@ -714,15 +715,18 @@ public sealed class ExecutionService : IAsyncDisposable
                 catch (Exception ex) { _log.LogWarning("History write failed: {Message}", ex.Message); }
             // After the run let go of its connection and the tab's lock: a session-owned session reads its catalog on that
             // connection, and DDL of this same run is in the catalog by now.
+            var ended = Stopwatch.GetTimestamp();
+            // A run that started may have committed DDL before a cancel (auto-commit engines, earlier batches), so the
+            // schema is read again then too; only a run that never ran (still queued when cancelled) changed nothing.
+            // First, so the edit recheck below finds that read begun after the run and waits for it instead of queuing
+            // a second catalog read of the same database.
+            if (classification.HasDdl && lockTaken) DdlExecuted?.Invoke(session);
             if (exec.Rechecks is { Count: > 0 } || exec.StaleDatabase != null)
             {
                 var pending = exec.Rechecks ?? [];
                 var database = pending.Count > 0 ? pending[0].Trace.Database! : exec.StaleDatabase!;
-                _ = Task.Run(() => RecheckAsync(exec, session, pending, database));
+                _ = Task.Run(() => RecheckAsync(exec, session, pending, database, ended));
             }
-            // A run that started may have committed DDL before a cancel (auto-commit engines, earlier batches), so the
-            // schema is read again then too; only a run that never ran (still queued when cancelled) changed nothing.
-            if (classification.HasDdl && lockTaken) DdlExecuted?.Invoke(session);
         }
     }
 
@@ -848,14 +852,14 @@ public sealed class ExecutionService : IAsyncDisposable
     /// result set once more. Every one of them gets a <c>query.resultEdit</c>, whatever happens — the webview shows
     /// "checking" until it arrives — and none is left <see cref="ResultEditInfo.Rechecking"/>.
     /// </summary>
-    async Task RecheckAsync(Execution exec, Session session, List<(int ResultIndex, ResultTrace Trace)> pending, string database)
+    async Task RecheckAsync(Execution exec, Session session, List<(int ResultIndex, ResultTrace Trace)> pending, string database, long ended)
     {
         string? failed = null;
         try
         {
             using var limit = CancellationTokenSource.CreateLinkedTokenSource(_stopping.Token);
             limit.CancelAfter(RecheckLimit);
-            failed = await RefreshMetadata!(session, database, limit.Token).ConfigureAwait(false);
+            failed = await RefreshMetadata!(session, database, ended, limit.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { failed = $"it did not finish within {RecheckLimit.TotalSeconds:0} s"; }
         catch (Exception ex)
