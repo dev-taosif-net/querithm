@@ -18,11 +18,14 @@ export function UpdateButton() {
   if (!version || phase === "idle") return null;
   const label =
     phase === "downloading" ? `Updating${pct === null ? "…" : ` ${pct}%`}` : phase === "installing" ? "Restarting…" : "Update";
-  // A ghost control with an accent dot: Run stays the strongest control on the bar.
   return (
     <button
       type="button"
-      className={`q-tb shrink-0 font-semibold ${phase === "failed" ? "text-warn" : "text-accent"}`}
+      className={`q-tb shrink-0 font-semibold border ${
+        phase === "failed"
+          ? "border-warn/60 !bg-warn/10 text-warn hover:!bg-warn/15"
+          : "border-accent/60 !bg-accent/10 text-accent hover:!bg-accent/15"
+      }`}
       title={phase === "failed" ? "The update did not finish. Click for details." : `Querithm ${version} is available`}
       aria-label={`Update to Querithm ${version}`}
       onClick={openUpdateDialog}

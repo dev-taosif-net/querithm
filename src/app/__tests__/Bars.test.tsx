@@ -15,7 +15,7 @@ vi.mock("../commands", () => {
     "query.run": ["F5", "Ctrl+Enter"], "query.runStatement": ["Ctrl+Shift+Enter"], "query.cancel": ["Alt+Pause"], "query.estimatedPlan": ["Ctrl+L"],
     "query.toggleActualPlan": ["Ctrl+M"], "tab.new": ["Ctrl+N"], "file.open": ["Ctrl+O"], "tab.reopenClosed": ["Ctrl+Shift+T"],
     "palette.connections": ["Ctrl+Shift+U"], "palette.databases": ["Ctrl+U"], "palette.objects": ["Ctrl+T"], "view.history": ["Ctrl+H"],
-    "view.settings": ["Ctrl+,"], "nav.back": ["Alt+Left"], "nav.forward": ["Alt+Right"],
+    "view.settings": ["Ctrl+,"], "nav.back": ["Alt+Left"], "nav.forward": ["Alt+Right"], "editor.toggleComment": ["Ctrl+/"],
   };
   return {
     displayKeys: (k: string) => k,
@@ -127,9 +127,22 @@ describe("TopBar: brand and navigation", () => {
     expect(face.parentElement?.className).toMatch(/\bborder\b/);
   });
 
-  it("has no comment buttons (they are in the editor's right-click menu, on their shortcuts and in the palette)", () => {
+  it("has a // button left of the search box that triggers Toggle line comment (Ctrl+/)", async () => {
+    const user = userEvent.setup();
     render(<TopBar />);
-    expect(screen.queryByText(/Comment/)).toBeNull();
+    const commentBtn = btn("Toggle line comment");
+    expect(commentBtn).toHaveTextContent("//");
+    expect(commentBtn).toHaveAttribute("title", "Toggle line comment (Ctrl+/)");
+    expect(commentBtn.nextElementSibling).toBe(btn("Go to table, proc, or command"));
+    await user.click(commentBtn);
+    expect(h.cmd["editor.toggleComment"]).toHaveBeenCalledTimes(1);
+    cleanup();
+    h.cmd["editor.toggleComment"].mockClear();
+    useTabs.setState({ tabs: {}, order: [], activeId: undefined });
+    render(<TopBar />);
+    unavailable(btn("Toggle line comment"));
+    await user.click(btn("Toggle line comment"));
+    expect(h.cmd["editor.toggleComment"]).not.toHaveBeenCalled();
   });
 });
 

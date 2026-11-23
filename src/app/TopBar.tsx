@@ -563,6 +563,16 @@ export function TopBar() {
       <div ref={app} role="toolbar" aria-label="App" className="flex items-center justify-end gap-1 min-w-0" {...appNav}>
         <button
           type="button"
+          className="q-tb w-7 !px-0 q-mono text-[11px] font-semibold border border-line-strong !bg-bg text-muted hover:text-fg hover:border-accent shrink-0"
+          aria-disabled={!tab || undefined}
+          onClick={guarded(!tab, () => runCommand("editor.toggleComment"))}
+          title={!tab ? "Open a query first" : tip("Toggle line comment", "editor.toggleComment")}
+          aria-label="Toggle line comment"
+        >
+          //
+        </button>
+        <button
+          type="button"
           className="mr-2 w-[200px] min-[1440px]:w-80 max-[1100px]:w-auto min-w-0 shrink bg-bg border border-line-strong rounded-md pl-2 pr-1 h-[28px] text-[12px] text-muted flex items-center justify-between gap-2 hover:border-accent"
           onClick={() => useUi.getState().setPalette({ mode: "objects" })}
           title={tip("Go to table, proc, or command", "palette.objects")}
