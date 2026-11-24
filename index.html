@@ -15,49 +15,32 @@
     <div id="portal" style="position: fixed; left: 0; top: 0; z-index: 9999"></div>
     <!-- Shown until the app has started (src/app/splash.ts sets data-stage and the line of text). -->
     <div id="splash" data-stage="1">
-      <svg class="splash-mark" viewBox="62 70 388 356" aria-hidden="true">
+      <svg class="splash-mark" viewBox="102 71 368 368" aria-hidden="true">
         <defs>
-          <linearGradient id="splash-ring" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" class="splash-ra" />
-            <stop offset=".55" class="splash-rb" />
-            <stop offset="1" class="splash-rc" />
+          <linearGradient id="splash-body" gradientUnits="userSpaceOnUse" x1="140" y1="92" x2="330" y2="390">
+            <stop offset="0" class="splash-ba" />
+            <stop offset=".55" class="splash-bb" />
+            <stop offset="1" class="splash-bc" />
           </linearGradient>
-          <linearGradient id="splash-plat" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0" class="splash-pa" />
-            <stop offset=".5" class="splash-pb" />
-            <stop offset="1" class="splash-pc" />
-          </linearGradient>
-          <linearGradient id="splash-pulse" x1="0" y1="0" x2="1" y2="0">
+          <linearGradient id="splash-pulse" gradientUnits="userSpaceOnUse" x1="296" y1="0" x2="450" y2="0">
             <stop offset="0" class="splash-ua" />
             <stop offset="1" class="splash-ub" />
           </linearGradient>
         </defs>
-        <path class="splash-track" d="M398 292 C402 278 404 264 404 248 C404 166.3 337.7 100 256 100 C174.3 100 108 166.3 108 248 C108 329.7 174.3 396 256 396 C286 396 314 387 337.5 371.5" />
-        <path class="splash-ring" pathLength="100" stroke="url(#splash-ring)" d="M398 292 C402 278 404 264 404 248 C404 166.3 337.7 100 256 100 C174.3 100 108 166.3 108 248 C108 329.7 174.3 396 256 396 C286 396 314 387 337.5 371.5" />
-        <g class="splash-t1">
-          <path class="splash-idle" d="M180 184 V212 C180 227 214 238 256 238 C298 238 332 227 332 212 V184 Z" />
-          <ellipse class="splash-idle-cap" cx="256" cy="184" rx="76" ry="24" />
-          <g class="splash-lit">
-            <path fill="url(#splash-plat)" d="M180 184 V212 C180 227 214 238 256 238 C298 238 332 227 332 212 V184 Z" />
-            <ellipse class="splash-cap" cx="256" cy="184" rx="76" ry="24" />
-          </g>
-          <circle class="splash-led" cx="206" cy="216" r="8" />
+        <g class="splash-tier splash-t1">
+          <path class="splash-idle" fill-rule="evenodd" d="M108 180 A148 88 0 0 1 404 180 A148 88 0 0 1 108 180 Z M152 180 A104 48 0 0 0 360 180 A104 48 0 0 0 152 180 Z" />
+          <path class="splash-lit" fill-rule="evenodd" fill="url(#splash-body)" d="M108 180 A148 88 0 0 1 404 180 A148 88 0 0 1 108 180 Z M152 180 A104 48 0 0 0 360 180 A104 48 0 0 0 152 180 Z" />
         </g>
-        <g class="splash-t2">
-          <path class="splash-idle" d="M180 232 V262 C180 277 214 288 256 288 C298 288 332 277 332 262 V232 C316 244 288 250 256 250 C224 250 196 244 180 232 Z" />
-          <g class="splash-lit">
-            <path fill="url(#splash-plat)" d="M180 232 V262 C180 277 214 288 256 288 C298 288 332 277 332 262 V232 C316 244 288 250 256 250 C224 250 196 244 180 232 Z" />
-          </g>
-          <circle class="splash-led" cx="206" cy="266" r="8" />
+        <g class="splash-tier splash-t2">
+          <path class="splash-idle" fill-rule="evenodd" d="M108 214 A148 78 0 0 0 262 291.9 L262 327.9 A148 84 0 0 1 108 244 Z" />
+          <path class="splash-lit" fill-rule="evenodd" fill="url(#splash-body)" d="M108 214 A148 78 0 0 0 262 291.9 L262 327.9 A148 84 0 0 1 108 244 Z" />
         </g>
-        <g class="splash-t3">
-          <path class="splash-idle" d="M180 282 V312 C180 327 214 338 256 338 C275 338 292 335 306 330 L332 282 C316 294 288 300 256 300 C224 300 196 294 180 282 Z" />
-          <g class="splash-lit">
-            <path fill="url(#splash-plat)" d="M180 282 V312 C180 327 214 338 256 338 C275 338 292 335 306 330 L332 282 C316 294 288 300 256 300 C224 300 196 294 180 282 Z" />
-          </g>
-          <circle class="splash-led" cx="206" cy="316" r="8" />
+        <g class="splash-tier splash-t3">
+          <path class="splash-idle" fill-rule="evenodd" d="M108 274 A148 78 0 0 0 316 345.3 L316 380.8 A148 84 0 0 1 108 304 Z" />
+          <path class="splash-lit" fill-rule="evenodd" fill="url(#splash-body)" d="M108 274 A148 78 0 0 0 316 345.3 L316 380.8 A148 84 0 0 1 108 304 Z" />
         </g>
-        <path class="splash-pulse" pathLength="100" stroke="url(#splash-pulse)" d="M276 314 L318 314 L344 262 L374 366 L402 302 L430 338" />
+        <path class="splash-track" d="M300 310 L330 310 L352 278 L388 400 L414 310 L446 310" />
+        <path class="splash-pulse" pathLength="100" stroke="url(#splash-pulse)" d="M300 310 L330 310 L352 278 L388 400 L414 310 L446 310" />
       </svg>
       <div class="splash-name">Querithm</div>
       <div class="splash-stage" role="status"><span id="splash-text">Starting the engine…</span><span id="splash-elapsed"></span></div>

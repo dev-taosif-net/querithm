@@ -1,6 +1,11 @@
 # Querithm
 
-<p align="center"><img src="docs/brand/querithm-wordmark.svg" alt="Querithm — Database &amp; SQL Development IDE" width="480"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/querithm-wordmark-dark.svg">
+    <img src="docs/brand/querithm-wordmark.svg" alt="Querithm — Database &amp; SQL Development IDE" width="480">
+  </picture>
+</p>
 
 A cross-platform SQL IDE for **SQL Server**, **PostgreSQL**, **MySQL / MariaDB**, **Oracle Database**, **SQLite** and **DuckDB**:
 Tauri v2 shell, .NET 10 engine (ScriptDom, Microsoft.Data.SqlClient, Npgsql, MySqlConnector, ODP.NET Core,

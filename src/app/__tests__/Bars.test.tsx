@@ -745,11 +745,13 @@ describe("StatusBar", () => {
 });
 
 describe("Logo", () => {
-  it("renders the cropped mark by default and the full tile on request, with unique gradient ids", () => {
+  it("renders the cropped mark by default and the padded app-icon crop on request, with unique gradient ids", () => {
     const { container } = render(<><Logo className="a" /><Logo tile className="b" /></>);
     const svgs = container.querySelectorAll("svg");
-    expect(svgs[0].getAttribute("viewBox")).toBe("84 72 368 368");
-    expect(svgs[1].getAttribute("viewBox")).toBe("0 0 512 512");
+    expect(svgs[0].getAttribute("viewBox")).toBe("102 71 368 368");
+    expect(svgs[1].getAttribute("viewBox")).toBe("84 53 404 404");
+    // Transparent in every theme: no background shape behind the mark.
+    expect(container.querySelector("rect")).toBeNull();
     const ids = [...container.querySelectorAll("linearGradient")].map((g) => g.id);
     expect(new Set(ids).size).toBe(ids.length);
   });

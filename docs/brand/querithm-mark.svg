@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="102 71 368 368">
+  <!-- Querithm mark, cropped tight for small UI sizes (toolbar, favicon). Same geometry as querithm-logo.svg. -->
+  <defs>
+    <linearGradient id="q-body" gradientUnits="userSpaceOnUse" x1="140" y1="92" x2="330" y2="390">
+      <stop offset="0" stop-color="#38BDF8"/>
+      <stop offset="0.55" stop-color="#2F6FED"/>
+      <stop offset="1" stop-color="#4F46E5"/>
+    </linearGradient>
+    <linearGradient id="q-pulse" gradientUnits="userSpaceOnUse" x1="296" y1="0" x2="450" y2="0">
+      <stop offset="0" stop-color="#D8B4FE"/>
+      <stop offset="1" stop-color="#A855F7"/>
+    </linearGradient>
+  </defs>
+  <path fill-rule="evenodd" fill="url(#q-body)" d="M108 180 A148 88 0 0 1 404 180 A148 88 0 0 1 108 180 Z M152 180 A104 48 0 0 0 360 180 A104 48 0 0 0 152 180 Z M108 214 A148 78 0 0 0 262 291.9 L262 327.9 A148 84 0 0 1 108 244 Z M108 274 A148 78 0 0 0 316 345.3 L316 380.8 A148 84 0 0 1 108 304 Z"/>
+  <path d="M300 310 L330 310 L352 278 L388 400 L414 310 L446 310" fill="none" stroke="url(#q-pulse)" stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

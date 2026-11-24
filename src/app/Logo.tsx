@@ -1,70 +1,33 @@
-// Brand mark (docs/brand/querithm-logo.svg). `tile` draws the app-icon squircle; without it only the Q ring,
-// database and pulse are drawn, cropped tight so the mark stays legible at toolbar size.
+// Brand mark (docs/brand/querithm-logo.svg): the database is the Q, its middle layer runs out as a violet pulse.
+// Transparent in every theme. `tile` keeps the app icon's padding (About, welcome); without it the mark is cropped
+// tight so it stays legible at toolbar size.
 import { useId } from "react";
+
+const BODY =
+  "M108 180 A148 88 0 0 1 404 180 A148 88 0 0 1 108 180 Z M152 180 A104 48 0 0 0 360 180 A104 48 0 0 0 152 180 Z " +
+  "M108 214 A148 78 0 0 0 262 291.9 L262 327.9 A148 84 0 0 1 108 244 Z " +
+  "M108 274 A148 78 0 0 0 316 345.3 L316 380.8 A148 84 0 0 1 108 304 Z";
+const PULSE = "M300 310 L330 310 L352 278 L388 400 L414 310 L446 310";
 
 export function Logo({ className, tile = false }: { className?: string; tile?: boolean }) {
   const id = `qlogo${useId().replace(/[^\w-]/g, "")}`; // url(#…) refs need a plain id
-  const ring = `${id}-ring`;
-  const plat = `${id}-plat`;
+  const body = `${id}-body`;
   const pulse = `${id}-pulse`;
-  const bg = `${id}-bg`;
   return (
-    <svg className={className} viewBox={tile ? "0 0 512 512" : "84 72 368 368"} aria-hidden>
+    <svg className={className} viewBox={tile ? "84 53 404 404" : "102 71 368 368"} aria-hidden>
       <defs>
-        <linearGradient id={bg} x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#141927" />
-          <stop offset="100%" stopColor="#090C14" />
+        <linearGradient id={body} gradientUnits="userSpaceOnUse" x1="140" y1="92" x2="330" y2="390">
+          <stop offset="0" stopColor="#38BDF8" />
+          <stop offset="0.55" stopColor="#2F6FED" />
+          <stop offset="1" stopColor="#4F46E5" />
         </linearGradient>
-        <linearGradient id={ring} x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#38BDF8" />
-          <stop offset="55%" stopColor="#2563EB" />
-          <stop offset="100%" stopColor="#4F46E5" />
-        </linearGradient>
-        <linearGradient id={plat} x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" stopColor="#60A5FA" />
-          <stop offset="50%" stopColor="#38BDF8" />
-          <stop offset="100%" stopColor="#2563EB" />
-        </linearGradient>
-        <linearGradient id={pulse} x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" stopColor="#10B981" />
-          <stop offset="100%" stopColor="#34D399" />
+        <linearGradient id={pulse} gradientUnits="userSpaceOnUse" x1="296" y1="0" x2="450" y2="0">
+          <stop offset="0" stopColor="#D8B4FE" />
+          <stop offset="1" stopColor="#A855F7" />
         </linearGradient>
       </defs>
-      {tile && <rect width="464" height="464" x="24" y="24" rx="104" fill={`url(#${bg})`} stroke="#262B38" strokeWidth="8" />}
-      <path
-        d="M398 292 C402 278 404 264 404 248 C404 166.3 337.7 100 256 100 C174.3 100 108 166.3 108 248 C108 329.7 174.3 396 256 396 C286 396 314 387 337.5 371.5"
-        fill="none"
-        stroke={`url(#${ring})`}
-        strokeWidth="34"
-        strokeLinecap="round"
-      />
-      <path d="M180 184 V212 C180 227 214 238 256 238 C298 238 332 227 332 212 V184 Z" fill={`url(#${plat})`} opacity="0.88" />
-      <ellipse cx="256" cy="184" rx="76" ry="24" fill="#7DD3FC" />
-      <path
-        d="M180 232 V262 C180 277 214 288 256 288 C298 288 332 277 332 262 V232 C316 244 288 250 256 250 C224 250 196 244 180 232 Z"
-        fill={`url(#${plat})`}
-        opacity="0.75"
-      />
-      <path
-        d="M180 282 V312 C180 327 214 338 256 338 C275 338 292 335 306 330 L332 282 C316 294 288 300 256 300 C224 300 196 294 180 282 Z"
-        fill={`url(#${plat})`}
-        opacity="0.6"
-      />
-      {tile && (
-        <>
-          <circle cx="206" cy="214" r="5" fill="#0F1117" />
-          <circle cx="206" cy="264" r="5" fill="#0F1117" />
-          <circle cx="206" cy="314" r="5" fill="#10B981" />
-        </>
-      )}
-      <path
-        d="M276 314 L318 314 L344 262 L374 366 L402 302 L430 338"
-        fill="none"
-        stroke={`url(#${pulse})`}
-        strokeWidth="26"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
+      <path fillRule="evenodd" fill={`url(#${body})`} d={BODY} />
+      <path d={PULSE} fill="none" stroke={`url(#${pulse})`} strokeWidth="36" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
