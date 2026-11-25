@@ -82,9 +82,11 @@ describe("row counts for completion", () => {
   it("table items show the count; an engine without one says rows n/a", () => {
     const rowCounts = new Map([[1, { rows: 1234, estimated: true }], [2, { rows: null, estimated: true }]]);
     const items = complete({ text: "SELECT * FROM ", offset: 14, dialect: "tsql", schema: idx, rowCounts, autoAlias: false }).items;
-    expect(items.find((i) => i.label === "Orders")?.detail).toBe("table · dbo · ~1.2k rows");
-    expect(items.find((i) => i.label === "Logs")?.detail).toBe("table · dbo · rows n/a");
-    expect(items.find((i) => i.label === "v")?.detail).toBe("view · dbo");
+    expect(items.find((i) => i.label === "Orders")?.detail).toBe("dbo · ~1.2k rows");
+    expect(items.find((i) => i.label === "Logs")?.detail).toBe("dbo · rows n/a");
+    expect(items.find((i) => i.label === "v")?.detail).toBe("dbo · view");
+    const one = complete({ text: "SELECT * FROM ", offset: 14, dialect: "tsql", schema: idx, rowCounts: new Map([[1, { rows: 1, estimated: false }]]), autoAlias: false }).items;
+    expect(one.find((i) => i.label === "Orders")?.detail).toBe("dbo · 1 row");
     expect([formatRows(999), formatRows(1000), formatRows(15_400), formatRows(5_600_000), formatRows(2e9)]).toEqual(["999", "1k", "15k", "5.6M", "2B"]);
   });
 });

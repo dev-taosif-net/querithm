@@ -208,6 +208,21 @@ public class Tier2CompletionTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void Object_items_describe_schema_and_kind_without_repeating_the_name()
+    {
+        // Regression (2026-11-25): the list read `sales.Regions  table sales.Regions`. The editor shows the label, then
+        // this detail: schema, kind unless a table, column count — as tier 1 words it.
+        var from = Complete("SELECT * FROM |");
+        Assert.Matches(@"^dbo · \d+ cols?$", Item(from, "Orders").Detail);
+        Assert.Matches(@"^dbo · view( · \d+ cols?)?$", Item(from, "vw_OpenOrders").Detail);
+        Assert.Matches(@"^sales · \d+ cols?$", Item(from, "sales.Regions").Detail);
+        foreach (var i in from.Where(i => i.Kind is CompletionKind.Table or CompletionKind.View or CompletionKind.Synonym or CompletionKind.TableFunction))
+            Assert.DoesNotContain(i.Label[(i.Label.LastIndexOf('.') + 1)..], i.Detail ?? "");
+        Assert.Matches(@"^sales · \d+ cols?$", Item(Complete("SELECT * FROM sales.|"), "Regions").Detail);
+        Assert.Equal("dbo · procedure", Item(Complete("EXEC |"), "usp_GetCustomerOrders").Detail);
+    }
+
+    [Fact]
     public void Temp_table_from_an_earlier_batch_is_visible()
     {
         var items = Complete("CREATE TABLE #t (A int, B date)\nGO\nSELECT x.| FROM #t x");

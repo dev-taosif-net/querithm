@@ -36,12 +36,21 @@ const STATEMENT_END_WORDS =new Set(["NULL", "TRUE", "FALSE", "END", "ASC", "DESC
 
 interface Cand {
   label: string;
+  /** Shown instead of the label (Tier1Item.display). */
+  display?: string;
+  /** Built from a snapshot object (Tier1Item.schemaObject). */
+  schemaObject?: boolean;
   kind: CompletionKind;
   detail?: string;
   insertText?: string;
   isSnippet?: boolean;
   filterText?: string;
   documentation?: string;
+  /**
+   * Documentation built only for the items the list keeps (MAX_ITEMS): an object's column table costs more than the
+   * rest of its item, and FROM on a large schema has thousands of candidates.
+   */
+  doc?: () => string;
   group: number;
   order?: number;
   /** Strings the prefix is matched against (default: [label]). */
@@ -163,6 +172,49 @@ export function openQuoteAt(text: string, prefixStart: number, dialect: Dialect)
  */
 export function monacoFilterText(typed: string, item: Pick<Tier1Item, "label" | "filterText">): string {
   return typed + (item.filterText ?? item.label);
+}
+
+/**
+ * What the list shows right of an object's name (§9): its schema, then its kind unless it is a table (the icon says
+ * so), then its columns and rows or what it returns: `sales · 42 cols · ~12k rows`, `sales · view · 8 cols`,
+ * `dbo · function → int`. `withSchema` false where the list holds one schema only (the user typed `sales.`).
+ */
+export function objectDescription(o: SnapObject, rowCounts?: Map<number, RowInfo>, withSchema = true): string {
+  const k = o.kind === "table" ? "" : o.kind === "tvf" ? "table function" : o.kind === "func" ? "function" : o.kind === "proc" ? "procedure" : o.kind;
+  let s = withSchema ? o.schema : "";
+  if (k) s = s ? `${s} · ${k}` : k;
+  if (o.returnType) return `${s} → ${o.returnType}`;
+  const n = o.columns?.length && (o.kind === "table" || o.kind === "view" || o.kind === "synonym") ? o.columns.length : 0;
+  if (n) {
+    const cols = n === 1 ? "1 col" : `${n} cols`;
+    s = s ? `${s} · ${cols}` : cols;
+  }
+  const rc = o.kind === "table" ? rowCounts?.get(o.id) : undefined;
+  if (rc) {
+    const rows = rc.rows == null ? "rows n/a" : `${rc.estimated ? "~" : ""}${formatRows(rc.rows)} ${rc.rows === 1 ? "row" : "rows"}`;
+    s = s ? `${s} · ${rows}` : rows;
+  }
+  return s || "table";
+}
+
+/** The snapshot object kind each object completion kind stands for. */
+const ITEM_OBJECT_KIND: Partial<Record<CompletionKind, ObjectKind>> = {
+  table: "table", view: "view", synonym: "synonym", tableFunction: "tvf", proc: "proc", func: "func", type: "type",
+};
+
+/**
+ * The snapshot object a tier-2 item names, found by its label as tier 2 writes it — `schema.name`, or the bare name of
+ * a default-schema object — and its kind; undefined for anything else (a delimited name, a temp table). A bare function
+ * name is never looked up: it may be a built-in of the same name.
+ */
+export function objectForItem(idx: SchemaIndex, kind: CompletionKind, label: string): SnapObject | undefined {
+  const want = ITEM_OBJECT_KIND[kind];
+  if (!want) return undefined;
+  const lower = label.toLowerCase();
+  const q = idx.byQualified.get(lower);
+  if (q) return q.kind === want ? q : undefined;
+  if (want === "func") return undefined;
+  return idx.byName.get(lower)?.find((o) => o.kind === want && isDefaultSchema(idx, o.schema));
 }
 
 /** A row count for an item's description: `1234` → `1.2k`, `5600000` → `5.6M`. */
@@ -474,12 +526,8 @@ class Builder {
     return this.unqualified(o) && !forceQualified ? this.q(o.name) : `${this.q(o.schema)}.${this.q(o.name)}`;
   }
 
-  private objectDetail(o: SnapObject): string {
-    const k = o.kind === "tvf" ? "table function" : o.kind === "func" ? "function" : o.kind === "proc" ? "procedure" : o.kind;
-    const n = o.columns?.length && (o.kind === "table" || o.kind === "view" || o.kind === "synonym") ? ` · ${o.columns.length} cols` : "";
-    const rc = o.kind === "table" ? this.rowCounts?.get(o.id) : undefined;
-    const rows = !rc ? "" : rc.rows == null ? " · rows n/a" : ` · ${rc.estimated ? "~" : ""}${formatRows(rc.rows)} rows`;
-    return o.returnType ? `${k} · ${o.schema} → ${o.returnType}` : `${k} · ${o.schema}${n}${rows}`;
+  private objectDetail(o: SnapObject, withSchema = true): string {
+    return objectDescription(o, this.rowCounts, withSchema);
   }
 
   private objectKind(o: SnapObject): CompletionKind {
@@ -523,11 +571,13 @@ class Builder {
       insertText = `${escSnippet(insertText)}(${this.paramsSnippet(o)})`;
       isSnippet = true;
     }
+    const cols = o.columns;
+    // Every object candidate gets the same fields (display, doc), set or undefined: one object shape for the engine.
     const c: Cand = {
-      label, kind: this.objectKind(o), detail: this.objectDetail(o), group, match: [label, o.name],
-      usageKeys: [label.toLowerCase(), `${o.schema}.${o.name}`.toLowerCase(), o.name.toLowerCase()],
+      label, display: label !== o.name ? o.name : undefined, kind: this.objectKind(o), detail: this.objectDetail(o, !unqualified), group,
+      match: [label, o.name], usageKeys: [label.toLowerCase(), `${o.schema}.${o.name}`.toLowerCase(), o.name.toLowerCase()],
+      schemaObject: true, doc: cols?.length ? () => [objectHeader(o), ...columnsTable(cols, 15)].join("\n\n") : undefined,
     };
-    if (o.columns?.length) c.documentation = [objectHeader(o), ...columnsTable(o.columns, 15)].join("\n\n");
     if (insertText !== label) c.insertText = insertText;
     if (isSnippet) c.isSnippet = true;
     return c;
@@ -554,7 +604,7 @@ class Builder {
       for (const s of idx.schemas) this.cands.push({ label: s, kind: "schema", detail: "schema", group: 5, insertText: this.q(s) });
       // Oracle's one-row DUAL lives in SYS, which the snapshot does not load.
       if (this.dialect === "oracle" && !idx.byName.has("dual")) {
-        this.cands.push({ label: "DUAL", kind: "table", detail: "table · SYS · one row (DUMMY)", group: 6 });
+        this.cands.push({ label: "DUAL", kind: "table", detail: "SYS · one row (DUMMY)", group: 6 });
       }
       this.keywords(tableContextKeywords(this.dialect), 8);
     }
@@ -647,12 +697,17 @@ class Builder {
         if (o.kind !== "func") continue;
         if (schema !== undefined && !eq(o.schema, schema)) continue;
         if (prefix && bestMatch(prefix, [o.name, `${o.schema}.${o.name}`]) === MATCH_NONE) continue;
-        const label = schema !== undefined ? o.name : this.labelFor(o);
-        const base = schema !== undefined ? this.q(o.name) : RULES[this.dialect].qualifyScalarFunctions ? this.insertFor(o, true) : this.insertFor(o);
+        // T-SQL calls a scalar function by its two-part name: the label is that name in every schema, dbo too, so the
+        // sidecar's item for it (always `schema.name`) merges with this one instead of listing the function twice.
+        const qualify = RULES[this.dialect].qualifyScalarFunctions;
+        const label = schema !== undefined ? o.name : qualify ? `${o.schema}.${o.name}` : this.labelFor(o);
+        const base = schema !== undefined ? this.q(o.name) : qualify ? this.insertFor(o, true) : this.insertFor(o);
+        const usageKeys = [label.toLowerCase(), `${o.schema}.${o.name}`.toLowerCase()];
+        // A T-SQL dbo function used to be listed by its bare name: uses counted under that name still count.
+        if (qualify && schema === undefined && this.unqualified(o)) usageKeys.push(o.name.toLowerCase());
         this.cands.push({
-          label, kind: "func", detail: this.objectDetail(o), group, isSnippet: true,
-          insertText: `${escSnippet(base)}(${this.paramsSnippet(o)})`, match: [label, o.name],
-          usageKeys: [label.toLowerCase(), `${o.schema}.${o.name}`.toLowerCase()],
+          label, display: label !== o.name ? o.name : undefined, kind: "func", detail: this.objectDetail(o, schema === undefined), group,
+          isSnippet: true, insertText: `${escSnippet(base)}(${this.paramsSnippet(o)})`, match: [label, o.name], usageKeys, schemaObject: true,
         });
       }
     }
@@ -1065,7 +1120,7 @@ class Builder {
   private finalize(objectContext: boolean): Tier1Item[] {
     const prefix = this.ctx.prefix;
     const usage = this.usage;
-    const scored: { item: Tier1Item; key: string }[] = [];
+    const scored: { item: Tier1Item; key: string; doc?: () => string }[] = [];
     const seen = new Set<string>();
     for (const c of this.cands) {
       // Inside an opened quote only a name can follow: no keyword, template or call.
@@ -1083,6 +1138,8 @@ class Builder {
       const rest = prefix ? Math.max(0, Math.min(...(c.match ?? [c.label]).map((x) => x.length)) - prefix.length) : 0;
       const st = sortText({ tier, match: m, group: c.group, usage: u, order: c.order ?? 0, rest, label: c.label });
       const item: Tier1Item = { label: c.label, kind: c.kind, sortText: st };
+      if (c.display !== undefined && c.display !== c.label) item.display = c.display;
+      if (c.schemaObject) item.schemaObject = true;
       if (c.detail !== undefined) item.detail = c.detail;
       if (c.insertText !== undefined) item.insertText = c.insertText;
       if (c.isSnippet) item.isSnippet = true;
@@ -1091,11 +1148,15 @@ class Builder {
       if (uk !== undefined && uk !== c.label.toLowerCase()) item.usageKey = uk;
       if (c.filterText !== undefined) item.filterText = c.filterText;
       if (c.documentation !== undefined) item.documentation = c.documentation;
-      scored.push({ item, key: st });
+      scored.push(c.documentation === undefined && c.doc ? { item, key: st, doc: c.doc } : { item, key: st });
     }
     scored.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
     const out: Tier1Item[] = new Array(Math.min(MAX_ITEMS, scored.length));
-    for (let i = 0; i < out.length; i++) out[i] = scored[i].item;
+    for (let i = 0; i < out.length; i++) {
+      const s = scored[i];
+      if (s.doc) s.item.documentation = s.doc();
+      out[i] = s.item;
+    }
     return out;
   }
 }

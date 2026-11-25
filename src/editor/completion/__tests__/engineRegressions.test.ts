@@ -238,6 +238,58 @@ describe("completion: descriptions and the details pane", () => {
   });
 });
 
+describe("completion: an object's name is shown once, its schema on the right (every engine)", () => {
+  // Regression (2026-11-25): the list read `sales.orders  table sales.orders`, and default-schema rows had no schema.
+  const OTHER: Record<Engine, string> = { tsql: "sales", pg: "sales", mySql: "sales", sqlite: "aux", duckDb: "sales", oracle: "SALES" };
+  function twoSchemas(d: Engine): SchemaIndex {
+    const objects: SnapObject[] = [
+      ...IDX[d].objects,
+      { id: 10, schema: OTHER[d], name: N(d, "orders"), kind: "table", columns: [col(N(d, "order_id"), 1, true)] },
+      { id: 11, schema: OTHER[d], name: N(d, "order_totals"), kind: "view", columns: [col(N(d, "total"), 1), col(N(d, "n"), 2)] },
+    ];
+    return buildSchemaIndex({ profileId: "p", database: d === "mySql" ? "shop" : "app", status: "fresh", objects, fks: [] }, d, d === "mySql" ? ["shop"] : ["app"]);
+  }
+  const at = (sql: string, d: Engine, idx: SchemaIndex) => {
+    const i = sql.indexOf("|");
+    return complete({ text: sql.slice(0, i) + sql.slice(i + 1), offset: i, dialect: d, schema: idx, autoAlias: false }).items;
+  };
+  const shown = (i: Tier1Item) => i.display ?? i.label;
+  for (const d of ENGINES) {
+    const s = DEFAULT_SCHEMA[d], o = OTHER[d], orders = N(d, "orders");
+    it(`${d}: two tables of one name stay two items, told apart by the schema on the right`, () => {
+      const idx = twoSchemas(d);
+      const items = at("SELECT * FROM ord|", d, idx).filter((i) => i.kind === "table" && shown(i) === orders);
+      expect(items.map((i) => i.detail).sort()).toEqual([`${o} · 1 col`, `${s} · 3 cols`].sort());
+      const other = items.find((i) => i.detail!.startsWith(o))!;
+      expect(other.label).toBe(`${o}.${orders}`); // its identity and what Enter inserts keep the schema
+      expect(other.insertText ?? other.label).toBe(`${o}.${orders}`);
+      const view = at("SELECT * FROM ord|", d, idx).find((i) => i.kind === "view")!;
+      expect([shown(view), view.detail]).toEqual([N(d, "order_totals"), `${o} · view · 2 cols`]);
+    });
+    it(`${d}: no row repeats its name on the right; a typed schema is not repeated either`, () => {
+      const idx = twoSchemas(d);
+      for (const i of at("SELECT * FROM |", d, idx).filter((x) => x.schemaObject)) {
+        expect(i.detail, i.label).not.toContain(shown(i));
+        expect(shown(i), i.label).not.toContain(".");
+      }
+      const typed = at(`SELECT * FROM ${o}.ord|`, d, idx).filter((i) => i.schemaObject);
+      expect(typed.map((i) => [shown(i), i.detail])).toEqual(expect.arrayContaining([[orders, "1 col"], [N(d, "order_totals"), "view · 2 cols"]]));
+    });
+    it(`${d}: the details pane is still built for every listed object`, () => {
+      const items = at("SELECT * FROM |", d, twoSchemas(d)).filter((i) => i.schemaObject);
+      expect(items.length).toBeGreaterThan(0);
+      for (const i of items) expect(i.documentation, i.label).toContain("| Column | Type | Nullability |");
+    });
+  }
+  it("with more objects than the list keeps (500), each kept item still has its details pane (built after the cut)", () => {
+    const objects: SnapObject[] = Array.from({ length: 700 }, (_, k) => ({ id: k + 1, schema: k % 2 ? "sales" : "dbo", name: `t${k}`, kind: "table" as const, columns: [col("id", 1, true)] }));
+    const idx = buildSchemaIndex({ profileId: "p", database: "app", status: "fresh", objects, fks: [] }, "tsql", ["app"]);
+    const items = complete({ text: "SELECT * FROM t", offset: 15, dialect: "tsql", schema: idx }).items.filter((i) => i.schemaObject);
+    expect(items).toHaveLength(500);
+    expect(items.every((i) => i.documentation?.includes("| Column |"))).toBe(true);
+  });
+});
+
 describe("completion: aliases, synonyms and engine row sources (review regressions)", () => {
   const colLabels = (items: Tier1Item[]) => items.filter((i) => i.kind === "column").map((i) => i.label);
   for (const d of ENGINES) {

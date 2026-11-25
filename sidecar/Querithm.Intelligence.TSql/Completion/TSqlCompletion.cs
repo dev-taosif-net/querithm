@@ -552,11 +552,14 @@ sealed class ItemBuilder(DocModel doc, CursorInfo cur, Env env, Resolver resolve
         var (kind, word, group) = o.Kind switch
         {
             ObjectKind.View => (CompletionKind.View, "view", "3"),
-            ObjectKind.Tvf => (CompletionKind.TableFunction, "table-valued function", "4"),
+            ObjectKind.Tvf => (CompletionKind.TableFunction, "table function", "4"),
             ObjectKind.Synonym => (CompletionKind.Synonym, "synonym", "4"),
-            _ => (CompletionKind.Table, "table", "2"),
+            _ => (CompletionKind.Table, "", "2"),
         };
-        var detail = $"{word} {o.Schema}.{o.Name}";
+        // Shown right of the label, as tier 1 words it (complete.ts objectDetail): the schema, the kind unless a table,
+        // the column count. Never the name again: the label already shows it.
+        var detail = word.Length == 0 ? o.Schema : $"{o.Schema} · {word}";
+        if (o.Kind != ObjectKind.Tvf && o.Columns is { Length: > 0 } cols) detail += cols.Length == 1 ? " · 1 col" : $" · {cols.Length} cols";
         if (o.Kind == ObjectKind.Tvf) Add(label, kind, detail, group, insert: label + "(${1})", snippet: true, doc: FuncSignature(o));
         else Add(label, kind, detail, group, doc: o.Columns is { Length: > 0 } c ? Preview(Resolver.SnapCols(o)) : null);
     }
@@ -620,7 +623,7 @@ sealed class ItemBuilder(DocModel doc, CursorInfo cur, Env env, Resolver resolve
             if (q.Count > 0 && !string.Equals(o.Schema, q[^1], StringComparison.OrdinalIgnoreCase)) continue;
             var label = q.Count > 0 || string.Equals(o.Schema, "dbo", StringComparison.OrdinalIgnoreCase) ? Quote(o.Name) : $"{Quote(o.Schema)}.{Quote(o.Name)}";
             var ps = (o.Params ?? []).Where(x => x.Ordinal > 0).OrderBy(x => x.Ordinal).Select(x => $"{x.Name} {x.Type}" + (x.Output ? " OUTPUT" : ""));
-            Add(label, CompletionKind.Proc, $"procedure {o.Schema}.{o.Name}", "1", doc: "(" + string.Join(", ", ps) + ")");
+            Add(label, CompletionKind.Proc, $"{o.Schema} · procedure", "1", doc: "(" + string.Join(", ", ps) + ")");
         }
     }
 
@@ -677,7 +680,7 @@ sealed class ItemBuilder(DocModel doc, CursorInfo cur, Env env, Resolver resolve
         if (Schema.Current is { } idx)
             foreach (var o in idx.Snapshot.Objects)
                 if (o.Kind == ObjectKind.Type)
-                    Add(string.Equals(o.Schema, "dbo", StringComparison.OrdinalIgnoreCase) ? Quote(o.Name) : $"{Quote(o.Schema)}.{Quote(o.Name)}", CompletionKind.Type, "user type " + o.Schema + "." + o.Name, "3");
+                    Add(string.Equals(o.Schema, "dbo", StringComparison.OrdinalIgnoreCase) ? Quote(o.Name) : $"{Quote(o.Schema)}.{Quote(o.Name)}", CompletionKind.Type, o.Schema + " · user type", "3");
     }
 
     void Cursors()

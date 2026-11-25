@@ -1057,7 +1057,19 @@ a new line). Lists re-opened from code (tier 2, a schema or row counts arriving)
 same rule holds, and tier 2 opens a new list only while the cursor is still in the word it asked for and no Escape was
 pressed since. Items merge by name and kind family (a column `Count` and the
 function COUNT stay two items); where tier 1 has the item its insert text wins (the dialect's quoting: a reserved word
-delimited, an alias as written) and tier 2 refines the detail. Tier 2's answer is cached per word (model, profile,
+delimited, an alias as written) and tier 2 refines the detail — except for a schema object (table, view, synonym, table
+function, procedure, function, type), whose tier-1 description below is kept. **List rows (2026-11-25).** An object row
+shows its bare name; the description on the right starts with its schema, the default schema included (`dbo`,
+`public`, `main`), then its kind unless it is a table (the icon says so), then its column count and row count or what it
+returns: `sales · 42 cols · ~12k rows`, `sales · view · 8 cols`, `dbo · function → int`. The schema is left out once the
+user typed it (`sales.|`). The name is never repeated on the right, and the item's identity (merge key, usage, ranking)
+stays the qualified label, so one name in two schemas is two rows and Enter inserts what it did before (`sales.Orders`,
+`Orders` in the default schema). T-SQL scalar functions are identified by their two-part name in every schema, as tier 2
+offers them, so a dbo function is one row. An object only tier 2 lists (past tier 1's 500, or a context tier 1 does not
+read) is found in the snapshot by tier 2's label (`schema.name`, or a default-schema bare name; never a bare function
+name, which may be a built-in, and never after a typed qualifier) and shown the same way, still filtered on its
+qualified label. An object's details pane (its columns) is built only for the at most 500 items the list keeps. Tier 2's
+answer is cached per word (model, profile,
 database, session, snapshot version, word start, the text before it, and the word it was asked with — the request sends
 the text and offset of that moment), so extending the word keeps its items, another word at the same place (typed after
 a backspace) asks again, and a schema refresh asks again; an older answer never replaces a newer one. Each tier-1 item's filter text starts with what

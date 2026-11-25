@@ -185,7 +185,9 @@ describe("completion provider", () => {
     expect(editor.triggered).toEqual(["tier2:editor.action.triggerSuggest"]);
     const second = completion("tsql").provideCompletionItems(m, pos(m, text.length));
     const orders = second.suggestions.find((s: any) => s.label.label === "Orders");
-    expect(orders.detail).toBe("dbo.Orders (5 cols)");
+    // A table keeps tier 1's description (columns, rows; the schema is typed): the sidecar's wording says less (§9).
+    expect(orders.detail).toBe("5 cols");
+    expect(orders.label.description).toBe("5 cols");
     expect(second.suggestions.some((s: any) => s.label.label === "OrdersExtra" && s.sortText === "5OrdersExtra" && s.documentation.value === "doc")).toBe(true);
     expect(P.completionStats.tier2.length).toBeGreaterThan(0);
     expect(P.completionStats.tier1.length).toBeGreaterThan(0);
@@ -430,7 +432,77 @@ describe("completion provider", () => {
     await vi.advanceTimersByTimeAsync(130);
     const after = completion("tsql").provideCompletionItems(m, pos(m, text.length)).suggestions.find((s: any) => s.label.label === "Orders");
     expect(after.insertText).toBe(before.insertText);
-    expect(after.detail).toBe("from sidecar");
+    expect(after.detail).toBe(before.detail);
+    expect(after.label).toEqual(before.label);
+  });
+
+  it("shows an object's name once, its schema leading the description, dbo included (Option A)", () => {
+    vi.useFakeTimers(); // T-SQL schedules a tier-2 call
+    rpc.mockResolvedValue([]);
+    const text = "select * from Prod";
+    const m = doc("tsql", text);
+    const items = completion("tsql").provideCompletionItems(m, pos(m, text.length)).suggestions;
+    const products = items.find((s: any) => s.kind === 2 && s.label.label === "Products");
+    expect(products.label.description).toBe("sales · 3 cols");
+    expect(products.insertText).toBe("sales.Products pro"); // what Enter inserts is unchanged
+    const orders = completion("tsql").provideCompletionItems(doc("tsql", "select * from Ord"), { lineNumber: 1, column: 18 }).suggestions
+      .find((s: any) => s.kind === 2 && s.label.label === "Orders");
+    expect(orders.label.description).toBe("dbo · 5 cols");
+    expect(items.some((s: any) => String(s.label.label).includes(".") && s.kind === 2)).toBe(false);
+  });
+
+  it("T-SQL: the sidecar's dbo.function and tier 1's are one item", async () => {
+    vi.useFakeTimers();
+    const text = "select fn_Ord";
+    const m = doc("tsql", text);
+    rpc.mockResolvedValue([{ label: "dbo.fn_OrderTotal", kind: "func", detail: "returns money", insertText: "dbo.fn_OrderTotal(${1})", isSnippet: true }]);
+    completion("tsql").provideCompletionItems(m, pos(m, text.length));
+    await vi.advanceTimersByTimeAsync(130);
+    const fns = completion("tsql").provideCompletionItems(m, pos(m, text.length)).suggestions.filter((s: any) => /fn_OrderTotal$/.test(s.label.label));
+    expect(fns).toHaveLength(1);
+    expect(fns[0].label.label).toBe("fn_OrderTotal");
+    expect(fns[0].label.description).toMatch(/^dbo · function/);
+    expect(fns[0].insertText).toBe("dbo.fn_OrderTotal(${1:@OrderId})");
+  });
+
+  it("an object only tier 2 lists looks like tier 1's rows; anything else stays as tier 2 sent it", async () => {
+    vi.useFakeTimers();
+    const text = "select * from Ord";
+    const m = doc("tsql", text);
+    rpc.mockResolvedValue([
+      { label: "sales.Products", kind: "table", detail: "sales · 3 cols", isSnippet: false },
+      { label: "[odd.name]", kind: "table", detail: "dbo", isSnippet: false },
+      { label: "Orders", kind: "proc", detail: "dbo · procedure", isSnippet: false }, // a name of another kind
+    ]);
+    completion("tsql").provideCompletionItems(m, pos(m, text.length));
+    await vi.advanceTimersByTimeAsync(130);
+    const items = completion("tsql").provideCompletionItems(m, pos(m, text.length)).suggestions;
+    const p = items.find((s: any) => s.label.label === "Products");
+    expect(p.label.description).toBe("sales · 3 cols");
+    expect(p.insertText).toBe("sales.Products");
+    expect(p.filterText).toBe("sales.Products");
+    expect(items.find((s: any) => s.label.label === "[odd.name]").label.description).toBe("dbo");
+    expect(items.find((s: any) => s.kind === 5 && s.label.label === "Orders").label.description).toBe("dbo · procedure");
+    // After a typed schema tier 2's bare names belong to it: never described as the default schema's object.
+    const q = "select * from sales.Ord";
+    const mq = doc("tsql", q);
+    rpc.mockResolvedValue([{ label: "Orders", kind: "table", detail: "sales · 9 cols", isSnippet: false }]);
+    completion("tsql").provideCompletionItems(mq, pos(mq, q.length));
+    await vi.advanceTimersByTimeAsync(130);
+    const o = completion("tsql").provideCompletionItems(mq, pos(mq, q.length)).suggestions.find((s: any) => s.label.label === "Orders");
+    expect(o.label.description).toBe("sales · 9 cols");
+  });
+
+  it("a CTE keeps the sidecar's richer description (only schema objects keep tier 1's)", async () => {
+    vi.useFakeTimers();
+    const text = "with r as (select 1 as n) select * from r";
+    const m = doc("tsql", text);
+    rpc.mockResolvedValue([{ label: "r", kind: "cte", detail: "CTE (n)", isSnippet: false }]);
+    const first = completion("tsql").provideCompletionItems(m, pos(m, text.length)).suggestions.find((s: any) => s.label.label === "r");
+    expect(first.label.description).toBe("CTE");
+    await vi.advanceTimersByTimeAsync(130);
+    const after = completion("tsql").provideCompletionItems(m, pos(m, text.length)).suggestions.find((s: any) => s.label.label === "r");
+    expect(after.label.description).toBe("CTE (n)");
   });
 
   it("recases keyword completions per settings (upper, lower, and off while typing)", () => {

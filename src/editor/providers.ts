@@ -4,7 +4,7 @@ import { rpc } from "../ipc/client";
 import { applyKeywordCase, complete, keywordCaseEdit, resolveObjectAt } from "./completion";
 import type { SchemaIndex, Tier1Item } from "./completion/types";
 import { sqlRegionAtOffset } from "./completion/sqlRegion";
-import { closeQuoteOf, monacoFilterText, openQuoteAt } from "./completion/complete";
+import { closeQuoteOf, monacoFilterText, objectDescription, objectForItem, openQuoteAt } from "./completion/complete";
 import { getStream } from "./completion/lexer";
 import { lastStartingBefore } from "./completion/scanner";
 import { expandWildcardAtOffset } from "./expandWildcard";
@@ -299,7 +299,8 @@ function installKeywordCaseOnType(editor: monaco.editor.ICodeEditor) {
 
 function toMonaco(item: Tier1Item | CompletionItem, range: monaco.IRange | monaco.languages.CompletionItemRanges, tier: 1 | 2, usageScope?: [string, string]): monaco.languages.CompletionItem {
   return {
-    label: { label: item.label, description: item.detail ?? undefined },
+    // An object shows its bare name, its schema leading the description on the right (§9); `label` stays its identity.
+    label: { label: ("display" in item && item.display) || item.label, description: item.detail ?? undefined },
     kind: kindMap[item.kind] ?? monaco.languages.CompletionItemKind.Text,
     detail: item.detail ?? undefined,
     documentation: item.documentation ? { value: item.documentation } : undefined,
@@ -389,10 +390,14 @@ function provideCompletion(model: monaco.editor.ITextModel, position: monaco.Pos
   // `menu`. A filter text that starts with what was typed gives every tier-1 item the same score, so tier 1's order
   // holds. (The text typed includes an opened quote: the range starts there.)
   const typed = text.slice(startOffset, offset);
+  // Tier-1 items built from a snapshot object: their description (schema, columns, rows) is kept over tier 2's.
+  const described = new Set<string>();
   for (const i of result.items) {
     const item = toMonaco(i, range, 1, scope);
     if (typed) item.filterText = monacoFilterText(typed, i);
-    merged.set(mergeKey(i.kind, i.label), item);
+    const k = mergeKey(i.kind, i.label);
+    merged.set(k, item);
+    if (i.schemaObject) described.add(k);
   }
   // The sidecar sends at most TIER2_CAP items, those matching the word (CompletionFilter): a word no cached answer covers
   // asks again, and the newest answer at this place is shown meanwhile (lookupTier2).
@@ -400,12 +405,23 @@ function provideCompletion(model: monaco.editor.ITextModel, position: monaco.Pos
   const t2 = exact ?? stale;
   if (t2) {
     // Merge by name and kind (§9). A name tier 1 already offers keeps tier 1's insert text, which follows the
-    // dialect's quoting rules (a reserved word delimited, an alias as written); tier 2 refines the detail.
+    // dialect's quoting rules (a reserved word delimited, an alias as written); tier 2 refines the detail — except
+    // for a table, view or routine, whose tier-1 description (schema, columns, rows) says more than tier 2's.
     for (const i of t2) {
       const k = mergeKey(i.kind, i.label);
       const prev = merged.get(k);
+      if (prev && described.has(k)) continue;
       const next = toMonaco(i, range, 2, scope);
       if (open) next.filterText = open + (next.filterText ?? i.label);
+      // An object only tier 2 lists (past tier 1's 500, or a context tier 1 does not read) looks like tier 1's rows.
+      // Not after a typed qualifier: tier 2's bare name there belongs to that schema, not to the default one.
+      const o = !prev && ctx.schema && result.context.qualifier === undefined ? objectForItem(ctx.schema, i.kind, i.label) : undefined;
+      if (o) {
+        const description = objectDescription(o, rowCounts);
+        next.label = { label: o.name, description };
+        next.detail = description;
+        next.filterText ??= i.label; // Monaco still filters on `schema.name`, as before
+      }
       merged.set(k, prev ? { ...prev, detail: next.detail ?? prev.detail, label: { label: (prev.label as monaco.languages.CompletionItemLabel).label, description: i.detail ?? (prev.label as monaco.languages.CompletionItemLabel).description } } : next);
     }
   }

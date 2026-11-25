@@ -146,10 +146,19 @@ describe("complete: expression contexts", () => {
     expect(items.every((i) => i.label.startsWith("@"))).toBe(true);
   });
   it("scalar function is schema-qualified on insert", () => {
-    const f = byLabel(itemsOf("SELECT fn_| FROM dbo.Orders"), "fn_OrderTotal")!;
+    // Its identity is the two-part name, dbo too (the sidecar's item for it is `dbo.fn_OrderTotal`); the list shows the name.
+    const f = byLabel(itemsOf("SELECT fn_| FROM dbo.Orders"), "dbo.fn_OrderTotal")!;
     expect(f.kind).toBe("func");
+    expect(f.display).toBe("fn_OrderTotal");
+    expect(f.detail).toMatch(/^dbo · function( → .+)?$/);
     expect(f.insertText).toBe("dbo.fn_OrderTotal(${1:@OrderId})");
     expect(f.isSnippet).toBe(true);
+  });
+  it("a dbo function's uses counted under its former bare label still rank it", () => {
+    const { text, offset } = at("SELECT fn_| FROM dbo.Orders");
+    const plain = byLabel(complete({ text, offset, dialect: "tsql", schema: IDX }).items, "dbo.fn_OrderTotal")!;
+    const used = byLabel(complete({ text, offset, dialect: "tsql", schema: IDX, usage: new Map([["fn_ordertotal", 5]]) }).items, "dbo.fn_OrderTotal")!;
+    expect(used.sortText < plain.sortText).toBe(true);
   });
   it("after AS (column alias) offers nothing", () => expect(itemsOf("SELECT OrderId AS | FROM dbo.Orders")).toEqual([]));
   it("no schema index: keywords and built-ins only, no throw", () => {
@@ -190,7 +199,14 @@ describe("complete: table contexts", () => {
     const l = labels(items);
     for (const x of ["Orders", "Customers", "OrderItems", "sales.Products", "vCustomerOrders", "ufn_CustomerOrders", "sales"]) expect(l).toContain(x);
     expect(byLabel(items, "vCustomerOrders")?.kind).toBe("view");
-    expect(byLabel(items, "sales.Products")?.detail).toBe("table · sales · 3 cols");
+    // The list shows the name once; the schema leads the description, dbo included (§9).
+    expect(byLabel(items, "sales.Products")?.display).toBe("Products");
+    expect(byLabel(items, "sales.Products")?.detail).toBe("sales · 3 cols");
+    expect(byLabel(items, "Orders")?.display).toBeUndefined();
+    expect(byLabel(items, "Orders")?.detail).toBe("dbo · 5 cols");
+    expect(byLabel(items, "vCustomerOrders")?.detail).toMatch(/^dbo · view( · \d+ cols?)?$/);
+    expect(byLabel(items, "Orders")?.schemaObject).toBe(true);
+    expect(byLabel(items, "sales")?.schemaObject).toBeUndefined();
     expect(byLabel(items, "ufn_CustomerOrders")?.insertText).toBe("ufn_CustomerOrders(${1:@CustomerId}) uc");
     expect(l).not.toContain("usp_GetCustomerOrders");
   });

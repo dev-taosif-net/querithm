@@ -85,7 +85,15 @@ export interface SchemaIndex {
 }
 
 export interface Tier1Item {
+  /** The item's identity: merged with tier 2, counted for usage and ranked by it (`sales.Orders`, `Orders` in dbo). */
   label: string;
+  /**
+   * What the list shows when it differs from `label`: an object's bare name, its schema being in `detail` (§9). The
+   * label's qualified form stays the identity, so two tables of one name in two schemas remain two items.
+   */
+  display?: string;
+  /** Built from a schema object of the snapshot: its detail (schema, columns, rows) is kept over tier 2's. */
+  schemaObject?: boolean;
   kind: CompletionKind;
   detail?: string;
   /** Text inserted; defaults to label. Snippet syntax when isSnippet. */
