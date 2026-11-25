@@ -6,14 +6,21 @@
 
 export type SyntaxThemeId = "standard" | "color-blind" | "neon" | "forest" | "ember" | "ocean";
 
-/** What a token is, for coloring. `delimiter` defaults to the editor foreground, `temp` to ident, `batch` to keyword, `escape` to string. */
+/**
+ * What a token is, for coloring. `delimiter` defaults to the editor foreground, `temp` to ident, `batch` to keyword,
+ * `escape` to string. The extended roles (constant … schema) are for Default palettes only: a palette without one colors
+ * its tokens as before, through `TOKEN_ROLES[].legacy` (plans/app-themes §2.4, §4.2).
+ */
 export type SyntaxRole =
   | "keyword" | "type" | "string" | "number" | "comment" | "variable" | "function" | "operator" | "ident"
-  | "temp" | "batch" | "delimiter" | "escape";
+  | "temp" | "batch" | "delimiter" | "escape"
+  | ExtendedRole;
+type ExtendedRole = "constant" | "wordOperator" | "cast" | "bind" | "systemVariable" | "cte" | "schema";
+type OptionalRole = "temp" | "batch" | "delimiter" | "escape" | ExtendedRole;
 
 /** Hex colors (#rrggbb) per role, plus the three colors `( )` cycle through by depth. */
-export type SyntaxPalette = Record<Exclude<SyntaxRole, "temp" | "batch" | "delimiter" | "escape">, string> &
-  Partial<Record<"temp" | "batch" | "delimiter" | "escape", string>> & { bracket1: string; bracket2: string; bracket3: string };
+export type SyntaxPalette = Record<Exclude<SyntaxRole, OptionalRole>, string> &
+  Partial<Record<OptionalRole, string>> & { bracket1: string; bracket2: string; bracket3: string };
 
 export type FontStyle = "" | "bold" | "italic" | "bold italic" | "underline" | "bold underline";
 
@@ -30,6 +37,8 @@ export interface SyntaxTheme {
 
 /** The shared structure (panel votes C3, V2–V5): keywords and GO bold, comments and #temp italic, escapes bold. */
 const STYLE: SyntaxTheme["fontStyle"] = { keyword: "bold", batch: "bold", comment: "italic", temp: "italic", escape: "bold" };
+/** The house font styles every palette starts from (App Theme Default palettes add bold word operators). */
+export const BASE_FONT_STYLE: Readonly<SyntaxTheme["fontStyle"]> = STYLE;
 
 export const SYNTAX_THEMES: readonly SyntaxTheme[] = [
   {
@@ -136,8 +145,14 @@ export const SYNTAX_THEMES: readonly SyntaxTheme[] = [
   },
 ];
 
+/** The fallback of `syntaxThemeById`, kept with its old meaning (not the Default choice below). */
 export const DEFAULT_SYNTAX_THEME: SyntaxThemeId = "standard";
 export const SYNTAX_THEME_IDS = SYNTAX_THEMES.map((t) => t.id);
+
+/** A Syntax colors choice: the App Theme's own palette ("default") or one of the six themes (plans/app-themes §2.4). */
+export type SyntaxChoice = "default" | SyntaxThemeId;
+export const SYNTAX_CHOICES: readonly SyntaxChoice[] = ["default", ...SYNTAX_THEME_IDS];
+export const DEFAULT_SYNTAX_CHOICE: SyntaxChoice = "default";
 
 /** An unknown or missing id (an old store.db, a hand-edited value) falls back to Standard. */
 export function syntaxThemeById(id: string | undefined): SyntaxTheme {
@@ -148,8 +163,12 @@ export function syntaxThemeById(id: string | undefined): SyntaxTheme {
  * Monaco token prefix → role. A rule also matches longer tokens ("identifier" covers identifier.quote and the
  * ".tsql" postfix); the most specific rule wins, so `number.hex` and `delimiter` need rules of their own or Monaco's
  * base theme colors them (0x1F ignored the theme before 2026-10-31).
+ *
+ * The entries with `legacy` are the newer token kinds (plans/app-themes §4.2, §5): a palette that does not color their
+ * role gives them the legacy role, which is how the token was colored before it existed, so the six themes look the
+ * same character for character (T1 highlightGolden.test.ts). None of their names is a rule of Monaco's base themes.
  */
-export const TOKEN_ROLES: { token: string; role: SyntaxRole }[] = [
+export const TOKEN_ROLES: { token: string; role: SyntaxRole; legacy?: SyntaxRole }[] = [
   { token: "keyword", role: "keyword" },
   { token: "keyword.batch", role: "batch" },
   { token: "type", role: "type" },
@@ -166,7 +185,20 @@ export const TOKEN_ROLES: { token: string; role: SyntaxRole }[] = [
   { token: "delimiter", role: "delimiter" },
   { token: "identifier", role: "ident" },
   { token: "identifier.temp", role: "temp" },
+  { token: "keyword.constant", role: "constant", legacy: "keyword" }, // TRUE FALSE NULL where they are keywords
+  { token: "identifier.constant", role: "constant", legacy: "ident" }, // TRUE / FALSE where they are not keywords
+  { token: "keyword.operator", role: "wordOperator", legacy: "keyword" }, // AND OR NOT IN LIKE BETWEEN IS …
+  { token: "type.cast", role: "cast", legacy: "type" }, // PostgreSQL / DuckDB ::
+  { token: "variable.bind", role: "bind", legacy: "variable" }, // $1 :name ? @p (the dialect's forms)
+  { token: "delimiter.bind", role: "bind", legacy: "delimiter" }, // MySQL ? (untokenized before: editor fg)
+  { token: "predefined.global", role: "systemVariable", legacy: "function" }, // @@x (T-SQL, MySQL)
+  { token: "identifier.cte", role: "cte", legacy: "ident" }, // semantic tokens (§5.3)
+  { token: "identifier.schema", role: "schema", legacy: "ident" }, // semantic tokens (§5.3)
 ];
+
+/** The role a token takes in a palette: its own when the palette colors it, else what it was before (I1). */
+export const effectiveRole = (p: SyntaxPalette, e: (typeof TOKEN_ROLES)[number]): SyntaxRole =>
+  e.legacy && p[e.role] === undefined ? e.legacy : e.role;
 
 /** A role's color in a palette, with the defaults for the derived roles. `fg` is the editor foreground. */
 export function roleColor(p: SyntaxPalette, role: SyntaxRole, fg: string): string {
@@ -175,14 +207,22 @@ export function roleColor(p: SyntaxPalette, role: SyntaxRole, fg: string): strin
     case "batch": return p.batch ?? p.keyword;
     case "escape": return p.escape ?? p.string;
     case "delimiter": return p.delimiter ?? fg;
-    default: return p[role];
+    // An extended role the palette lacks: rulesFor never asks (effectiveRole falls back to the legacy role first).
+    default: return p[role] ?? fg;
   }
 }
 
-/** Monaco theme rules for a theme in one mode (foreground without '#', as Monaco wants). */
+/** Monaco theme rules for a palette and its font styles (foreground without '#', as Monaco wants). */
+export function rulesFor(p: SyntaxPalette, fontStyle: Partial<Record<SyntaxRole, FontStyle>>, fg: string) {
+  return TOKEN_ROLES.map((e) => {
+    const role = effectiveRole(p, e);
+    return { token: e.token, foreground: roleColor(p, role, fg).slice(1, 7), fontStyle: fontStyle[role] ?? "" };
+  });
+}
+
+/** Monaco theme rules for a theme in one mode. */
 export function syntaxRules(theme: SyntaxTheme, mode: "dark" | "light", fg: string) {
-  const p = theme[mode];
-  return TOKEN_ROLES.map(({ token, role }) => ({ token, foreground: roleColor(p, role, fg).slice(1, 7), fontStyle: theme.fontStyle[role] ?? "" }));
+  return rulesFor(theme[mode], theme.fontStyle, fg);
 }
 
 /** The Settings preview: a few lines already split into roles, so the picker needs no editor or tokenizer. */

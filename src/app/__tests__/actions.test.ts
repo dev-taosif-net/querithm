@@ -79,7 +79,7 @@ import { useProfiles } from "../../store/profiles";
 import { useConnections } from "../../store/connections";
 import { useExecutions } from "../../store/executions";
 import { executionData, ExecutionData } from "../../results/model";
-import { useSettings } from "../../store/settings";
+import { flushSettings, useSettings } from "../../store/settings";
 import { useClosedTabs } from "../../store/closedTabs";
 import * as A from "../actions";
 import { ENGINE_LIST } from "../../engines";
@@ -120,7 +120,13 @@ function reset() {
   useExecutions.setState({ views: {} });
 }
 
-beforeEach(reset);
+beforeEach(async () => {
+  // A settings save an earlier test scheduled (a connect touches recentProfiles; 400 ms debounce) is written now, into
+  // a mock that answers nothing, so it never lands in this test's rpc calls when the suite runs slowly.
+  h.rpc.mockReset();
+  await flushSettings();
+  reset();
+});
 
 describe("newQueryTab", () => {
   it("creates a model and tab bound to the requested profile, using the engine language and default database", () => {

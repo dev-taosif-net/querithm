@@ -226,6 +226,15 @@ const EntryLine = memo(function EntryLine({ tabId, entry: e, rows = 0, marked }:
           {"\n"}
         </span>
       )}
+      {/* A warning, or an error with no "Msg n" header, shows its kind by a glyph too: never by color alone (§13 S6). */}
+      {(m.severity === "warning" || (m.severity === "error" && !h)) && (
+        <span className={`${m.severity === "error" ? "text-err" : "text-warn"} mr-1 inline-flex align-[-2px]`} data-q-kind-glyph={m.severity}>
+          <span aria-hidden>
+            <Icon name={m.severity === "error" ? "errorCircle" : "alert"} size={12} strokeWidth={2.2} />
+          </span>
+          <span className="sr-only">{m.severity === "error" ? "Error: " : "Warning: "}</span>
+        </span>
+      )}
       <span className={m.severity === "error" ? "text-err" : m.severity === "warning" ? "text-warn" : "text-fg"}>{m.message}</span>
     </div>
   );

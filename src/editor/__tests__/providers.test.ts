@@ -138,13 +138,19 @@ describe("document lifetime (M12)", () => {
 });
 
 describe("registration", () => {
-  it("registers completion, hover, folding, formatting, highlights, code actions, and signature help", () => {
+  it("registers completion, hover, folding, formatting, highlights, code actions, signature help and semantic tokens", () => {
     for (const lang of ["tsql", "pgsql"]) {
       expect(Object.keys(fake.providers[lang]).sort()).toEqual([
-        "codeAction", "completion", "documentHighlight", "folding", "format", "hover", "rangeFormat", "signature",
+        "codeAction", "completion", "documentHighlight", "folding", "format", "hover", "rangeFormat", "semanticTokens", "signature",
       ]);
     }
     expect(completion("tsql").triggerCharacters).toContain(".");
+  });
+  it("registers the semantic tokens provider (App Themes §5.3) for every SQL language, gated off", () => {
+    const langs = ["tsql", "pgsql", "sqlite", "mysql", "duckdb", "oracle"];
+    for (const lang of langs) expect(fake.providers[lang]?.semanticTokens?.getLegend()).toEqual({ tokenTypes: ["identifier"], tokenModifiers: ["cte", "schema"] });
+    const m = doc("tsql", "WITH r AS (SELECT 1 AS n) SELECT * FROM dbo.t, r");
+    expect(fake.providers.tsql.semanticTokens.provideDocumentRangeSemanticTokens(m, m.getFullModelRange(), {})).toBeNull();
   });
   it("counts accepted completions through the noteUsage command", () => {
     expect(() => fake.commands["querithm.noteUsage"]({}, "Orders")).not.toThrow();

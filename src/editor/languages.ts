@@ -49,14 +49,68 @@ first_value floor format generate_series greatest jsonb_agg jsonb_build_object j
 nullif percent_rank rank regexp_replace regexp_matches repeat replace right round row_number rpad rtrim split_part string_agg strpos substr substring
 sum to_char to_date to_json to_jsonb to_number to_timestamp trim unnest upper`.split(/\s+/);
 
+/**
+ * Lexical token kinds decided from the word alone (plans/app-themes §5.2). `constantKeywords` and `wordOperators` are
+ * keywords of the dialect, so a palette without the new roles colors them as keywords, exactly as before;
+ * `constantIdents` are words that were plain identifiers. languages.test.ts holds these relations.
+ */
+export interface LexicalKinds {
+  constantKeywords: string[];
+  constantIdents: string[];
+  wordOperators: string[];
+}
+const WORD_OPERATORS = ["AND", "OR", "NOT", "IN", "LIKE", "BETWEEN", "IS"];
+export const LEXICAL_KINDS: Record<Dialect, LexicalKinds> = {
+  tsql: { constantKeywords: ["NULL"], constantIdents: [], wordOperators: WORD_OPERATORS },
+  pg: { constantKeywords: ["TRUE", "FALSE", "NULL"], constantIdents: [], wordOperators: [...WORD_OPERATORS, "ILIKE", "SIMILAR", "ISNULL", "NOTNULL"] },
+  sqlite: { constantKeywords: ["NULL"], constantIdents: ["TRUE", "FALSE"], wordOperators: [...WORD_OPERATORS, "GLOB", "REGEXP", "MATCH", "ISNULL", "NOTNULL"] },
+  mySql: { constantKeywords: ["TRUE", "FALSE", "NULL"], constantIdents: [], wordOperators: [...WORD_OPERATORS, "XOR", "DIV", "MOD", "REGEXP", "RLIKE"] },
+  duckDb: { constantKeywords: ["TRUE", "FALSE", "NULL"], constantIdents: [], wordOperators: [...WORD_OPERATORS, "ILIKE", "GLOB", "SIMILAR"] },
+  // PL/SQL BOOLEAN literals; not reserved words.
+  oracle: { constantKeywords: ["NULL"], constantIdents: ["TRUE", "FALSE"], wordOperators: WORD_OPERATORS },
+};
+
+/** The Monarch word lists of one dialect: its keywords, types and functions, and its §5.2 kinds (lower case). */
+function wordLists(d: Dialect, keywords: string[], types: string[], functions: string[]) {
+  const lower = (words: string[]) => words.map((w) => w.toLowerCase());
+  const k = LEXICAL_KINDS[d];
+  return {
+    keywords: lower(keywords),
+    typeKeywords: lower(types),
+    builtinFunctions: lower(functions),
+    constantKeywords: lower(k.constantKeywords),
+    wordOperators: lower(k.wordOperators),
+    constantIdents: lower(k.constantIdents),
+  };
+}
+
+/**
+ * How a dialect colors a word. Monarch takes the first case that matches, so the narrower lists come before
+ * `@keywords`, and `@constantIdents` after the lists that colored a word before it. A list the dialect leaves empty
+ * gets no case.
+ */
+function wordCases(d: Dialect) {
+  const k = LEXICAL_KINDS[d];
+  const when = (words: string[], c: Record<string, string>) => (words.length > 0 ? c : {});
+  return {
+    cases: {
+      ...when(k.constantKeywords, { "@constantKeywords": "keyword.constant" }),
+      ...when(k.wordOperators, { "@wordOperators": "keyword.operator" }),
+      "@keywords": "keyword",
+      "@typeKeywords": "type",
+      "@builtinFunctions": "predefined",
+      ...when(k.constantIdents, { "@constantIdents": "identifier.constant" }),
+      "@default": "identifier",
+    },
+  };
+}
+
 export function tsqlLanguage(): Monaco.languages.IMonarchLanguage {
   return {
     defaultToken: "",
     ignoreCase: true,
     tokenPostfix: ".tsql",
-    keywords: TSQL_KEYWORDS.map((k) => k.toLowerCase()),
-    typeKeywords: TSQL_TYPES,
-    builtinFunctions: TSQL_FUNCTIONS.map((k) => k.toLowerCase()),
+    ...wordLists("tsql", TSQL_KEYWORDS, TSQL_TYPES, TSQL_FUNCTIONS),
     operators: ["=", ">", "<", "<=", ">=", "<>", "!=", "!<", "!>", "+", "-", "*", "/", "%", "&", "|", "^", "~", "+=", "-=", "*=", "/=", "%="],
     brackets: [
       { open: "(", close: ")", token: "delimiter.parenthesis" },
@@ -67,7 +121,10 @@ export function tsqlLanguage(): Monaco.languages.IMonarchLanguage {
         { include: "@comments" },
         { include: "@whitespace" },
         [/^\s*go\b(\s+\d+)?\s*$/i, "keyword.batch"],
-        [/@@[\w]+/, "predefined"],
+        // Monarch reads `@@` in a rule as one literal `@` (monarchCompile compileRegExp), so `@@@@` is the two
+        // characters `@@`. With `@@` alone this rule was /@\w+/: `@x` and the tail of `@@x` painted as functions, the
+        // first `@` of `@@x` plain (fixed 2026-11-24, plans/app-themes §5.2).
+        [/@@@@\w+/, "predefined.global"],
         [/@[\w$#]+/, "variable"],
         [/#{1,2}[\w$#@]+/, "identifier.temp"],
         [/N?'/, { token: "string.quote", next: "@string" }],
@@ -78,17 +135,7 @@ export function tsqlLanguage(): Monaco.languages.IMonarchLanguage {
         [/\.[0-9]+([eE][+-]?[0-9]+)?/, "number"],
         [/[;,.]/, "delimiter"],
         [/[()]/, "@brackets"],
-        [
-          /[\w$#]+/,
-          {
-            cases: {
-              "@keywords": "keyword",
-              "@typeKeywords": "type",
-              "@builtinFunctions": "predefined",
-              "@default": "identifier",
-            },
-          },
-        ],
+        [/[\w$#]+/, wordCases("tsql")],
         [/[<>=!%&+\-*/|~^]+/, "operator"],
       ],
       whitespace: [[/\s+/, "white"]],
@@ -126,35 +173,24 @@ export function pgLanguage(): Monaco.languages.IMonarchLanguage {
     defaultToken: "",
     ignoreCase: true,
     tokenPostfix: ".pgsql",
-    keywords: PG_KEYWORDS.map((k) => k.toLowerCase()),
-    typeKeywords: PG_TYPES,
-    builtinFunctions: PG_FUNCTIONS,
+    ...wordLists("pg", PG_KEYWORDS, PG_TYPES, PG_FUNCTIONS),
     operators: [],
     tokenizer: {
       root: [
         { include: "@comments" },
         [/\s+/, "white"],
         [/\$([A-Za-z_]\w*)?\$/, { token: "string.dollar", next: "@dollar.$0" }],
-        [/\$\d+/, "variable"],
-        [/::\s*[\w"]+(\[\])?/, "type"],
-        [/:[A-Za-z_]\w*/, "variable"],
+        [/\$\d+/, "variable.bind"],
+        // `::` is the cast (legacy: the type's color), then the type name.
+        [/(::)(\s*)([\w"]+(?:\[\])?)/, ["type.cast", "type", "type"]],
+        [/:[A-Za-z_]\w*/, "variable.bind"],
         [/[eE]'/, { token: "string.quote", next: "@estring" }],
         [/'/, { token: "string.quote", next: "@string" }],
         [/"/, { token: "identifier.quote", next: "@quoted" }],
         [/[0-9]+(\.[0-9]*)?([eE][+-]?[0-9]+)?/, "number"],
         [/[;,.]/, "delimiter"],
         [/[()[\]]/, "@brackets"],
-        [
-          /[A-Za-z_][\w$]*/,
-          {
-            cases: {
-              "@keywords": "keyword",
-              "@typeKeywords": "type",
-              "@builtinFunctions": "predefined",
-              "@default": "identifier",
-            },
-          },
-        ],
+        [/[A-Za-z_][\w$]*/, wordCases("pg")],
         [/[<>=!%&+\-*/|~^#@?]+/, "operator"],
       ],
       comments: [
@@ -193,10 +229,7 @@ export function pgLanguage(): Monaco.languages.IMonarchLanguage {
         [/'/, { token: "string.quote", next: "@string" }],
         [/"/, { token: "identifier.quote", next: "@quoted" }],
         [/[0-9]+(\.[0-9]*)?/, "number"],
-        [
-          /[A-Za-z_][\w$]*/,
-          { cases: { "@keywords": "keyword", "@typeKeywords": "type", "@builtinFunctions": "predefined", "@default": "identifier" } },
-        ],
+        [/[A-Za-z_][\w$]*/, wordCases("pg")],
         [/./, ""],
       ],
     },
@@ -240,24 +273,20 @@ JSON_OBJECT JSON_OBJECTAGG JSON_SET JSON_UNQUOTE LAG LAST_INSERT_ID LAST_VALUE L
 NULLIF POWER RAND RANK REPLACE RIGHT ROUND ROW_COUNT ROW_NUMBER RPAD RTRIM SQRT STR_TO_DATE SUBSTRING SUBSTRING_INDEX SUM SYSDATE TIMESTAMPDIFF
 TRIM UPPER USER UUID YEAR`.split(/\s+/);
 
-const wordCases = { cases: { "@keywords": "keyword", "@typeKeywords": "type", "@builtinFunctions": "predefined", "@default": "identifier" } };
-
 /** SQLite: '…' strings, "…" / […] / `…` names, X'…' blobs, `?` `?NNN` `:name` `@name` `$name` parameters. */
 export function sqliteLanguage(): Monaco.languages.IMonarchLanguage {
   return {
     defaultToken: "",
     ignoreCase: true,
     tokenPostfix: ".sqlite",
-    keywords: SQLITE_KEYWORDS.map((k) => k.toLowerCase()),
-    typeKeywords: SQLITE_TYPES.map((k) => k.toLowerCase()),
-    builtinFunctions: SQLITE_FUNCTIONS,
+    ...wordLists("sqlite", SQLITE_KEYWORDS, SQLITE_TYPES, SQLITE_FUNCTIONS),
     operators: [],
     tokenizer: {
       root: [
         { include: "@comments" },
         [/\s+/, "white"],
-        [/\?\d*/, "variable"],
-        [/[:@$][A-Za-z_]\w*/, "variable"],
+        [/\?\d*/, "variable.bind"],
+        [/[:@$][A-Za-z_]\w*/, "variable.bind"],
         [/[xX]'/, { token: "string.quote", next: "@blob" }],
         [/'/, { token: "string.quote", next: "@string" }],
         [/"/, { token: "identifier.quote", next: "@quoted" }],
@@ -268,7 +297,7 @@ export function sqliteLanguage(): Monaco.languages.IMonarchLanguage {
         [/\.[0-9]+([eE][+-]?[0-9]+)?/, "number"],
         [/[;,.]/, "delimiter"],
         [/[()]/, "@brackets"],
-        [/[A-Za-z_][\w$]*/, wordCases],
+        [/[A-Za-z_][\w$]*/, wordCases("sqlite")],
         [/->>|->|\|\||==|!=|<>|<=|>=|<<|>>|[<>=!%&+\-*/|~]/, "operator"],
       ],
       comments: [
@@ -318,16 +347,17 @@ export function mysqlLanguage(): Monaco.languages.IMonarchLanguage {
     defaultToken: "",
     ignoreCase: true,
     tokenPostfix: ".mysql",
-    keywords: MYSQL_KEYWORDS.map((k) => k.toLowerCase()),
-    typeKeywords: MYSQL_TYPES,
-    builtinFunctions: MYSQL_FUNCTIONS.map((k) => k.toLowerCase()),
+    ...wordLists("mySql", MYSQL_KEYWORDS, MYSQL_TYPES, MYSQL_FUNCTIONS),
     operators: [],
     tokenizer: {
       root: [
         { include: "@comments" },
         [/\s+/, "white"],
-        [/@@[\w$.]+/, "predefined"],
+        // As in T-SQL, `@@@@` is the two characters `@@` in a Monarch rule (`@@` alone is one `@`).
+        [/@@@@[\w$.]+/, "predefined.global"],
         [/@[\w$.]+/, "variable"],
+        // A positional parameter; it had no rule (editor fg), and a palette without `bind` keeps that look.
+        [/\?/, "delimiter.bind"],
         [/[xXbBnN]'/, { token: "string.quote", next: "@string" }],
         [/'/, { token: "string.quote", next: "@string" }],
         [/"/, { token: "string.quote", next: "@dstring" }],
@@ -338,7 +368,7 @@ export function mysqlLanguage(): Monaco.languages.IMonarchLanguage {
         [/\.[0-9]+([eE][+-]?[0-9]+)?/, "number"],
         [/[;,.]/, "delimiter"],
         [/[()]/, "@brackets"],
-        [/[A-Za-z_$][\w$]*/, wordCases],
+        [/[A-Za-z_$][\w$]*/, wordCases("mySql")],
         [/<=>|->>|->|:=|\|\||&&|<=|>=|<>|!=|<<|>>|[<>=!%&+\-*/|~^]/, "operator"],
       ],
       comments: [
@@ -470,19 +500,18 @@ export function duckdbLanguage(): Monaco.languages.IMonarchLanguage {
     defaultToken: "",
     ignoreCase: true,
     tokenPostfix: ".duckdb",
-    keywords: DUCKDB_KEYWORDS.map((k) => k.toLowerCase()),
-    typeKeywords: DUCKDB_TYPES,
-    builtinFunctions: DUCKDB_FUNCTIONS,
+    ...wordLists("duckDb", DUCKDB_KEYWORDS, DUCKDB_TYPES, DUCKDB_FUNCTIONS),
     operators: [],
     tokenizer: {
       root: [
         { include: "@comments" },
         [/\s+/, "white"],
         [/\$([A-Za-z_]\w*)?\$/, { token: "string.dollar", next: "@dollar.$0" }],
-        [/\$\d+/, "variable"],
-        [/\$[A-Za-z_]\w*/, "variable"],
-        [/\?/, "variable"],
-        [/::\s*[\w"]+(\[\])?/, "type"],
+        [/\$\d+/, "variable.bind"],
+        [/\$[A-Za-z_]\w*/, "variable.bind"],
+        [/\?/, "variable.bind"],
+        // `::` is the cast (legacy: the type's color), then the type name, as in PostgreSQL.
+        [/(::)(\s*)([\w"]+(?:\[\])?)/, ["type.cast", "type", "type"]],
         [/[eE]'/, { token: "string.quote", next: "@estring" }],
         [/'/, { token: "string.quote", next: "@string" }],
         [/"/, { token: "identifier.quote", next: "@quoted" }],
@@ -490,7 +519,7 @@ export function duckdbLanguage(): Monaco.languages.IMonarchLanguage {
         [/[0-9]+(\.[0-9]*)?([eE][+-]?[0-9]+)?/, "number"],
         [/[;,.:]/, "delimiter"],
         [/[()[\]{}]/, "@brackets"],
-        [/[A-Za-z_][\w$]*/, wordCases],
+        [/[A-Za-z_][\w$]*/, wordCases("duckDb")],
         [/[<>=!%&+\-*/|~^#@]+/, "operator"],
       ],
       comments: [
@@ -584,9 +613,7 @@ export function oracleLanguage(): Monaco.languages.IMonarchLanguage {
     defaultToken: "",
     ignoreCase: true,
     tokenPostfix: ".oracle",
-    keywords: ORACLE_KEYWORDS.map((k) => k.toLowerCase()),
-    typeKeywords: ORACLE_TYPES,
-    builtinFunctions: ORACLE_FUNCTIONS,
+    ...wordLists("oracle", ORACLE_KEYWORDS, ORACLE_TYPES, ORACLE_FUNCTIONS),
     operators: [],
     tokenizer: {
       root: [
@@ -600,15 +627,15 @@ export function oracleLanguage(): Monaco.languages.IMonarchLanguage {
         [/n?q'(\S)/, { token: "string.quote", next: "@qAny.$1" }],
         [/n?'/, { token: "string.quote", next: "@string" }],
         [/"/, { token: "identifier.quote", next: "@quoted" }],
-        [/:"[^"]*"?/, "variable"],
-        [/:(?!=)[A-Za-z0-9_$#]+/, "variable"],
+        [/:"[^"]*"?/, "variable.bind"],
+        [/:(?!=)[A-Za-z0-9_$#]+/, "variable.bind"],
         [/<<[A-Za-z][\w$#]*>>/, "identifier.label"],
         [/[0-9]+(\.(?!\.)[0-9]*)?([eE][+-]?[0-9]+)?[fFdD]?/, "number"],
         [/\.[0-9]+([eE][+-]?[0-9]+)?[fFdD]?/, "number"],
         [/[;,.]/, "delimiter"],
         [/[()]/, "@brackets"],
         [/@[A-Za-z][\w$#.]*/, "identifier.link"],
-        [/[A-Za-z][\w$#]*/, wordCases],
+        [/[A-Za-z][\w$#]*/, wordCases("oracle")],
         [/\|\||:=|=>|\.\.|\*\*|<>|!=|\^=|~=|<=|>=|[<>=+\-*/%@!^~&|]/, "operator"],
       ],
       comments: [

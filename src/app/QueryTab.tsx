@@ -200,11 +200,11 @@ function ContextBar({ tab }: { tab: TabState }) {
   const showUse = useDb && tab.database && useDb.toLowerCase() !== tab.database.toLowerCase();
   if (!b && !tab.readOnly && !showUse) return null;
   return (
-    <div className={`h-[30px] border-b border-line px-3.5 flex items-center justify-between text-xs shrink-0 ${prod ? "bg-err/10 q-hl" : "bg-panel-2"}`}>
+    <div className={`h-[30px] border-b border-line px-3.5 flex items-center justify-between text-xs shrink-0 ${prod ? "bg-err/(--q-err-row-alpha) q-hl" : "bg-panel-2"}`}>
       <div className="flex items-center gap-2 min-w-0">
         {b && (
           <>
-            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wide border ${prod ? "bg-err/15 border-err/40 text-err" : "bg-accent/15 border-accent/40 text-accent"}`}>
+            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wide border ${prod ? "bg-err/(--q-toast-alpha) border-err/40 text-err" : "bg-accent/15 border-accent/40 text-accent"}`}>
               BOUND {b.kind === "proc" ? "STORED PROCEDURE" : b.kind === "view" ? "VIEW" : "FUNCTION"}
             </span>
             <span className="q-mono text-fg font-medium truncate">
@@ -215,7 +215,7 @@ function ContextBar({ tab }: { tab: TabState }) {
         )}
         {tab.readOnly && <span className="text-muted">Read-only definition — use Modify in the explorer to edit.</span>}
         {showUse && (
-          <span className="text-warn">
+          <span className="text-warn rounded px-1.5 py-0.5 bg-panel-2">
             USE <b>{useDb}</b> in this script differs from the tab's database <b>{tab.database}</b>.
             <button className="ml-2 q-btn h-[20px]" onClick={() => void changeDatabase(tab.id, useDb!)}>
               Switch tab to {useDb}

@@ -153,7 +153,8 @@ describe("ErdTab", () => {
     const edge = screen.getAllByTestId(/^edge-/).find((e) => e.dataset.sourceHandle === "out:customerid")!;
     fireEvent.mouseEnter(edge);
     expect(edge.textContent).toBe("FK_Orders_Customers (CustomerId → CustomerId)");
-    expect(document.querySelectorAll(".bg-accent\\/15.q-hl").length).toBe(2);
+    // A lit key column is a selected row (--q-row-sel): status text keeps 4.5:1 on it in every App Theme.
+    expect(document.querySelectorAll(".bg-row-sel.q-hl").length).toBe(2);
     fireEvent.mouseLeave(edge);
     expect(edge.textContent).toBe("");
   });

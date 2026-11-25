@@ -211,3 +211,17 @@ html[data-theme="light"] #splash {
     opacity: 0.5;
   }
 }
+
+/* App Themes (plans/app-themes §6): with a valid boot cache, boot-theme.js names the App Theme (data-app-theme) and sets
+   its start colours (--boot-*), so a Cortado or Vellum window starts in its own colours. Without one, the two rules
+   above stand (Querithm Dark / Light). Later rules of equal specificity win. */
+html[data-app-theme] {
+  background: var(--boot-bg, #0f1117);
+}
+html[data-app-theme] #splash {
+  --s-bg: var(--boot-bg);
+  --s-fg: var(--boot-fg);
+  --s-muted: var(--boot-muted);
+  --s-idle: var(--boot-idle);
+  --s-track: var(--boot-track);
+}

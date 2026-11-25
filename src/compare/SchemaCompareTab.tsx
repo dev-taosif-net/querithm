@@ -241,7 +241,7 @@ function ItemList({ rows, checked, focus, onFocus, onCheck, onToggleGroup }: {
 function ItemRow({ item, top, checked, focused, onFocus, onCheck }: { item: CompareItem; top: number; checked: boolean; focused: boolean; onFocus: (k: string) => void; onCheck: (on: boolean) => void }) {
   const badge = CLASS_BADGE[item.class];
   return (
-    <div className={`absolute left-0 right-0 flex items-center gap-1.5 pl-5 pr-2 cursor-pointer ${focused ? "bg-accent/15 q-hl" : "hover:bg-hover"}`} style={{ top, height: ROW }}
+    <div className={`absolute left-0 right-0 flex items-center gap-1.5 pl-5 pr-2 cursor-pointer ${focused ? "bg-row-sel q-hl" : "hover:bg-hover"}`} style={{ top, height: ROW }}
       onClick={() => onFocus(item.key)} title={[...item.changes, item.note ?? ""].filter(Boolean).join("\n")} data-q-compare-item={item.key}>
       <input type="checkbox" checked={checked} disabled={item.class === "identical"} aria-label={`Include ${itemName(item)}`}
         onClick={(e) => e.stopPropagation()} onChange={(e) => onCheck(e.target.checked)} />

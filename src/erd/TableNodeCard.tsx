@@ -61,7 +61,7 @@ export const TableNodeCard = memo(function TableNodeCard({ data }: NodeProps<Nod
       {t.columns.map((c) => {
         const lit = data.highlight.has(c.name.toLowerCase());
         return (
-          <div key={c.name} className={`relative flex items-center gap-1.5 px-2.5 ${lit ? "bg-accent/15 q-hl" : ""}`} style={{ height: ROW_H }}>
+          <div key={c.name} className={`relative flex items-center gap-1.5 px-2.5 ${lit ? "bg-row-sel q-hl" : ""}`} style={{ height: ROW_H }}>
             {(c.pk || c.fk) && <Handle id={handleId("in", c.name)} type="target" position={Position.Left} style={{ opacity: 0 }} />}
             {c.fk && <Handle id={handleId("out", c.name)} type="source" position={Position.Right} style={{ opacity: 0 }} />}
             <span className={`w-4 text-[9px] font-bold ${c.pk ? "text-warn" : "text-accent"}`}>{c.pk ? "PK" : c.fk ? "FK" : ""}</span>

@@ -2,12 +2,13 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 // Monaco's own base themes: the rules our theme inherits from (inherit: true). The module ships no types.
 // @ts-expect-error untyped internal module of monaco-editor
-import { vs as vsTheme, vs_dark as vsDarkTheme } from "monaco-editor/esm/vs/editor/standalone/common/themes.js";
+import { hc_black as hcBlackTheme, vs as vsTheme, vs_dark as vsDarkTheme } from "monaco-editor/esm/vs/editor/standalone/common/themes.js";
 import {
-  DEFAULT_SYNTAX_THEME, PREVIEW, roleColor, SUGGEST_COLORS, SYNTAX_THEMES, syntaxRules, syntaxThemeById, TOKEN_ROLES,
-  type SyntaxThemeId,
+  DEFAULT_SYNTAX_CHOICE, DEFAULT_SYNTAX_THEME, effectiveRole, PREVIEW, roleColor, rulesFor, SUGGEST_COLORS, SYNTAX_CHOICES,
+  SYNTAX_THEME_IDS, SYNTAX_THEMES, syntaxRules, syntaxThemeById, TOKEN_ROLES, type SyntaxThemeId,
 } from "../syntaxTheme";
-import { oracleLanguage, pgLanguage, pgLanguageConfiguration, tsqlLanguage, tsqlLanguageConfiguration } from "../languages";
+import { LANGUAGES, pgLanguageConfiguration, tsqlLanguage, tsqlLanguageConfiguration } from "../languages";
+import { DIALECT_LIST } from "../../engines";
 import { contrast, deltaE2000, oklch, over, parseHex, simulate, toHex, CVD } from "./colorScience";
 
 const css = readFileSync(new URL("../../theme/tokens.css", import.meta.url), "utf8");
@@ -19,7 +20,7 @@ function themeVars(selector: string): Record<string, string> {
 }
 const MODES = { dark: themeVars(':root[data-theme="dark"]'), light: themeVars(':root[data-theme="light"]') };
 type BaseTheme = { base: string; rules: { token: string }[] };
-const BASE_THEMES = [vsTheme, vsDarkTheme] as BaseTheme[];
+const BASE_THEMES = [vsTheme, vsDarkTheme, hcBlackTheme] as BaseTheme[];
 
 /** Every surface code is read on: editor, current line, a selection on each, and a changed line in a diff (tint twice). */
 function editorLayers(v: Record<string, string>) {
@@ -68,33 +69,39 @@ const cases = SYNTAX_THEMES.flatMap((t) => (["dark", "light"] as const).map((mod
 const pairs = () => ROLES.flatMap((a, i) => ROLES.slice(i + 1).map((b) => [a, b] as const));
 const isKey = (a: string, b: string) => KEY_PAIRS.some(([x, y]) => (x === a && y === b) || (x === b && y === a));
 
-/** Every token string a Monarch tokenizer can emit (actions, cases and brackets). */
+/** Every token string a Monarch tokenizer can emit (actions, cases, group actions and brackets). */
 function emittedTokens(lang: ReturnType<typeof tsqlLanguage>): Set<string> {
   const out = new Set<string>();
   const walk = (a: unknown): void => {
     if (typeof a === "string") out.add(a);
-    else if (Array.isArray(a)) a.slice(1).forEach(walk);
+    else if (Array.isArray(a)) a.forEach(walk); // one action per regex group, e.g. ["type.cast", "type", "type"]
     else if (a && typeof a === "object") {
       const o = a as { token?: string; cases?: Record<string, unknown> };
       if (o.token) out.add(o.token);
       if (o.cases) Object.values(o.cases).forEach(walk);
     }
   };
-  for (const rules of Object.values(lang.tokenizer)) for (const r of rules) walk(r);
+  // A rule is [regex, action] (its regex is skipped) or { include }.
+  for (const rules of Object.values(lang.tokenizer)) for (const r of rules) if (Array.isArray(r)) walk(r[1]);
   for (const b of (lang.brackets ?? []) as { token: string }[]) out.add(b.token);
   return out;
 }
-const UNSTYLED = new Set(["", "white", "@brackets"]);
+/** `invalid` (SQLite's non-hex X'' digits) is left to Monaco's base themes on purpose: every one paints it as an error. */
+const UNSTYLED = new Set(["", "white", "@brackets", "invalid"]);
+/** T9 (plans/app-themes §9): every dialect's tokenizer, not a sample. */
+const DIALECT_LANGUAGES = DIALECT_LIST.map((d) => [d, LANGUAGES[d].tokens()] as const);
 /** How specific a rule is for a token, as Monaco ranks it: segments matched, or -1 when it does not match. */
 const specificity = (rule: string, token: string) => (rule === "" ? 0 : token === rule || token.startsWith(`${rule}.`) ? rule.split(".").length : -1);
 
 describe("SQL syntax themes: token coverage", () => {
-  it.each([["tsql", tsqlLanguage()], ["pgsql", pgLanguage()], ["oracle", oracleLanguage()]])("every %s token kind has a rule (identifiers are not left as plain text)", (_, lang) => {
+  it("covers all six dialects", () => expect(DIALECT_LANGUAGES.map(([d]) => d)).toEqual(["tsql", "pg", "sqlite", "mySql", "duckDb", "oracle"]));
+
+  it.each(DIALECT_LANGUAGES)("every %s token kind has a rule (identifiers are not left as plain text)", (_, lang) => {
     const missing = [...emittedTokens(lang)].filter((t) => !UNSTYLED.has(t) && !TOKEN_ROLES.some((r) => specificity(r.token, t) > 0));
     expect(missing).toEqual([]);
   });
 
-  it.each([["tsql", tsqlLanguage()], ["pgsql", pgLanguage()], ["oracle", oracleLanguage()]])("on %s our rule out-ranks Monaco's base theme for every token, so hex numbers follow the theme", (_, lang) => {
+  it.each(DIALECT_LANGUAGES)("on %s our rule out-ranks Monaco's base themes (vs, vs-dark, hc-black) for every token, so hex numbers follow the theme", (_, lang) => {
     // 0x1F took the base theme's number.hex color (5BB498 / 3030C0) before an explicit rule existed.
     const tokens = [...emittedTokens(lang)].filter((t) => !UNSTYLED.has(t)).map((t) => `${t}.${lang.tokenPostfix!.slice(1)}`);
     for (const base of BASE_THEMES) {
@@ -106,6 +113,53 @@ describe("SQL syntax themes: token coverage", () => {
       expect(lost, base.base).toEqual([]);
     }
     expect(TOKEN_ROLES.find((r) => r.token === "number.hex")?.role).toBe("number");
+  });
+
+  it("the newer token kinds are emitted: constants, word operators, casts and binds (T9 sees group actions too)", () => {
+    const all = new Set(DIALECT_LANGUAGES.flatMap(([, lang]) => [...emittedTokens(lang)]));
+    for (const t of ["keyword.constant", "identifier.constant", "keyword.operator", "type.cast", "variable.bind", "delimiter.bind"]) expect(all, t).toContain(t);
+  });
+
+  it("each newer token's legacy role is the role of its longest pre-existing prefix, so it looks as it did (I1)", () => {
+    const old = TOKEN_ROLES.filter((r) => !r.legacy);
+    expect(old.map((r) => r.token)).toEqual([
+      "keyword", "keyword.batch", "type", "string", "string.quote", "string.dollar", "string.escape", "number", "number.hex",
+      "comment", "variable", "predefined", "operator", "delimiter", "identifier", "identifier.temp",
+    ]);
+    for (const e of TOKEN_ROLES.filter((r) => r.legacy)) {
+      const prefix = old.filter((r) => specificity(r.token, e.token) > 0).sort((a, b) => specificity(b.token, e.token) - specificity(a.token, e.token))[0];
+      expect(e.legacy, e.token).toBe(prefix?.role);
+    }
+  });
+
+  it("no newer token name is a rule of Monaco's base themes, so the base never styles them first", () => {
+    const base = new Set(BASE_THEMES.flatMap((t) => t.rules.map((r) => r.token)));
+    for (const e of TOKEN_ROLES.filter((r) => r.legacy)) expect(base.has(e.token), e.token).toBe(false);
+  });
+
+  it.each(cases)("%s %s: a palette without the newer roles gives their tokens the legacy role's color and style", (_, mode, p, t) => {
+    const rules = new Map(syntaxRules(t, mode, "#123456").map((r) => [r.token, r]));
+    for (const e of TOKEN_ROLES.filter((r) => r.legacy)) {
+      expect(effectiveRole(p, e), e.token).toBe(e.legacy);
+      expect(rules.get(e.token), e.token).toEqual({ ...rules.get(TOKEN_ROLES.find((r) => !r.legacy && r.role === e.legacy)!.token), token: e.token });
+    }
+  });
+
+  it("a palette with the newer roles colors their tokens with them (the Default palettes, plans/app-themes §4.2)", () => {
+    const t = SYNTAX_THEMES[0];
+    const extended = { ...t.dark, constant: "#010101", wordOperator: "#020202", cast: "#030303", bind: "#040404", systemVariable: "#050505", cte: "#060606", schema: "#070707" };
+    const rules = new Map(rulesFor(extended, { ...t.fontStyle, wordOperator: "bold" }, "#123456").map((r) => [r.token, r]));
+    expect(rules.get("keyword.constant")).toEqual({ token: "keyword.constant", foreground: "010101", fontStyle: "" });
+    expect(rules.get("identifier.constant")?.foreground).toBe("010101");
+    expect(rules.get("keyword.operator")).toEqual({ token: "keyword.operator", foreground: "020202", fontStyle: "bold" });
+    expect(rules.get("type.cast")?.foreground).toBe("030303");
+    expect(rules.get("variable.bind")?.foreground).toBe("040404");
+    expect(rules.get("delimiter.bind")?.foreground).toBe("040404");
+    expect(rules.get("predefined.global")?.foreground).toBe("050505");
+    expect(rules.get("identifier.cte")?.foreground).toBe("060606");
+    expect(rules.get("identifier.schema")?.foreground).toBe("070707");
+    // The 16 pre-existing tokens are untouched by the extra roles.
+    expect(rulesFor(extended, t.fontStyle, "#123456").slice(0, 16)).toEqual(syntaxRules(t, "dark", "#123456").slice(0, 16));
   });
 
   it("T-SQL [names] are not bracket pairs, so the ]] escape in [a]]b] is never painted as an unexpected bracket", () => {
@@ -129,6 +183,12 @@ describe("SQL syntax themes: registry", () => {
     expect(syntaxThemeById(undefined).id).toBe("standard");
     expect(new Set(SYNTAX_THEMES.map((t) => t.id)).size).toBe(SYNTAX_THEMES.length);
     for (const t of SYNTAX_THEMES) expect(Object.keys(PROMISES)).toContain(t.id);
+  });
+
+  it("Syntax colors choices: Default first and the default choice, then the six themes; the theme fallback stays Standard", () => {
+    expect(SYNTAX_CHOICES).toEqual(["default", ...SYNTAX_THEME_IDS]);
+    expect(DEFAULT_SYNTAX_CHOICE).toBe("default");
+    expect(DEFAULT_SYNTAX_THEME).toBe("standard");
   });
 
   it.each(["high-contrast", "classic", "minimal"])("the removed %s theme, still saved in an older store.db, falls back to Standard", (id) => {

@@ -82,13 +82,24 @@ describe("the shell's start colour", () => {
     expect(setup.indexOf("theme::apply(&window")).toBeLessThan(setup.indexOf("window_state::restore(&window)"));
   });
 
-  it("keeps the theme through one command that takes only the three words", () => {
+  it("keeps the theme through one command that takes only a theme word and two colours", () => {
     expect(mainRs).toContain("theme::app_theme_keep,");
     const command = themeRs.split("pub async fn app_theme_keep")[1]?.split("\n}\n")[0] ?? "";
-    // Parsed before anything touches the disk; what is written is the parsed word, never the argument.
+    // The disk is written by Keeper::keep (one call at a time, the newest winning, temp file + rename); the command
+    // reaches it only with the parsed value.
+    const keep = themeRs.split("fn keep(&self")[1]?.split("\n    }\n")[0] ?? "";
+    // Parsed before anything touches the disk; what is written is made from the parsed values, never the argument.
     expect(command.indexOf("parse(&theme)")).toBeGreaterThan(-1);
-    expect(command.indexOf("parse(&theme)")).toBeLessThan(command.indexOf("std::fs::"));
-    expect(command).toContain("word(kept)");
-    expect(command).not.toMatch(/write\([^)]*theme\b(?!\.)/);
+    expect(command).not.toContain("std::fs::");
+    expect(command.indexOf("parse(&theme)")).toBeLessThan(command.indexOf("KEEPER.keep(ticket, &dir, &kept)"));
+    expect(keep).toContain("std::fs::write(&tmp, serialize(kept))");
+    expect(keep).toContain("std::fs::rename(&tmp, dir.join(FILE))");
+    for (const body of [command, keep]) expect(body).not.toMatch(/write\([^)]*theme\b(?!\.)/);
+  });
+
+  it("never knows a theme id: adding an App Theme changes no Rust (plans/app-themes I8)", () => {
+    const ids = [...file("src/theme/appThemeData.ts").matchAll(/\bid: "([a-z][a-z0-9-]*)"/g)].map((m) => m[1]).filter((id) => id !== "dark" && id !== "light");
+    expect(ids.length).toBeGreaterThan(0);
+    for (const id of ids) expect(themeRs).not.toMatch(new RegExp(`\\b${id}\\b`, "i"));
   });
 });

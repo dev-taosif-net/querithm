@@ -764,6 +764,34 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Members of an object setting, merged under the store's write lock (SettingsStore.Patch). Checked here first: a key
+    /// and every member name 1–<see cref="SettingsPatchLimits.MaxNameLength"/> characters, at most
+    /// <see cref="SettingsPatchLimits.MaxMembers"/> names in all, and never a key settings.set handles itself.
+    /// </summary>
+    public Task SettingsPatch(SettingsPatchParams p)
+    {
+        if (p == null || string.IsNullOrEmpty(p.Key) || p.Key.Length > SettingsPatchLimits.MaxNameLength)
+            throw QuerithmException.Invalid($"settings.patch needs a key of 1–{SettingsPatchLimits.MaxNameLength} characters.");
+        // §13 rule 7: the Prod confirmations switch takes exactly true or false, through settings.set, never a merged object.
+        if (p.Key == QueryGuard.SettingKey) throw QuerithmException.Invalid("The production confirmation setting is changed with settings.set.");
+        if (p.Key == LegacyGroupsKey) throw QuerithmException.Invalid("Connection groups are not a setting; use the group methods.");
+        var names = new List<string>();
+        if (p.Set != null) names.AddRange(p.Set.Keys);
+        if (p.SetWhenNew != null) names.AddRange(p.SetWhenNew.Keys);
+        if (p.Remove != null) names.AddRange(p.Remove);
+        if (names.Count > SettingsPatchLimits.MaxMembers)
+            throw QuerithmException.Invalid($"settings.patch names at most {SettingsPatchLimits.MaxMembers} members.");
+        foreach (var name in names)
+            if (string.IsNullOrEmpty(name) || name.Length > SettingsPatchLimits.MaxNameLength)
+                throw QuerithmException.Invalid($"A setting member name is 1–{SettingsPatchLimits.MaxNameLength} characters.");
+        return Task.Run(() => StoreWrite(() =>
+        {
+            s.Settings.Patch(p.Key, p.Set, p.SetWhenNew, p.Remove);
+            return true;
+        }));
+    }
+
     // ---- snippets (user data in store.db, never logged) ----
     public Task<Snippet[]> SnippetList() => Task.Run(s.Snippets.List);
 

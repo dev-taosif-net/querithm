@@ -2,8 +2,8 @@
 export type {
   Clause, CompletionRequest, CompletionResult, CursorContext, SchemaIndex, TableInScope, Tier1Item,
 } from "./types";
-export { tokenize, scan } from "./scanner";
-export type { Token, TokenKind } from "./scanner";
+export { tokenize, scan, semanticSpans, SEMANTIC_MAX_STATEMENTS } from "./scanner";
+export type { SemanticKind, SemanticSpan, Token, TokenKind } from "./scanner";
 export { buildSchemaIndex, findObject, resolveTable } from "./schemaIndex";
 export { complete } from "./complete";
 export { matchRank, humpMatch, sortText } from "./rank";

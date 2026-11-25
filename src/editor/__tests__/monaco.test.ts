@@ -36,6 +36,48 @@ describe("monaco bootstrap", () => {
     expect((self as any).MonacoEnvironment.getWorker()).toBeTruthy();
   });
 
+  it("gives Monaco an identical theme once (each setTheme re-colors every model); a changed variable applies again", () => {
+    const s = document.documentElement.style;
+    s.setProperty("--q-bg", "#121212");
+    m.applyMonacoTheme();
+    const defined = fake.monaco.editor.defineTheme.mock.calls.length;
+    const set = fake.monaco.editor.setTheme.mock.calls.length;
+    m.applyMonacoTheme();
+    m.applyMonacoTheme();
+    expect(fake.monaco.editor.defineTheme.mock.calls.length).toBe(defined);
+    expect(fake.monaco.editor.setTheme.mock.calls.length).toBe(set);
+    s.setProperty("--q-bg", "#131313"); // same theme ids, another value: still applied
+    m.applyMonacoTheme();
+    expect(fake.monaco.editor.defineTheme.mock.calls.length).toBe(defined + 1);
+    expect(fake.monaco.editor.setTheme.mock.calls.length).toBe(set + 1);
+    expect(theme().colors["editor.background"]).toBe("#131313");
+  });
+
+  it("drops drawn semantic tokens only with a theme Monaco re-colors by (V7): the same theme under a new attribute drops none", async () => {
+    const { setPaletteChangeHook } = await import("../themeState");
+    const dropped = vi.fn();
+    setPaletteChangeHook(dropped);
+    const root = document.documentElement;
+    delete root.dataset.comments;
+    m.applyMonacoTheme();
+    dropped.mockClear();
+    const set = fake.monaco.editor.setTheme.mock.calls.length;
+    // The document gets data-comments after the first apply (initMonaco runs first): no attribute already read as
+    // italic, so Monaco gets no new theme, asks for no tokens, and the drawn ones must stay.
+    root.dataset.comments = "italic";
+    m.applyMonacoTheme();
+    expect(fake.monaco.editor.setTheme.mock.calls.length).toBe(set);
+    expect(dropped).not.toHaveBeenCalled();
+    root.dataset.comments = "upright"; // a real change: a new theme, then the drop
+    m.applyMonacoTheme();
+    expect(fake.monaco.editor.setTheme.mock.calls.length).toBe(set + 1);
+    expect(dropped).toHaveBeenCalledTimes(1);
+    m.applyMonacoTheme();
+    expect(dropped).toHaveBeenCalledTimes(1);
+    delete root.dataset.comments;
+    setPaletteChangeHook(() => {});
+  });
+
   it("derives theme colors from the CSS variables: hex, rgba and a fallback", () => {
     const s = document.documentElement.style;
     s.setProperty("--q-bg", "#101010");
@@ -68,6 +110,41 @@ describe("monaco bootstrap", () => {
     expect(c["diffEditor.removedLineBackground"]).toBe("#dc262616");
     expect(c["diffEditor.removedTextBackground"]).toBe("#dc262616");
     expect(c["editorLineNumber.foreground"]).toBe("#8c949e");
+  });
+
+  it("find, squiggles, word highlight and bracket match follow the theme tokens (plans/app-themes §4.3)", () => {
+    const s = document.documentElement.style;
+    s.setProperty("--q-warn", "#f59e0b");
+    s.setProperty("--q-err", "#f97b7b");
+    s.setProperty("--q-accent", "#60a5fa");
+    s.setProperty("--q-fg", "#e6edf3");
+    s.setProperty("--q-line", "#30363d");
+    s.setProperty("--q-line-strong", "#6e7681");
+    m.applyMonacoTheme();
+    let c = theme().colors;
+    // Find: a warn wash, never Monaco's opaque grey, a solid border on the current match and 60 % on the others.
+    expect(c["editor.findMatchBackground"]).toBe("#f59e0b1a");
+    expect(c["editor.findMatchBorder"]).toBe("#f59e0b");
+    expect(c["editor.findMatchHighlightBorder"]).toBe("#f59e0b99");
+    // Squiggles: error in --q-err; warning in its own amber mark (never --q-warn); info falls back to the accent.
+    expect(c["editorError.foreground"]).toBe("#f97b7b");
+    expect(c["editorWarning.foreground"]).toBe(m.WARN_MARK_FALLBACK.dark);
+    expect(c["editorInfo.foreground"]).toBe("#60a5fa");
+    expect(c["editorOverviewRuler.errorForeground"]).toBe("#f97b7b");
+    expect(c["editor.wordHighlightBackground"]).toBe("#e6edf317");
+    expect(c["editorBracketMatch.border"]).toBe("#6e7681");
+    expect(c["editorBracketMatch.background"]).toBe("#00000000");
+    // A theme that sets its own mark and info color gets them; light mode falls back to the deeper amber.
+    s.setProperty("--q-warn-mark", "#e3cf55");
+    s.setProperty("--q-info", "#7ab9e5");
+    m.applyMonacoTheme();
+    c = theme().colors;
+    expect(c["editorWarning.foreground"]).toBe("#e3cf55");
+    expect(c["editorInfo.foreground"]).toBe("#7ab9e5");
+    s.removeProperty("--q-warn-mark");
+    document.documentElement.dataset.theme = "light";
+    m.applyMonacoTheme();
+    expect(theme().colors["editorWarning.foreground"]).toBe(m.WARN_MARK_FALLBACK.light);
   });
 
   it("re-measures fonts once the editor webfont loads so selections line up with glyphs", async () => {

@@ -229,7 +229,7 @@ export function TabList({ onClose, only }: { onClose: () => void; only?: string[
                     <Identity f={f} line={r.tool ? (displayTitle(r.tool.kind, r.tool.title) !== r.tool.title ? r.tool.title : undefined) : previewOf(r.id, r.profile?.engine)} />
                     {meta && <span className="text-[10.5px] leading-[17px] text-muted shrink-0">{meta}</span>}
                     <button
-                      className={`shrink-0 w-6 h-6 rounded text-muted hover:text-fg hover:bg-hover ${k === cur ? "" : "opacity-0 group-hover/row:opacity-100"}`}
+                      className={`q-icon-btn shrink-0 ${k === cur ? "" : "opacity-0 group-hover/row:opacity-100"}`}
                       title="Close tab"
                       tabIndex={-1}
                       aria-label={`Close ${tabTitleText(displayTitle(f.kind, f.title))}`}
@@ -276,7 +276,7 @@ export function TabList({ onClose, only }: { onClose: () => void; only?: string[
                     )}
                     <span className="text-[10.5px] leading-[17px] text-muted shrink-0">{closedAgo(r.snap.closedAt)}</span>
                     <button
-                      className={`shrink-0 w-6 h-6 rounded text-muted hover:text-fg hover:bg-hover ${k === cur ? "" : "opacity-0 group-hover/row:opacity-100"}`}
+                      className={`q-icon-btn shrink-0 ${k === cur ? "" : "opacity-0 group-hover/row:opacity-100"}`}
                       title="Forget"
                       tabIndex={-1}
                       aria-label={`Forget ${many ? `${r.titles.length} tabs` : r.snap.title}`}
@@ -297,12 +297,12 @@ export function TabList({ onClose, only }: { onClose: () => void; only?: string[
             Group by connection
           </label>
           {emptyCount > 0 && current && (
-            <button className="text-muted hover:text-fg underline-offset-2 hover:underline" onClick={() => void closeTabs("empty", current)}>
+            <button className="q-link text-muted hover:text-fg" onClick={() => void closeTabs("empty", current)}>
               Close {emptyCount} empty tab{emptyCount === 1 ? "" : "s"}
             </button>
           )}
           {!only && closed.length > 0 && (
-            <button className="text-muted hover:text-fg underline-offset-2 hover:underline" onClick={() => useClosedTabs.getState().clear()}>
+            <button className="q-link text-muted hover:text-fg" onClick={() => useClosedTabs.getState().clear()}>
               Clear recently closed
             </button>
           )}

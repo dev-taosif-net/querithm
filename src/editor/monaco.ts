@@ -4,8 +4,12 @@ import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
 import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import { LANGUAGES } from "./languages";
 import { DIALECT_LIST, DIALECTS } from "../engines";
-import { SUGGEST_COLORS, syntaxRules, syntaxThemeById } from "./syntaxTheme";
+import { rulesFor, SUGGEST_COLORS } from "./syntaxTheme";
+import { resolveDocumentAppTheme, resolveSyntax } from "../theme/resolve";
+import { paletteChanged, semanticWanted, setSemanticWanted, WARN_MARK_FALLBACK } from "./themeState";
 import { ignoreMonacoCancellations } from "./cancellation";
+
+export { WARN_MARK_FALLBACK };
 
 declare global {
   interface Window {
@@ -66,19 +70,33 @@ function hex(name: string): string {
   return "#888888";
 }
 
+const warnMark = (dark: boolean) => (cssVar("--q-warn-mark") ? hex("--q-warn-mark") : WARN_MARK_FALLBACK[dark ? "dark" : "light"]);
+/** A token's color as #rrggbb plus a two-digit alpha. */
+const tint = (name: string, alpha: string) => `${hex(name).slice(0, 7)}${alpha}`;
+
 /**
  * The Monaco theme (§12 Theme): editor chrome from the same CSS variables as the UI, token colors from the syntax
  * theme named by `data-syntax` (Settings → Syntax colors) in the mode named by `data-theme`.
  */
-export function applyMonacoTheme() {
+let lastPaletteKey = "";
+/** The theme definition last given to Monaco (JSON), to skip an identical one. */
+let lastDefinition = "";
+
+/**
+ * The Monaco theme (plans/app-themes §4.3): chrome from the CSS variables of the App Theme on the document; token rules
+ * from Syntax colors (data-syntax: "default" = the App Theme's own palette, else one of the six, unchanged) in the
+ * theme's mode; comments upright when data-comments="upright". Returns whether semantic coloring was switched on or off.
+ */
+export function applyMonacoTheme(): boolean {
   const root = document.documentElement;
-  const dark = root.dataset.theme !== "light";
-  const syntax = syntaxThemeById(root.dataset.syntax);
-  const palette = dark ? syntax.dark : syntax.light;
-  monaco.editor.defineTheme("querithm", {
+  const app = resolveDocumentAppTheme(root);
+  const dark = app.mode === "dark";
+  const syn = resolveSyntax(root.dataset.syntax, app, root.dataset.comments === "upright");
+  const palette = syn.palette;
+  const definition: monaco.editor.IStandaloneThemeData = {
     base: dark ? "vs-dark" : "vs",
     inherit: true,
-    rules: syntaxRules(syntax, dark ? "dark" : "light", hex("--q-fg")),
+    rules: rulesFor(syn.palette, syn.fontStyle, hex("--q-fg")),
     colors: {
       "editor.background": hex("--q-bg"),
       "editor.foreground": hex("--q-fg"),
@@ -111,6 +129,33 @@ export function applyMonacoTheme() {
       "diffEditor.removedLineBackground": hex("--q-diff-remove"),
       "diffEditor.removedTextBackground": hex("--q-diff-remove"),
       "focusBorder": hex("--q-accent"),
+      // Find (plans/app-themes §4.3, DA2 R1): Monaco's opaque default dropped tokens to 2.3–2.7:1. A warn tint at 10 % keeps
+      // every token at 4.5:1 (comments 4.0) and is never read as the selection or the accent; the current match gets a
+      // 2 px warn border, the others 1 px at 60 %.
+      "editor.findMatchBackground": tint("--q-warn", "1a"),
+      "editor.findMatchBorder": hex("--q-warn"),
+      "editor.findMatchHighlightBackground": tint("--q-warn", "1a"),
+      "editor.findMatchHighlightBorder": tint("--q-warn", "99"),
+      "editorOverviewRuler.findMatchForeground": tint("--q-warn", "99"),
+      // Squiggles and their ruler marks in the theme's colors (DA2 R2). Warnings use their own amber mark, never --q-warn:
+      // errors and warnings share the wavy shape, and on Querithm Light --q-warn is ΔE 1.3 from the error red for
+      // deuteranopes (§4.3 D16).
+      "editorError.foreground": hex("--q-err"),
+      "editorWarning.foreground": warnMark(dark),
+      "editorInfo.foreground": cssVar("--q-info") ? hex("--q-info") : hex("--q-accent"),
+      "editorOverviewRuler.errorForeground": hex("--q-err"),
+      "editorOverviewRuler.warningForeground": warnMark(dark),
+      "editorOverviewRuler.infoForeground": cssVar("--q-info") ? hex("--q-info") : hex("--q-accent"),
+      // Word highlight (fg 9 % + a line-strong edge) and bracket match (an edge, no fill): Monaco's greys dropped schema
+      // prefixes to 4.06:1 and were 1.6–2.0:1 on light themes (DA2 V4, V5).
+      "editor.wordHighlightBackground": tint("--q-fg", "17"),
+      "editor.wordHighlightStrongBackground": tint("--q-fg", "17"),
+      "editor.wordHighlightTextBackground": tint("--q-fg", "17"),
+      "editor.wordHighlightTextBorder": hex("--q-line-strong"),
+      "editorBracketMatch.border": hex("--q-line-strong"),
+      "editorBracketMatch.background": "#00000000",
+      "editorIndentGuide.background1": hex("--q-line"),
+      "editorIndentGuide.activeBackground1": hex("--q-line-strong"),
       // Only ( ) are colorized (languages.ts); 4–6 are transparent, which Monaco drops, so depth cycles 1–2–3.
       "editorBracketHighlight.foreground1": palette.bracket1,
       "editorBracketHighlight.foreground2": palette.bracket2,
@@ -120,8 +165,30 @@ export function applyMonacoTheme() {
       "editorBracketHighlight.foreground6": "#00000000",
       "editorBracketHighlight.unexpectedBracket.foreground": hex("--q-err"),
     },
-  });
-  monaco.editor.setTheme("querithm");
+  };
+  // The same theme again (a boot applies it up to three times: initMonaco, the settings effect, after the load) is not
+  // defined again: Monaco answers every setTheme with a new color map, which re-tokenizes and re-renders every model.
+  // Compared by its definition, not by the theme ids, so a CSS variable that changed under the same ids still applies.
+  const text = JSON.stringify(definition);
+  const themeSet = text !== lastDefinition;
+  if (themeSet) {
+    monaco.editor.defineTheme("querithm", definition);
+    monaco.editor.setTheme("querithm");
+    lastDefinition = text;
+  }
+  // V7: semantic tokens already drawn hold color ids of the previous color map; drop them when the palette changed. Only
+  // together with a setTheme: its color-theme event is what makes Monaco ask for them again. Without one the color map
+  // is unchanged, the drawn tokens are still right, and dropping them would leave them blank until a scroll or an edit
+  // (no data-comments yet reads as italic: the same theme). A re-apply with the same palette (an OS flip under a fixed
+  // theme) drops nothing either.
+  const key = `${app.id}|${app.mode}|${syn.choice}|${syn.fontStyle.comment ?? ""}`;
+  if (key !== lastPaletteKey) {
+    if (lastPaletteKey && themeSet) paletteChanged();
+    lastPaletteKey = key;
+  }
+  const changed = semanticWanted() !== syn.semantic;
+  setSemanticWanted(syn.semantic);
+  return changed;
 }
 
 export { monaco };

@@ -133,7 +133,7 @@ function Notices({ tabId, notices, connected, saveOutputs }: { tabId: string; no
         <div key={i} className="flex items-center gap-2 text-warn">
           <Icon name="alert" size={12} />
           <span className="flex-1">{n}</span>
-          <button className="text-muted hover:text-fg" aria-label="Dismiss" title="Dismiss" onClick={() => dismiss(i)}>
+          <button className="q-icon-btn w-5 h-5" aria-label="Dismiss" title="Dismiss" onClick={() => dismiss(i)}>
             <Icon name="close" size={11} strokeWidth={2.2} />
           </button>
         </div>

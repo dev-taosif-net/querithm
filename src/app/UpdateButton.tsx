@@ -23,7 +23,7 @@ export function UpdateButton() {
       type="button"
       className={`q-tb shrink-0 font-semibold border ${
         phase === "failed"
-          ? "border-warn/60 !bg-warn/10 text-warn hover:!bg-warn/15"
+          ? "border-warn/60 !bg-warn/(--q-warn-row-alpha) text-warn hover:!bg-warn/(--q-toast-alpha)"
           : "border-accent/60 !bg-accent/10 text-accent hover:!bg-accent/15"
       }`}
       title={phase === "failed" ? "The update did not finish. Click for details." : `Querithm ${version} is available`}

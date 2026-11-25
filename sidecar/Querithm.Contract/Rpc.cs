@@ -130,6 +130,12 @@ public interface IQuerithmRpc
 
     [RpcMethod("settings.get")] Task<SettingEntry[]> SettingsGet(SettingsGetParams p);
     [RpcMethod("settings.set")] Task SettingsSet(SettingEntry p);
+    /// <summary>
+    /// Members of an object setting changed in one IMMEDIATE transaction (<see cref="SettingsPatchParams"/>); bounded by
+    /// <see cref="SettingsPatchLimits"/>, <c>invalid</c> otherwise. Refuses the keys settings.set handles itself (the Prod
+    /// confirmations switch, the old groups key); <c>storeBusy</c> when another instance holds the write lock too long.
+    /// </summary>
+    [RpcMethod("settings.patch")] Task SettingsPatch(SettingsPatchParams p);
 
     [RpcMethod("snippet.list")] Task<Snippet[]> SnippetList();
     [RpcMethod("snippet.save")] Task<Snippet> SnippetSave(SnippetSaveParams p);

@@ -4,6 +4,7 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { contrastRatio } from "../../app/tabStyle";
 import { SYNTAX_THEMES } from "../../editor/syntaxTheme";
+import { APP_THEMES, tokenVars } from "../appThemes";
 
 // WCAG AA for body text; every button and chip label in the app is below the 18.66 px bold "large text" size.
 const MIN = 4.5;
@@ -17,7 +18,16 @@ function block(selector: string): string {
   return css.slice(start, css.indexOf("}", start));
 }
 const varsOf = (selector: string): Vars => Object.fromEntries([...block(selector).matchAll(/(--q-[\w-]+):\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
-const themes = { dark: varsOf(':root[data-theme="dark"]'), light: varsOf(':root[data-theme="light"]') };
+/** Component-state defaults (the `html` block): alphas every theme inherits unless its own block sets them. */
+const stateDefaults = varsOf("html");
+const legacyVars = { dark: { ...stateDefaults, ...varsOf(':root[data-theme="dark"]') }, light: { ...stateDefaults, ...varsOf(':root[data-theme="light"]') } };
+/** Every App Theme as the browser cascades it: the state defaults, its mode's Querithm block, then its generated block
+ *  (plans/app-themes §2.2). Querithm Dark and Light keep their own names, so failures read as before. */
+const themes: Record<string, Vars> = Object.fromEntries(
+  APP_THEMES.map((t) => [t.legacy ? t.mode : t.id, { ...legacyVars[t.mode], ...tokenVars(t) }]),
+);
+/** The App Theme behind each key of `themes`. */
+const themeOf: Record<string, (typeof APP_THEMES)[number]> = Object.fromEntries(APP_THEMES.map((t) => [t.legacy ? t.mode : t.id, t]));
 /** Tailwind color name → token, from the `@theme` block (`bg-accent` → `--q-accent`). */
 const twColors: Record<string, string> = Object.fromEntries([...block("@theme").matchAll(/--color-([\w-]+):\s*var\((--q-[\w-]+)\)/g)].map((m) => [m[1], m[2]]));
 /** The surfaces a translucent fill or a transparent button can sit on. */
@@ -38,12 +48,48 @@ function mix(a: Rgba, b: Rgba, p: number): Rgba {
 const over = (top: Rgba, bottom: Rgba): Rgba => [0, 1, 2].map((i) => top[i] * top[3] + bottom[i] * (1 - top[3])).concat(1) as Rgba;
 const withAlpha = (c: Rgba, a: number): Rgba => [c[0], c[1], c[2], c[3] * a];
 
+/** Top-level comma split (commas inside parentheses stay). */
+function splitTop(s: string): string[] {
+  const out: string[] = [];
+  let depth = 0, start = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === "(") depth++;
+    else if (s[i] === ")") depth--;
+    else if (s[i] === "," && depth === 0) {
+      out.push(s.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  out.push(s.slice(start).trim());
+  return out;
+}
+/** `var(--a)` / `var(--a, fallback)`: the variable's value, else the fallback (state tokens fall back to today's formula). */
+function resolveVar(v: string, vars: Vars): string | null {
+  const m = /^var\(([\s\S]*)\)$/.exec(v.trim());
+  if (!m) return null;
+  const [name, ...rest] = splitTop(m[1]);
+  if (name in vars) return vars[name];
+  if (rest.length) return rest.join(", ");
+  return null;
+}
+/** A percentage, possibly given through a variable: `12%`, `var(--q-run-tint, 10%)`. */
+function percent(v: string, vars: Vars): number {
+  const t = v.trim();
+  const via = resolveVar(t, vars);
+  if (via !== null) return percent(via, vars);
+  const m = /^([\d.]+)%$/.exec(t);
+  if (!m) throw new Error(`unsupported percentage: ${v}`);
+  return +m[1];
+}
+
 function color(value: string, vars: Vars): Rgba {
   const v = value.trim();
   if (v in NAMED) return NAMED[v];
   const ref = /^var\((--[\w-]+)\)$/.exec(v);
   if (ref && !(ref[1] in vars) && SURFACE_VARS.has(ref[1])) return NAMED.transparent;
   if (ref) return color(vars[ref[1]] ?? `missing ${ref[1]}`, vars);
+  const withFallback = /^var\(/.test(v) ? resolveVar(v, vars) : null;
+  if (withFallback !== null) return color(withFallback, vars);
   const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(v);
   if (hex) {
     const h = hex[1].length === 3 ? [...hex[1]].map((x) => x + x).join("") : hex[1];
@@ -51,8 +97,20 @@ function color(value: string, vars: Vars): Rgba {
   }
   const rgba = /^rgba?\(\s*(\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\s*\)$/.exec(v);
   if (rgba) return [+rgba[1], +rgba[2], +rgba[3], rgba[4] === undefined ? 1 : +rgba[4]];
-  const cm = /^color-mix\(in srgb,\s*(.+?)\s+([\d.]+)%,\s*(.+)\)$/.exec(v);
-  if (cm) return mix(color(cm[1], vars), color(cm[3], vars), +cm[2] / 100);
+  const cmArgs = /^color-mix\(([\s\S]*)\)$/.exec(v);
+  if (cmArgs) {
+    // color-mix(in srgb, <color> <pct>, <color>): the color and its percentage split at the last top-level space.
+    const [space, first, second] = splitTop(cmArgs[1]);
+    if (space !== "in srgb" || !first || !second) throw new Error(`unsupported color: ${value}`);
+    let depth = 0, cut = -1;
+    for (let i = 0; i < first.length; i++) {
+      if (first[i] === "(") depth++;
+      else if (first[i] === ")") depth--;
+      else if (first[i] === " " && depth === 0) cut = i;
+    }
+    if (cut < 0) throw new Error(`unsupported color: ${value}`);
+    return mix(color(first.slice(0, cut), vars), color(second, vars), percent(first.slice(cut + 1), vars) / 100);
+  }
   throw new Error(`unsupported color: ${value}`);
 }
 const ratio = (fg: Rgba, bg: Rgba) => {
@@ -77,9 +135,12 @@ const rules = [...css.matchAll(/(\.q-btn[\w-]*)((?::[\w-]+(?:\([^)]*\))?)*)\s*\{
 const variants = [...new Set(rules.filter((r) => !r.pseudo && r.cls !== ".q-btn").map((r) => r.cls))];
 
 /** The background and text color of `.q-btn` + `variant` in a state; `background` is null when the button is transparent to its surface. */
-function button(variant: string | null, state: "base" | "hover", vars: Vars) {
+/** `active` = pressed with the pointer over it: the :hover and the :active rules both apply, the later one winning. */
+function button(variant: string | null, state: "base" | "hover" | "active", vars: Vars) {
+  const live = (r: (typeof rules)[number]) => !/:disabled(?!\))/.test(r.pseudo);
   const applies = (r: (typeof rules)[number]) =>
-    (r.cls === ".q-btn" || r.cls === variant) && (r.pseudo === "" || (state === "hover" && r.pseudo.includes(":hover") && !/:disabled(?!\))/.test(r.pseudo)));
+    (r.cls === ".q-btn" || r.cls === variant) &&
+    (r.pseudo === "" || (state !== "base" && r.pseudo.includes(":hover") && live(r)) || (state === "active" && r.pseudo.includes(":active") && live(r)));
   const decls = rules.filter(applies).sort((a, b) => a.specificity - b.specificity || a.order - b.order).reduce((acc, r) => ({ ...acc, ...r.decls }), {} as { background?: string; color?: string });
   const bg = color(decls.background!, vars);
   return { background: bg[3] === 0 ? null : bg, color: color(decls.color!, vars) };
@@ -88,10 +149,10 @@ function button(variant: string | null, state: "base" | "hover", vars: Vars) {
 describe("button contrast (tokens.css)", () => {
   it("finds the button variants", () => expect(variants).toEqual(expect.arrayContaining([".q-btn-primary", ".q-btn-danger", ".q-btn-run", ".q-btn-stop", ".q-btn-ghost"])));
 
-  it.each(Object.entries(themes))("%s: every .q-btn variant keeps its label readable at rest and on hover", (theme, vars) => {
+  it.each(Object.entries(themes))("%s: every .q-btn variant keeps its label readable at rest, on hover and pressed", (theme, vars) => {
     const failures: string[] = [];
     for (const v of [null, ...variants])
-      for (const state of ["base", "hover"] as const) {
+      for (const state of ["base", "hover", "active"] as const) {
         const b = button(v, state, vars);
         const w = worst(b.color, b.background, vars);
         if (w.value < MIN) failures.push(`${v ?? ".q-btn"} ${state} on ${w.on}: ${w.value.toFixed(2)}`);
@@ -165,6 +226,87 @@ describe("Object Explorer row contrast (tokens.css)", () => {
   });
 });
 
+// ---- Component states (plans/app-themes §13): labels other than the variant's own sit on button and toolbar fills
+// (`q-btn text-err`, `q-tb text-accent`, a muted server name), and status surfaces paint by data-kind.
+const stateFill = (token: string, fallbacks: string[], vars: Vars) => color(`var(${token}, ${fallbacks.map((f) => `var(${f}`).join(", ")}${")".repeat(fallbacks.length)})`, vars);
+const tintOver = (kind: string, pctToken: string, pctDefault: string, under: string, vars: Vars) =>
+  over(withAlpha(color(`var(${kind})`, vars), percent(`var(${pctToken}, ${pctDefault})`, vars) / 100), color(`var(${under})`, vars));
+
+describe("component states (tokens.css §13)", () => {
+  it.each(Object.entries(themes))("%s: fg, error, accent and muted labels read on every button and toolbar hover and pressed fill", (theme, vars) => {
+    const failures: string[] = [];
+    const fills = {
+      "btn hover": stateFill("--q-btn-hover", ["--q-hover"], vars),
+      "btn pressed": stateFill("--q-btn-pressed", ["--q-btn-hover", "--q-hover"], vars),
+      "ghost hover": stateFill("--q-ghost-hover", ["--q-hover"], vars),
+      "ghost pressed": stateFill("--q-ghost-pressed", ["--q-ghost-hover", "--q-hover"], vars),
+    };
+    for (const [name, fill] of Object.entries(fills))
+      for (const t of ["--q-fg", "--q-err", "--q-accent", "--q-muted"]) {
+        const r = ratio(color(`var(${t})`, vars), fill);
+        if (r < MIN) failures.push(`${t} on ${name}: ${r.toFixed(2)}`);
+      }
+    expect(failures, theme).toEqual([]);
+  });
+
+  it.each(Object.entries(themes))("%s: the focus ring reaches 3:1 on every surface and selection fill", (theme, vars) => {
+    const ring = color("var(--q-focus-ring, var(--q-accent))", vars);
+    const failures = ["--q-bg", "--q-panel", "--q-panel-2", "--q-raised", "--q-active", "--q-row-sel", "--q-overlay-sel"]
+      .map((s) => [s, ratio(ring, color(`var(${s})`, vars))] as const)
+      .filter(([, r]) => r < NON_TEXT)
+      .map(([s, r]) => `${s}: ${r.toFixed(2)}`);
+    expect(failures, theme).toEqual([]);
+  });
+
+  it.each(Object.entries(themes))("%s: toasts, banners and status rows keep their text readable for every kind", (theme, vars) => {
+    const failures: string[] = [];
+    const KINDS = { error: "--q-err", warn: "--q-warn", success: "--q-ok" } as const;
+    for (const [kind, hue] of Object.entries(KINDS)) {
+      const text = color(`var(${hue})`, vars);
+      // A toast's wash sits on opaque --q-raised.
+      const toast = tintOver(hue, "--q-toast-alpha", "15%", "--q-raised", vars);
+      if (ratio(text, toast) < MIN) failures.push(`${kind} toast: ${ratio(text, toast).toFixed(2)}`);
+      // The banner sits under the top bar, on the page.
+      for (const under of ["--q-bg", "--q-panel"]) {
+        const banner = tintOver(hue, "--q-banner-alpha", "15%", under, vars);
+        if (ratio(text, banner) < MIN) failures.push(`${kind} banner on ${under}: ${ratio(text, banner).toFixed(2)}`);
+      }
+    }
+    for (const [kind, hue, pct, def] of [["error", "--q-err", "--q-err-row-alpha", "10%"], ["warn", "--q-warn", "--q-warn-row-alpha", "15%"]] as const)
+      for (const under of ["--q-bg", "--q-panel", "--q-raised"]) {
+        const row = tintOver(hue, pct, def, under, vars);
+        for (const t of [hue, "--q-fg", "--q-muted-hl"]) {
+          const r = ratio(color(`var(${t})`, vars), row);
+          if (r < MIN) failures.push(`${t} on the ${kind} row over ${under}: ${r.toFixed(2)}`);
+        }
+      }
+    const info = ratio(color("var(--q-fg)", vars), color("var(--q-raised)", vars));
+    if (info < MIN) failures.push(`info toast: ${info.toFixed(2)}`);
+    const infoGlyph = ratio(color("var(--q-info, var(--q-accent))", vars), color("var(--q-raised)", vars));
+    if (infoGlyph < NON_TEXT) failures.push(`info glyph: ${infoGlyph.toFixed(2)}`);
+    expect(failures, theme).toEqual([]);
+  });
+
+  it("every status surface draws its kind through data-kind, never a color class alone", () => {
+    for (const cls of [".q-toast", ".q-banner", ".q-status-row"]) for (const kind of ["error", "warn"]) expect(css).toContain(`${cls}[data-kind="${kind}"]`);
+    expect(css).toMatch(/\.q-toast \{[^}]*border-left: 3px solid var\(--q-kind\)/);
+    expect(css).toMatch(/\.q-status-row \{[^}]*border-left: 2px solid var\(--q-kind\)/);
+  });
+
+  it("disabled Primary, Run and Stop are drawn as the plain button, as Danger is", () => {
+    for (const v of ["primary", "run", "stop"]) expect(css).toMatch(new RegExp(`\\.q-btn-${v}:disabled \\{[^}]*background: var\\(--q-raised\\)`));
+    expect(css).toMatch(/\.q-btn-danger:disabled,\s*\.q-btn-danger\[aria-disabled="true"\] \{[^}]*background: var\(--q-raised\)/);
+  });
+
+  it("every class string with the accent fill labels it in --q-accent-fg (several themes' accent fill is light)", () => {
+    // White on the accent fill read 1.8–2.2:1 on themes whose accent is light (gold, aqua, rose, lime) (State Critic R2).
+    const offenders = sourceClasses()
+      .map((c) => c.text)
+      .filter((t) => /(^|\s)bg-accent-solid(\s|$)/.test(t.split("\t")[1]) && /(^|\s)text-(?!accent-fg)[\w/-]+/.test(t.split("\t")[1].replace(/\S*:\S+/g, "")));
+    expect(offenders).toEqual([]);
+  });
+});
+
 // ---- Connect dialog rows: the dialog is --q-panel, a hovered row --q-raised, the active row --q-row-sel and the footer
 // --q-panel-2. Environment words are text there (4.5:1); the PROD tag is white on --q-env-prod-fill, and the Production
 // stripe is the --q-env-prod mark (3:1 against every row surface; the darker fill is 2.99:1 on the dark active row).
@@ -232,7 +374,12 @@ describe("diff tint contrast (tokens.css)", () => {
     const failures: string[] = [];
     const bg = color("var(--q-bg)", vars);
     // Every syntax theme's colors in this mode (src/editor/syntaxTheme.ts), then the text and line-number tokens.
-    const syntax = SYNTAX_THEMES.flatMap((t) => Object.entries(t[theme as "dark" | "light"]).map(([role, hex]) => [`${t.id}.${role}`, hex] as const));
+    // …and the App Theme's own Default palette (plans/app-themes): every palette a user can pick shows on this theme.
+    const app = themeOf[theme];
+    const syntax = [
+      ...SYNTAX_THEMES.flatMap((t) => Object.entries(t[app.mode]).map(([role, hex]) => [`${t.id}.${role}`, hex] as const)),
+      ...Object.entries(app.sql).map(([role, hex]) => [`default.${role}`, hex] as const),
+    ];
     expect(syntax.length).toBeGreaterThanOrEqual(9 * SYNTAX_THEMES.length);
     const fgs = [...syntax, ...["--q-fg", "--q-muted"].map((v) => [v, `var(${v})`] as const)];
     for (const tint of ["--q-diff-insert", "--q-diff-remove"]) {
@@ -267,6 +414,23 @@ describe("React Flow controls (tokens.css)", () => {
 });
 
 // ---- Scrollbars: the thumb was --q-hover (~1.2:1), so a scrolling panel (the import dialog at 960×560) looked complete.
+describe("status edges (tokens.css)", () => {
+  const edge = (rule: string) => /var\(--q-toast-border-alpha, ([\d.]+%)\)/.exec(block(rule))?.[1];
+
+  // Audit 2026-11-25: a 50 % default on html made the 40 % fallback of .q-banner dead, so Querithm Dark and Light banners
+  // changed edge (they were border-err/40). Each rule keeps its own fallback; only a new theme's block sets the token.
+  it("Querithm Dark and Light keep a toast's edge at 50 % and a banner's at 40 %, as before App Themes", () => {
+    expect(stateDefaults["--q-toast-border-alpha"]).toBeUndefined();
+    expect(edge(".q-toast")).toBe("50%");
+    expect(edge(".q-banner")).toBe("40%");
+    for (const mode of ["dark", "light"] as const) expect(legacyVars[mode]["--q-toast-border-alpha"], mode).toBeUndefined();
+  });
+
+  it("every new App Theme sets the edge alpha itself", () => {
+    for (const t of APP_THEMES.filter((x) => !x.legacy)) expect(tokenVars(t)["--q-toast-border-alpha"], t.id).toMatch(/^\d+(\.\d+)?%$/);
+  });
+});
+
 describe("scrollbar thumb (tokens.css)", () => {
   const thumb = /::-webkit-scrollbar-thumb\s*\{([^}]*)\}/.exec(css)![1];
   const hover = /::-webkit-scrollbar-thumb:hover\s*\{([^}]*)\}/.exec(css)![1];
@@ -308,7 +472,9 @@ type Classes = { text: string; line: number; hasText: boolean | null; conds?: Re
 const componentPaint: Record<string, { background?: string; color?: string }> = Object.fromEntries(
   [...css.matchAll(/\.(q-(?!btn)[\w-]+)\s*\{([^}]*)\}/g)]
     .map((m) => [m[1], Object.fromEntries([...m[2].matchAll(/(?:^|;)\s*(background|color)\s*:\s*([^;]+)/g)].map((d) => [d[1], d[2].trim()]))] as const)
-    .filter(([, d]) => d.background || d.color),
+    // Status surfaces paint by their data-kind (.q-toast, .q-banner, .q-status-row): the "status surfaces" tests below
+    // check every kind on every theme, which a class string alone cannot name.
+    .filter(([, d]) => (d.background || d.color) && !/--q-kind|gradient/.test(`${d.background ?? ""} ${d.color ?? ""}`)),
 );
 
 /** Every class string an expression can produce: each branch of a conditional joined to the static part of its template. */
@@ -410,11 +576,13 @@ function paints(classes: string, vars: Vars): Map<string, Paint> {
     const comp = key === "" ? componentPaint[util] : undefined;
     if (comp?.background) p.compFill = color(comp.background, vars);
     if (comp?.color) p.compText = color(comp.color, vars);
-    const m = /^(bg|text)-([\w-]+?)(?:\/(\d+))?$/.exec(util);
+    // An opacity is a number (`bg-err/10`) or a state token (`bg-err/(--q-err-row-alpha)`, plans/app-themes §13).
+    const m = /^(bg|text)-([\w-]+?)(?:\/(\d+|\(--[\w-]+\)))?$/.exec(util);
     const name = m?.[2];
     if (m?.[1] === "text" && name && EXEMPT_TEXT.has(name)) p.exempt = true;
     else if (m && name && (name in twColors || name in NAMED)) {
-      const c = withAlpha(name in NAMED ? NAMED[name] : color(`var(${twColors[name]})`, vars), m[3] ? +m[3] / 100 : 1);
+      const alpha = !m[3] ? 1 : m[3].startsWith("(") ? percent(`var(${m[3].slice(1, -1)})`, vars) / 100 : +m[3] / 100;
+      const c = withAlpha(name in NAMED ? NAMED[name] : color(`var(${twColors[name]})`, vars), alpha);
       if (m[1] === "bg") p.fill = c;
       else p.text = c;
     }
@@ -506,10 +674,12 @@ describe("fill + text contrast (components)", () => {
     expect(failuresOf([sample("bg-err text-err")], vars)).toHaveLength(1); // a fill with text of its own color
     expect(failuresOf([sample("bg-err/40 text-err")], vars)).toHaveLength(1); // a same-hue tint above 15 %
     expect(failuresOf([sample("px-2 text-fg hover:bg-fg")], vars)).toHaveLength(1); // only the hover state is unreadable
-    expect(failuresOf([sample("q-btn q-btn-primary bg-white")], vars)).toHaveLength(1); // a utility overriding the button fill
-    expect(failuresOf([sample("rounded bg-accent-solid")], vars)).toHaveLength(1); // inherited body text on a solid fill
+    expect(failuresOf([sample("q-btn q-btn-primary bg-accent-fg")], vars)).toHaveLength(1); // a utility overriding the button fill
+    // Inherited body text on a solid fill of its own color: unreadable on every theme (an accent fill can carry body text
+    // on a dark-accent theme, so the accent is not a theme-independent sample).
+    expect(failuresOf([sample("rounded bg-fg")], vars)).toHaveLength(1);
     expect(failuresOf([sample("rounded bg-accent-solid", false), sample("bg-accent-solid", null)], vars)).toEqual([]); // no text of its own / unknown element
-    expect(failuresOf([sample("bg-err/15 text-err"), sample("bg-accent-solid text-white"), sample("q-btn q-btn-danger"), sample("bg-panel text-faint")], vars)).toEqual([]);
+    expect(failuresOf([sample("bg-err/15 text-err"), sample("bg-accent-solid text-accent-fg"), sample("q-btn q-btn-danger"), sample("bg-panel text-faint")], vars)).toEqual([]);
     // A child without a fill of its own is read on its parent's: a muted key hint inside a primary button, a muted detail
     // on a highlighted row (also when only the hover state paints it); the parent's own text color passes.
     expect(failuresOf([sample("q-kbd", true, [["q-btn q-btn-primary"]])], vars)).toHaveLength(1);

@@ -20,7 +20,7 @@ export function BlockingBanner({ tab }: { tab: TabState }) {
   if (!tab.sessionId || !state || state.unavailable || state.blockedCount <= 0 || tab.txState !== "open") return null;
   if (mutedUntil > now) return null;
   return (
-    <div className="q-banner-in px-3 py-1.5 border-b border-warn/50 bg-warn/15 q-hl text-[11.5px] flex items-center gap-3 shrink-0 [&>button]:shrink-0" role="status" data-testid="blocking-banner">
+    <div className="q-banner-in px-3 py-1.5 border-b border-warn/50 border-l-[3px] border-l-warn bg-warn/(--q-banner-alpha) q-hl text-[11.5px] flex items-center gap-3 shrink-0 [&>button]:shrink-0" role="status" data-testid="blocking-banner">
       <span className="text-fg min-w-0">
         This tab&apos;s open transaction is blocking <b>{state.blockedCount}</b> session{state.blockedCount === 1 ? "" : "s"} for <b>{ms(state.maxWaitMs)}</b>.
       </span>
@@ -28,7 +28,7 @@ export function BlockingBanner({ tab }: { tab: TabState }) {
       <button className="q-btn" onClick={() => void txAction(tab.id, "rollback")}>Rollback</button>
       <button className="q-btn" onClick={() => openActivityMonitor(tab.profileId)}>Open monitor</button>
       <span className="flex-1" />
-      <button className="text-muted hover:text-fg whitespace-nowrap" aria-label="Dismiss for 5 minutes" onClick={() => { useBlocking.getState().mute(tab.sessionId!); setNow(Date.now()); }}>
+      <button className="q-link text-muted hover:text-fg whitespace-nowrap" aria-label="Dismiss for 5 minutes" onClick={() => { useBlocking.getState().mute(tab.sessionId!); setNow(Date.now()); }}>
         Dismiss (5 min)
       </button>
     </div>

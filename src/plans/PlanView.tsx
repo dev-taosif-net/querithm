@@ -10,7 +10,7 @@ import type { TabState } from "../store/tabs";
 import { useExecutions } from "../store/executions";
 import { useUi, toast } from "../store/ui";
 import { Empty } from "../results/ResultsPanel";
-import { useThemeKey } from "../app/tabStyle";
+import { useThemeMode } from "../app/tabStyle";
 import { Chips, MenuButton, PanelFooter, PanelRow, Seg, usePanelWidth } from "../app/panelKit";
 import { Icon } from "../app/icons";
 
@@ -29,7 +29,7 @@ const PlanNodeCard = memo(function PlanNodeCard({ data }: NodeProps<Node<PlanNod
   return (
     <div
       className={`rounded-lg p-2.5 text-[11px] shadow-lg border ${
-        hot ? "bg-err/10 q-hl border-2 border-err" : warn ? "bg-panel border-warn/60" : "bg-panel border-line"
+        hot ? "bg-err/(--q-err-row-alpha) q-hl border-2 border-err" : warn ? "bg-panel border-warn/60" : "bg-panel border-line"
       } ${data.selected ? "ring-2 ring-accent" : ""}`}
       style={{ width: NODE_W }}
     >
@@ -38,7 +38,7 @@ const PlanNodeCard = memo(function PlanNodeCard({ data }: NodeProps<Node<PlanNod
       <div className="flex items-center justify-between gap-1">
         <span className={`text-[10px] font-bold uppercase truncate ${hot ? "text-err" : warn ? "text-warn" : "text-muted"}`}>{n.logicalOp ?? n.physicalOp}</span>
         {data.rank != null ? (
-          <span className={`px-1.5 rounded text-[10px] font-bold ${hot ? "bg-err-solid text-white" : "bg-warn/15 text-warn"}`}>
+          <span className={`px-1.5 rounded text-[10px] font-bold ${hot ? "bg-err-solid text-white" : "bg-warn/(--q-toast-alpha) text-warn"}`}>
             #{data.rank + 1} · Cost {n.costPercent?.toFixed(1)}%
           </span>
         ) : (
@@ -57,7 +57,7 @@ const PlanNodeCard = memo(function PlanNodeCard({ data }: NodeProps<Node<PlanNod
             <>Est rows <b className="text-fg">{fmt(n.estRows)}</b></>
           )}
         </span>
-        {warn && <span className="text-warn font-bold" title={n.warnings.map((w) => w.message).join("\n")}>⚠ {n.warnings.length}</span>}
+        {warn && <span className="text-warn font-bold rounded px-1 bg-panel" title={n.warnings.map((w) => w.message).join("\n")}>⚠ {n.warnings.length}</span>}
       </div>
     </div>
   );
@@ -126,7 +126,7 @@ export function PlanView({ tab }: { tab: TabState }) {
 
 /** Renders plans that are already loaded (a query tab's plans, or a running request's plan from the activity monitor). */
 export function PlanDiagram({ plans }: { plans: { plan: PlanTree; raw: string }[] }) {
-  const themeKey = useThemeKey();
+  const themeMode = useThemeMode();
   const width = usePanelWidth();
   const statements = useMemo(() => plans.flatMap((p) => p.plan.statements.map((s) => ({ s, raw: p.raw }))), [plans]);
   const [index, setIndex] = useState(0);
@@ -161,7 +161,7 @@ export function PlanDiagram({ plans }: { plans: { plan: PlanTree; raw: string }[
               </span>
             )}
             {missing && (
-              <span className="h-[22px] flex items-center gap-1.5 pl-1.5 pr-0.5 rounded border border-warn/40 bg-warn/15 text-warn text-[11px] shrink-0 min-w-0" title={`Missing index on ${missing.table} — est. impact ${missing.impact.toFixed(1)}%`}>
+              <span className="h-[22px] flex items-center gap-1.5 pl-1.5 pr-0.5 rounded border border-warn/40 bg-warn/(--q-toast-alpha) text-warn text-[11px] shrink-0 min-w-0" title={`Missing index on ${missing.table} — est. impact ${missing.impact.toFixed(1)}%`}>
                 <Icon name="alert" size={12} strokeWidth={2} />
                 <span className="truncate">Missing index on <b>{missing.table} ({[...missing.equalityColumns, ...missing.inequalityColumns].join(", ")})</b> · {missing.impact.toFixed(1)}%</span>
                 <button
@@ -203,7 +203,7 @@ export function PlanDiagram({ plans }: { plans: { plan: PlanTree; raw: string }[
             onNodeClick={(_, n) => setSelected(n.id)}
             onPaneClick={() => setSelected(null)}
             proOptions={{ hideAttribution: true }}
-            colorMode={themeKey === "light" ? "light" : "dark"}
+            colorMode={themeMode}
             // The canvas is an app surface: the hot node's error tint is read on it (React Flow's own grey is not a token).
             style={{ background: "var(--q-bg)" }}
           >
@@ -280,7 +280,7 @@ function PlanTable({ nodes, selected, onSelect, label }: { nodes: { node: PlanNo
                 </td>
                 <td role="gridcell" className="px-3 py-1 text-ident truncate max-w-[280px]" title={n.objectName ?? undefined}>{n.objectName ?? ""}</td>
                 <td role="gridcell" className="px-3 py-1 text-right whitespace-nowrap">
-                  {rank != null && <span className={`mr-1.5 px-1 rounded-[3px] text-[10px] font-bold ${rank === 0 ? "bg-err-solid text-white" : "bg-warn/15 text-warn"}`}>#{rank + 1}</span>}
+                  {rank != null && <span className={`mr-1.5 px-1 rounded-[3px] text-[10px] font-bold ${rank === 0 ? "bg-err-solid text-white" : "bg-warn/(--q-toast-alpha) text-warn"}`}>#{rank + 1}</span>}
                   {(n.costPercent ?? 0).toFixed(1)}%
                 </td>
                 <td role="gridcell" className="px-3 py-1 text-right">{fmt(n.estRows)}</td>
@@ -324,7 +324,7 @@ function Inspector({ node }: { node: PlanNode }) {
         ))}
       </div>
       {node.warnings.length > 0 && (
-        <div className="mt-3 p-2 rounded bg-warn/10 border border-warn/40 text-warn space-y-1">
+        <div className="mt-3 p-2 rounded bg-warn/(--q-warn-row-alpha) border border-warn/40 border-l-2 border-l-warn text-warn space-y-1">
           {node.warnings.map((w, i) => (
             <div key={i}>⚠ {w.message}</div>
           ))}

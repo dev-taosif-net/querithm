@@ -12,6 +12,21 @@ const ed = await import("../editors");
 
 const tid = (() => { let n = 0; return () => `tab${++n}`; })();
 
+// First in the file: no editor exists yet.
+describe("semantic coloring with no editor open", () => {
+  it("refreshEditorOptions switches the provider with the palette although there is no editor to update", async () => {
+    const { setSemanticWanted } = await import("../themeState");
+    const { semanticEnabled } = await import("../semanticTokens");
+    expect(ed.allEditors()).toEqual([]);
+    setSemanticWanted(true);
+    ed.refreshEditorOptions();
+    expect(semanticEnabled()).toBe(true);
+    setSemanticWanted(false);
+    ed.refreshEditorOptions();
+    expect(semanticEnabled()).toBe(false);
+  });
+});
+
 describe("editor model registry", () => {
   it("maps engines to Monaco languages", () => {
     expect(ed.languageFor("pg")).toBe("pgsql");

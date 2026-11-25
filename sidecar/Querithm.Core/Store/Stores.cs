@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
@@ -209,6 +210,68 @@ public sealed class SettingsStore(LocalStore store)
         using var c = store.Open();
         c.Cmd("INSERT INTO setting (key, value_json) VALUES ($k, $v) ON CONFLICT(key) DO UPDATE SET value_json = $v", null,
             ("$k", key), ("$v", valueJson)).ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// Changes members of an object setting in one IMMEDIATE transaction: the read and the write happen under the store's
+    /// write lock, so a second Querithm instance's patch waits and then sees this one's members (never the old object).
+    /// Every value is parsed before the store is opened (<c>invalid</c> names the member). Order: remove, then the
+    /// members for a setting that held none (<paramref name="setWhenNew"/>), then <paramref name="set"/>. A stored value
+    /// that is not an object counts as holding none and is replaced. Members already stored keep their position and value.
+    /// </summary>
+    public void Patch(string key, IReadOnlyDictionary<string, string>? set, IReadOnlyDictionary<string, string>? setWhenNew, IReadOnlyCollection<string>? remove)
+    {
+        var values = ParseMembers(set);
+        var whenNew = ParseMembers(setWhenNew);
+        using var c = store.Open();
+        using var tx = c.BeginTransaction(deferred: false);
+        string? stored;
+        using (var read = c.Cmd("SELECT value_json FROM setting WHERE key = $k", tx, ("$k", key)))
+            stored = read.ExecuteScalar() as string;
+        var obj = StoredObject(stored);
+        var wasEmpty = obj.Count == 0;
+        if (remove != null) foreach (var name in remove) obj.Remove(name);
+        if (wasEmpty) foreach (var (name, node) in whenNew) obj[name] = node;
+        foreach (var (name, node) in values) obj[name] = node;
+        c.Cmd("INSERT INTO setting (key, value_json) VALUES ($k, $v) ON CONFLICT(key) DO UPDATE SET value_json = $v", tx,
+            ("$k", key), ("$v", obj.ToJsonString())).ExecuteNonQuery();
+        tx.Commit();
+    }
+
+    static List<(string Name, JsonNode? Node)> ParseMembers(IReadOnlyDictionary<string, string>? members)
+    {
+        var list = new List<(string, JsonNode?)>();
+        if (members == null) return list;
+        foreach (var (name, json) in members)
+        {
+            try
+            {
+                list.Add((name, JsonNode.Parse(json ?? "")));
+            }
+            catch (JsonException)
+            {
+                throw QuerithmException.Invalid($"The value of setting member \"{name}\" is not valid JSON.");
+            }
+        }
+        return list;
+    }
+
+    /// <summary>The stored object, member by member; a repeated member keeps its last value, as the webview's JSON.parse does.</summary>
+    static JsonObject StoredObject(string? json)
+    {
+        var obj = new JsonObject();
+        if (string.IsNullOrEmpty(json)) return obj;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return obj;
+            foreach (var p in doc.RootElement.EnumerateObject()) obj[p.Name] = JsonNode.Parse(p.Value.GetRawText());
+        }
+        catch (JsonException)
+        {
+            // Set() stores only valid JSON; an unreadable value holds nothing to keep (the webview reads it as empty too).
+        }
+        return obj;
     }
 
     /// <summary>Typed access in the wire format; pass metadata from <see cref="Json.Context"/>.</summary>

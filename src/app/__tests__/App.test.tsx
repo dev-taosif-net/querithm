@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "./domPolyfills";
+import { appThemeById } from "../../theme/appThemes";
+import { keepThemeBoot } from "../theme";
 
 const h = vi.hoisted(() => ({
   version: "1",
@@ -57,16 +59,21 @@ vi.mock("../bench", () => ({ installBench: () => h.calls.push("installBench"), r
 vi.mock("../../store/updates", () => ({ installUpdateChecks: () => h.calls.push("updateChecks"), useUpdates: { getState: () => ({ phase: "idle" }) } }));
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ setZoom: (z: number) => h.setZoom(z) }) }));
 
-type Stores = { useSettings: typeof import("../../store/settings").useSettings; useProfiles: typeof import("../../store/profiles").useProfiles };
-let stores: Stores;
+type Stores = {
+  useSettings: typeof import("../../store/settings").useSettings;
+  useProfiles: typeof import("../../store/profiles").useProfiles;
+  flushSettings: typeof import("../../store/settings").flushSettings;
+};
+let stores: Stores | undefined;
 /** Each test gets a fresh module graph: App boots once per module instance, so the stores must come from the same graph. */
 async function loadApp() {
   vi.resetModules();
-  stores = { useSettings: (await import("../../store/settings")).useSettings, useProfiles: (await import("../../store/profiles")).useProfiles };
+  const settings = await import("../../store/settings");
+  stores = { useSettings: settings.useSettings, useProfiles: (await import("../../store/profiles")).useProfiles, flushSettings: settings.flushSettings };
   return (await import("../App")).App;
 }
-const useSettings = { setState: (s: any) => stores.useSettings.setState(s), getState: () => stores.useSettings.getState() };
-const useProfiles = { getState: () => stores.useProfiles.getState() };
+const useSettings = { setState: (s: any) => stores!.useSettings.setState(s), getState: () => stores!.useSettings.getState() };
+const useProfiles = { getState: () => stores!.useProfiles.getState() };
 
 function matchMedia(dark: boolean) {
   const listeners: (() => void)[] = [];
@@ -87,13 +94,19 @@ beforeEach(() => {
   history.replaceState(null, "", "/");
 });
 let restoreLocation = () => {};
-afterEach(() => {
+afterEach(async () => {
   restoreLocation();
   restoreLocation = () => {};
   cleanup();
-  document.documentElement.removeAttribute("data-theme");
+  // A save this test's settings scheduled (400 ms debounce) is written now, into a mock that answers at once: left
+  // pending, it fired in the next test, whose settings.get it answered in place of that test's own load (W8 flake).
+  h.rpc.mockImplementation(async () => undefined);
+  await stores?.flushSettings();
+  stores = undefined;
+  for (const a of ["data-theme", "data-app-theme", "data-syntax", "data-comments", "style"]) document.documentElement.removeAttribute(a);
   document.getElementById("splash")?.remove();
   localStorage.removeItem("querithm.theme");
+  localStorage.removeItem("querithm.themeBoot"); // read before the settings load: never from another test
 });
 
 /** index.html's start screen (§16), as the page holds it before the app renders. */
@@ -329,8 +342,10 @@ describe("App", () => {
       localStorage.setItem("querithm.theme", "light");
       document.documentElement.dataset.theme = "light"; // public/boot-theme.js, before the first paint
       let loaded: ((v: unknown) => void) | undefined;
+      // Only the load waits for the test; the save that follows it (a migrated object is written back) reads at once,
+      // as the sidecar answers it: a read left hanging is a write in flight that flushSettings waits for.
       h.rpc.mockImplementation(async (m: string) =>
-        m === "system.ping" ? { version: "1" } : m === "settings.get" ? new Promise((r) => (loaded = r)) : m === "profile.list" || m === "group.list" ? [] : undefined,
+        m === "system.ping" ? { version: "1" } : m === "settings.get" ? (loaded ? [] : new Promise((r) => (loaded = r))) : m === "profile.list" || m === "group.list" ? [] : undefined,
       );
       const seen: (string | undefined)[] = [];
       const mo = new MutationObserver(() => seen.push(document.documentElement.dataset.theme));
@@ -346,6 +361,52 @@ describe("App", () => {
       expect(seen).not.toContain("dark");
     });
 
+    // Regression (plans/app-themes §6.2, review): before the settings loaded, the store's default picks and syntax
+    // colors replaced the App Theme boot-theme.js had named (Cortado → Querithm Dark → Cortado once the engine answered).
+    it("keeps the App Theme and syntax colors the window last had while the settings load, then the setting", async () => {
+      const root = document.documentElement;
+      localStorage.setItem("querithm.theme", "dark");
+      const cortado = appThemeById("cortado")!, vellum = appThemeById("vellum")!;
+      keepThemeBoot(cortado, vellum, "neon");
+      // public/boot-theme.js, before the first paint:
+      root.dataset.theme = "dark";
+      root.dataset.appTheme = "cortado";
+      root.dataset.syntax = "neon";
+      let loaded: ((v: unknown) => void) | undefined;
+      h.rpc.mockImplementation(async (m: string) =>
+        m === "system.ping" ? { version: "1" } : m === "settings.get" ? (loaded ? [] : new Promise((r) => (loaded = r))) : m === "profile.list" || m === "group.list" ? [] : undefined,
+      );
+      const seen: string[] = [];
+      const mo = new MutationObserver(() => seen.push(`${root.dataset.appTheme}/${root.dataset.syntax}`));
+      mo.observe(root, { attributes: true, attributeFilter: ["data-app-theme", "data-syntax"] });
+      const App = await loadApp();
+      render(<App />);
+      await waitFor(() => expect(loaded).toBeDefined());
+      await act(async () => {}); // let the mount's layout effects and observers run
+      expect([root.dataset.appTheme, root.dataset.syntax]).toEqual(["cortado", "neon"]);
+      expect(seen).toEqual([]); // nothing switched while the settings were unread
+      // The saved setting is what shows once read, also when it is the default the cache did not hold.
+      loaded!([{ key: "ui.settings", valueJson: JSON.stringify({ theme: "dark", darkTheme: "dark", syntaxColors: "default" }) }]);
+      await screen.findByText("workspace");
+      await waitFor(() => expect([root.dataset.appTheme, root.dataset.syntax]).toEqual(["dark", "default"]));
+      mo.disconnect();
+    });
+
+    it("the start screen's colours follow the theme shown, for the splash Restart engine shows again", async () => {
+      const root = document.documentElement;
+      root.removeAttribute("style"); // no boot cache: boot-theme.js set no --boot-* colours
+      const App = await loadApp();
+      render(<App />);
+      await screen.findByText("workspace");
+      expect(root.style.getPropertyValue("--boot-bg")).toBe("#0f1117"); // Querithm Dark, the default
+      act(() => useSettings.setState({ theme: "dark", darkTheme: "fathom" } as any));
+      await waitFor(() => expect(root.style.getPropertyValue("--boot-bg")).toBe(appThemeById("fathom")!.ui.bg));
+      expect(root.style.getPropertyValue("--boot-fg")).toBe(appThemeById("fathom")!.ui.fg);
+      act(() => useSettings.setState({ theme: "light" } as any));
+      await waitFor(() => expect(root.style.getPropertyValue("--boot-bg")).toBe("#ffffff"));
+      expect(root.style.getPropertyValue("--boot-idle")).toBe("#e3e8ef"); // Querithm Light's own splash tier
+    });
+
     it("keeps the loaded setting for the next start, in the webview and in the shell", async () => {
       h.tauri = true;
       h.rpc.mockImplementation(async (m: string) =>
@@ -355,10 +416,16 @@ describe("App", () => {
       render(<App />);
       await screen.findByText("workspace");
       await waitFor(() => expect(localStorage.getItem("querithm.theme")).toBe("light"));
-      expect(h.themeKeep.mock.calls).toEqual([["light"]]);
+      await waitFor(() => expect(h.themeKeep.mock.calls).toEqual([["light #0f1117 #ffffff"]]));
       act(() => useSettings.getState().set({ theme: "system" }));
       await waitFor(() => expect(localStorage.getItem("querithm.theme")).toBe("system"));
-      expect(h.themeKeep.mock.calls).toEqual([["light"], ["system"]]);
+      await waitFor(() => expect(h.themeKeep.mock.calls).toEqual([["light #0f1117 #ffffff"], ["system #0f1117 #ffffff"]]));
+      // A new pick is a new window colour for the shell (plans/app-themes §6.3); a syntax-only change is not.
+      act(() => useSettings.getState().set({ darkTheme: "cortado" }));
+      await waitFor(() => expect(h.themeKeep.mock.calls.at(-1)).toEqual(["system #221a13 #ffffff"]));
+      act(() => useSettings.getState().set({ syntaxColors: "neon" }));
+      await waitFor(() => expect(JSON.parse(localStorage.getItem("querithm.themeBoot") ?? "{}").syntax).toBe("neon"));
+      expect(h.themeKeep).toHaveBeenCalledTimes(3);
     });
 
     it("settings that could not be read never replace the kept theme with the default", async () => {
@@ -376,14 +443,31 @@ describe("App", () => {
       expect(h.themeKeep).not.toHaveBeenCalled();
     });
 
-    it("names the syntax theme on the document and re-applies the editor theme when it changes", async () => {
+    it("names the syntax colors on the document and re-applies the editor theme when they change", async () => {
       const App = await loadApp();
       render(<App />);
-      await waitFor(() => expect(document.documentElement.dataset.syntax).toBe("standard"));
+      await waitFor(() => expect(document.documentElement.dataset.syntax).toBe("default"));
       h.applyTheme.mockClear();
-      act(() => useSettings.setState({ syntaxTheme: "unknown" } as any));
-      await waitFor(() => expect(document.documentElement.dataset.syntax).toBe("unknown"));
+      act(() => useSettings.setState({ syntaxColors: "standard" }));
+      await waitFor(() => expect(document.documentElement.dataset.syntax).toBe("standard"));
       expect(h.applyTheme).toHaveBeenCalled();
+    });
+
+    it("names the App Theme on the document by its mode and id; a pick of the other mode or an unknown id shows Querithm Dark/Light", async () => {
+      const App = await loadApp();
+      render(<App />);
+      const root = document.documentElement;
+      await waitFor(() => expect(root.dataset.appTheme).toBe("dark"));
+      act(() => useSettings.setState({ theme: "dark", darkTheme: "cortado" }));
+      await waitFor(() => expect(root.dataset.appTheme).toBe("cortado"));
+      expect(root.dataset.theme).toBe("dark");
+      act(() => useSettings.setState({ theme: "light", lightTheme: "vellum" }));
+      await waitFor(() => expect(root.dataset.appTheme).toBe("vellum"));
+      expect(root.dataset.theme).toBe("light");
+      act(() => useSettings.setState({ lightTheme: "cortado" })); // a dark theme as the light pick (a hand-edited file)
+      await waitFor(() => expect(root.dataset.appTheme).toBe("light"));
+      act(() => useSettings.setState({ italicComments: false }));
+      await waitFor(() => expect(root.dataset.comments).toBe("upright"));
     });
 
     it("applies the interface scale to the webview when it changes, re-rendering no part of the shell (L26)", async () => {
@@ -405,7 +489,7 @@ describe("App", () => {
       localStorage.setItem("querithm.uiScale", "125");
       let loaded: ((v: unknown) => void) | undefined;
       h.rpc.mockImplementation(async (m: string) =>
-        m === "system.ping" ? { version: "1" } : m === "settings.get" ? new Promise((r) => (loaded = r)) : m === "profile.list" || m === "group.list" ? [] : undefined,
+        m === "system.ping" ? { version: "1" } : m === "settings.get" ? (loaded ? [] : new Promise((r) => (loaded = r))) : m === "profile.list" || m === "group.list" ? [] : undefined,
       );
       try {
         const App = await loadApp();

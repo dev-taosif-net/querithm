@@ -126,7 +126,7 @@ function PanelHeader({ tab, width }: { tab: TabState; width: PanelWidth }) {
                 <Icon name={v.icon} size={14} strokeWidth={2} />
                 {!iconOnly && <span>{v.label}</span>}
                 {b && (
-                  <span className={`px-[5px] rounded-full q-mono text-[10.5px] leading-4 font-semibold flex items-center gap-0.5 ${b.tone === "err" ? "bg-err/15 text-err" : b.tone === "ok" ? "bg-ok/15 text-ok" : "bg-raised text-muted"}`}>
+                  <span className={`px-[5px] rounded-full q-mono text-[10.5px] leading-4 font-semibold flex items-center gap-0.5 ${b.tone === "err" ? "bg-err/(--q-toast-alpha) text-err" : b.tone === "ok" ? "bg-ok/(--q-toast-alpha) text-ok" : "bg-raised text-muted"}`}>
                     {b.tone === "err" && <Icon name="errorCircle" size={10} strokeWidth={2.25} />}
                     {b.text}
                   </span>
@@ -185,7 +185,7 @@ function RunPicker({ tab, compact }: { tab: TabState; compact: boolean }) {
         <Icon name="history" size={13} strokeWidth={2} />
         <span>{compact ? `${pos}/${total}` : `Run ${pos} of ${total}`}</span>
         {!compact && cur && <span className="q-mono text-[10.5px] text-muted">{clock(cur.startedAt)}</span>}
-        {older && <span className="px-1 rounded bg-warn/15 text-warn text-[10px] font-semibold">older</span>}
+        {older && <span className="px-1 rounded bg-warn/(--q-toast-alpha) text-warn text-[10px] font-semibold">older</span>}
         {errs > 0 && (
           <span className="flex items-center gap-0.5 text-err text-[10.5px] font-semibold">
             <Icon name="errorCircle" size={10} strokeWidth={2.25} />

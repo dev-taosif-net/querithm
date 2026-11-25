@@ -71,7 +71,7 @@ export function UpdateDialog({ close }: { close: () => void }) {
       )}
       {phase === "installing" && <p className="text-fg">Installing the update. Querithm will restart in a moment…</p>}
       {phase === "failed" && error && (
-        <div role="alert" className="border border-err/50 bg-err/10 rounded p-2 text-fg">
+        <div role="alert" className="border border-err/50 border-l-2 border-l-err bg-err/(--q-err-row-alpha) rounded p-2 text-fg">
           <p>{error.message}</p>
           {WEBSITE_KINDS.has(error.kind) && <p className="mt-1 q-mono text-fg select-text">{DOWNLOAD_PAGE}</p>}
         </div>

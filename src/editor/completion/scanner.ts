@@ -2,12 +2,12 @@
 // Work per call: one cached/incremental token stream, a backward boundary search from the cursor, a forward
 // statement split over the enclosing statement only, and one analysis pass over that statement.
 import type { Dialect } from "../../ipc/contract";
-import type { Clause, CursorContext, TableInScope } from "./types";
+import type { Clause, CursorContext, SchemaIndex, TableInScope } from "./types";
 import { getStream, tokenize, type Token } from "./lexer";
 import {
   ANCHOR_KEYWORDS, CONTINUATION_PREV, OBJECT_KIND_WORDS, PROJECTION_END, TABLE_HINTS, statementKeywords,
 } from "./keywords";
-import { knownDialect } from "../../engines";
+import { DIALECTS, foldIdentifier, knownDialect } from "../../engines";
 
 export { tokenize };
 export type { Token, TokenKind } from "./lexer";
@@ -268,6 +268,25 @@ function isAnchorAt(T: Token[], j: number): boolean {
   return true;
 }
 
+/**
+ * A safe place to start splitting for the statement holding token `k`: after the nearest ';' or GO before it, or an anchor
+ * keyword at the outermost relative paren depth (0 when there is none).
+ */
+function restartPoint(T: Token[], k: number): number {
+  let d = 0, m = 0;
+  for (let j = k; j >= 0; j--) {
+    const t = T[j];
+    if (t.kind === "go" || (t.kind === "punct" && t.value === ";")) return j + 1;
+    if (t.kind === "punct") {
+      if (t.value === ")") d++;
+      else if (t.value === "(") { d--; if (d < m) m = d; }
+      continue;
+    }
+    if (d === m && (t.kind === "keyword" || t.kind === "ident") && ANCHOR_KEYWORDS.has(t.upper) && isAnchorAt(T, j)) return j;
+  }
+  return 0;
+}
+
 export interface StmtLoc {
   /** First token index of the statement, -1 when the statement is empty. */
   start: number;
@@ -285,21 +304,7 @@ export interface StmtLoc {
  * outermost relative paren depth), then splits forward to the end of the enclosing statement.
  */
 export function locateStatement(T: Token[], k: number, skip: number, dialect: Dialect): StmtLoc {
-  let s0 = 0;
-  let d = 0, m = 0;
-  for (let j = k; j >= 0; j--) {
-    const t = T[j];
-    if (t.kind === "go" || (t.kind === "punct" && t.value === ";")) { s0 = j + 1; break; }
-    if (t.kind === "punct") {
-      if (t.value === ")") d++;
-      else if (t.value === "(") { d--; if (d < m) m = d; }
-      continue;
-    }
-    if (d === m && (t.kind === "keyword" || t.kind === "ident") && ANCHOR_KEYWORDS.has(t.upper) && isAnchorAt(T, j)) {
-      s0 = j;
-      break;
-    }
-  }
+  const s0 = restartPoint(T, k);
   const sp = new Splitter(T, dialect);
   let start = -1, end = -1, kind = "";
   let afterCursor = false;
@@ -556,6 +561,10 @@ interface Ref extends TableInScope {
   scopeBranch?: number;
   /** A derived table whose select list is `*`: the "(" of its query, whose own tables give its columns. */
   starOpen?: number;
+  /** A named reference: the token index of each written part of its name (`db..t` has two), for semantic colours. */
+  partAt?: number[];
+  /** The name is called: `dbo.f(1)`, `o.x.nodes(…)` (a column's method on T-SQL APPLY), Oracle `pkg.f(…)`. */
+  call?: boolean;
 }
 
 /** Clauses whose cursor is in an expression over the statement's sources. */
@@ -581,9 +590,13 @@ interface WFrame { clause: Clause; fn: FrameFn; open: number; execKw: number; ca
 class Analyzer {
   readonly pm: Int32Array;
   readonly ctes: { name: string; columns?: string[]; quoted?: boolean }[] = [];
+  /** The token index of each CTE's name in its definition, in `ctes` order. */
+  readonly cteAt: number[] = [];
   /** CTE name (lower case) → the "(" of its body, for a body whose select list is `*`. */
   private readonly cteStar = new Map<string, number>();
   readonly refs: Ref[] = [];
+  /** Every named reference parseRef read, in order; a PIVOT's source stays here after it leaves `refs`. */
+  readonly named: Ref[] = [];
   insert?: InsertInfo;
   mergeTarget?: Ref;
   private skipUntil = -1;
@@ -779,6 +792,7 @@ class Analyzer {
       if (!isNameTok(nameTok)) return;
       const name = nameTok!.value;
       const quoted = nameTok!.kind === "qident";
+      this.cteAt.push(i); // every path below records this CTE in `ctes`
       i++;
       let cols: string[] | undefined;
       if (isPunct(T[i], "(")) {
@@ -983,6 +997,7 @@ class Analyzer {
     // dotted name chain: [db.][schema.]name, allowing empty parts (db..t); temp #t and table variables @t
     const parts: string[] = [];
     const quoted: boolean[] = [];
+    const partAt: number[] = [];
     let x = j;
     let last = -1;
     for (;;) {
@@ -991,6 +1006,7 @@ class Analyzer {
       if (isNameTok(t) || (t.kind === "variable" && parts.length === 0)) {
         parts.push(t.value);
         quoted.push(t.kind === "qident");
+        partAt.push(x);
         last = x;
         x++;
         if (isPunct(T[x], ".") && x <= this.b) { x++; if (isPunct(T[x], ".")) { parts.push(""); quoted.push(false); x++; } continue; }
@@ -999,10 +1015,12 @@ class Analyzer {
       return undefined; // not a name, or the chain ends with '.'
     }
     let n = last + 1;
+    let call = false;
     if (!noCall && isPunct(T[n], "(") && n <= this.b) {
       const m = this.match(n);
       if (m < 0) return undefined;
       n = m + 1;
+      call = true;
     }
     if (!this.pg && W(T[n]) === "WITH" && isPunct(T[n + 1], "(")) { const m = this.match(n + 1); n = m < 0 ? n + 2 : m + 1; }
     if (!this.pg && W(T[n]) === "FOR" && W(T[n + 1]) === "SYSTEM_TIME") n = this.skipSystemTime(n + 2);
@@ -1028,8 +1046,11 @@ class Analyzer {
     if (al.aliasQuoted) ref.aliasQuoted = true;
     if (quoted[parts.length - 1]) ref.quoted = true;
     if (parts.length >= 2 && quoted[parts.length - 2]) ref.schemaQuoted = true;
+    ref.partAt = partAt;
+    if (call) ref.call = true;
     this.tagScope(ref);
     this.refs.push(ref);
+    this.named.push(ref);
     this.skipUntil = Math.max(this.skipUntil, ref.endIdx);
     return ref;
   }
@@ -1720,4 +1741,329 @@ function scanBody(text: string, T: Token[], idx: number, bs: number, be: number,
     }
   }
   return inner;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Semantic spans (App Themes §5.3): CTE names and schema prefixes for the editor's semantic tokens. The same statement
+// split and Analyzer as completion, so both agree on what a CTE is; tokens only, never a regex over the text.
+// ---------------------------------------------------------------------------------------------
+
+export type SemanticKind = "cte" | "schema";
+
+/** One name to colour: `[start, end)` in the text, on one line, never inside a string or a comment. */
+export interface SemanticSpan { start: number; end: number; kind: SemanticKind }
+
+/** Statements one call analyses at most (the statements of PostgreSQL `$$` bodies included). */
+export const SEMANTIC_MAX_STATEMENTS = 200;
+
+/** Words between CREATE / ALTER / DROP [OR REPLACE] and the object kind. */
+const DDL_MODIFIERS = new Set([
+  "TEMP", "TEMPORARY", "GLOBAL", "LOCAL", "UNLOGGED", "UNIQUE", "CLUSTERED", "NONCLUSTERED", "COLUMNSTORE", "MATERIALIZED",
+  "RECURSIVE", "FOREIGN", "VIRTUAL", "CONSTRAINT", "FULLTEXT", "SPATIAL", "BITMAP", "PERSISTENT", "EDITIONABLE",
+  "NONEDITIONABLE", "EDITIONING", "FORCE", "NOFORCE", "AGGREGATE",
+]);
+/** Object kinds whose name follows CREATE / ALTER / DROP. */
+const DDL_KINDS = new Set([
+  "TABLE", "VIEW", "PROCEDURE", "PROC", "FUNCTION", "TRIGGER", "INDEX", "SEQUENCE", "TYPE", "SYNONYM", "PACKAGE", "MACRO",
+  "DOMAIN", "EVENT",
+]);
+
+interface SpanCtx {
+  /** The text the tokens index: the document, or a PostgreSQL `$$` body in it. */
+  text: string;
+  /** Where `text` starts in the document. */
+  base: number;
+  /** The requested document range. */
+  from: number;
+  to: number;
+  dialect: Dialect;
+  schema: SchemaIndex | null;
+  out: SemanticSpan[];
+  /** Statements this call may still analyse. */
+  budget: { left: number };
+}
+
+/**
+ * The CTE names and schema prefixes of the statements overlapping `[from, to)` (offsets in `text`), sorted, for the
+ * semantic-token provider (App Themes §5.3). Never throws.
+ * - `cte`: a CTE's name where it is defined (`WITH [RECURSIVE] name …`), an unqualified table reference that resolves to
+ *   one, and a qualifier `name.` when `name` is such a reference written without an alias.
+ * - `schema`: every non-final part of a dotted name in an object position (FROM, JOIN, APPLY, UPDATE, INSERT INTO,
+ *   DELETE, MERGE INTO, USING, SELECT … INTO, DDL headers with an index's or trigger's ON table and REFERENCES,
+ *   TRUNCATE, EXEC / EXECUTE / CALL targets).
+ * - Only where `schema` (the connection's cached catalog) names the part: `a.b(` calls anywhere (a schema's function, an
+ *   Oracle package's, a T-SQL column's method), Oracle two-part EXEC / CALL targets, and PostgreSQL / Oracle `INTO a.b`
+ *   (a record field in PL/pgSQL and PL/SQL).
+ * - Never: aliases, columns, strings, comments, Oracle `name@link`, a span that crosses a line.
+ * PostgreSQL `$$` routine and DO bodies are analysed as scripts of their own. At most SEMANTIC_MAX_STATEMENTS statements.
+ */
+export function semanticSpans(text: string, dialect: Dialect, from: number, to: number, schema?: SchemaIndex | null): SemanticSpan[] {
+  const src = typeof text === "string" ? text : "";
+  const n = src.length;
+  let lo = Math.max(0, Math.min(Number.isFinite(from) ? from : 0, n));
+  let hi = Math.max(0, Math.min(Number.isFinite(to) ? to : n, n));
+  if (lo > hi) [lo, hi] = [hi, lo];
+  const d = knownDialect(dialect);
+  const c: SpanCtx = { text: src, base: 0, from: lo, to: hi, dialect: d, schema: schema ?? null, out: [], budget: { left: SEMANTIC_MAX_STATEMENTS } };
+  try {
+    scriptSpans(c, getStream(src, d).code, 0);
+  } catch (e) {
+    // Tolerant: the spans found so far are kept. An analyzer bug shows here (CTE and schema colors stop part way) in a
+    // dev build; the shipped app stays quiet. Never the SQL text: it is user data (CLAUDE §3).
+    if (import.meta.env.DEV) console.debug("[semantic] spans stopped early:", e instanceof Error ? e.message : String(e));
+  }
+  const out = c.out.sort((x, y) => x.start - y.start);
+  let w = 0;
+  for (const s of out) if (w === 0 || s.start >= out[w - 1].end) out[w++] = s;
+  out.length = w;
+  return out;
+}
+
+/** The statements of one script (the document or a `$$` body) that overlap the range. */
+function scriptSpans(c: SpanCtx, T: Token[], depth: number): void {
+  const n = T.length;
+  if (!n) return;
+  const lo = c.from - c.base, hi = c.to - c.base;
+  const sp = new Splitter(T, c.dialect);
+  let start = -1;
+  for (let i = restartPoint(T, Math.max(0, lastStartingBefore(T, lo))); i <= n; i++) {
+    const r = i < n ? sp.step(i) : GO;
+    if (r === CONT) continue;
+    if (start >= 0 && T[i - 1].end > lo) {
+      if (c.budget.left <= 0) return;
+      c.budget.left--;
+      statementSpans(c, T, start, i - 1, depth);
+    }
+    start = r === START ? i : -1;
+    if (i < n && T[i].start >= hi) return;
+  }
+}
+
+function statementSpans(c: SpanCtx, T: Token[], a: number, b: number, depth: number): void {
+  const an = new Analyzer(c.text, T, a, b, -1, c.dialect);
+  an.parseCtes();
+  an.collectRefs();
+  /** Tokens of names in object positions: never a qualifier. */
+  const object = new Uint8Array(b - a + 1);
+  const take = (i: number) => { if (i >= a && i <= b) object[i - a] = 1; };
+  const cteNames = new Set<string>();
+  for (const x of an.ctes) cteNames.add(x.name.toLowerCase());
+  for (const at of an.cteAt) emit(c, T[at], "cte");
+  // A qualifier `name.` is a CTE's only when an unaliased reference to the CTE is the one thing in the statement so named.
+  const cteUnaliased = new Set<string>();
+  const otherNames = new Set<string>();
+  for (const r of an.refs) if (r.alias) otherNames.add(r.alias.toLowerCase());
+  const pgOrOracle = PG_RULES[c.dialect] || c.dialect === "oracle";
+  for (const r of an.named) {
+    const at = r.partAt ?? [];
+    if (!at.length) continue;
+    // `a IS DISTINCT FROM b.c`: an expression, not a FROM clause.
+    if (W(T[at[0] - 1]) === "FROM" && W(T[at[0] - 2]) === "DISTINCT") continue;
+    for (const p of at) take(p);
+    if (r.alias) otherNames.add(r.alias.toLowerCase());
+    const last = at[at.length - 1];
+    if (dbLink(c, T, last + 1)) continue;
+    if (at.length === 1) {
+      const t = T[last];
+      // `FROM f(1)` calls a function: a CTE takes no arguments, so a CTE named f does not make this one.
+      if (isNameTok(t) && !r.call && cteNames.has(t.value.toLowerCase())) {
+        emit(c, t, "cte");
+        if (!r.alias) cteUnaliased.add(t.value.toLowerCase());
+      } else if (!r.alias) otherNames.add(r.name.toLowerCase());
+      continue;
+    }
+    if (!r.alias) otherNames.add(r.name.toLowerCase());
+    const confirm = r.call || (r.role === "into" && pgOrOracle);
+    for (let p = 0; p < at.length - 1; p++) if (!confirm || catalogHas(c, T[at[p]])) emit(c, T[at[p]], "schema");
+  }
+  const head = W(T[a]);
+  if (head === "CREATE" || head === "ALTER" || head === "DROP") ddlSpans(c, T, a, b, head, take);
+  else if (head === "TRUNCATE") {
+    let j = a + 1;
+    if (W(T[j]) === "TABLE") j++;
+    if (W(T[j]) === "ONLY") j++;
+    j = objectChain(c, T, j, b, take, true);
+    while (j < b && isPunct(T[j], ",")) j = objectChain(c, T, j + 1, b, take, true);
+  }
+  for (let i = a; i <= b; i++) {
+    if (object[i - a]) continue;
+    const t = T[i];
+    if (t.kind === "string") {
+      if (t.tag && depth < 3 && DIALECTS[c.dialect].dollarQuotedBodies && i > 0 && (W(T[i - 1]) === "AS" || W(T[i - 1]) === "DO")) bodySpans(c, t, depth);
+      continue;
+    }
+    const u = W(t);
+    if (u === "EXEC" || u === "EXECUTE" || u === "CALL") { execSpans(c, T, i, a, b, take); continue; }
+    if (!isNameTok(t) || i >= b || !isPunct(T[i + 1], ".")) continue;
+    // A part after a dot is not a chain's start; a dot before this statement's first token is another statement's.
+    if (i > a && (isPunct(T[i - 1], ".") || isOp(T[i - 1], "::"))) continue;
+    const ch = nameChain(T, i, b)!;
+    if (dbLink(c, T, ch.next)) {
+      // `hr.pkg@link(1)`: names on another database (Oracle) are never colored, as in an object position.
+    } else if (ch.parts.length >= 2 && ch.next <= b && isPunct(T[ch.next], "(")) {
+      // `a.b(`: a schema's function, a package's, or a column's method — only the catalog can tell.
+      for (let p = 0; p < ch.parts.length - 1; p++) if (catalogHas(c, T[ch.parts[p]])) emit(c, T[ch.parts[p]], "schema");
+    } else {
+      const key = t.value.toLowerCase();
+      if (cteUnaliased.has(key) && !otherNames.has(key)) emit(c, t, "cte");
+    }
+    i = ch.parts[ch.parts.length - 1];
+  }
+}
+
+/** `CREATE | ALTER | DROP [OR REPLACE] [modifiers] <kind> [IF [NOT] EXISTS] a.b`, an index's or trigger's ON table, REFERENCES. */
+function ddlSpans(c: SpanCtx, T: Token[], a: number, b: number, head: string, take: (i: number) => void): void {
+  let j = a + 1;
+  if (W(T[j]) === "OR") j += 2;
+  for (let guard = 0; guard < 8 && j <= b; guard++) {
+    const w = W(T[j]);
+    if (DDL_MODIFIERS.has(w)) { j++; continue; }
+    // MySQL: ALGORITHM = x, DEFINER = user, SQL SECURITY x, before VIEW, PROCEDURE, FUNCTION, TRIGGER or EVENT.
+    if ((w === "ALGORITHM" || w === "DEFINER") && isOp(T[j + 1], "=")) {
+      j += 2;
+      while (j <= b && j < a + 16 && !DDL_KINDS.has(W(T[j]))) j++;
+      continue;
+    }
+    if (w === "SQL" && W(T[j + 1]) === "SECURITY") { j += 3; continue; }
+    break;
+  }
+  const kind = W(T[j]);
+  if (DDL_KINDS.has(kind)) {
+    j++;
+    if ((kind === "PACKAGE" || kind === "TYPE") && W(T[j]) === "BODY") j++;
+    if (kind === "INDEX" && W(T[j]) === "CONCURRENTLY") j++;
+    let ok = true;
+    if (W(T[j]) === "IF") {
+      j++;
+      if (W(T[j]) === "NOT") j++;
+      ok = W(T[j]) === "EXISTS";
+      j++;
+    }
+    if (ok) {
+      if (W(T[j]) === "ONLY") j++;
+      // T-SQL `DROP INDEX t.ix` (the old form) names the index's table, not a schema.
+      const mark = !(c.dialect === "tsql" && kind === "INDEX" && head === "DROP");
+      j = objectChain(c, T, j, b, take, mark);
+      if (head === "DROP") while (j < b && isPunct(T[j], ",")) j = objectChain(c, T, j + 1, b, take, mark);
+      if (kind === "INDEX" || kind === "TRIGGER") {
+        let depth = 0;
+        for (let x = j; x <= b; x++) {
+          if (isPunct(T[x], "(")) depth++;
+          else if (isPunct(T[x], ")")) depth--;
+          else if (depth === 0 && W(T[x]) === "ON") {
+            objectChain(c, T, W(T[x + 1]) === "ONLY" ? x + 2 : x + 1, b, take, true);
+            break;
+          }
+        }
+      }
+    }
+  }
+  for (let x = a + 1; x < b; x++) if (W(T[x]) === "REFERENCES") objectChain(c, T, x + 1, b, take, true);
+}
+
+/** EXEC / EXECUTE / CALL at `i`: its target's schema (Oracle: the schema of `s.pkg.p`, or of `x.p` when the catalog has x). */
+function execSpans(c: SpanCtx, T: Token[], i: number, a: number, b: number, take: (i: number) => void): void {
+  // `x.exec`: a name, not the statement. Only within this statement: `SELECT a.` left unfinished before `EXEC dbo.p`
+  // ends at the dot, and the EXEC that follows is a statement of its own.
+  if (i > a && isPunct(T[i - 1], ".")) return;
+  let j = i + 1;
+  const next = T[j];
+  const nu = W(next);
+  if (W(T[i]) === "EXECUTE" && (nu === "FUNCTION" || nu === "PROCEDURE")) j++; // PostgreSQL triggers: EXECUTE FUNCTION s.f()
+  else {
+    if (i > a && CONTINUATION_PREV.has(W(T[i - 1]))) return; // GRANT EXECUTE, WITH EXECUTE AS
+    if (nu === "AS") return; // EXECUTE AS USER
+    if (!PG_RULES[c.dialect] && isPunct(next, "(")) return; // EXEC ('dynamic SQL')
+    if (next?.kind === "variable" && isOp(T[j + 1], "=")) j += 2; // EXEC @rc = dbo.p
+  }
+  const ch = nameChain(T, j, b);
+  if (!ch) return;
+  for (const p of ch.parts) take(p);
+  if (ch.parts.length < 2 || dbLink(c, T, ch.next)) return;
+  if (c.dialect === "oracle") {
+    if (ch.parts.length >= 3 || catalogHas(c, T[ch.parts[0]])) emit(c, T[ch.parts[0]], "schema");
+    return;
+  }
+  for (let p = 0; p < ch.parts.length - 1; p++) emit(c, T[ch.parts[p]], "schema");
+}
+
+/** A dotted name at `j` in an object position: its parts are names, never qualifiers. Returns the index after it. */
+function objectChain(c: SpanCtx, T: Token[], j: number, b: number, take: (i: number) => void, mark: boolean): number {
+  const ch = nameChain(T, j, b);
+  if (!ch) return j;
+  for (const p of ch.parts) take(p);
+  if (mark && !dbLink(c, T, ch.next)) for (let p = 0; p < ch.parts.length - 1; p++) emit(c, T[ch.parts[p]], "schema");
+  return ch.next;
+}
+
+/** `a.b.c` / `db..t` at `j` (a name first, then names or keywords): the token index of each written part, and the index after. */
+function nameChain(T: Token[], j: number, b: number): { parts: number[]; next: number } | null {
+  if (j > b || !isNameTok(T[j])) return null;
+  const parts = [j];
+  let x = j + 1;
+  while (x < b && isPunct(T[x], ".")) {
+    const nx = T[x + 1];
+    if (isNameTok(nx) || nx.kind === "keyword") { parts.push(x + 1); x += 2; }
+    else if (isPunct(nx, ".")) x++;
+    else break;
+  }
+  return { parts, next: x };
+}
+
+/** Oracle `name@link`: a remote object, never coloured. */
+function dbLink(c: SpanCtx, T: Token[], x: number): boolean {
+  return c.dialect === "oracle" && isOp(T[x], "@");
+}
+
+const catalogNames = new WeakMap<SchemaIndex, { exact: Set<string>; lower: Set<string> }>();
+
+/** The cached catalog has a schema or database of this name (spelled as the server folds it, where it folds names). */
+function catalogHas(c: SpanCtx, t: Token): boolean {
+  const idx = c.schema;
+  if (!idx || !isNameTok(t)) return false;
+  let m = catalogNames.get(idx);
+  if (!m) {
+    m = { exact: new Set(), lower: new Set() };
+    for (const s of [...(idx.schemas ?? []), ...(idx.databases ?? [])]) {
+      if (typeof s !== "string") continue;
+      m.exact.add(s);
+      m.lower.add(s.toLowerCase());
+    }
+    catalogNames.set(idx, m);
+  }
+  return DIALECTS[c.dialect].identifierFold
+    ? m.exact.has(foldIdentifier(t.value, t.kind === "qident", c.dialect))
+    : m.lower.has(t.value.toLowerCase());
+}
+
+/**
+ * A body's code tokens, kept per body token: a token object survives incremental re-lexing only while its text is
+ * unchanged (lexer.ts), so a body that was not edited is not lexed again.
+ */
+const bodyTokens = new WeakMap<Token, { dialect: Dialect; length: number; code: Token[] }>();
+
+/** A PostgreSQL `AS $$ … $$` / `DO $$ … $$` body: analysed as a script of its own (as scanBody does for completion). */
+function bodySpans(c: SpanCtx, t: Token, depth: number): void {
+  const bs = t.start + (t.tag ?? 0);
+  const be = t.open ? t.end : t.end - (t.tag ?? 0);
+  if (be <= bs || c.base + be <= c.from || c.base + bs >= c.to) return;
+  const body = c.text.slice(bs, be);
+  let memo = bodyTokens.get(t);
+  if (!memo || memo.dialect !== c.dialect || memo.length !== t.end - t.start) {
+    memo = { dialect: c.dialect, length: t.end - t.start, code: tokenize(body, c.dialect).filter((x) => x.kind !== "comment") };
+    bodyTokens.set(t, memo);
+  }
+  scriptSpans({ ...c, text: body, base: c.base + bs }, memo.code, depth + 1);
+}
+
+function emit(c: SpanCtx, t: Token, kind: SemanticKind): void {
+  if (t.kind !== "ident" && t.kind !== "qident") return;
+  const s = c.base + t.start, e = c.base + t.end;
+  if (e <= c.from || s >= c.to || e <= s) return;
+  // Monaco's semantic tokens cannot cross a line.
+  for (let x = t.start; x < t.end; x++) {
+    const ch = c.text.charCodeAt(x);
+    if (ch === 10 || ch === 13) return;
+  }
+  c.out.push({ start: s, end: e, kind });
 }

@@ -7,7 +7,9 @@ import { explorerAction } from "../explorer/explorerWindow";
 import { modeOf, type ExplorerMode } from "../explorer/layoutState";
 import { EngineChip, NumberField, Segmented, Switch } from "../app/controls";
 import { Icon } from "../app/icons";
-import { syntaxThemeById, type SyntaxThemeId } from "../editor/syntaxTheme";
+import { syntaxThemeById, type SyntaxChoice } from "../editor/syntaxTheme";
+import { appThemeById } from "../theme/appThemes";
+import { AppThemePicker } from "./AppThemePicker";
 import { SyntaxThemePicker } from "./SyntaxThemePicker";
 import { defaultsOf, isModified, pages, settingDefs, type PageId, type SettingDef } from "./registry";
 
@@ -42,8 +44,10 @@ function defaultText(def: SettingDef): string {
       return `${(v as number).toLocaleString("en-US")} rows`;
     case "explorerMode":
       return EXPLORER_MODES.find((m) => m.value === modeNow(defaultSettings))!.label;
+    case "appTheme":
+      return appThemeById(defaultSettings.darkTheme)?.name ?? "Querithm Dark";
     case "syntaxTheme":
-      return syntaxThemeById(v as string).label;
+      return v === "default" ? "Default" : syntaxThemeById(v as string).label;
   }
 }
 
@@ -122,17 +126,24 @@ export function SettingRow({ def, announce }: { def: SettingDef; announce: (text
         </span>
       );
       break;
+    case "appTheme":
+      control = (
+        <div id={id}>
+          <AppThemePicker name={id} labelledBy={labelId} describedBy={describedBy} />
+        </div>
+      );
+      break;
     case "syntaxTheme":
       control = (
         <div id={id}>
-          <SyntaxThemePicker name={id} value={st.value as SyntaxThemeId} labelledBy={labelId} describedBy={describedBy} onChange={(v) => set({ syntaxTheme: v })} />
+          <SyntaxThemePicker name={id} value={st.value as SyntaxChoice} labelledBy={labelId} describedBy={describedBy} onChange={(v) => set({ syntaxColors: v })} />
         </div>
       );
       break;
   }
   const labelled = c.kind === "switch" || c.kind === "number";
   // The theme cards need the row's width: they sit under the label instead of beside it.
-  const wide = c.kind === "syntaxTheme";
+  const wide = c.kind === "syntaxTheme" || c.kind === "appTheme";
   const reset = () => {
     resetRow(def);
     announce(`${def.label} reset to ${defaultText(def)}.`);

@@ -78,7 +78,7 @@ function LiveOutput({ tabId, cell, executionId, engine }: { tabId: string; cell:
                 key={v}
                 role="radio"
                 aria-checked={(cell.view ?? "grid") === v}
-                className={`h-full px-2 ${(cell.view ?? "grid") === v ? "bg-accent-solid text-white font-semibold" : "text-fg hover:bg-hover"}`}
+                className={`h-full px-2 ${(cell.view ?? "grid") === v ? "bg-accent-solid text-accent-fg font-semibold" : "text-fg hover:bg-ghost-hover"}`}
                 onClick={() => setCellChart(tabId, cell.id, { view: v })}
               >
                 {v === "grid" ? "Grid" : "Chart"}
@@ -96,7 +96,7 @@ function LiveOutput({ tabId, cell, executionId, engine }: { tabId: string; cell:
       )}
       {others.length > 0 && (
         <div className="mt-1">
-          <button className="text-accent hover:underline" onClick={() => setAllMessages(!allMessages)} aria-expanded={allMessages}>
+          <button className="q-link" onClick={() => setAllMessages(!allMessages)} aria-expanded={allMessages}>
             {allMessages ? "Hide messages" : `Messages (${others.length.toLocaleString()})`}
           </button>
           {allMessages && (

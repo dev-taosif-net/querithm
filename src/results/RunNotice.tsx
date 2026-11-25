@@ -25,7 +25,7 @@ export function RunNotice({ tab, view, data, skip = [] }: { tab: TabState; view:
     <div
       role="status"
       data-q-notice={n.kind}
-      className={`h-[24px] pl-2 pr-1 flex items-center gap-2 text-[11.5px] shrink-0 whitespace-nowrap overflow-hidden border-b q-hl ${tone === "err" ? "bg-err/10 border-err/35 text-fg" : "bg-warn/10 border-warn/35 text-fg"}`}
+      className={`h-[24px] pl-2 pr-1 flex items-center gap-2 text-[11.5px] shrink-0 whitespace-nowrap overflow-hidden border-b q-hl ${tone === "err" ? "bg-err/(--q-err-row-alpha) border-err/35 border-l-2 border-l-err text-fg" : "bg-warn/(--q-warn-row-alpha) border-warn/35 border-l-2 border-l-warn text-fg"}`}
     >
       <NoticeBody tab={tab} notice={n} />
       <span className="flex-1" />
@@ -38,7 +38,7 @@ export function RunNotice({ tab, view, data, skip = [] }: { tab: TabState; view:
       {n.kind !== "older" && (
         <button
           type="button"
-          className="w-5 h-5 rounded flex items-center justify-center text-muted hover:text-fg hover:bg-hover shrink-0"
+          className="q-icon-btn w-5 h-5 shrink-0"
           aria-label="Dismiss notice"
           title="Dismiss (it returns on the next run that needs it)"
           onClick={() => useTabs.getState().update(tab.id, { noticeDismissed: view.id })}

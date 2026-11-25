@@ -115,6 +115,26 @@ public sealed class ProdConfirmationsSettingTests
         Assert.False(h.Services.Executions.Guard.ProdConfirmations);
     }
 
+    /// <summary>
+    /// settings.patch merges members of an object setting; the switch is a bare true / false that settings.set checks and
+    /// applies to the guard, so a patch of its key is refused and neither the stored value nor the guard moves.
+    /// </summary>
+    [Fact]
+    public async Task A_settings_patch_of_the_switch_is_refused_and_changes_nothing()
+    {
+        var (h, sid) = await SqliteProd();
+        await using var _h = h;
+        await Set(h, "false");
+        var e = await Assert.ThrowsAsync<QuerithmException>(() => h.Rpc.SettingsPatch(new SettingsPatchParams
+        {
+            Key = QueryGuard.SettingKey, Set = new Dictionary<string, string> { ["on"] = "true" }, SetWhenNew = new Dictionary<string, string> { ["on"] = "true" },
+        }));
+        Assert.Equal("invalid", e.Code);
+        Assert.Equal("false", Assert.Single(await h.Rpc.SettingsGet(new SettingsGetParams { Keys = [QueryGuard.SettingKey] })).ValueJson);
+        Assert.False(h.Services.Executions.Guard.ProdConfirmations);
+        Assert.Equal(3, await Count(h, sid));
+    }
+
     static Services Start(LocalStore store) =>
         Services.Create(store, new CapturingFrames(), new CapturingNotifier(), NullLoggerFactory.Instance, new ProviderRegistry([new SqliteProvider()]));
 

@@ -73,7 +73,7 @@ describe("engine status", () => {
       h.rpc.mockClear();
       h.status!({ state: "restarted" });
       await vi.advanceTimersByTimeAsync(0);
-      expect(h.rpc).toHaveBeenCalledWith("settings.set", expect.objectContaining({ key: "ui.settings" }));
+      expect(h.rpc).toHaveBeenCalledWith("settings.patch", expect.objectContaining({ key: "ui.settings", set: expect.objectContaining({ wordWrap: "true" }) }));
       expect(useSettingsStatus.getState().save).toBe("saved");
       off();
     } finally {

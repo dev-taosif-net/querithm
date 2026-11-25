@@ -1,10 +1,19 @@
 // Monaco models are created once per tab and disposed on close (§12). Editor instances are shared: one per
 // visible Dockview group (normally one), and switching tabs calls setModel() — never one Monaco per tab.
 import { initMonaco, monaco } from "./monaco";
+import { semanticWanted, setPaletteChangeHook } from "./themeState";
+import { setSemanticEnabled } from "./semanticTokens";
+import { clearSemanticTokens } from "./monacoInternals";
 import { useSettings } from "../store/settings";
 import { createOverflowHost } from "./overflowHost";
 import { languageOf } from "../engines";
 import type { Engine } from "../ipc/contract";
+
+// V7 (plans/app-themes §4.3): semantic tokens already drawn hold color ids of the previous palette; drop them on every
+// palette change (the provider is asked again and paints them in the new colors).
+setPaletteChangeHook(() => {
+  for (const m of monaco.editor.getModels()) clearSemanticTokens(m);
+});
 
 const models = new Map<string, monaco.editor.ITextModel>();
 const tabOfModel = new Map<string, string>();
@@ -91,6 +100,10 @@ export function onEditorCreated(l: (editor: monaco.editor.IStandaloneCodeEditor)
 
 function editorOptions(): monaco.editor.IStandaloneEditorConstructionOptions {
   const s = useSettings.getState();
+  // CTE names and schema prefixes are colored only by a palette that has colors for them (Default): the provider
+  // (switched by createEntry and refreshEditorOptions) and the editor option go together. The option is global
+  // configuration, so every editor follows it.
+  const semantic = semanticWanted();
   return {
     automaticLayout: true,
     fontFamily: '"JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", Menlo, monospace',
@@ -128,7 +141,7 @@ function editorOptions(): monaco.editor.IStandaloneEditorConstructionOptions {
     find: { addExtraSpaceOnTop: false },
     scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10, useShadows: false },
     stickyScroll: { enabled: !s.reducedDecorations },
-    "semanticHighlighting.enabled": false,
+    "semanticHighlighting.enabled": semantic,
     contextmenu: true,
     multiCursorModifier: "alt",
     unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false },
@@ -153,8 +166,12 @@ function compactOptions(): monaco.editor.IEditorOptions {
   };
 }
 
-/** Applies settings to every live editor. */
+/**
+ * Applies settings to every live editor. The semantic provider is switched first, also with no editor open: it is
+ * module state, and left on it would keep re-registering for every schema change and keep tokens of a palette not shown.
+ */
 export function refreshEditorOptions() {
+  setSemanticEnabled(semanticWanted());
   for (const e of editors.values()) e.editor.updateOptions(e.compact ? compactOptions() : editorOptions());
   spare?.entry.editor.updateOptions(editorOptions());
 }
@@ -272,6 +289,7 @@ function createEntry(): EditorEntry {
   host.addEventListener("mouseup", noPrimaryPaste, true);
   host.addEventListener("auxclick", noPrimaryPaste, true);
   const overflow = createOverflowHost(document);
+  setSemanticEnabled(semanticWanted());
   const editor = monaco.editor.create(host, { ...editorOptions(), overflowWidgetsDomNode: overflow });
   editorCreated.forEach((l) => l(editor));
   return { editor, host, overflow };

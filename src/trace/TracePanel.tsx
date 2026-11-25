@@ -88,7 +88,7 @@ export function TracePanel({ tab, lead }: { tab: TabState; lead?: ReactNode }) {
                     setSel(i);
                     highlight(tabs, tab, e.procName, e.line);
                   }}
-                  className={`border-b border-line/50 cursor-default ${sel === i ? "bg-accent/15 q-hl" : "hover:bg-panel"} ${e.error ? "text-err" : ""}`}
+                  className={`border-b border-line/50 cursor-default ${sel === i ? "bg-row-sel q-hl" : "hover:bg-panel"} ${e.error ? "text-err" : ""}`}
                 >
                   <td className="px-3 py-1 text-muted">{i + 1}</td>
                   <td className="px-3 py-1 whitespace-nowrap">{e.eventName}</td>

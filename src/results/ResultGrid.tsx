@@ -10,7 +10,7 @@ import "@glideapps/glide-data-grid/dist/index.css";
 import { StorageClass, type ArrowResultSet, type ColumnModel } from "./model";
 import type { Cell, GridStaging, RowRef } from "./staging";
 import { rpc } from "../ipc/client";
-import { useSettings } from "../store/settings";
+import { useThemeKey } from "../app/tabStyle";
 import { toast, useUi } from "../store/ui";
 import { selectionStats, type SelectionStats } from "./selectionStats";
 export { formatStatNumber, type SelectionStats } from "./selectionStats";
@@ -59,15 +59,18 @@ export function tint(color: string, alpha: number): string {
 }
 
 export function gridTheme(): Partial<Theme> {
+  // Text on the accent fill (a selected column's header): the theme's own label color. Several App Themes have a light
+  // accent with a dark label, where white was 1.6–2.0:1 (Cortado, Fathom, Damson, Juniper).
+  const accentFg = cssVar("--q-accent-fg") || "#ffffff";
   return {
     accentColor: cssVar("--q-accent"),
-    accentFg: "#ffffff",
+    accentFg,
     accentLight: cssVar("--q-sel"),
     textDark: cssVar("--q-fg"),
     textMedium: cssVar("--q-muted"),
     textLight: cssVar("--q-faint"),
     textHeader: cssVar("--q-muted"),
-    textHeaderSelected: "#ffffff",
+    textHeaderSelected: accentFg,
     textBubble: cssVar("--q-fg"),
     bgIconHeader: cssVar("--q-muted"),
     fgIconHeader: cssVar("--q-panel"),
@@ -237,8 +240,8 @@ export function ResultGrid({
   const initialScroll = useRef({ x: memory.x, y: memory.y });
   useEffect(() => { memory.widths = widths; memory.selection = selection; }, [memory, widths, selection]);
   const ref = useRef<DataEditorRef>(null);
-  const settingTheme = useSettings((s) => s.theme);
-  const themeKey = `${settingTheme}|${document.documentElement.dataset.theme}`;
+  // The shown App Theme (mode and id): two dark themes differ, so the grid's colours are read again on either change.
+  const themeKey = useThemeKey();
   const theme = useMemo(gridTheme, [themeKey]);
   // "(default)", rows marked for deletion and unchanged compare cells are still read: the muted tier, not the faint one.
   const muted = theme.textMedium;

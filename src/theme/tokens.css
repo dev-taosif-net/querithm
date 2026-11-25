@@ -8,6 +8,8 @@
   --color-panel-2: var(--q-panel-2);
   --color-raised: var(--q-raised);
   --color-hover: var(--q-hover);
+  /* A borderless button's hover (segmented controls, chips): an App Theme's --q-ghost-hover, else the row hover. */
+  --color-ghost-hover: var(--q-ghost-hover, var(--q-hover));
   --color-line: var(--q-line);
   --color-line-strong: var(--q-line-strong);
   --color-fg: var(--q-fg);
@@ -204,6 +206,28 @@
   --q-chart-other: #768390;
 }
 
+/* Component-state defaults (plans/app-themes §13): the alphas every theme used before App Themes. An App Theme's own
+   block (more specific) sets its tuned values; Querithm Dark and Light keep these. Utilities read them as
+   bg-err/(--q-err-row-alpha). Not part of the frozen dark/light blocks above. */
+html {
+  --q-toast-alpha: 15%;
+  /* No --q-toast-border-alpha here: Querithm Dark and Light keep each edge's own fallback (toast 50 %, banner 40 %, as
+     before App Themes); the new themes set it in their blocks. */
+  --q-banner-alpha: 15%;
+  --q-err-row-alpha: 10%;
+  --q-err-row-sel-alpha: 15%;
+  --q-warn-row-alpha: 10%;
+  /* Find-in-viewer marks (JSON/XML viewer): the current match and the others. */
+  --q-mark-alpha: 45%;
+  --q-mark-dim-alpha: 25%;
+  --q-run-tint: 10%;
+  --q-run-tint-hover: 15%;
+  --q-run-tint-pressed: 15%;
+  --q-stop-tint: 10%;
+  --q-stop-tint-hover: 15%;
+  --q-stop-tint-pressed: 15%;
+}
+
 html,
 body,
 #root {
@@ -245,8 +269,27 @@ select {
 }
 
 :focus-visible {
-  outline: 1px solid var(--q-accent);
+  outline: 1px solid var(--q-focus-ring, var(--q-accent));
   outline-offset: -1px;
+}
+/* The wider rings are unlayered, as the default above is. An unlayered rule beats every @layer rule whatever their
+   specificity, so inside @layer components these never applied: the top bar, solid buttons and switches all showed the
+   1 px inset default (checked in Chrome on the built CSS). */
+/* The bar's focus ring sits outside the control, 2 px: the 1 px inset default disappears on a bordered control.
+   :where() keeps it at the default's specificity (it wins by coming later), so a solid button's own ring wins in the bar. */
+:where(.q-topbar) :focus-visible {
+  outline: 2px solid var(--q-focus-ring, var(--q-accent));
+  outline-offset: 1px;
+}
+/* The ring sits 2 px off a solid fill: on several themes the ring and the fill are the same hue (State Critic V6). */
+.q-btn-primary:focus-visible,
+.q-btn-danger:focus-visible {
+  outline: 2px solid var(--q-focus-ring, var(--q-accent));
+  outline-offset: 2px;
+}
+.q-switch:focus-visible {
+  outline: 2px solid var(--q-focus-ring, var(--q-accent));
+  outline-offset: 2px;
 }
 
 @layer components {
@@ -261,11 +304,16 @@ select {
     outline: none;
   }
   .q-input:focus {
-    border-color: var(--q-accent);
+    border-color: var(--q-input-focus, var(--q-accent));
   }
   /* Keyboard focus: the accent border plus a 1 px ring, 2 px in all, on every field (WCAG 2.4.7). */
   .q-input:focus-visible {
-    box-shadow: 0 0 0 1px var(--q-accent);
+    box-shadow: 0 0 0 1px var(--q-input-focus, var(--q-accent));
+  }
+  /* A field holding an invalid value (aria-invalid): the error border and ring; the message below carries the word. */
+  .q-input[aria-invalid="true"] {
+    border-color: var(--q-err);
+    box-shadow: 0 0 0 1px var(--q-err);
   }
   /* A native select drawn like the other fields: one chevron, the same radius and padding in both themes. */
   .q-select {
@@ -298,12 +346,20 @@ select {
     white-space: nowrap;
     cursor: default;
   }
+  /* Component states (plans/app-themes §13): an App Theme may set --q-btn-hover / -pressed / -border-hover and the other
+     state tokens below; Querithm Dark and Light set none, so each var() falls back to the color they had before. */
   .q-btn:hover:not(:disabled):not([aria-disabled="true"]) {
-    background: var(--q-hover);
+    background: var(--q-btn-hover, var(--q-hover));
+    border-color: var(--q-btn-border-hover, var(--q-line));
+  }
+  /* Pressed: one step past hover, by hue or chroma, never toward the label's lightness (labels keep 4.5:1). */
+  .q-btn:active:not(:disabled):not([aria-disabled="true"]) {
+    background: var(--q-btn-pressed, var(--q-btn-hover, var(--q-hover)));
+    border-color: var(--q-btn-border-hover, var(--q-line));
   }
   .q-btn:disabled,
   .q-btn[aria-disabled="true"] {
-    opacity: 0.45;
+    opacity: var(--q-disabled-opacity, 0.45);
   }
   /* Hover darkens a solid fill: lightening it toward white drops the white label below 4.5:1.
      Every variant that paints its own label color needs its own hover rule with the SAME selector chain as .q-btn:hover
@@ -315,19 +371,45 @@ select {
     color: var(--q-accent-fg);
     font-weight: 600;
   }
+  /* A theme whose accent fill is light (dark label) lightens it on hover instead: --q-accent-solid-hover. */
   .q-btn-primary:hover:not(:disabled):not([aria-disabled="true"]) {
-    background: color-mix(in srgb, var(--q-accent-solid) 85%, black);
+    background: var(--q-accent-solid-hover, color-mix(in srgb, var(--q-accent-solid) 85%, black));
+    border-color: var(--q-accent-solid-hover, color-mix(in srgb, var(--q-accent-solid) 85%, black));
+  }
+  .q-btn-primary:active:not(:disabled):not([aria-disabled="true"]) {
+    background: var(--q-accent-solid-pressed, var(--q-accent-solid-hover, color-mix(in srgb, var(--q-accent-solid) 85%, black)));
+    border-color: var(--q-accent-solid-pressed, var(--q-accent-solid-hover, color-mix(in srgb, var(--q-accent-solid) 85%, black)));
+  }
+  /* Disabled Primary, Run and Stop are the plain button, as Danger is: a dimmed solid or tinted fill still reads as
+     armed, and an opacity-dimmed label on the fill falls to about 2:1 (State Critic V5). */
+  .q-btn-primary:disabled {
+    background: var(--q-raised);
+    border-color: var(--q-line);
+    color: var(--q-fg);
+    font-weight: 500;
+  }
+  .q-btn-primary[aria-disabled="true"] {
+    background: var(--q-raised);
+    border-color: var(--q-line);
+    color: var(--q-fg);
+    font-weight: 500;
   }
   .q-btn-danger {
     background: var(--q-err-solid);
     border-color: var(--q-err-solid);
-    color: #fff;
+    color: var(--q-err-solid-fg, #fff);
     font-weight: 600;
   }
   /* Without its own hover rule, .q-btn:hover (higher specificity) paints --q-hover under the white label. */
   .q-btn-danger:hover:not(:disabled):not([aria-disabled="true"]) {
-    background: color-mix(in srgb, var(--q-err-solid) 85%, black);
+    background: var(--q-err-solid-hover, color-mix(in srgb, var(--q-err-solid) 85%, black));
+    border-color: var(--q-err-solid-hover, color-mix(in srgb, var(--q-err-solid) 85%, black));
   }
+  .q-btn-danger:active:not(:disabled):not([aria-disabled="true"]) {
+    background: var(--q-err-solid-pressed, var(--q-err-solid-hover, color-mix(in srgb, var(--q-err-solid) 85%, black)));
+    border-color: var(--q-err-solid-pressed, var(--q-err-solid-hover, color-mix(in srgb, var(--q-err-solid) 85%, black)));
+  }
+  /* Their focus ring (2 px off the fill) is unlayered, after the :focus-visible default. */
   /* An unavailable destructive button is a plain one: a red fill reads as armed even when dimmed. */
   .q-btn-danger:disabled,
   .q-btn-danger[aria-disabled="true"] {
@@ -339,26 +421,110 @@ select {
   /* Tinted buttons keep the tint at ≤ 15 % so the same-hue label stays at 4.5:1; the border is the full hue so the
      control's edge reaches 3:1 (WCAG 1.4.11). */
   .q-btn-run {
-    background: color-mix(in srgb, var(--q-ok) 10%, transparent);
+    background: color-mix(in srgb, var(--q-ok) var(--q-run-tint, 10%), transparent);
     border-color: var(--q-ok);
     color: var(--q-ok);
     font-weight: 600;
   }
   .q-btn-run:hover:not(:disabled):not([aria-disabled="true"]) {
-    background: color-mix(in srgb, var(--q-ok) 15%, transparent);
+    background: color-mix(in srgb, var(--q-ok) var(--q-run-tint-hover, 15%), transparent);
+    border-color: var(--q-ok);
+  }
+  .q-btn-run:active:not(:disabled):not([aria-disabled="true"]) {
+    background: color-mix(in srgb, var(--q-ok) var(--q-run-tint-pressed, var(--q-run-tint-hover, 15%)), transparent);
+    border-color: var(--q-ok);
+  }
+  .q-btn-run:disabled {
+    background: var(--q-raised);
+    border-color: var(--q-line);
+    color: var(--q-fg);
+    font-weight: 500;
+  }
+  .q-btn-run[aria-disabled="true"] {
+    background: var(--q-raised);
+    border-color: var(--q-line);
+    color: var(--q-fg);
+    font-weight: 500;
   }
   .q-btn-stop {
-    background: color-mix(in srgb, var(--q-err) 10%, transparent);
+    background: color-mix(in srgb, var(--q-err) var(--q-stop-tint, 10%), transparent);
     border-color: var(--q-err);
     color: var(--q-err);
     font-weight: 600;
   }
   .q-btn-stop:hover:not(:disabled):not([aria-disabled="true"]) {
-    background: color-mix(in srgb, var(--q-err) 15%, transparent);
+    background: color-mix(in srgb, var(--q-err) var(--q-stop-tint-hover, 15%), transparent);
+    border-color: var(--q-err);
+  }
+  .q-btn-stop:active:not(:disabled):not([aria-disabled="true"]) {
+    background: color-mix(in srgb, var(--q-err) var(--q-stop-tint-pressed, var(--q-stop-tint-hover, 15%)), transparent);
+    border-color: var(--q-err);
+  }
+  .q-btn-stop:disabled {
+    background: var(--q-raised);
+    border-color: var(--q-line);
+    color: var(--q-fg);
+    font-weight: 500;
+  }
+  .q-btn-stop[aria-disabled="true"] {
+    background: var(--q-raised);
+    border-color: var(--q-line);
+    color: var(--q-fg);
+    font-weight: 500;
   }
   .q-btn-ghost {
     background: transparent;
     border-color: transparent;
+  }
+  /* Ghost and toolbar hover are one notch calmer than a bordered button's (--q-ghost-hover); the border stays hidden. */
+  .q-btn-ghost:hover:not(:disabled):not([aria-disabled="true"]) {
+    background: var(--q-ghost-hover, var(--q-hover));
+    border-color: transparent;
+  }
+  .q-btn-ghost:active:not(:disabled):not([aria-disabled="true"]) {
+    background: var(--q-ghost-pressed, var(--q-ghost-hover, var(--q-hover)));
+    border-color: transparent;
+  }
+  /* Icon-only button (close, more, refresh, pin…): the ghost button's states at a fixed square size, muted at rest. */
+  .q-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--q-muted);
+    cursor: default;
+  }
+  .q-icon-btn:hover:not(:disabled):not([aria-disabled="true"]) {
+    background: var(--q-ghost-hover, var(--q-hover));
+    color: var(--q-fg);
+  }
+  .q-icon-btn:active:not(:disabled):not([aria-disabled="true"]) {
+    background: var(--q-ghost-pressed, var(--q-ghost-hover, var(--q-hover)));
+    color: var(--q-fg);
+  }
+  .q-icon-btn:disabled,
+  .q-icon-btn[aria-disabled="true"] {
+    opacity: var(--q-disabled-opacity, 0.45);
+  }
+  /* Text link button ("Show details", "Learn more"): accent text, underline on hover; never a fill. */
+  .q-link {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    color: var(--q-accent);
+    cursor: pointer;
+    text-underline-offset: 2px;
+  }
+  .q-link:hover:not(:disabled):not([aria-disabled="true"]) {
+    text-decoration: underline;
+  }
+  .q-link:disabled,
+  .q-link[aria-disabled="true"] {
+    opacity: var(--q-disabled-opacity, 0.45);
   }
   /* Top-bar control: no fill or border at rest (only the launch strip and Run carry an outline), 28 px tall. */
   .q-tb {
@@ -380,15 +546,83 @@ select {
   }
   .q-tb:hover:not([aria-disabled="true"]),
   .q-tb[aria-expanded="true"] {
-    background: var(--q-hover);
+    background: var(--q-ghost-hover, var(--q-hover));
+  }
+  /* :active only while pressed; an open menu ([aria-expanded]) keeps the hover token (labels keep 4.5:1 on both). */
+  .q-tb:active:not([aria-disabled="true"]) {
+    background: var(--q-ghost-pressed, var(--q-ghost-hover, var(--q-hover)));
   }
   .q-tb[aria-disabled="true"] {
-    opacity: 0.45;
+    opacity: var(--q-disabled-opacity, 0.45);
   }
-  /* The bar's focus ring sits outside the control, 2 px: the 1 px inset default disappears on a bordered control. */
-  .q-topbar :focus-visible {
-    outline: 2px solid var(--q-accent);
-    outline-offset: 1px;
+  /* The bar's focus ring (2 px, outside the control) is unlayered, after the :focus-visible default. */
+  /* Status surfaces (§13, State Critic R1/V2/V3): the kind's hue sits on a full-hue left edge and in a glyph; the fill
+     is a wash. Toasts float over the grid and the editor, so their wash sits on opaque --q-raised (no backdrop blur).
+     data-kind: error | warn | success | info. */
+  .q-toast,
+  .q-banner,
+  .q-status-row {
+    --q-kind: var(--q-fg);
+  }
+  .q-toast[data-kind="error"],
+  .q-banner[data-kind="error"],
+  .q-status-row[data-kind="error"] {
+    --q-kind: var(--q-err);
+  }
+  .q-toast[data-kind="warn"],
+  .q-banner[data-kind="warn"],
+  .q-status-row[data-kind="warn"] {
+    --q-kind: var(--q-warn);
+  }
+  .q-toast[data-kind="success"],
+  .q-banner[data-kind="success"],
+  .q-status-row[data-kind="success"] {
+    --q-kind: var(--q-ok);
+  }
+  .q-toast[data-kind="info"],
+  .q-banner[data-kind="info"],
+  .q-status-row[data-kind="info"] {
+    --q-kind: var(--q-info, var(--q-accent));
+  }
+  .q-toast {
+    background:
+      linear-gradient(color-mix(in srgb, var(--q-kind) var(--q-toast-alpha, 15%), transparent), color-mix(in srgb, var(--q-kind) var(--q-toast-alpha, 15%), transparent)),
+      var(--q-raised);
+    border: 1px solid color-mix(in srgb, var(--q-kind) var(--q-toast-border-alpha, 50%), transparent);
+    border-left: 3px solid var(--q-kind);
+    color: var(--q-kind);
+  }
+  /* An info toast is plain: raised, the hairline and body text; its glyph carries the kind. */
+  .q-toast[data-kind="info"] {
+    background: var(--q-raised);
+    border-color: var(--q-line);
+    border-left: 1px solid var(--q-line);
+    color: var(--q-fg);
+  }
+  .q-banner {
+    background: color-mix(in srgb, var(--q-kind) var(--q-banner-alpha, 15%), transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--q-kind) var(--q-toast-border-alpha, 40%), transparent);
+    border-left: 3px solid var(--q-kind);
+    color: var(--q-kind);
+  }
+  /* An in-flow error or warning row (Messages, result notices, plan warnings): a 2 px edge and the row tint. */
+  .q-status-row {
+    border-left: 2px solid var(--q-kind);
+  }
+  .q-status-row[data-kind="error"] {
+    background: color-mix(in srgb, var(--q-err) var(--q-err-row-alpha, 10%), transparent);
+  }
+  .q-status-row[data-kind="warn"] {
+    background: color-mix(in srgb, var(--q-warn) var(--q-warn-row-alpha, 10%), transparent);
+  }
+  /* The kind glyph before the text (✖ ⚠ ✓ ℹ): never color alone. */
+  .q-kind-glyph {
+    flex: none;
+    font-weight: 700;
+    color: var(--q-kind);
+  }
+  .q-toast[data-kind="info"] .q-kind-glyph {
+    color: var(--q-info, var(--q-accent));
   }
   /* A highlighted row (selection, focus, or an error / warning tint): muted text in it, from a class or an inline
      var(--q-muted), keeps 4.5:1 on the tint. */
@@ -502,10 +736,7 @@ select {
     transform: translateX(12px);
     background: var(--q-panel);
   }
-  .q-switch:focus-visible {
-    outline: 2px solid var(--q-accent);
-    outline-offset: 2px;
-  }
+  /* Its focus ring (2 px off the track) is unlayered, after the :focus-visible default. */
   .q-switch[aria-disabled="true"] {
     opacity: 0.45;
   }
@@ -1107,14 +1338,15 @@ select {
   margin-left: 4px;
   margin-top: 5px;
 }
+/* Decoration fills stay at 12 %: every syntax palette keeps 4.5:1 on them over the editor and the current line (§13). */
 .q-debug-line {
-  background: color-mix(in srgb, var(--q-warn) 18%, transparent);
+  background: color-mix(in srgb, var(--q-warn) 12%, transparent);
 }
 .q-trace-line {
-  background: color-mix(in srgb, var(--q-accent) 18%, transparent);
+  background: color-mix(in srgb, var(--q-accent) 12%, transparent);
 }
 .q-error-line {
-  background: color-mix(in srgb, var(--q-err) 14%, transparent);
+  background: color-mix(in srgb, var(--q-err) 12%, transparent);
 }
 /* What Run would execute, while the pointer or focus is on a Run control; the env color on a prod connection. */
 .q-run-scope {
@@ -1124,11 +1356,11 @@ select {
   background: color-mix(in srgb, var(--q-env-prod) 12%, transparent);
 }
 .q-pair-match {
-  background: color-mix(in srgb, var(--q-accent) 22%, transparent);
+  background: color-mix(in srgb, var(--q-accent) 12%, transparent);
   border-bottom: 2px solid var(--q-accent);
 }
 .q-insert-match {
-  background: color-mix(in srgb, var(--q-accent) 25%, transparent);
+  background: color-mix(in srgb, var(--q-accent) 12%, transparent);
   outline: 1px dashed var(--q-accent);
   border-radius: 2px;
 }

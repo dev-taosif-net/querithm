@@ -182,7 +182,7 @@ const StackPane = memo(function StackPane({ pane, index, selected, mounted, avai
         lead={
           <button
             type="button"
-            className="w-4 h-4 rounded flex items-center justify-center hover:bg-hover hover:text-fg shrink-0 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+            className="q-icon-btn w-4 h-4 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
             aria-expanded={!collapsed}
             aria-label={`${collapsed ? "Expand" : "Collapse"} result set ${n}`}
             title={keepOpen ? "Apply or discard the staged changes first" : collapsed ? "Expand" : "Collapse"}

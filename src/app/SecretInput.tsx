@@ -31,7 +31,7 @@ export function PasswordInput({ what = "password", className = "", ...rest }: Om
       <SecretInput {...rest} className={className} style={{ ...rest.style, paddingRight: 34 }} type={shown ? "text" : "password"} spellCheck={false} autoCapitalize="off" autoCorrect="off" />
       <button
         type="button"
-        className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-6 flex items-center justify-center rounded text-muted hover:text-fg hover:bg-hover"
+        className="q-icon-btn absolute right-1 top-1/2 -translate-y-1/2 w-7 h-6"
         title={shown ? "Hide" : "Show"}
         aria-label={`Show ${what}`}
         aria-pressed={shown}

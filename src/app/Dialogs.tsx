@@ -183,7 +183,7 @@ function PasswordDialog({ d }: { d: Extract<Dialog, { kind: "password" }> }) {
         </>
       }
     >
-      {d.error && <div className="mb-3 p-2 rounded bg-err/10 border border-err/40 text-err text-[11px]">{d.error}</div>}
+      {d.error && <div className="mb-3 p-2 rounded bg-err/(--q-err-row-alpha) border border-err/40 border-l-2 border-l-err text-err text-[11px]">{d.error}</div>}
       <Field label={d.ssh ? (profile?.ssh?.auth === "privateKey" ? "Key passphrase" : "SSH password") : profile?.auth === "entraToken" ? "Access token" : "Password"}>
         <PasswordInput
           className="q-input w-full" autoFocus value={value} onValue={setValue}

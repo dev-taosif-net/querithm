@@ -1,5 +1,6 @@
 // Sessions (B1a): a Glide grid over the model's rows. A snapshot repaints only the cells that changed (damage), and
 // re-renders this grid only when the row count changes — never the tab (U1). Selection follows the session key (U2).
+import { useThemeKey } from "../app/tabStyle";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DataEditor, GridCellKind, CompactSelection, type DataEditorRef, type GridCell, type GridColumn, type GridSelection, type Item } from "@glideapps/glide-data-grid";
 import "@glideapps/glide-data-grid/dist/index.css";
@@ -28,7 +29,8 @@ export function SessionsPane({ model, columns = DEFAULT_COLUMNS }: SessionsPaneP
   const [selection, setSelection] = useState<GridSelection>({ columns: CompactSelection.empty(), rows: CompactSelection.empty() });
   const prev = useRef<ActivityRow[]>(model.rows);
   const [sortTag, setSortTag] = useState("");
-  const theme = useMemo(gridTheme, []);
+  const themeKey = useThemeKey();
+  const theme = useMemo(gridTheme, [themeKey]);
   useTopics(model, ["connection"]); // dim when paused
   const paused = model.paused;
 

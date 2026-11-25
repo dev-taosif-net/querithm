@@ -1,6 +1,7 @@
 // Object Explorer (§10, §12): the servers in use and pinned profiles, lazy levels from the cached snapshot, a
-// virtualized WAI-ARIA tree (one Tab stop, arrow keys, type-ahead), search scoped to the active tab's database,
-// per-kind context menus, drag a table into the editor. Rows come from tree.ts; this file draws and drives them.
+// virtualized WAI-ARIA tree (one Tab stop, arrow keys, type-ahead), search scoped to the active tab's database (the
+// last tab's with none in front), per-kind context menus, drag a table into the editor. Rows come from tree.ts; this
+// file draws and drives them.
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
 import type { EnvironmentKind, Profile, SnapObject } from "../ipc/contract";
 import { rpc } from "../ipc/client";
@@ -21,6 +22,7 @@ import { findUsagesOf, renameOf } from "../refactor/refactorActions";
 import { explorerAction, explorerHooks, useExplorerWidth } from "./explorerWindow";
 import { useExplorer } from "./explorerState";
 import { pruneExpanded, takeNewlyConnected } from "./expansion";
+import { useLastBinding } from "../app/lastBinding";
 import { menuFor, sessionReason } from "./menus";
 import { bindActiveTab, columnList, columnName, connectFromExplorer, copyText, insertName, insertText, openObject, qualified } from "./objectActions";
 import {
@@ -102,6 +104,9 @@ export function Explorer() {
   const activeDb = useTabs((s) => (s.activeId ? s.tabs[s.activeId]?.database : undefined));
   const activeSession = useTabs((s) => (s.activeId ? s.tabs[s.activeId]?.sessionId : undefined));
   const hasTab = useTabs((s) => !!s.activeId);
+  // With no query tab in front, search reads the last tab's database: the one the top bar shows and a new query opens in.
+  const lastShown = useLastBinding(hasTab);
+  const lastDb = lastShown?.database ? lastShown : undefined;
   const themeKey = useThemeKey();
   const searchBox = useRef<HTMLInputElement>(null);
   const viewBtn = useRef<HTMLButtonElement>(null);
@@ -177,17 +182,17 @@ export function Explorer() {
     }
   }, [tree.needCatalog, servers]);
 
-  // ---- search, scoped to the active tab's database (never another server)
+  // ---- search, scoped to the active tab's database, or with none in front the top bar's (never another server)
   const query = ex.query;
   const searching = !!query.trim();
   const scope = useMemo(() => {
-    if (!hasTab) return searchScope(undefined, servers, entries);
+    if (!hasTab && !lastDb) return searchScope(undefined, servers, entries);
     // A session-owned engine's tab (SQLite) searches its own session's view; an in-memory one has none before it opens.
-    const tab = { profileId: activeProfile, database: activeDb, sessionId: activeSession };
+    const tab = hasTab ? { profileId: activeProfile, database: activeDb, sessionId: activeSession } : { profileId: lastDb!.profileId, database: lastDb!.database };
     const own = tabScope(tab);
-    return searchScope({ ...tab, sessionId: own?.sessionId, noDatabaseYet: !!activeProfile && !!activeDb && !own }, servers, entries);
+    return searchScope({ ...tab, sessionId: own?.sessionId, noDatabaseYet: !!tab.profileId && !!tab.database && !own }, servers, entries);
     // profilesList: tabScope reads the tab's engine from the profiles store.
-  }, [hasTab, activeProfile, activeDb, activeSession, servers, entries, profilesList]);
+  }, [hasTab, activeProfile, activeDb, activeSession, lastDb, servers, entries, profilesList]);
   useEffect(() => {
     if (searching && scope.state === "loading") useSnapshots.getState().ensure(scope.profileId, scope.db, scope.sessionId);
   }, [searching, scope]);
@@ -617,17 +622,18 @@ export function Explorer() {
               onKeyDown={onSearchKey}
             />
             {query && (
-              <button className="w-5 h-5 flex items-center justify-center rounded text-muted hover:text-fg hover:bg-hover" title="Clear search (Esc)" aria-label="Clear search" onClick={() => { useExplorer.getState().set({ query: "" }); searchBox.current?.focus(); }}>
+              <button className="q-icon-btn w-5 h-5" title="Clear search (Esc)" aria-label="Clear search" onClick={() => { useExplorer.getState().set({ query: "" }); searchBox.current?.focus(); }}>
                 <Icon name="close" size={12} />
               </button>
             )}
-            <button ref={kindBtn} className={`relative w-[22px] h-[22px] flex items-center justify-center rounded hover:bg-hover ${ex.kind !== "all" ? "text-accent" : "text-muted"}`} aria-label={ex.kind === "all" ? "Filter by kind" : `Kind filter: ${kindLabel(ex.kind)}`} title={ex.kind === "all" ? "Filter by kind" : `Kind filter: ${kindLabel(ex.kind)}`} aria-haspopup="menu" aria-expanded={popup === "kind"} onClick={() => setPopup((p) => (p === "kind" ? null : "kind"))}>
+            <button ref={kindBtn} className={`q-icon-btn relative w-[22px] h-[22px] ${ex.kind !== "all" ? "text-accent" : "text-muted"}`} aria-label={ex.kind === "all" ? "Filter by kind" : `Kind filter: ${kindLabel(ex.kind)}`} title={ex.kind === "all" ? "Filter by kind" : `Kind filter: ${kindLabel(ex.kind)}`} aria-haspopup="menu" aria-expanded={popup === "kind"} onClick={() => setPopup((p) => (p === "kind" ? null : "kind"))}>
               <Icon name="filter" size={14} />
               {ex.kind !== "all" && <span aria-hidden className="absolute top-[3px] right-[3px] w-1.5 h-1.5 rounded-full bg-accent" />}
             </button>
           </div>
           {popup === "kind" && <DropMenu anchor={kindBtn} label="Filter by kind" items={kindItems(ex.kind, scopeEngine ?? (engines.size === 1 ? ([...engines][0] as Engine) : undefined))} onClose={() => setPopup(null)} />}
-          <ScopeLine scope={scope} profiles={profiles} envText={envText} kind={ex.kind} count={results?.total} searching={searching} compact={compact} onReveal={() => revealActive(active)} />
+          {/* Reveals the database the line names: the active tab's, or with none in front the last tab's (no `active`). */}
+          <ScopeLine scope={scope} tabless={!hasTab} profiles={profiles} envText={envText} kind={ex.kind} count={results?.total} searching={searching} compact={compact} onReveal={() => revealActive("db" in scope ? { profileId: scope.profileId, db: scope.db } : undefined)} />
         </div>
       )}
 
@@ -820,16 +826,17 @@ function EnvTag({ env, color }: { env: EnvironmentKind; color: string }) {
   );
 }
 
-function ScopeLine({ scope, profiles, envText, kind, count, searching, compact, onReveal }: {
-  scope: ReturnType<typeof searchScope>; profiles: Map<string, Profile>; envText: Map<string, string>; kind: KindFilter; count?: number; searching: boolean; compact: boolean; onReveal: () => void;
+function ScopeLine({ scope, tabless, profiles, envText, kind, count, searching, compact, onReveal }: {
+  scope: ReturnType<typeof searchScope>; tabless: boolean; profiles: Map<string, Profile>; envText: Map<string, string>; kind: KindFilter; count?: number; searching: boolean; compact: boolean; onReveal: () => void;
 }) {
   const p = "profileId" in scope ? profiles.get(scope.profileId) : undefined;
   let right = "";
   if (searching && scope.state === "ready") right = count === undefined ? "" : `${count.toLocaleString("en-US")} match${count === 1 ? "" : "es"}${scope.stale ? " (cached)" : ""}`;
   else if (searching && scope.state === "loading") right = "Reading catalog…";
-  // What the search box searches: the active tab's database, named "in ENV server › database" so it does not read as
-  // the server being browsed below (the sticky path names that one).
-  const where = p && "db" in scope ? `Searches the active tab's database: ${ENV_TEXT[p.environment]} ${p.name} › ${scope.db}` : undefined;
+  // What the search box searches: the active tab's database (with none in front, the one new queries open in), named
+  // "in ENV server › database" so it does not read as the server being browsed below (the sticky path names that one).
+  const whose = tabless ? "the database new queries open in" : "the active tab's database";
+  const where = p && "db" in scope ? `Searches ${whose}: ${ENV_TEXT[p.environment]} ${p.name} › ${scope.db}` : undefined;
   return (
     <div id="q-explorer-scope" aria-live="polite" title={where} className="h-[22px] flex items-center gap-[5px] px-0.5 text-[11px] text-muted whitespace-nowrap overflow-hidden">
       {scope.state === "noTab" ? (
@@ -860,16 +867,16 @@ function ScopeLine({ scope, profiles, envText, kind, count, searching, compact, 
       {right && <span className="shrink-0">{right}</span>}
       {scope.state === "server" &&
         (compact ? (
-          <button className="shrink-0 w-[18px] h-[18px] flex items-center justify-center rounded border border-line-strong text-fg hover:bg-hover" aria-label="Reconnect" title="Reconnect" onClick={() => void connectFromExplorer(scope.profileId)}>
+          <button className="q-btn shrink-0 w-[18px] h-[18px] p-0 justify-center border-line-strong" aria-label="Reconnect" title="Reconnect" onClick={() => void connectFromExplorer(scope.profileId)}>
             <Icon name="reconnect" size={11} />
           </button>
         ) : (
-          <button className="shrink-0 h-[18px] px-1.5 rounded border border-line-strong text-fg text-[11px] hover:bg-hover" onClick={() => void connectFromExplorer(scope.profileId)}>
+          <button className="q-btn shrink-0 h-[18px] px-1.5 border-line-strong" onClick={() => void connectFromExplorer(scope.profileId)}>
             Reconnect
           </button>
         ))}
       {!compact && "db" in scope && scope.state !== "server" && (
-        <button className="shrink-0 w-[18px] h-[18px] flex items-center justify-center rounded text-muted hover:text-fg hover:bg-hover" aria-label="Reveal the active database in the tree" title="Reveal the active database in the tree" onClick={onReveal}>
+        <button className="q-icon-btn shrink-0 w-[18px] h-[18px]" aria-label={tabless ? "Reveal this database in the tree" : "Reveal the active database in the tree"} title={tabless ? "Reveal this database in the tree" : "Reveal the active database in the tree"} onClick={onReveal}>
           <Icon name="locate" size={12} />
         </button>
       )}

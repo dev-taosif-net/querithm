@@ -116,24 +116,75 @@ describe("Settings: rows", () => {
     expect(sw).toBeChecked();
   });
 
-  it("a segmented control is a radio group; choosing a theme applies it", async () => {
-    open({ page: "appearance" });
-    const group = screen.getByRole("radiogroup", { name: "Color theme" });
-    await userEvent.setup().click(within(group).getByRole("radio", { name: "Light" }));
-    expect(useSettings.getState().theme).toBe("light");
+  it("a segmented control is a radio group; choosing an option applies it", async () => {
+    open({ page: "formatting" });
+    const group = screen.getByRole("radiogroup", { name: "Keyword case" });
+    await userEvent.setup().click(within(group).getByRole("radio", { name: "lower" }));
+    expect(useSettings.getState().keywordCase).toBe("lower");
   });
 
-  it("syntax colors are a radio group of theme cards with a preview; choosing one applies it and reset brings Standard back", async () => {
+  it("color themes are cards in a dark and a light group; a card picks the theme and its mode; Match system keeps both picks", async () => {
+    open({ page: "appearance" });
+    const user = userEvent.setup();
+    const light = screen.getByRole("radio", { name: "Querithm Light" });
+    expect(screen.getByRole("radio", { name: "Querithm Dark" })).toBeChecked();
+    expect(light).toHaveAccessibleDescription(/brightest theme/);
+    await user.click(screen.getByRole("radio", { name: "Vellum" }));
+    expect(useSettings.getState()).toMatchObject({ theme: "light", lightTheme: "vellum", darkTheme: "dark" });
+    await user.click(screen.getByRole("radio", { name: "Cortado" }));
+    expect(useSettings.getState()).toMatchObject({ theme: "dark", darkTheme: "cortado", lightTheme: "vellum" });
+    // Match system: two groups, each choosing only its own pick; the shown theme carries "In use".
+    await user.click(screen.getByRole("radio", { name: "Match system" }));
+    expect(useSettings.getState().theme).toBe("system");
+    const whenLight = screen.getByRole("radiogroup", { name: "When the system is light" });
+    await user.click(within(whenLight).getByRole("radio", { name: "Floe" }));
+    expect(useSettings.getState()).toMatchObject({ theme: "system", lightTheme: "floe", darkTheme: "cortado" });
+    expect(screen.getAllByText("In use").length).toBe(1);
+  });
+
+  it("Single theme is one radiogroup of nine cards in a Dark and a Light group, each named by its own heading", () => {
+    useSettings.setState({ theme: "dark" });
+    open({ page: "appearance" });
+    const single = screen.getByRole("radiogroup", { name: "Single theme" });
+    const dark = within(single).getByRole("group", { name: "Dark" });
+    const light = within(single).getByRole("group", { name: "Light" });
+    expect(within(dark).getAllByRole("radio")).toHaveLength(6);
+    expect(within(light).getAllByRole("radio")).toHaveLength(3);
+    const ids = [...document.querySelectorAll("[id]")].map((e) => e.id);
+    expect(ids.length).toBe(new Set(ids).size);
+    // The mode switch's radios are hidden: the segment after each draws its keyboard focus.
+    const mode = screen.getByRole("radio", { name: "Single theme" });
+    expect(mode.className).toContain("peer");
+    expect(mode.nextElementSibling?.className).toMatch(/peer-focus-visible:outline-2/);
+  });
+
+  it("syntax colors: Default first, previewing the color theme's own palette; Standard keeps its card; reset brings Default back", async () => {
     open({ page: "appearance" });
     const group = screen.getByRole("radiogroup", { name: "Syntax colors" });
+    const radios = within(group).getAllByRole("radio");
+    expect(radios[0]).toHaveAccessibleName("Default");
+    expect(radios[0]).toBeChecked();
+    expect(radios[0]).toHaveAccessibleDescription(/Querithm Dark uses the Standard colors/);
     const standard = within(group).getByRole("radio", { name: "Standard" });
-    expect(standard).toBeChecked();
     expect(standard).toHaveAccessibleDescription(/everyday SQL/);
-    expect(within(group).getAllByText("DECLARE").length).toBe(within(group).getAllByRole("radio").length);
-    useSettings.setState({ syntaxTheme: "other" as never });
-    expect(await screen.findByRole("button", { name: "Reset Syntax colors to the default, Standard" })).toBeInTheDocument();
+    expect(within(group).getAllByText("DECLARE").length).toBe(radios.length);
     await userEvent.setup().click(standard);
-    expect(useSettings.getState().syntaxTheme).toBe("standard");
+    expect(useSettings.getState().syntaxColors).toBe("standard");
+    expect(await screen.findByRole("button", { name: "Reset Syntax colors to the default, Default" })).toBeInTheDocument();
+  });
+
+  it("the previews draw comments as the editor does: Italic comments off makes every preview's comment upright", () => {
+    open({ page: "appearance" });
+    const syntaxComments = () => within(screen.getByRole("radiogroup", { name: "Syntax colors" })).getAllByText("-- Orders in the last 30 days");
+    const themeComments = () => screen.getAllByText("-- big");
+    expect(syntaxComments().length).toBe(7);
+    expect(themeComments().length).toBe(9);
+    for (const el of [...syntaxComments(), ...themeComments()]) expect(el.style.fontStyle).toBe("italic");
+    act(() => useSettings.getState().set({ italicComments: false }));
+    for (const el of [...syntaxComments(), ...themeComments()]) expect(el.style.fontStyle).not.toBe("italic");
+    // The other font styles stay: Color-blind safe keeps its italic variables.
+    const cb = within(screen.getByRole("radiogroup", { name: "Syntax colors" })).getByRole("radio", { name: "Color-blind safe" }).closest("label")!;
+    expect(within(cb).getByText("@since").style.fontStyle).toBe("italic");
   });
 
   it("a number applies when valid, is never stored empty or out of range, and reverts on blur", () => {

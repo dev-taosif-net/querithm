@@ -137,7 +137,7 @@ describe("shell", () => {
     await shell.restart();
     await shell.appInfo();
     await shell.resultsDiscard("e1");
-    await shell.themeKeep("light");
+    await shell.themeKeep("light #0f1117 #ffffff");
     expect(invoke.mock.calls).toEqual([
       ["secret_set", { profileId: "p", secret: "s" }],
       ["secret_delete", { profileId: "p" }],
@@ -146,7 +146,7 @@ describe("shell", () => {
       ["sidecar_restart"],
       ["app_info"],
       ["results_discard", { executionId: "e1" }],
-      ["app_theme_keep", { theme: "light" }],
+      ["app_theme_keep", { theme: "light #0f1117 #ffffff" }],
     ]);
   });
 });

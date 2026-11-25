@@ -516,7 +516,7 @@ function Pane({ caption, active, onClose, children }: { caption?: string; active
       <div className={`h-[20px] px-2 flex items-center gap-2 text-[11px] text-muted bg-panel border-b border-line shrink-0 ${active ? "shadow-[inset_0_2px_0_var(--q-accent)]" : ""}`}>
         <span className="truncate">{caption}</span>
         {onClose && (
-          <button type="button" className="ml-auto w-4 h-4 rounded flex items-center justify-center hover:bg-hover hover:text-fg" aria-label="Stop comparing" title="Stop comparing" onClick={onClose}>
+          <button type="button" className="q-icon-btn ml-auto w-4 h-4" aria-label="Stop comparing" title="Stop comparing" onClick={onClose}>
             <Icon name="close" size={11} strokeWidth={2} />
           </button>
         )}
@@ -534,7 +534,7 @@ function ErrorCard({ tab, item }: { tab: TabState; item: Extract<LedgerItem, { k
     .join(", ");
   return (
     <div className="flex-1 overflow-auto p-4" data-q-error-card>
-      <div className="max-w-3xl rounded-md border border-err/40 bg-err/10 q-hl p-3 space-y-2">
+      <div className="max-w-3xl rounded-md border border-err/40 border-l-2 border-l-err bg-err/(--q-err-row-alpha) q-hl p-3 space-y-2">
         <div className="text-[12.5px] font-semibold text-err flex items-center gap-1.5">
           <Icon name="errorCircle" size={14} strokeWidth={2} />
           Error{lineOf(m) ? ` at line ${lineOf(m)}` : ""}
@@ -563,7 +563,7 @@ function InlineError({ tab, item, selected, onShow }: { tab: TabState; item: Ext
   const line = lineOf(m);
   return (
     <div
-      className={`mx-2 my-1 h-[26px] px-2 rounded border q-hl flex items-center gap-2 text-[11.5px] text-err min-w-0 ${selected ? "border-err bg-err/15" : "border-err/40 bg-err/10"}`}
+      className={`mx-2 my-1 h-[26px] px-2 rounded border q-hl flex items-center gap-2 text-[11.5px] text-err min-w-0 ${selected ? "border-err bg-err/(--q-err-row-sel-alpha)" : "border-err/40 bg-err/(--q-err-row-alpha)"}`}
       role="group" aria-label={`Error${line ? ` at line ${line}` : ""}`} data-q-stack-error
     >
       <Icon name="errorCircle" size={13} strokeWidth={2} />
@@ -921,7 +921,7 @@ function FilterField({ rs, filter, setFilter, compact }: { rs: ArrowResultSet; f
         }}
       />
       {filter && (
-        <button type="button" className="mr-0.5 w-4 h-4 rounded flex items-center justify-center text-muted hover:text-fg" onClick={() => setFilter("")} title="Clear filter (Esc)" aria-label="Clear filter">
+        <button type="button" className="q-icon-btn mr-0.5 w-4 h-4" onClick={() => setFilter("")} title="Clear filter (Esc)" aria-label="Clear filter">
           <Icon name="close" size={11} strokeWidth={2} />
         </button>
       )}

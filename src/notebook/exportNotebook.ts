@@ -113,16 +113,20 @@ async function chartImage(cell: CellState, rs: ArrowResultSet | undefined): Prom
   const { spec } = reconcileSpec(cell.chart as ChartSpec | null | undefined, chartColumns(rs));
   if (!spec) return null;
   const data = await computeChartOnce(rs, spec);
-  // Exported pages are read on white: draw in the light palette whatever the app's theme.
+  // Exported pages are read on white: draw in Querithm Light whatever the app's theme (mode and App Theme both).
   const root = document.documentElement;
   const was = root.dataset.theme;
+  const wasApp = root.dataset.appTheme;
   root.dataset.theme = "light";
+  root.dataset.appTheme = "light";
   try {
     const canvas = renderChartImage(data, `${spec.kind === "histogram" ? `Histogram of ${spec.x}` : `${spec.y.join(", ") || "Rows"} by ${spec.x}`}`, 900, 360, chartTheme());
     return canvas ? canvas.toDataURL("image/png") : null;
   } finally {
     if (was === undefined) delete root.dataset.theme;
     else root.dataset.theme = was;
+    if (wasApp === undefined) delete root.dataset.appTheme;
+    else root.dataset.appTheme = wasApp;
   }
 }
 

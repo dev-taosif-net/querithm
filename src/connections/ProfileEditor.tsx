@@ -899,7 +899,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
         {test.text}
         {testStale && <span className="block text-[11px]">Settings changed since this test. Test again.</span>}
       </span>
-      <button type="button" className="shrink-0 self-start w-6 h-6 flex items-center justify-center rounded opacity-70 hover:opacity-100 hover:bg-hover" aria-label="Dismiss" title="Dismiss" onClick={() => setTest(null)}>
+      <button type="button" className="q-icon-btn shrink-0 self-start" aria-label="Dismiss" title="Dismiss" onClick={() => setTest(null)}>
         <Icon d={ICON.x} size={13} />
       </button>
     </div>
@@ -967,13 +967,13 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
               <EngineSelect ref={refs.engine} value={engineChosen ? p.engine : null} options={offered} unavailable={unavailable} autoFocus={!engineChosen} onChange={chooseEngine} />
             </div>
             {engineChosen && !local && !pasteOpen && (
-              <button type="button" className="shrink-0 min-h-6 text-[12px] text-accent hover:underline" onClick={() => setPasteOpen(true)}>Paste a connection string…</button>
+              <button type="button" className="q-link shrink-0 min-h-6 text-[12px]" onClick={() => setPasteOpen(true)}>Paste a connection string…</button>
             )}
           </div>
           {/* Notes about the last switch or pasted string: one live region, kept mounted so each note is announced. */}
           <div aria-live="polite" className="col-start-2 min-w-0">
             {undo && (
-              <Note onDismiss={() => setUndo(null)} action={<button type="button" className="min-h-6 px-1 text-accent hover:underline" onClick={undoSwitch}>Undo</button>}>
+              <Note onDismiss={() => setUndo(null)} action={<button type="button" className="q-link min-h-6 px-1" onClick={undoSwitch}>Undo</button>}>
                 {undo.text}
               </Note>
             )}
@@ -1025,7 +1025,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
                     {fileLocations.includes("memory") && (
                       <>
                         <span className="text-[12px] text-muted">or</span>
-                        <button type="button" className="min-h-6 text-[12px] text-accent hover:underline" onClick={() => setLocation("memory")}>Use an in-memory database instead</button>
+                        <button type="button" className="q-link min-h-6 text-[12px]" onClick={() => setLocation("memory")}>Use an in-memory database instead</button>
                       </>
                     )}
                   </div>
@@ -1039,7 +1039,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
                 <div className="space-y-1.5 min-w-0">
                   <p className="text-[12px] text-fg leading-snug">Each tab gets its own empty database, and it is gone when the tab closes. Nothing is written to disk.</p>
                   {fileLocations.includes("file") && (
-                    <button type="button" className="min-h-6 text-[12px] text-accent hover:underline" onClick={() => setLocation("file")}>Use a database file instead</button>
+                    <button type="button" className="q-link min-h-6 text-[12px]" onClick={() => setLocation("file")}>Use a database file instead</button>
                   )}
                 </div>
               </div>
@@ -1084,7 +1084,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
                   <Offer>
                     <span>{p.port} is the usual {ENGINE_TRAITS[portOffer].shortLabel} port.</span>
                     <button type="button" className={`${BTN} h-6`} onClick={() => { const port = p.port; chooseEngine(portOffer); set({ port }); }}>Switch to {ENGINE_TRAITS[portOffer].shortLabel}</button>
-                    <button type="button" className="min-h-6 text-accent hover:underline" onClick={() => setPortOffer(null)}>Keep {traits.shortLabel}</button>
+                    <button type="button" className="q-link min-h-6" onClick={() => setPortOffer(null)}>Keep {traits.shortLabel}</button>
                   </Offer>
                 </div>
               )}
@@ -1145,13 +1145,13 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
                       {forget ? (
                         <>
                           <span className="text-warn">Forgotten when you save.</span>
-                          <button type="button" className="min-h-6 text-accent hover:underline" onClick={() => setForget(false)}>Undo</button>
+                          <button type="button" className="q-link min-h-6" onClick={() => setForget(false)}>Undo</button>
                         </>
                       ) : (
                         <>
                           <span className="text-ok truncate">Saved in the OS keyring</span>
-                          <button type="button" className="min-h-6 text-accent hover:underline" onClick={() => setChangeSecret(true)}>Change</button>
-                          <button type="button" className="min-h-6 text-accent hover:underline" onClick={() => setForget(true)}>Forget</button>
+                          <button type="button" className="q-link min-h-6" onClick={() => setChangeSecret(true)}>Change</button>
+                          <button type="button" className="q-link min-h-6" onClick={() => setForget(true)}>Forget</button>
                         </>
                       )}
                     </div>
@@ -1168,7 +1168,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
                       />
                       <button
                         type="button"
-                        className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-6 flex items-center justify-center rounded text-muted hover:text-fg hover:bg-hover"
+                        className="q-icon-btn absolute right-1 top-1/2 -translate-y-1/2 w-7 h-6"
                         title={showSecret ? "Hide" : "Show"}
                         // A fixed name with the pressed state: "Show password, pressed" means it is shown.
                         aria-label={`Show ${p.auth === "entraToken" ? "token" : "password"}`}
@@ -1192,7 +1192,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
                   )}
                   {existing && savedSecret !== false && changeSecret && !kindChanged && (
                     <span className="block mt-1.5 text-[11px] text-muted">
-                      Leave it empty to keep the saved one. <button type="button" className="min-h-6 text-accent hover:underline" onClick={() => { setChangeSecret(false); setSecret(""); setSecretTouched(false); }}>Keep saved</button>
+                      Leave it empty to keep the saved one. <button type="button" className="q-link min-h-6" onClick={() => { setChangeSecret(false); setSecret(""); setSecretTouched(false); }}>Keep saved</button>
                     </span>
                   )}
                 </Row>
@@ -1227,14 +1227,14 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
                       <Offer>
                         <span>The address contains “{prodWord}”. Is this Production?</span>
                         <button type="button" className={`${BTN} h-6`} onClick={() => pickEnv("prod")}>Mark as Production</button>
-                        <button type="button" className="min-h-6 text-accent hover:underline" onClick={() => setProdDismissed(prodKey)}>It isn’t</button>
+                        <button type="button" className="q-link min-h-6" onClick={() => setProdDismissed(prodKey)}>It isn’t</button>
                       </Offer>
                     )}
                     {lowerProd && (
                       <Offer warn>
                         <span className="text-fg">Lower this profile from Production to {envLabel[lowerProd]}? Its tabs lose the Production guards.</span>
                         <button type="button" className={`${BTN} h-6`} onClick={() => { set({ environment: lowerProd }); setEnvChosen(true); setLowerProd(null); }}>Lower it</button>
-                        <button type="button" className="min-h-6 text-accent hover:underline" onClick={() => setLowerProd(null)}>Keep Production</button>
+                        <button type="button" className="q-link min-h-6" onClick={() => setLowerProd(null)}>Keep Production</button>
                       </Offer>
                     )}
                   </>
@@ -1654,7 +1654,7 @@ function Note({ children, action, onDismiss }: { children: ReactNode; action?: R
       <div className="flex-1 min-w-0 space-y-0.5 select-text">{children}</div>
       {action}
       {onDismiss && (
-        <button type="button" className="shrink-0 -my-1 w-6 h-6 flex items-center justify-center rounded opacity-70 hover:opacity-100 hover:bg-hover" aria-label="Dismiss" title="Dismiss" onClick={onDismiss}>
+        <button type="button" className="q-icon-btn shrink-0 -my-1" aria-label="Dismiss" title="Dismiss" onClick={onDismiss}>
           <Icon d={ICON.x} size={13} />
         </button>
       )}

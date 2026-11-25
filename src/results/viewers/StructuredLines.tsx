@@ -17,7 +17,7 @@ function Highlighted({ text, needle, current }: { text: string; needle: string; 
   for (let at = lower.indexOf(needle); at >= 0; at = lower.indexOf(needle, at + needle.length)) {
     if (at > from) parts.push(text.slice(from, at));
     parts.push(
-      <mark key={at} className={`rounded-sm text-fg ${current ? "bg-warn/45" : "bg-warn/25"}`}>
+      <mark key={at} className={`rounded-sm text-fg ${current ? "bg-warn/(--q-mark-alpha)" : "bg-warn/(--q-mark-dim-alpha)"}`}>
         {text.slice(at, at + needle.length)}
       </mark>,
     );

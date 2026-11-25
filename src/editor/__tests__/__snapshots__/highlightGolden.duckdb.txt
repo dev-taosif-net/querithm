@@ -1,0 +1,399 @@
+# T1 highlight golden, duckdb (plans/app-themes §9 T1, I1). Written by highlightGolden.test.ts:
+# never update it to make a change pass. Each style is the foreground and font style (b bold, i italic,
+# u underline, s strikethrough) Monaco resolves for a character, under each syntax theme and mode.
+id  standard/dark  standard/light  color-blind/dark  color-blind/light  neon/dark  neon/light  forest/dark  forest/light  ember/dark  ember/light  ocean/dark  ocean/light
+A   939ca8 i       5e636d i        b1aaa8 i          585857 i           aaa596 i   665b64 i    a1a293 i     5f5f54 i      af9b83 i    6c6260 i     949fab i    575b62 i
+B   a5aaff b       22309a b        b9aafc b          320a7f b           ff67c3 b   b80086 b    4bbf70 b     006c2e b      f88f03 b    9e4c00 b     47a1ff b    0057bf b
+C   e6edf3         1f2328          e6edf3            1f2328             e6edf3     1f2328      e6edf3       1f2328        e6edf3      1f2328       e6edf3      1f2328
+D   dcdde3         24272d          f3f6f3            080804             eceef2     1a1d2c      ebebe7       1f251b        edebe5      13110f       eceff0      13161a
+E   ec9563         9c4a00          f8914f            5f3631             00e4ff     036680      f8dc90       573d00        a7a5f9      403c7a       fa9160      a24601
+F   66bccc         0e6584          9fddf9            2a5e73             fe7b18     9e4600      fbc2ac       5b4036        ffbe98      5f3b2a       30c5f0      13687c
+G   aed992         23703a          c9fdb7            5f5a00             acf56a     456800      e2a6ba       71223b        a3c77b      456947       6bebb2      00704a
+H   e3c27a         5f5300          e3dd73            3a2d01             3db5ff     0858d6      8fbce9       093c76        f8d977      3f3c00       33ecfe      004745
+I   6cc0a8         205f58          81c38e            003d3e             f0e070     795d00      af94d2       735390        77b3a4      004745       f2da63      7b5b00
+J   e6a6d6         8a1f7c          d09ec7 i          7c32a1 i           bb86ff     4c009f      87deed       004e62        f19fe0      8a4670       c3baff      562c8a
+K   aed992 b       23703a b        c9fdb7 b          5f5a00 b           acf56a b   456800 b    e2a6ba b     71223b b      a3c77b b    456947 b     6bebb2 b    00704a b
+
+== stress.sql
+   1 | /* ============================================================================
+     | 0-79 A
+   2 |    Monthly revenue health report — stress fixture for syntax palettes
+     | 0-69 A
+   3 |    Nested CTEs, JSONB, window functions, casts, params, inline comments.
+     | 0-72 A
+   4 |    ============================================================================ */
+     | 0-82 A
+   5 | WITH RECURSIVE region_tree AS (
+     | 0-4 B  4-5 C  5-14 B  14-15 C  15-26 D  26-27 C  27-29 B  29-31 C
+   6 |     -- anchor: top-level regions
+     | 0-4 C  4-32 A
+   7 |     SELECT r.region_id, r.parent_id, r.name, 1 AS depth
+     | 0-4 C  4-10 B  10-11 C  11-12 D  12-13 C  13-22 D  22-24 C  24-25 D  25-26 C  26-35 D  35-37 C  37-38 D  38-39 C  39-43 D  43-45 C  45-46 E  46-47 C  47-49 B  49-50 C  50-55 D
+   8 |     FROM sales.regions AS r
+     | 0-4 C  4-8 B  8-9 C  9-14 D  14-15 C  15-22 D  22-23 C  23-25 B  25-26 C  26-27 D
+   9 |     WHERE r.parent_id IS NULL
+     | 0-4 C  4-9 B  9-10 C  10-11 D  11-12 C  12-21 D  21-22 C  22-24 B  24-25 C  25-29 B
+  10 |     UNION ALL
+     | 0-4 C  4-9 B  9-10 C  10-13 B
+  11 |     SELECT c.region_id, c.parent_id, c.name, rt.depth + 1
+     | 0-4 C  4-10 B  10-11 C  11-12 D  12-13 C  13-22 D  22-24 C  24-25 D  25-26 C  26-35 D  35-37 C  37-38 D  38-39 C  39-43 D  43-45 C  45-47 D  47-48 C  48-53 D  53-54 C  54-55 F  55-56 C  56-57 E
+  12 |     FROM sales.regions c
+     | 0-4 C  4-8 B  8-9 C  9-14 D  14-15 C  15-22 D  22-23 C  23-24 D
+  13 |     JOIN region_tree rt ON rt.region_id = c.parent_id
+     | 0-4 C  4-8 B  8-9 C  9-20 D  20-21 C  21-23 D  23-24 C  24-26 B  26-27 C  27-29 D  29-30 C  30-39 D  39-40 C  40-41 F  41-42 C  42-43 D  43-44 C  44-53 D
+  14 |     WHERE rt.depth < 8
+     | 0-4 C  4-9 B  9-10 C  10-12 D  12-13 C  13-18 D  18-19 C  19-20 F  20-21 C  21-22 E
+  15 | ),
+     | 0-2 C
+  16 | active_customers AS (
+     | 0-16 D  16-17 C  17-19 B  19-21 C
+  17 |     SELECT cu.customer_id,
+     | 0-4 C  4-10 B  10-11 C  11-13 D  13-14 C  14-25 D  25-26 C
+  18 |            cu.profile ->> 'tier'                    AS tier,
+     | 0-11 C  11-13 D  13-14 C  14-21 D  21-22 C  22-25 F  25-26 C  26-32 G  32-52 C  52-54 B  54-55 C  55-59 D  59-60 C
+  19 |            (cu.profile -> 'flags' @> '["vip"]')     AS is_vip,
+     | 0-12 C  12-14 D  14-15 C  15-22 D  22-23 C  23-25 F  25-26 C  26-33 G  33-34 C  34-36 F  36-37 C  37-46 G  46-52 C  52-54 B  54-55 C  55-61 D  61-62 C
+  20 |            cu.profile #>> '{address,country}'       AS country,
+     | 0-11 C  11-13 D  13-14 C  14-21 D  21-22 C  22-25 F  25-26 C  26-45 G  45-52 C  52-54 B  54-55 C  55-62 D  62-63 C
+  21 |            COALESCE(cu.credit_limit, 0)::NUMERIC(12, 2) AS credit_limit
+     | 0-11 C  11-19 H  19-20 C  20-22 D  22-23 C  23-35 D  35-37 C  37-38 E  38-39 C  39-48 I  48-49 C  49-51 E  51-53 C  53-54 E  54-56 C  56-58 B  58-59 C  59-71 D
+  22 |     FROM public.customers cu
+     | 0-4 C  4-8 B  8-9 C  9-15 D  15-16 C  16-25 D  25-26 C  26-28 D
+  23 |     WHERE cu.deleted_at IS NULL
+     | 0-4 C  4-9 B  9-10 C  10-12 D  12-13 C  13-23 D  23-24 C  24-26 B  26-27 C  27-31 B
+  24 |       AND cu.created_at >= $1::TIMESTAMP            -- report start
+     | 0-6 C  6-9 B  9-10 C  10-12 D  12-13 C  13-23 D  23-24 C  24-26 F  26-27 C  27-29 J  29-40 I  40-52 C  52-67 A
+  25 |       AND cu.status IN ('active', 'trial', 'grace')
+     | 0-6 C  6-9 B  9-10 C  10-12 D  12-13 C  13-19 D  19-20 C  20-22 B  22-24 C  24-32 G  32-34 C  34-41 G  41-43 C  43-50 G  50-51 C
+  26 |       AND NOT cu.is_test_account = TRUE
+     | 0-6 C  6-9 B  9-10 C  10-13 B  13-14 C  14-16 D  16-17 C  17-32 D  32-33 C  33-34 F  34-35 C  35-39 B
+  27 | ),
+     | 0-2 C
+  28 | orders_enriched AS (
+     | 0-15 D  15-16 C  16-18 B  18-20 C
+  29 |     SELECT o.order_id,
+     | 0-4 C  4-10 B  10-11 C  11-12 D  12-13 C  13-21 D  21-22 C
+  30 |            o.customer_id,
+     | 0-11 C  11-12 D  12-13 C  13-24 D  24-25 C
+  31 |            DATE_TRUNC('month', o.ordered_at)           AS month,
+     | 0-11 C  11-21 H  21-22 C  22-29 G  29-31 C  31-32 D  32-33 C  33-43 D  43-55 C  55-57 B  57-58 C  58-63 D  63-64 C
+  32 |            CAST(o.total_cents AS BIGINT) / 100.0        AS total,
+     | 0-11 C  11-15 B  15-16 C  16-17 D  17-18 C  18-29 D  29-30 C  30-32 B  32-33 C  33-39 I  39-41 C  41-42 F  42-43 C  43-48 E  48-56 C  56-58 B  58-59 C  59-64 D  64-65 C
+  33 |            o.meta -> 'items'                           AS items,
+     | 0-11 C  11-12 D  12-13 C  13-17 D  17-18 C  18-20 F  20-21 C  21-28 G  28-55 C  55-57 B  57-58 C  58-63 D  63-64 C
+  34 |            jsonb_array_length(o.meta -> 'items')       AS item_count,
+     | 0-11 C  11-29 D  29-30 C  30-31 D  31-32 C  32-36 D  36-37 C  37-39 F  39-40 C  40-47 G  47-55 C  55-57 B  57-58 C  58-68 D  68-69 C
+  35 |            o.currency::VARCHAR(3)                      AS currency,
+     | 0-11 C  11-12 D  12-13 C  13-21 D  21-30 I  30-31 C  31-32 E  32-55 C  55-57 B  57-58 C  58-66 D  66-67 C
+  36 |            CASE
+     | 0-11 C  11-15 B
+  37 |                WHEN o.total_cents > 100000 THEN 'large'
+     | 0-15 C  15-19 B  19-20 C  20-21 D  21-22 C  22-33 D  33-34 C  34-35 F  35-36 C  36-42 E  42-43 C  43-47 B  47-48 C  48-55 G
+  38 |                WHEN o.total_cents BETWEEN 10000 AND 100000 THEN 'medium'
+     | 0-15 C  15-19 B  19-20 C  20-21 D  21-22 C  22-33 D  33-34 C  34-41 B  41-42 C  42-47 E  47-48 C  48-51 B  51-52 C  52-58 E  58-59 C  59-63 B  63-64 C  64-72 G
+  39 |                ELSE 'small'
+     | 0-15 C  15-19 B  19-20 C  20-27 G
+  40 |            END                                         AS size_band
+     | 0-11 C  11-14 B  14-55 C  55-57 B  57-58 C  58-67 D
+  41 |     FROM sales.orders o
+     | 0-4 C  4-8 B  8-9 C  9-14 D  14-15 C  15-21 D  21-22 C  22-23 D
+  42 |     JOIN active_customers ac ON ac.customer_id = o.customer_id
+     | 0-4 C  4-8 B  8-9 C  9-25 D  25-26 C  26-28 D  28-29 C  29-31 B  31-32 C  32-34 D  34-35 C  35-46 D  46-47 C  47-48 F  48-49 C  49-50 D  50-51 C  51-62 D
+  43 |     WHERE o.ordered_at < :report_end
+     | 0-4 C  4-9 B  9-10 C  10-11 D  11-12 C  12-22 D  22-23 C  23-24 F  24-26 C  26-36 D
+  44 |       AND o.refunded = FALSE
+     | 0-6 C  6-9 B  9-10 C  10-11 D  11-12 C  12-20 D  20-21 C  21-22 F  22-23 C  23-28 B
+  45 |       /* exclude internal transfers: they inflate totals
+     | 0-6 C  6-56 A
+  46 |          and are reconciled by finance separately */
+     | 0-52 A
+  47 |       AND o.channel NOT LIKE 'internal%'
+     | 0-6 C  6-9 B  9-10 C  10-11 D  11-12 C  12-19 D  19-20 C  20-23 B  23-24 C  24-28 B  28-29 C  29-40 G
+  48 | ),
+     | 0-2 C
+  49 | monthly AS (
+     | 0-7 D  7-8 C  8-10 B  10-12 C
+  50 |     SELECT oe.customer_id,
+     | 0-4 C  4-10 B  10-11 C  11-13 D  13-14 C  14-25 D  25-26 C
+  51 |            oe.month,
+     | 0-11 C  11-13 D  13-14 C  14-19 D  19-20 C
+  52 |            SUM(oe.total)                                   AS revenue,
+     | 0-11 C  11-14 H  14-15 C  15-17 D  17-18 C  18-23 D  23-59 C  59-61 B  61-62 C  62-69 D  69-70 C
+  53 |            COUNT(*)                                        AS orders,
+     | 0-11 C  11-16 H  16-17 C  17-18 F  18-59 C  59-61 B  61-62 C  62-68 D  68-69 C
+  54 |            AVG(oe.item_count)::INT                         AS avg_items,
+     | 0-11 C  11-14 H  14-15 C  15-17 D  17-18 C  18-28 D  28-29 C  29-34 I  34-59 C  59-61 B  61-62 C  62-71 D  71-72 C
+  55 |            ROW_NUMBER() OVER (PARTITION BY oe.customer_id ORDER BY oe.month DESC) AS rn,
+     | 0-11 C  11-21 H  21-24 C  24-28 B  28-30 C  30-39 B  39-40 C  40-42 B  42-43 C  43-45 D  45-46 C  46-57 D  57-58 C  58-63 B  63-64 C  64-66 B  66-67 C  67-69 D  69-70 C  70-75 D  75-76 C  76-80 B  80-82 C  82-84 B  84-85 C  85-87 D  87-88 C
+  56 |            LAG(SUM(oe.total)) OVER w                       AS prev_revenue,
+     | 0-11 C  11-14 H  14-15 C  15-18 H  18-19 C  19-21 D  21-22 C  22-27 D  27-30 C  30-34 B  34-35 C  35-36 D  36-59 C  59-61 B  61-62 C  62-74 D  74-75 C
+  57 |            SUM(SUM(oe.total)) OVER (w ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running
+     | 0-11 C  11-14 H  14-15 C  15-18 H  18-19 C  19-21 D  21-22 C  22-27 D  27-30 C  30-34 B  34-36 C  36-37 D  37-38 C  38-42 B  42-43 C  43-50 B  50-51 C  51-60 D  60-61 C  61-70 D  70-71 C  71-74 B  74-75 C  75-82 D  82-83 C  83-86 B  86-88 C  88-90 B  90-91 C  91-98 D
+  58 |     FROM orders_enriched oe
+     | 0-4 C  4-8 B  8-9 C  9-24 D  24-25 C  25-27 D
+  59 |     GROUP BY oe.customer_id, oe.month
+     | 0-4 C  4-9 B  9-10 C  10-12 B  12-13 C  13-15 D  15-16 C  16-27 D  27-29 C  29-31 D  31-32 C  32-37 D
+  60 |     WINDOW w AS (PARTITION BY oe.customer_id ORDER BY oe.month)
+     | 0-4 C  4-10 B  10-11 C  11-12 D  12-13 C  13-15 B  15-17 C  17-26 B  26-27 C  27-29 B  29-30 C  30-32 D  32-33 C  33-44 D  44-45 C  45-50 B  50-51 C  51-53 B  53-54 C  54-56 D  56-57 C  57-62 D  62-63 C
+  61 | )
+     | 0-1 C
+  62 | SELECT ac.customer_id,
+     | 0-6 B  6-7 C  7-9 D  9-10 C  10-21 D  21-22 C
+  63 |        ac.tier,
+     | 0-7 C  7-9 D  9-10 C  10-14 D  14-15 C
+  64 |        ac.country,
+     | 0-7 C  7-9 D  9-10 C  10-17 D  17-18 C
+  65 |        m.month,
+     | 0-7 C  7-8 D  8-9 C  9-14 D  14-15 C
+  66 |        m.revenue,
+     | 0-7 C  7-8 D  8-9 C  9-16 D  16-17 C
+  67 |        m.orders,
+     | 0-7 C  7-8 D  8-9 C  9-15 D  15-16 C
+  68 |        ROUND(100.0 * (m.revenue - m.prev_revenue) / NULLIF(m.prev_revenue, 0), 1) AS growth_pct,
+     | 0-7 C  7-12 H  12-13 C  13-18 E  18-19 C  19-20 F  20-22 C  22-23 D  23-24 C  24-31 D  31-32 C  32-33 F  33-34 C  34-35 D  35-36 C  36-48 D  48-50 C  50-51 F  51-52 C  52-58 H  58-59 C  59-60 D  60-61 C  61-73 D  73-75 C  75-76 E  76-79 C  79-80 E  80-82 C  82-84 B  84-85 C  85-95 D  95-96 C
+  69 |        m.running,
+     | 0-7 C  7-8 D  8-9 C  9-16 D  16-17 C
+  70 |        CASE WHEN ac.is_vip AND m.revenue > ac.credit_limit THEN 'review' ELSE NULL END AS flag,
+     | 0-7 C  7-11 B  11-12 C  12-16 B  16-17 C  17-19 D  19-20 C  20-26 D  26-27 C  27-30 B  30-31 C  31-32 D  32-33 C  33-40 D  40-41 C  41-42 F  42-43 C  43-45 D  45-46 C  46-58 D  58-59 C  59-63 B  63-64 C  64-72 G  72-73 C  73-77 B  77-78 C  78-82 B  82-83 C  83-86 B  86-87 C  87-89 B  89-90 C  90-94 D  94-95 C
+  71 |        (SELECT string_agg(rt.name, ' › ' ORDER BY rt.depth)
+     | 0-8 C  8-14 B  14-15 C  15-25 H  25-26 C  26-28 D  28-29 C  29-33 D  33-35 C  35-40 G  40-41 C  41-46 B  46-47 C  47-49 B  49-50 C  50-52 D  52-53 C  53-58 D  58-59 C
+  72 |           FROM region_tree rt
+     | 0-10 C  10-14 B  14-15 C  15-26 D  26-27 C  27-29 D
+  73 |          WHERE rt.region_id = ANY (SELECT region_id FROM sales.customer_regions cr WHERE cr.customer_id = ac.customer_id)) AS regions
+     | 0-9 C  9-14 B  14-15 C  15-17 D  17-18 C  18-27 D  27-28 C  28-29 F  29-30 C  30-33 B  33-35 C  35-41 B  41-42 C  42-51 D  51-52 C  52-56 B  56-57 C  57-62 D  62-63 C  63-79 D  79-80 C  80-82 D  82-83 C  83-88 B  88-89 C  89-91 D  91-92 C  92-103 D  103-104 C  104-105 F  105-106 C  106-108 D  108-109 C  109-120 D  120-123 C  123-125 B  125-126 C  126-133 D
+  74 | FROM active_customers ac
+     | 0-4 B  4-5 C  5-21 D  21-22 C  22-24 D
+  75 | JOIN monthly m ON m.customer_id = ac.customer_id AND m.rn <= 12
+     | 0-4 B  4-5 C  5-12 D  12-13 C  13-14 D  14-15 C  15-17 B  17-18 C  18-19 D  19-20 C  20-31 D  31-32 C  32-33 F  33-34 C  34-36 D  36-37 C  37-48 D  48-49 C  49-52 B  52-53 C  53-54 D  54-55 C  55-57 D  57-58 C  58-60 F  60-61 C  61-63 E
+  76 | LEFT JOIN LATERAL (
+     | 0-4 B  4-5 C  5-9 B  9-10 C  10-17 B  17-19 C
+  77 |     SELECT jsonb_object_agg(k, v) AS overrides
+     | 0-4 C  4-10 B  10-11 C  11-27 D  27-28 C  28-29 D  29-31 C  31-32 D  32-34 C  34-36 B  36-37 C  37-46 D
+  78 |     FROM jsonb_each_text(ac.profile -> 'overrides') AS t(k, v)
+     | 0-4 C  4-8 B  8-9 C  9-24 D  24-25 C  25-27 D  27-28 C  28-35 D  35-36 C  36-38 F  38-39 C  39-50 G  50-52 C  52-54 B  54-55 C  55-56 D  56-57 C  57-58 D  58-60 C  60-61 D  61-62 C
+  79 |     WHERE v <> ''
+     | 0-4 C  4-9 B  9-10 C  10-11 D  11-12 C  12-14 F  14-15 C  15-17 G
+  80 | ) ov ON TRUE
+     | 0-2 C  2-4 D  4-5 C  5-7 B  7-8 C  8-12 B
+  81 | WHERE m.revenue > 0
+     | 0-5 B  5-6 C  6-7 D  7-8 C  8-15 D  15-16 C  16-17 F  17-18 C  18-19 E
+  82 |   AND (ac.tier = 'gold' OR ac.tier = 'platinum' OR ac.is_vip)
+     | 0-2 C  2-5 B  5-7 C  7-9 D  9-10 C  10-14 D  14-15 C  15-16 F  16-17 C  17-23 G  23-24 C  24-26 B  26-27 C  27-29 D  29-30 C  30-34 D  34-35 C  35-36 F  36-37 C  37-47 G  47-48 C  48-50 B  50-51 C  51-53 D  53-54 C  54-60 D  60-61 C
+  83 | ORDER BY m.revenue DESC NULLS LAST, ac.customer_id
+     | 0-5 B  5-6 C  6-8 B  8-9 C  9-10 D  10-11 C  11-18 D  18-19 C  19-23 B  23-24 C  24-29 B  29-30 C  30-34 B  34-36 C  36-38 D  38-39 C  39-50 D
+  84 | LIMIT 500 OFFSET 0;
+     | 0-5 B  5-6 C  6-9 E  9-10 C  10-16 B  16-17 C  17-18 E  18-19 C
+  85 |
+     |
+  86 | -- ---------------------------------------------------------------------------
+     | 0-78 A
+  87 | -- T-SQL section (SQL Server dialect): variables, temp tables, batches
+     | 0-70 A
+  88 | -- ---------------------------------------------------------------------------
+     | 0-78 A
+  89 | DECLARE @since DATE = DATEADD(DAY, -30, CAST(GETDATE() AS DATE));
+     | 0-7 D  7-8 C  8-9 F  9-14 D  14-15 C  15-19 I  19-20 C  20-21 F  21-22 C  22-29 D  29-30 C  30-33 D  33-35 C  35-36 F  36-38 E  38-40 C  40-44 B  44-45 C  45-52 D  52-55 C  55-57 B  57-58 C  58-62 I  62-65 C
+  90 | DECLARE @limit INT = 250, @verbose BIT = 1;
+     | 0-7 D  7-8 C  8-9 F  9-14 B  14-15 C  15-18 I  18-19 C  19-20 F  20-21 C  21-24 E  24-26 C  26-27 F  27-34 D  34-35 C  35-38 I  38-39 C  39-40 F  40-41 C  41-42 E  42-43 C
+  91 |
+     |
+  92 | IF OBJECT_ID('tempdb..#top_accounts') IS NOT NULL DROP TABLE #top_accounts;
+     | 0-2 B  2-3 C  3-12 D  12-13 C  13-36 G  36-38 C  38-40 B  40-41 C  41-44 B  44-45 C  45-49 B  49-50 C  50-54 B  54-55 C  55-60 B  60-61 C  61-62 F  62-74 D  74-75 C
+  93 |
+     |
+  94 | SELECT TOP (@limit)
+     | 0-6 B  6-7 C  7-10 D  10-12 C  12-13 F  13-18 B  18-19 C
+  95 |        a.AccountId,
+     | 0-7 C  7-8 D  8-9 C  9-18 D  18-19 C
+  96 |        a.[Display Name]                         AS name,
+     | 0-7 C  7-8 D  8-10 C  10-17 D  17-18 C  18-22 D  22-48 C  48-50 B  50-51 C  51-55 D  55-56 C
+  97 |        SUM(t.Amount)                            AS volume,
+     | 0-7 C  7-10 H  10-11 C  11-12 D  12-13 C  13-19 D  19-48 C  48-50 B  50-51 C  51-57 D  57-58 C
+  98 |        COUNT_BIG(*)                             AS txn_count,
+     | 0-7 C  7-16 D  16-17 C  17-18 F  18-48 C  48-50 B  50-51 C  51-60 D  60-61 C
+  99 |        MAX(t.PostedAt)                          AS last_seen,
+     | 0-7 C  7-10 H  10-11 C  11-12 D  12-13 C  13-21 D  21-48 C  48-50 B  50-51 C  51-60 D  60-61 C
+ 100 |        IIF(SUM(t.Amount) > 1e6, N'whale', N'regular') AS segment
+     | 0-7 C  7-10 D  10-11 C  11-14 H  14-15 C  15-16 D  16-17 C  17-23 D  23-25 C  25-26 F  26-27 C  27-30 E  30-32 C  32-33 D  33-40 G  40-42 C  42-43 D  43-52 G  52-54 C  54-56 B  56-57 C  57-64 D
+ 101 | INTO #top_accounts
+     | 0-4 B  4-5 C  5-6 F  6-18 D
+ 102 | FROM dbo.Accounts AS a WITH (NOLOCK)
+     | 0-4 B  4-5 C  5-8 D  8-9 C  9-17 D  17-18 C  18-20 B  20-21 C  21-22 D  22-23 C  23-27 B  27-29 C  29-35 D  35-36 C
+ 103 | INNER JOIN ledger.Transactions t ON t.AccountId = a.AccountId
+     | 0-5 B  5-6 C  6-10 B  10-11 C  11-17 D  17-18 C  18-30 D  30-31 C  31-32 D  32-33 C  33-35 B  35-36 C  36-37 D  37-38 C  38-47 D  47-48 C  48-49 F  49-50 C  50-51 D  51-52 C  52-61 D
+ 104 | WHERE t.PostedAt >= @since
+     | 0-5 B  5-6 C  6-7 D  7-8 C  8-16 D  16-17 C  17-19 F  19-20 C  20-21 F  21-26 D
+ 105 |   AND t.Status <> N'void'
+     | 0-2 C  2-5 B  5-6 C  6-7 D  7-8 C  8-14 D  14-15 C  15-17 F  17-18 C  18-19 D  19-25 G
+ 106 |   AND t.Amount IS NOT NULL
+     | 0-2 C  2-5 B  5-6 C  6-7 D  7-8 C  8-14 D  14-15 C  15-17 B  17-18 C  18-21 B  21-22 C  22-26 B
+ 107 |   AND a.Region LIKE N'EU-%'
+     | 0-2 C  2-5 B  5-6 C  6-7 D  7-8 C  8-14 D  14-15 C  15-19 B  19-20 C  20-21 D  21-27 G
+ 108 | GROUP BY a.AccountId, a.[Display Name]
+     | 0-5 B  5-6 C  6-8 B  8-9 C  9-10 D  10-11 C  11-20 D  20-22 C  22-23 D  23-25 C  25-32 D  32-33 C  33-37 D  37-38 C
+ 109 | HAVING SUM(t.Amount) > 0x0F4240              -- 1,000,000 in hex
+     | 0-6 B  6-7 C  7-10 H  10-11 C  11-12 D  12-13 C  13-19 D  19-21 C  21-22 F  22-23 C  23-31 E  31-45 C  45-64 A
+ 110 | ORDER BY volume DESC;
+     | 0-5 B  5-6 C  6-8 B  8-9 C  9-15 D  15-16 C  16-20 B  20-21 C
+ 111 |
+     |
+ 112 | IF @@ROWCOUNT = 0 AND @verbose = 1
+     | 0-2 B  2-3 C  3-5 F  5-13 D  13-14 C  14-15 F  15-16 C  16-17 E  17-18 C  18-21 B  21-22 C  22-23 F  23-30 D  30-31 C  31-32 F  32-33 C  33-34 E
+ 113 |     PRINT N'No accounts matched since ' + CONVERT(NVARCHAR(10), @since, 120);
+     | 0-4 C  4-9 D  9-10 C  10-11 D  11-39 G  39-40 C  40-41 F  41-42 C  42-49 D  49-50 C  50-58 D  58-59 C  59-61 E  61-64 C  64-65 F  65-70 D  70-72 C  72-75 E  75-77 C
+ 114 | GO
+     | 0-2 D
+ 115 |
+     |
+ 116 | MERGE INTO dbo.AccountSegments AS target
+     | 0-5 D  5-6 C  6-10 B  10-11 C  11-14 D  14-15 C  15-30 D  30-31 C  31-33 B  33-34 C  34-40 D
+ 117 | USING #top_accounts AS source
+     | 0-5 B  5-6 C  6-7 F  7-19 D  19-20 C  20-22 B  22-23 C  23-29 D
+ 118 |    ON target.AccountId = source.AccountId
+     | 0-3 C  3-5 B  5-6 C  6-12 D  12-13 C  13-22 D  22-23 C  23-24 F  24-25 C  25-31 D  31-32 C  32-41 D
+ 119 | WHEN MATCHED AND target.Segment <> source.segment THEN
+     | 0-4 B  4-5 C  5-12 D  12-13 C  13-16 B  16-17 C  17-23 D  23-24 C  24-31 D  31-32 C  32-34 F  34-35 C  35-41 D  41-42 C  42-49 D  49-50 C  50-54 B
+ 120 |     UPDATE SET target.Segment = source.segment, target.UpdatedAt = SYSUTCDATETIME()
+     | 0-4 C  4-10 B  10-11 C  11-14 B  14-15 C  15-21 D  21-22 C  22-29 D  29-30 C  30-31 F  31-32 C  32-38 D  38-39 C  39-46 D  46-48 C  48-54 D  54-55 C  55-64 D  64-65 C  65-66 F  66-67 C  67-81 D  81-83 C
+ 121 | WHEN NOT MATCHED BY TARGET THEN
+     | 0-4 B  4-5 C  5-8 B  8-9 C  9-16 D  16-17 C  17-19 B  19-20 C  20-26 D  26-27 C  27-31 B
+ 122 |     INSERT (AccountId, Segment, UpdatedAt) VALUES (source.AccountId, source.segment, SYSUTCDATETIME())
+     | 0-4 C  4-10 B  10-12 C  12-21 D  21-23 C  23-30 D  30-32 C  32-41 D  41-43 C  43-49 B  49-51 C  51-57 D  57-58 C  58-67 D  67-69 C  69-75 D  75-76 C  76-83 D  83-85 C  85-99 D  99-102 C
+ 123 | OUTPUT $action, inserted.AccountId;
+     | 0-6 D  6-7 C  7-14 J  14-16 C  16-24 D  24-25 C  25-34 D  34-35 C
+ 124 | GO
+     | 0-2 D
+ 125 |
+     |
+ 126 | -- ---------------------------------------------------------------------------
+     | 0-78 A
+ 127 | -- MySQL / SQLite style: ? and named params, backticks, JSON paths
+     | 0-66 A
+ 128 | -- ---------------------------------------------------------------------------
+     | 0-78 A
+ 129 | UPDATE `inventory`.`stock_levels` sl
+     | 0-6 B  6-8 C  8-17 D  17-20 C  20-32 D  32-34 C  34-36 D
+ 130 |    SET sl.qty_on_hand = sl.qty_on_hand - ?,
+     | 0-3 C  3-6 B  6-7 C  7-9 D  9-10 C  10-21 D  21-22 C  22-23 F  23-24 C  24-26 D  26-27 C  27-38 D  38-39 C  39-40 F  40-41 C  41-42 J  42-43 C
+ 131 |        sl.reserved    = GREATEST(sl.reserved - ?, 0),
+     | 0-7 C  7-9 D  9-10 C  10-18 D  18-22 C  22-23 F  23-24 C  24-32 H  32-33 C  33-35 D  35-36 C  36-44 D  44-45 C  45-46 F  46-47 C  47-48 J  48-50 C  50-51 E  51-53 C
+ 132 |        sl.attrs       = JSON_SET(sl.attrs, '$.last_move', NOW())
+     | 0-7 C  7-9 D  9-10 C  10-15 D  15-22 C  22-23 F  23-24 C  24-32 D  32-33 C  33-35 D  35-36 C  36-41 D  41-43 C  43-56 G  56-58 C  58-61 H  61-64 C
+ 133 |  WHERE sl.sku = :sku
+     | 0-1 C  1-6 B  6-7 C  7-9 D  9-10 C  10-13 D  13-14 C  14-15 F  15-17 C  17-20 D
+ 134 |    AND sl.warehouse_id = @warehouse
+     | 0-3 C  3-6 B  6-7 C  7-9 D  9-10 C  10-22 D  22-23 C  23-24 F  24-25 C  25-26 F  26-35 D
+ 135 |    AND JSON_EXTRACT(sl.attrs, '$.locked') = FALSE;
+     | 0-3 C  3-6 B  6-7 C  7-19 H  19-20 C  20-22 D  22-23 C  23-28 D  28-30 C  30-40 G  40-42 C  42-43 F  43-44 C  44-49 B  49-50 C
+ 136 |
+     |
+ 137 | INSERT INTO audit_log (actor, action, payload, at)
+     | 0-6 B  6-7 C  7-11 B  11-12 C  12-21 D  21-23 C  23-28 D  28-30 C  30-36 D  36-38 C  38-45 D  45-47 C  47-49 B  49-50 C
+ 138 | VALUES ('svc-inventory', 'stock.decrement', json_object('sku', :sku, 'qty', ?), CURRENT_TIMESTAMP);
+     | 0-6 B  6-8 C  8-23 G  23-25 C  25-42 G  42-44 C  44-55 D  55-56 C  56-61 G  61-64 C  64-67 D  67-69 C  69-74 G  74-76 C  76-77 J  77-80 C  80-97 H  97-99 C
+ 139 |
+     |
+ 140 | -- Oracle: bind variables, NVL, DECODE, connect by
+     | 0-50 A
+ 141 | SELECT LPAD(' ', 2 * (LEVEL - 1)) || e.last_name AS org_chart,
+     | 0-6 B  6-7 C  7-11 D  11-12 C  12-15 G  15-17 C  17-18 E  18-19 C  19-20 F  20-22 C  22-27 D  27-28 C  28-29 F  29-30 C  30-31 E  31-34 C  34-36 F  36-37 C  37-38 D  38-39 C  39-48 D  48-49 C  49-51 B  51-52 C  52-61 D  61-62 C
+ 142 |        NVL(e.commission_pct, 0) * e.salary        AS commission,
+     | 0-7 C  7-10 D  10-11 C  11-12 D  12-13 C  13-27 D  27-29 C  29-30 E  30-32 C  32-33 F  33-34 C  34-35 D  35-36 C  36-42 D  42-50 C  50-52 B  52-53 C  53-63 D  63-64 C
+ 143 |        DECODE(e.job_id, 'SA_REP', 'Sales', 'IT_PROG', 'Engineering', 'Other') AS dept_kind
+     | 0-7 C  7-13 D  13-14 C  14-15 D  15-16 C  16-22 D  22-24 C  24-32 G  32-34 C  34-41 G  41-43 C  43-52 G  52-54 C  54-67 G  67-69 C  69-76 G  76-78 C  78-80 B  80-81 C  81-90 D
+ 144 | FROM hr.employees e
+     | 0-4 B  4-5 C  5-7 D  7-8 C  8-17 D  17-18 C  18-19 D
+ 145 | START WITH e.manager_id IS NULL
+     | 0-5 D  5-6 C  6-10 B  10-11 C  11-12 D  12-13 C  13-23 D  23-24 C  24-26 B  26-27 C  27-31 B
+ 146 | CONNECT BY PRIOR e.employee_id = e.manager_id
+     | 0-7 D  7-8 C  8-10 B  10-11 C  11-16 D  16-17 C  17-18 D  18-19 C  19-30 D  30-31 C  31-32 F  32-33 C  33-34 D  34-35 C  35-45 D
+ 147 | ORDER SIBLINGS BY e.last_name;
+     | 0-5 B  5-6 C  6-14 D  14-15 C  15-17 B  17-18 C  18-19 D  19-20 C  20-29 D  29-30 C
+ 148 |
+     |
+ 149 | -- DuckDB: list/struct functions, QUALIFY
+     | 0-41 A
+ 150 | SELECT region, product, revenue,
+     | 0-6 B  6-7 C  7-13 D  13-15 C  15-22 D  22-24 C  24-31 D  31-32 C
+ 151 |        list_aggregate([revenue, cost], 'sum')   AS combined,
+     | 0-7 C  7-21 D  21-23 C  23-30 D  30-32 C  32-36 D  36-39 C  39-44 G  44-48 C  48-50 B  50-51 C  51-59 D  59-60 C
+ 152 |        {'k': region, 'v': revenue}              AS kv
+     | 0-8 C  8-11 G  11-13 C  13-19 D  19-21 C  21-24 G  24-26 C  26-33 D  33-48 C  48-50 B  50-51 C  51-53 D
+ 153 | FROM read_parquet('exports/sales_2026_*.parquet')
+     | 0-4 B  4-5 C  5-17 D  17-18 C  18-48 G  48-49 C
+ 154 | QUALIFY ROW_NUMBER() OVER (PARTITION BY region ORDER BY revenue DESC) <= 3;
+     | 0-7 B  7-8 C  8-18 H  18-21 C  21-25 B  25-27 C  27-36 B  36-37 C  37-39 B  39-40 C  40-46 D  46-47 C  47-52 B  52-53 C  53-55 B  55-56 C  56-63 D  63-64 C  64-68 B  68-70 C  70-72 F  72-73 C  73-74 E  74-75 C
+ 155 |
+     |
+ 156 | /* Edge cases:
+     | 0-14 A
+ 157 |    - a string containing -- is not a comment: '--not a comment'
+     | 0-63 A
+ 158 |    - a string with an escaped quote: 'it''s fine'
+     | 0-49 A
+ 159 |    - E'escapes\tin\npostgres' and $$dollar quoted -- text$$
+     | 0-59 A
+ 160 | */
+     | 0-2 A
+ 161 | SELECT '--not a comment' AS s1, 'it''s fine' AS s2, E'tab\there' AS s3, $$dollar -- text$$ AS s4,
+     | 0-6 B  6-7 C  7-24 G  24-25 C  25-27 B  27-28 C  28-30 D  30-32 C  32-44 G  44-45 C  45-47 B  47-48 C  48-50 D  50-52 C  52-57 G  57-59 K  59-64 G  64-65 C  65-67 B  67-68 C  68-70 D  70-72 C  72-90 G  90-91 C  91-93 B  93-94 C  94-96 D  96-97 C
+ 162 |        NULL::JSONB AS empty_doc, TRUE AND NOT FALSE AS logic, 3.14e-2 AS sci, -42 AS neg,
+     | 0-7 C  7-11 B  11-18 I  18-19 C  19-21 B  21-22 C  22-31 D  31-33 C  33-37 B  37-38 C  38-41 B  41-42 C  42-45 B  45-46 C  46-51 B  51-52 C  52-54 B  54-55 C  55-60 D  60-62 C  62-69 E  69-70 C  70-72 B  72-73 C  73-76 D  76-78 C  78-79 F  79-81 E  81-82 C  82-84 B  84-85 C  85-88 D  88-89 C
+ 163 |        x'DEADBEEF' AS blob, INTERVAL '3 days' AS span, '2026-11-24'::DATE AS d;
+     | 0-7 C  7-8 D  8-18 G  18-19 C  19-21 B  21-22 C  22-26 I  26-28 C  28-36 I  36-37 C  37-45 G  45-46 C  46-48 B  48-49 C  49-53 D  53-55 C  55-67 G  67-73 I  73-74 C  74-76 B  76-77 C  77-78 D  78-79 C
+ 164 |
+     |
+
+== forms.sql
+   1 | -- T1 corpus, every dialect: the token kinds of plans/app-themes §5.2 (constants, word operators, casts, binds,
+     | 0-111 A
+   2 | -- system variables) and the semantic forms of §5.3 (CTE names, schema prefixes), in upper and lower case.
+     | 0-106 A
+   3 | SELECT TRUE, FALSE, NULL, true AS t, false AS f, null AS n, NOT NULL;
+     | 0-6 B  6-7 C  7-11 B  11-13 C  13-18 B  18-20 C  20-24 B  24-26 C  26-30 B  30-31 C  31-33 B  33-34 C  34-35 D  35-37 C  37-42 B  42-43 C  43-45 B  45-46 C  46-47 D  47-49 C  49-53 B  53-54 C  54-56 B  56-57 C  57-58 D  58-60 C  60-63 B  63-64 C  64-68 B  68-69 C
+   4 | SELECT a FROM t WHERE a AND b OR NOT c IN (1, 2) AND d LIKE 'x%' AND e BETWEEN 1 AND 2 AND f IS NULL AND g IS NOT TRUE;
+     | 0-6 B  6-7 C  7-8 D  8-9 C  9-13 B  13-14 C  14-15 D  15-16 C  16-21 B  21-22 C  22-23 D  23-24 C  24-27 B  27-28 C  28-29 D  29-30 C  30-32 B  32-33 C  33-36 B  36-37 C  37-38 D  38-39 C  39-41 B  41-43 C  43-44 E  44-46 C  46-47 E  47-49 C  49-52 B  52-53 C  53-54 D  54-55 C  55-59 B  59-60 C  60-64 G  64-65 C  65-68 B  68-69 C  69-70 D  70-71 C  71-78 B  78-79 C  79-80 E  80-81 C  81-84 B  84-85 C  85-86 E  86-87 C  87-90 B  90-91 C  91-92 D  92-93 C  93-95 B  95-96 C  96-100 B  100-101 C  101-104 B  104-105 C  105-106 D  106-107 C  107-109 B  109-110 C  110-113 B  113-114 C  114-118 B  118-119 C
+   5 | select a from t where a and b or not c in (1) and d like 'y' and e between 1 and 2 and f is not null;
+     | 0-6 B  6-7 C  7-8 D  8-9 C  9-13 B  13-14 C  14-15 D  15-16 C  16-21 B  21-22 C  22-23 D  23-24 C  24-27 B  27-28 C  28-29 D  29-30 C  30-32 B  32-33 C  33-36 B  36-37 C  37-38 D  38-39 C  39-41 B  41-43 C  43-44 E  44-46 C  46-49 B  49-50 C  50-51 D  51-52 C  52-56 B  56-57 C  57-60 G  60-61 C  61-64 B  64-65 C  65-66 D  66-67 C  67-74 B  74-75 C  75-76 E  76-77 C  77-80 B  80-81 C  81-82 E  82-83 C  83-86 B  86-87 C  87-88 D  88-89 C  89-91 B  91-92 C  92-95 B  95-96 C  96-100 B  100-101 C
+   6 | SELECT a ILIKE 'x', b SIMILAR TO 'y', c ISNULL, d NOTNULL, e GLOB 'z*', f REGEXP '^a', g MATCH 'q', j RLIKE 'k';
+     | 0-6 B  6-7 C  7-8 D  8-9 C  9-14 B  14-15 C  15-18 G  18-20 C  20-21 D  21-22 C  22-29 B  29-30 C  30-32 B  32-33 C  33-36 G  36-38 C  38-39 D  39-40 C  40-46 D  46-48 C  48-49 D  49-50 C  50-57 D  57-59 C  59-60 D  60-61 C  61-65 B  65-66 C  66-70 G  70-72 C  72-73 D  73-74 C  74-80 D  80-81 C  81-85 G  85-87 C  87-88 D  88-89 C  89-94 D  94-95 C  95-98 G  98-100 C  100-101 D  101-102 C  102-107 D  107-108 C  108-111 G  111-112 C
+   7 | SELECT h XOR i, 7 DIV 2, 7 MOD 2, 7 % 2 FROM dual;
+     | 0-6 B  6-7 C  7-8 D  8-9 C  9-12 D  12-13 C  13-14 D  14-16 C  16-17 E  17-18 C  18-21 D  21-22 C  22-23 E  23-25 C  25-26 E  26-27 C  27-30 D  30-31 C  31-32 E  32-34 C  34-35 E  35-36 C  36-37 F  37-38 C  38-39 E  39-40 C  40-44 B  44-45 C  45-49 D  49-50 C
+   8 | SELECT a::int, b::"T"[], c :: text, d::INT[], NULL::JSONB, '1'::numeric(12, 2) FROM t;
+     | 0-6 B  6-7 C  7-8 D  8-13 I  13-15 C  15-16 D  16-23 I  23-25 C  25-26 D  26-27 C  27-34 I  34-36 C  36-37 D  37-44 I  44-46 C  46-50 B  50-57 I  57-59 C  59-62 G  62-71 I  71-72 C  72-74 E  74-76 C  76-77 E  77-79 C  79-83 B  83-84 C  84-85 D  85-86 C
+   9 | SELECT $1, $2, $name, :name, :1, :"x", ?, ?1, ?12, @p, @x, @@x, @@ROWCOUNT, @@global.max_connections, $x;
+     | 0-6 B  6-7 C  7-9 J  9-11 C  11-13 J  13-15 C  15-20 J  20-23 C  23-27 D  27-30 C  30-31 E  31-34 C  34-37 D  37-39 C  39-40 J  40-42 C  42-43 J  43-44 E  44-46 C  46-47 J  47-49 E  49-51 C  51-52 F  52-53 D  53-55 C  55-56 F  56-57 D  57-59 C  59-61 F  61-62 D  62-64 C  64-66 F  66-74 D  74-76 C  76-78 F  78-84 D  84-85 C  85-100 D  100-102 C  102-104 J  104-105 C
+  10 | WITH recent AS (SELECT * FROM sales.Orders o WHERE o.placed_at > CURRENT_DATE)
+     | 0-4 B  4-5 C  5-11 D  11-12 C  12-14 B  14-16 C  16-22 B  22-23 C  23-24 F  24-25 C  25-29 B  29-30 C  30-35 D  35-36 C  36-42 D  42-43 C  43-44 D  44-45 C  45-50 B  50-51 C  51-52 D  52-53 C  53-62 D  62-63 C  63-64 F  64-65 C  65-77 H  77-78 C
+  11 | SELECT r.*, c.name FROM recent r JOIN dbo.Customers c ON c.id = r.customer_id WHERE r.total > ? AND c.region = :region;
+     | 0-6 B  6-7 C  7-8 D  8-9 C  9-10 F  10-12 C  12-13 D  13-14 C  14-18 D  18-19 C  19-23 B  23-24 C  24-30 D  30-31 C  31-32 D  32-33 C  33-37 B  37-38 C  38-41 D  41-42 C  42-51 D  51-52 C  52-53 D  53-54 C  54-56 B  56-57 C  57-58 D  58-59 C  59-61 D  61-62 C  62-63 F  63-64 C  64-65 D  65-66 C  66-77 D  77-78 C  78-83 B  83-84 C  84-85 D  85-86 C  86-91 D  91-92 C  92-93 F  93-94 C  94-95 J  95-96 C  96-99 B  99-100 C  100-101 D  101-102 C  102-108 D  108-109 C  109-110 F  110-112 C  112-118 D  118-119 C
+  12 | INSERT INTO sales.Orders (id, note) VALUES (@id, 'it''s'), ($1, NULL);
+     | 0-6 B  6-7 C  7-11 B  11-12 C  12-17 D  17-18 C  18-24 D  24-26 C  26-28 D  28-30 C  30-34 D  34-36 C  36-42 B  42-44 C  44-45 F  45-47 D  47-49 C  49-56 G  56-60 C  60-62 J  62-64 C  64-68 B  68-70 C
+  13 | UPDATE sales.Orders SET note = NULL WHERE id IN (SELECT id FROM recent) AND flag IS TRUE;
+     | 0-6 B  6-7 C  7-12 D  12-13 C  13-19 D  19-20 C  20-23 B  23-24 C  24-28 D  28-29 C  29-30 F  30-31 C  31-35 B  35-36 C  36-41 B  41-42 C  42-44 D  44-45 C  45-47 B  47-49 C  49-55 B  55-56 C  56-58 D  58-59 C  59-63 B  63-64 C  64-70 D  70-72 C  72-75 B  75-76 C  76-80 D  80-81 C  81-83 B  83-84 C  84-88 B  88-89 C
+  14 |
+     |
+
+== duckdb.sql
+   1 | -- T1 corpus, DuckDB: every Monarch rule of duckdbLanguage() fires at least once (highlightGolden.test.ts checks it).
+     | 0-117 A
+   2 | SELECT $1, $name, ?, a::INTEGER, b :: "T"[], c::"Mixed", E'esc\n''q', 'it''s', "dq""x", 0x1F, 0XAB, 1.5e3, 10., {'k': 1}, [1, 2];
+     | 0-6 B  6-7 C  7-9 J  9-11 C  11-16 J  16-18 C  18-19 J  19-21 C  21-22 D  22-31 I  31-33 C  33-34 D  34-35 C  35-43 I  43-45 C  45-46 D  46-55 I  55-57 C  57-62 G  62-64 K  64-68 G  68-70 C  70-77 G  77-79 C  79-86 D  86-88 C  88-92 E  92-94 C  94-98 E  98-100 C  100-105 E  105-107 C  107-110 E  110-113 C  113-116 G  116-118 C  118-119 E  119-123 C  123-124 E  124-126 C  126-127 E  127-129 C
+   3 | SELECT a:b, a @> b, c ->> d, e || f, g <= h, (i & 1) | ~j ^ k % 2 # 1, a ILIKE 'x', b GLOB 'y', c SIMILAR TO 'z' FROM t;
+     | 0-6 B  6-7 C  7-8 D  8-9 C  9-10 D  10-12 C  12-13 D  13-14 C  14-16 F  16-17 C  17-18 D  18-20 C  20-21 D  21-22 C  22-25 F  25-26 C  26-27 D  27-29 C  29-30 D  30-31 C  31-33 F  33-34 C  34-35 D  35-37 C  37-38 D  38-39 C  39-41 F  41-42 C  42-43 D  43-46 C  46-47 D  47-48 C  48-49 F  49-50 C  50-51 E  51-53 C  53-54 F  54-55 C  55-56 F  56-57 D  57-58 C  58-59 F  59-60 C  60-61 D  61-62 C  62-63 F  63-64 C  64-65 E  65-66 C  66-67 F  67-68 C  68-69 E  69-71 C  71-72 D  72-73 C  73-78 B  78-79 C  79-82 G  82-84 C  84-85 D  85-86 C  86-90 B  90-91 C  91-94 G  94-96 C  96-97 D  97-98 C  98-105 B  105-106 C  106-108 B  108-109 C  109-112 G  112-113 C  113-117 B  117-118 C  118-119 D  119-120 C
+   4 | SELECT $tag$ body $other$ still $ string $tag$, $$ plain $$, TRUE, FALSE, NULL IS NOT NULL;
+     | 0-6 B  6-7 C  7-46 G  46-48 C  48-59 G  59-61 C  61-65 B  65-67 C  67-72 B  72-74 C  74-78 B  78-79 C  79-81 B  81-82 C  82-85 B  85-86 C  86-90 B  90-91 C
+   5 | SELECT $$ across
+     | 0-6 B  6-7 C  7-16 G
+   6 | lines $ $$;
+     | 0-10 G  10-11 C
+   7 | /* outer /* nested */ * / still */ SELECT 1;
+     | 0-34 A  34-35 C  35-41 B  41-42 C  42-43 E  43-44 C
+   8 | /* across
+     | 0-9 A
+   9 |    lines */
+     | 0-11 A
+  10 | FROM read_parquet('x.parquet') QUALIFY row_number() OVER (PARTITION BY a ORDER BY b) = 1;
+     | 0-4 B  4-5 C  5-17 D  17-18 C  18-29 G  29-31 C  31-38 B  38-39 C  39-49 H  49-52 C  52-56 B  56-58 C  58-67 B  67-68 C  68-70 B  70-71 C  71-72 D  72-73 C  73-78 B  78-79 C  79-81 B  81-82 C  82-83 D  83-85 C  85-86 F  86-87 C  87-88 E  88-89 C
+  11 |
+     |

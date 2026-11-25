@@ -26,8 +26,9 @@ export const pages: Page[] = [
   { id: "about", title: "About", keywords: ["version", "update", "updates", "license", "credit", "made by", "platform"] },
 ];
 
-/** A row's control. `rowLimit`, `explorerMode` and `syntaxTheme` are custom rows drawn by the page itself. */
+/** A row's control. `rowLimit`, `explorerMode`, `appTheme` and `syntaxTheme` are custom rows drawn by the page itself. */
 export type Control =
+  | { kind: "appTheme" }
   | { kind: "switch" }
   | { kind: "segmented"; options: { value: string; label: string }[] }
   | { kind: "number"; min: number; max: number; unit: string; width?: number }
@@ -66,16 +67,22 @@ const PLAN_READS = engineNames(["pg", "oracle"]);
 export const settingDefs: SettingDef[] = [
   // Appearance
   {
-    id: "theme", keys: ["theme"], page: "appearance", group: "Theme", label: "Color theme",
-    description: "Match system follows your operating system's light or dark setting.",
-    control: { kind: "segmented", options: [{ value: "dark", label: "Dark" }, { value: "light", label: "Light" }, { value: "system", label: "Match system" }] },
-    keywords: ["dark", "light", "colour", "color", "appearance"],
+    id: "theme", keys: ["theme", "darkTheme", "lightTheme"], page: "appearance", group: "Theme", label: "Color theme",
+    description: "Pick one theme, or Match system to use a dark and a light theme as your operating system switches. Each theme says when it suits.",
+    control: { kind: "appTheme" },
+    keywords: ["dark", "light", "colour", "color", "appearance", "match system", "cortado", "fathom", "inkwell", "damson", "juniper", "floe", "vellum", "eye", "comfort"],
   },
   {
-    id: "syntaxTheme", keys: ["syntaxTheme"], page: "appearance", group: "Theme", label: "Syntax colors",
-    description: "How SQL is colored in the editor. Each choice has a dark and a light version and follows the color theme.",
+    id: "syntaxColors", keys: ["syntaxColors"], page: "appearance", group: "Theme", label: "Syntax colors",
+    description: "How SQL is colored in the editor. Default uses the color theme's own colors; the others keep their colors on every theme.",
     control: { kind: "syntaxTheme" },
-    keywords: ["syntax", "highlighting", "colour", "color", "editor", "color blind", "colour blind", "deuteranopia", "protanopia", "neon", "forest", "ember", "ocean"],
+    keywords: ["syntax", "highlighting", "colour", "color", "editor", "dark", "light", "color blind", "colour blind", "deuteranopia", "protanopia", "neon", "forest", "ember", "ocean", "standard"],
+  },
+  {
+    id: "italicComments", keys: ["italicComments"], page: "appearance", group: "Theme", label: "Italic comments",
+    description: "Draws SQL comments in italics. Turn off if slanted text is harder to read (astigmatism, dyslexia).",
+    control: { kind: "switch" },
+    keywords: ["italic", "comments", "slanted", "astigmatism", "dyslexia", "accessibility"],
   },
   {
     id: "reducedDecorations", keys: ["reducedDecorations"], page: "appearance", group: "Display", label: "Reduce visual effects",

@@ -35,10 +35,10 @@ export function SidePanel({ model, view, engine, profileId, onClose }: { model: 
         <button className={`px-2 h-full ${tab === "detail" ? "text-fg font-semibold border-b-2 border-accent" : "text-muted"}`} onClick={() => setTab("detail")}>Detail</button>
         <button className={`px-2 h-full ${tab === "diagnose" ? "text-fg font-semibold border-b-2 border-accent" : "text-muted"}`} onClick={() => setTab("diagnose")}>Why is it slow?</button>
         <span className="flex-1 text-right text-muted truncate">session {view.row.key.id}</span>
-        <button className="w-5 h-5 text-muted hover:text-fg" onClick={onClose} aria-label="Close panel">×</button>
+        <button className="q-icon-btn w-5 h-5" onClick={onClose} aria-label="Close panel">×</button>
       </div>
       {ended && (
-        <div className="px-3 py-1.5 text-[11px] text-warn bg-warn/10 border-b border-line" data-testid="side-ended">
+        <div className="px-3 py-1.5 text-[11px] text-warn bg-warn/(--q-warn-row-alpha) border-b border-line border-l-2 border-l-warn" data-testid="side-ended">
           Session {view.row.key.id} has ended; this is what it showed when you opened it.
         </div>
       )}

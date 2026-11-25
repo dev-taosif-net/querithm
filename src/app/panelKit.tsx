@@ -96,7 +96,7 @@ export function Seg<T extends string>({ label, value, options, onChange, compact
             aria-pressed={on}
             aria-label={compact ? o.label : undefined}
             title={o.unavailable ?? o.title ?? (compact ? o.label : undefined)}
-            className={`px-2 text-[11px] flex items-center gap-1 ${i ? "border-l border-line" : ""} ${on ? (o.unavailable ? "bg-raised text-fg font-semibold" : "bg-accent-solid text-white font-semibold") : o.unavailable ? "text-muted hover:bg-hover" : "text-fg hover:bg-hover"}`}
+            className={`px-2 text-[11px] flex items-center gap-1 ${i ? "border-l border-line" : ""} ${on ? (o.unavailable ? "bg-raised text-fg font-semibold" : "bg-accent-solid text-accent-fg font-semibold") : o.unavailable ? "text-muted hover:bg-ghost-hover" : "text-fg hover:bg-ghost-hover"}`}
             onClick={() => !on && onChange(o.value)}
           >
             {o.unavailable ? <Icon name="unavailable" size={12} strokeWidth={2} /> : o.icon && <Icon name={o.icon} size={12} strokeWidth={2} />}
@@ -172,7 +172,7 @@ export function PanelIconButton({ icon, label, onClick, pressed, disabled }: {
   return (
     <button
       type="button"
-      className="w-6 h-6 rounded flex items-center justify-center text-muted hover:text-fg hover:bg-hover shrink-0"
+      className="q-icon-btn shrink-0"
       aria-label={label}
       aria-pressed={pressed}
       aria-disabled={disabled ? true : undefined}
@@ -299,7 +299,7 @@ export function Chips({ label, chips, selected, compared, onSelect, menuFor, loc
             title={c.title}
             data-q-chip={c.key}
             className={`flex items-center gap-1.5 h-[22px] pl-0.5 pr-2 rounded border text-[11.5px] shrink-0 ${cmp ? "border-dashed" : ""} ${
-              c.error ? (on ? "border-err bg-err/10 text-err font-semibold q-hl" : "border-err/60 text-err hover:bg-err/10 q-hl") : on ? "border-accent bg-row-sel text-fg font-semibold" : cmp ? "border-accent text-fg hover:bg-hover" : "border-line text-fg hover:bg-hover"
+              c.error ? (on ? "border-err bg-err/(--q-err-row-alpha) text-err font-semibold q-hl" : "border-err/60 text-err hover:bg-err/(--q-err-row-alpha) q-hl") : on ? "border-accent bg-row-sel text-fg font-semibold" : cmp ? "border-accent text-fg hover:bg-hover" : "border-line text-fg hover:bg-hover"
             }`}
             onClick={(e) => click(e, c.key)}
             onKeyDown={(e) => move(e, i)}
@@ -335,7 +335,7 @@ function ChipBadge({ chip, on }: { chip: ChipModel; on: boolean }) {
     <span
       aria-hidden
       className={`min-w-[16px] h-[16px] px-[3px] rounded-[3px] flex items-center justify-center q-mono text-[10px] font-semibold ${
-        chip.error ? "bg-err/15 text-err" : on ? "bg-accent-solid text-white" : "bg-raised text-muted"
+        chip.error ? "bg-err/(--q-toast-alpha) text-err" : on ? "bg-accent-solid text-accent-fg" : "bg-raised text-muted"
       }`}
     >
       {chip.n}

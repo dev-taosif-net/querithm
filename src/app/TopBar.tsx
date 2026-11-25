@@ -18,6 +18,7 @@ import { UpdateButton } from "./UpdateButton";
 import { EngineLogo } from "../connections/EngineLogo";
 import { fillForWhite, readableOnSurface, useThemeKey } from "./tabStyle";
 import { Icon } from "./icons";
+import { useLastBinding } from "./lastBinding";
 import { DropMenu, type MenuEntry } from "./ToolbarMenu";
 import { clearRunScope, showRunScope, type ScopeMode } from "../editor/runScope";
 import { actualPlanWithRun, assertNever, engineTraits, ENGINE_LIST, ENGINES } from "../engines";
@@ -174,9 +175,8 @@ function NewButton() {
  * query does not inherit one.
  */
 function useStripBinding(tab: TabState | undefined): TabBinding | undefined {
-  const last = useTabs((s) => (tab ? undefined : s.lastBinding));
-  const offline = useConnections((s) => !!last?.profileId && !!s.disconnected[last.profileId]);
-  return tab ?? (offline ? undefined : last);
+  const last = useLastBinding(!!tab);
+  return tab ?? last;
 }
 
 /** Environment · engine · connection › database, joined to Run ▾: the eye crosses the target before it reaches Run. */
@@ -224,7 +224,7 @@ function LaunchStrip({ tab }: { tab: TabState | undefined }) {
           ? `Run on ${target}${plan ? ", with actual plan" : ""}`
           : "Run (choose a connection first)";
   const runKeys = running ? keyOf("query.cancel") : keyOf("query.run");
-  const tone = running ? "text-err hover:bg-err/15" : "text-ok hover:bg-ok/15";
+  const tone = running ? "text-err hover:bg-err/(--q-stop-tint-hover)" : "text-ok hover:bg-ok/(--q-run-tint-hover)";
 
   return (
     <div className={`flex items-stretch h-[28px] rounded-md border bg-bg ${!profile ? "border-dashed border-line-strong" : lost ? "border-err" : "border-line-strong"}`}>
@@ -303,7 +303,7 @@ function LaunchStrip({ tab }: { tab: TabState | undefined }) {
         )}
       </div>
       <SplitButton
-        className={`-my-px -mr-px rounded-r-md border ${running ? "border-err bg-err/10" : "border-ok bg-ok/10"}`}
+        className={`-my-px -mr-px rounded-r-md border ${running ? "border-err bg-err/(--q-stop-tint)" : "border-ok bg-ok/(--q-run-tint)"}`}
         caretClass={`!h-auto ${tone}`}
         caretLabel="More ways to run"
         menuLabel="Run"
@@ -498,7 +498,7 @@ function TxGroup({ tab, running }: { tab: TabState; running: boolean }) {
   const long = open && age >= LONG_TX_MS;
   const why = running ? "Wait for the running query" : undefined;
   return (
-    <div role="group" aria-label={open ? "Open transaction" : "Transaction state unknown"} className={`flex items-stretch h-[28px] rounded-md border bg-warn/10 ${long ? "border-warn" : "border-warn/45"}`}>
+    <div role="group" aria-label={open ? "Open transaction" : "Transaction state unknown"} className={`flex items-stretch h-[28px] rounded-md border bg-warn/(--q-warn-row-alpha) ${long ? "border-warn" : "border-warn/45"}`}>
       <span
         className={`flex items-center gap-1.5 px-2 max-[1100px]:px-1.5 text-warn text-[11px] tracking-wide ${long ? "font-bold" : "font-semibold"}`}
         title={open ? "Transaction open: a connection is pinned to this tab" : "Transaction state unknown: commit or roll back to be sure"}

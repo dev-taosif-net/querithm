@@ -349,7 +349,7 @@ export function ImportWizardDialog({ d }: { d: Extract<Dialog, { kind: "import" 
       {step === "target" && target && ins && (
         <div className="space-y-3">
           {doubt && (
-            <div className="p-2 rounded border border-warn/50 bg-warn/10 text-fg" role="alert">
+            <div className="p-2 rounded border border-warn/50 border-l-2 border-l-warn bg-warn/(--q-warn-row-alpha) text-fg" role="alert">
               <div className="font-semibold text-warn">The last import into {schema}.{table} may already have written its rows</div>
               <div>
                 Its connection failed while {doubt.rows.toLocaleString()} rows from {doubt.file} were being committed, so whether they were
@@ -452,8 +452,11 @@ export function ImportWizardDialog({ d }: { d: Extract<Dialog, { kind: "import" 
             {progress ? `${progress.rowsLoaded.toLocaleString()} rows loaded · ${progress.rejected.toLocaleString()} rejected · ${(progress.elapsedMs / 1000).toFixed(1)} s` : "Starting…"}
           </div>
           {result && (
-            <div className={`p-3 rounded border ${result.error ? "border-err/50 bg-err/10" : "border-ok/50 bg-ok/10"}`}>
-              {result.error ? <div className="text-err font-semibold">{result.cancelled ? "Cancelled — nothing was kept." : result.error}</div> : <div className="text-ok font-semibold">Imported {result.rowsLoaded.toLocaleString()} rows into {schema}.{table}.</div>}
+            <div className={`p-3 rounded border ${result.error ? "border-err/50 border-l-2 border-l-err bg-err/(--q-err-row-alpha)" : "border-ok/50 bg-ok/10"}`}>
+              {/* One element whose color follows the same condition as the box, so an error never reads on the success tint. */}
+              <div className={result.error ? "text-err font-semibold" : "text-ok font-semibold"}>
+                {result.error ? (result.cancelled ? "Cancelled — nothing was kept." : result.error) : <>Imported {result.rowsLoaded.toLocaleString()} rows into {schema}.{table}.</>}
+              </div>
               {result.committedRows != null && result.error && result.errorCode !== "outcomeUnknown" && <div className="text-fg">{result.committedRows.toLocaleString()} rows were committed before the failure: resume after file row {result.committedRows.toLocaleString()}.</div>}
               {result.errorCode === "outcomeUnknown" && <div className="text-fg">Querithm asks you to confirm you checked the table before it imports into it again.</div>}
               {result.rejectFile && (

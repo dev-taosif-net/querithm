@@ -143,7 +143,7 @@ export function Modal({
             {subtitle && <div id={`${id}-subtitle`} className={`text-[11px] mt-0.5 ${danger ? "text-white" : "text-muted"}`}>{subtitle}</div>}
           </div>
           {closeButton && (
-            <button type="button" tabIndex={-1} aria-label="Close" title="Close (Esc)" className="-my-1 -mr-2 w-7 h-7 shrink-0 inline-flex items-center justify-center rounded text-muted hover:text-fg hover:bg-hover" onClick={onClose}>
+            <button type="button" tabIndex={-1} aria-label="Close" title="Close (Esc)" className="q-icon-btn -my-1 -mr-2 w-7 h-7 shrink-0" onClick={onClose}>
               <svg aria-hidden width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                 <path d="M6 6l12 12M18 6 6 18" />
               </svg>

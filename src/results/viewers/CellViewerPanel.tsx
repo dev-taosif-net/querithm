@@ -85,7 +85,7 @@ function Segments<T extends string>({ value, options, onChange, label }: { value
       {options.map((o) => (
         <button
           key={o.value}
-          className={`h-[20px] px-2 text-[11px] ${value === o.value ? "bg-accent-solid text-white font-semibold" : "text-muted hover:text-fg hover:bg-hover"}`}
+          className={`h-[20px] px-2 text-[11px] ${value === o.value ? "bg-accent-solid text-accent-fg font-semibold" : "text-muted hover:text-fg hover:bg-ghost-hover"}`}
           aria-pressed={value === o.value}
           onClick={() => onChange(o.value)}
         >
@@ -98,7 +98,7 @@ function Segments<T extends string>({ value, options, onChange, label }: { value
 
 function Note({ children, error }: { children: React.ReactNode; error?: boolean }) {
   return (
-    <div className={`px-2 py-1 text-[11px] border-b border-line shrink-0 break-words ${error ? "bg-err/10 q-hl text-err" : "bg-panel-2 text-muted"}`} role={error ? "alert" : "note"}>
+    <div className={`px-2 py-1 text-[11px] border-b border-line shrink-0 break-words ${error ? "bg-err/(--q-err-row-alpha) q-hl text-err border-l-2 border-l-err" : "bg-panel-2 text-muted"}`} role={error ? "alert" : "note"}>
       {children}
     </div>
   );

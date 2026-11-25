@@ -301,7 +301,7 @@ export function ConnectDialog({ onClose, focus }: { onClose: () => void; focus?:
       <span className="self-center font-semibold">{chosenProfiles.length} selected</span>
       {chosenProd > 0 && <span className="self-center text-[11px] font-semibold text-env-prod-fg">· {chosenProd} Production</span>}
       {hidden > 0 && <span className="self-center text-[11px] text-muted">· {hidden} hidden by filter</span>}
-      <button className="text-accent text-[11px] hover:underline" onClick={() => checkAll(flat, true)}>Select all shown</button>
+      <button className="q-link text-[11px]" onClick={() => checkAll(flat, true)}>Select all shown</button>
       <span className="mr-auto" />
       <button className="q-btn" disabled={!chosenProfiles.some((p) => p.groupName)} onClick={() => void ungroupChosen()}>Remove from group</button>
       <button className="q-btn q-btn-primary" disabled={!chosenProfiles.length} onClick={moveChosen}>Move to group…</button>
@@ -701,7 +701,7 @@ function IconButton({ title, label, onClick, className = "", children }: { title
       tabIndex={-1}
       title={title}
       aria-label={label}
-      className={`w-6 h-6 inline-flex items-center justify-center rounded text-muted hover:text-fg hover:bg-hover ${className}`}
+      className={`q-icon-btn ${className}`}
       onClick={(e) => {
         e.stopPropagation();
         onClick(e);

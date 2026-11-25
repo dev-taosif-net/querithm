@@ -3,7 +3,7 @@ namespace Querithm.Contract;
 /// <summary>Contract version; system.ping returns it and the webview refuses to run on a mismatch (§5).</summary>
 public static class ContractInfo
 {
-    public const string Version = "1.19.0";
+    public const string Version = "1.20.0";
 }
 
 /// <summary>Members are appended as providers land (Phase D); existing spellings never change ("mssql", "pg").</summary>
@@ -132,6 +132,35 @@ public sealed record SettingEntry
     public required string Key { get; init; }
     /// <summary>JSON-encoded value.</summary>
     public required string ValueJson { get; init; }
+}
+
+/// <summary>
+/// settings.patch: changes some members of a setting whose value is a JSON object (the webview's <c>ui.settings</c>) in
+/// one write transaction. Two Querithm instances saving at once each keep the members the other wrote, which a read in
+/// one call and a write in the next could not promise (§16, 2026-11-25). Values are JSON-encoded, as in
+/// <see cref="SettingEntry"/>. Applied in this order: <see cref="Remove"/>, <see cref="SetWhenNew"/>, <see cref="Set"/>.
+/// </summary>
+public sealed record SettingsPatchParams
+{
+    public required string Key { get; init; }
+    /// <summary>Members to write: name → JSON-encoded value.</summary>
+    public Dictionary<string, string>? Set { get; init; }
+    /// <summary>
+    /// Members written only when the setting held none before this call (no row, an empty object, or a value that is not
+    /// an object): what a first save adds. <see cref="Set"/> still wins for a member in both.
+    /// </summary>
+    public Dictionary<string, string>? SetWhenNew { get; init; }
+    /// <summary>Members to drop.</summary>
+    public string[]? Remove { get; init; }
+}
+
+/// <summary>The limits the sidecar enforces on settings.patch.</summary>
+public static class SettingsPatchLimits
+{
+    /// <summary>The most members one call may name, across Set, SetWhenNew and Remove together.</summary>
+    public const int MaxMembers = 256;
+    /// <summary>The longest member name.</summary>
+    public const int MaxNameLength = 128;
 }
 
 public sealed record SyntheticParams

@@ -44,6 +44,8 @@ const TARGETS = {
   6: ["Full parse of 12k-line proc", "ms", 100],
   7: ["Tab switch between connected sessions (p95)", "ms", 50],
   "7b": ["Tab switch 1 ↔ 30 with 30 tabs open (p95)", "ms", 50],
+  // App Themes (plans/app-themes): a theme card's setting change → the frame showing the theme rendered, all nine in turn.
+  "39switch": ["App Theme switch with 30 tabs open: theme card → frame rendered (p95)", "ms", 50],
   8: ["DB switch, SQL Server, existing connection (overhead over one roundtrip)", "ms", 20],
   9: ["Metadata snapshot load from SQLite", "ms", 80],
   10: ["Incremental refresh with 10 changed objects", "ms", 2000],
@@ -1451,6 +1453,12 @@ async function uiMetrics() {
     record(7, p95(tabs), { samples: tabs.length });
     const tabs30 = await page.evaluate(() => window.__bench.tabSwitch30(50));
     record("7b", p95(tabs30), { samples: tabs30.length });
+    const themes = await page.evaluate(() => window.__bench.themeSwitch30(3));
+    const round1 = (a) => Math.round(a * 10) / 10;
+    record("39switch", p95(themes.all), {
+      samples: themes.all.length, tabs: themes.tabs, activeTabLines: themes.activeLines, withinModeP95: round1(p95(themes.within)), acrossModesP95: round1(p95(themes.across)),
+      worstMs: round1(Math.max(...themes.all)), oneLineTabP95: themes.oneLine ? round1(p95(themes.oneLine.all)) : null,
+    });
     await page.evaluate(() => window.gc?.());
     const big = await page.evaluate(() => window.__bench.bigResult(1_000_000, 40, 240));
     record(11, big.firstBatchMs, { fullFetchMs: big.fullFetchMs, rows: big.rows });

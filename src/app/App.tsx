@@ -5,7 +5,9 @@ import { isTauri } from "../ipc/transport";
 import { initMonaco, applyMonacoTheme } from "../editor/monaco";
 import { installProviders } from "../editor/providers";
 import { refreshEditorOptions } from "../editor/editors";
-import { useSettings, useSettingsStatus } from "../store/settings";
+import { takeSyntaxMigrationNotice, useSettings, useSettingsStatus } from "../store/settings";
+import { toast } from "../store/ui";
+import { resolveAppTheme } from "../theme/resolve";
 import { useProfiles } from "../store/profiles";
 import { installSnapshotListeners } from "../store/snapshots";
 import { installDiagListeners } from "../store/diag";
@@ -31,7 +33,7 @@ import { installBench, runAppBench } from "./bench";
 import { installUpdateChecks } from "../store/updates";
 import { getAppInfo } from "./appInfo";
 import { applyUiScale } from "./uiScale";
-import { cachedTheme, isDark, keepTheme } from "./theme";
+import { cachedTheme, cachedThemeChoice, isDark, keepTheme, keepThemeBoot, setBootColors } from "./theme";
 import { hideSplash, showSplash, splashStage } from "./splash";
 
 let booted: Promise<void> | null = null;
@@ -45,10 +47,47 @@ function themeToShow(s = useSettings.getState()) {
   return s.loaded ? s.theme : (cachedTheme() ?? s.theme);
 }
 
-function syncDocumentTheme(theme = themeToShow(), syntax = useSettings.getState().syntaxTheme) {
-  document.documentElement.dataset.theme = isDark(theme) ? "dark" : "light";
-  document.documentElement.dataset.syntax = syntax;
-  applyMonacoTheme();
+/**
+ * The theme choice to show, as themeToShow for the word: the settings once they have loaded; before that the App Theme
+ * picks and syntax colors the window last had (the boot cache, which public/boot-theme.js already put on the document,
+ * plans/app-themes §6.2). The store's defaults here switched a Cortado window to Querithm Dark and back while loading.
+ */
+function choiceToShow(s = useSettings.getState()) {
+  const live = { theme: s.theme, darkTheme: s.darkTheme, lightTheme: s.lightTheme, syntaxColors: s.syntaxColors };
+  return s.loaded ? live : { ...live, ...bootChoice() };
+}
+
+/** The boot cache, read once: it is written only once the settings have loaded (keepThemeBoot), and read only before. */
+let bootCache: ReturnType<typeof cachedThemeChoice> | undefined;
+const bootChoice = () => (bootCache ??= cachedThemeChoice());
+
+/** One part of choiceToShow for a selector, which runs on every settings change: no object built, the cache read once. */
+function shownPart<K extends "darkTheme" | "lightTheme" | "syntaxColors">(s: ReturnType<typeof useSettings.getState>, k: K) {
+  return s.loaded ? s[k] : (bootChoice()[k] ?? s[k]);
+}
+
+/** Writes an attribute only when it changes: every write of data-theme flushes the tab-style caches (tabStyle.ts). */
+function setIfChanged(root: HTMLElement, key: string, value: string) {
+  if (root.dataset[key] !== value) root.dataset[key] = value;
+}
+
+/**
+ * Names the shown App Theme on the document (plans/app-themes §4.4): data-theme = its mode (every existing reader keeps
+ * working), data-app-theme = its id (selects its generated token block), data-syntax = Syntax colors, data-comments =
+ * upright when italic comments are off, and the start screen's colours (shown again by Restart engine). Then the editor
+ * theme follows; semantic coloring is switched with the palette.
+ */
+function syncDocumentTheme() {
+  const s = useSettings.getState();
+  const c = choiceToShow(s);
+  const root = document.documentElement;
+  const app = resolveAppTheme(c, isDark("system"));
+  setIfChanged(root, "theme", app.mode);
+  setIfChanged(root, "appTheme", app.id);
+  setIfChanged(root, "syntax", c.syntaxColors);
+  setIfChanged(root, "comments", s.italicComments ? "italic" : "upright");
+  setBootColors(root, app);
+  if (applyMonacoTheme()) refreshEditorOptions();
 }
 
 async function boot() {
@@ -84,6 +123,12 @@ async function boot() {
   if (!(await restoreWorkspace())) newQueryTab();
   installAutosave();
   splashStage(4);
+  // Once, on the start that moved a saved Standard to Default: say so, with the way back (plans/app-themes §3.6).
+  if (takeSyntaxMigrationNotice())
+    toast("info", "Syntax colors now follow your color theme (Default): NULL, AND/OR, CTE names and schema prefixes have their own colors.", {
+      label: "Use Standard",
+      run: () => useSettings.getState().set({ syntaxColors: "standard" }),
+    });
   const info = await getAppInfo().catch(() => null);
   // window.__bench only for a harness (L10): the shell or the dev bridge reports bench when launched with QUERITHM_BENCH=1;
   // ?bench is honoured in the browser (dev bridge) only, never in the shell's webview.
@@ -99,19 +144,32 @@ async function boot() {
  */
 function SettingsEffects() {
   const theme = useSettings(themeToShow);
-  const syntax = useSettings((s) => s.syntaxTheme);
+  // Primitives only: a selector returning a fresh object would re-render forever. The shown values (the boot cache's
+  // before the settings load), so the load re-applies whenever what shows changes, also back to a default.
+  const darkTheme = useSettings((s) => shownPart(s, "darkTheme"));
+  const lightTheme = useSettings((s) => shownPart(s, "lightTheme"));
+  const syntax = useSettings((s) => shownPart(s, "syntaxColors"));
+  const italicComments = useSettings((s) => s.italicComments);
   // Kept for the next start only when it is the saved setting: not the default before the settings have loaded, and
   // not the default they fall back to when they could not be read.
   const loaded = useSettings((s) => s.loaded);
   const unread = useSettingsStatus((s) => s.loadFailed);
-  useLayoutEffect(() => void (loaded && !unread && keepTheme(theme)), [loaded, unread, theme]);
+  // Both picks' start colours for the next start: the shell's window colour and the first frame (plans/app-themes §6);
+  // an unknown pick keeps Querithm's. A syntax-only change tells the shell nothing new (keepTheme dedupes its line).
   useLayoutEffect(() => {
-    const apply = () => syncDocumentTheme(theme, syntax);
+    if (!loaded || unread) return;
+    const dark = resolveAppTheme({ theme: "dark", darkTheme, lightTheme }, true);
+    const light = resolveAppTheme({ theme: "light", darkTheme, lightTheme }, false);
+    keepTheme(theme, dark, light);
+    keepThemeBoot(dark, light, syntax);
+  }, [loaded, unread, theme, darkTheme, lightTheme, syntax]);
+  useLayoutEffect(() => {
+    const apply = () => syncDocumentTheme();
     apply();
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
-  }, [theme, syntax]);
+  }, [theme, darkTheme, lightTheme, syntax, italicComments]);
   // The tab layout sets the strip's height (--q-strip-h), which the Object Explorer's header follows.
   const tabLayout = useSettings((s) => s.tabLayout);
   useLayoutEffect(() => void (document.documentElement.dataset.tabLayout = tabLayout), [tabLayout]);

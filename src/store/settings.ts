@@ -1,14 +1,27 @@
 import { create } from "zustand";
 import type { KeywordCase } from "../ipc/contract";
 import { rpc } from "../ipc/client";
+import { withTimeLimit } from "../ipc/timeLimit";
 import { joinBinding, splitBinding, UNBOUND, usableShortcut } from "../app/shortcuts";
 import { toast } from "./ui";
-import { DEFAULT_SYNTAX_THEME, SYNTAX_THEME_IDS, type SyntaxThemeId } from "../editor/syntaxTheme";
+import { DEFAULT_SYNTAX_CHOICE, SYNTAX_CHOICES, SYNTAX_THEME_IDS, type SyntaxChoice, type SyntaxThemeId } from "../editor/syntaxTheme";
+import { DARK_APP_THEME_IDS, LIGHT_APP_THEME_IDS } from "../theme/appThemes";
 
 export interface Settings {
+  /** The mode (§12 Theme): the dark pick, the light pick, or follow the OS between them ("system"). */
   theme: "dark" | "light" | "system";
-  /** SQL token colors (§12 Theme); each theme has a dark and a light variant. */
-  syntaxTheme: SyntaxThemeId;
+  /** The App Theme shown in dark mode (plans/app-themes §3): a dark theme id; "dark" = Querithm Dark. */
+  darkTheme: string;
+  /** The App Theme shown in light mode: a light theme id; "light" = Querithm Light. */
+  lightTheme: string;
+  /**
+   * SQL token colors: "default" (the App Theme's own palette, following the theme) or one of the six syntax themes,
+   * which keep their colors on every App Theme. Replaces `syntaxTheme`, which is still written as a mirror for older
+   * builds (`legacySyntaxMirror`).
+   */
+  syntaxColors: SyntaxChoice;
+  /** Comments in the SQL editor are italic; off draws them upright (astigmatism, dyslexia). */
+  italicComments: boolean;
   editorFontSize: number;
   minimap: boolean;
   wordWrap: boolean;
@@ -109,7 +122,10 @@ export function touchRecent(recent: readonly string[], id: string): string[] {
 
 export const defaultSettings: Settings = {
   theme: "dark",
-  syntaxTheme: DEFAULT_SYNTAX_THEME,
+  darkTheme: "dark",
+  lightTheme: "light",
+  syntaxColors: DEFAULT_SYNTAX_CHOICE,
+  italicComments: true,
   editorFontSize: 13,
   minimap: true,
   wordWrap: false,
@@ -163,7 +179,9 @@ const choices: Partial<Record<keyof Settings, readonly string[]>> = {
   theme: ["dark", "light", "system"],
   panelDock: ["bottom", "right"],
   resultLayout: ["tabs", "stacked", "side"],
-  syntaxTheme: SYNTAX_THEME_IDS,
+  darkTheme: DARK_APP_THEME_IDS,
+  lightTheme: LIGHT_APP_THEME_IDS,
+  syntaxColors: SYNTAX_CHOICES,
   keywordCase: ["upper", "lower", "preserve"],
   tabLayout: TAB_LAYOUTS,
 };
@@ -196,23 +214,52 @@ function clean<K extends keyof Settings>(key: K, v: unknown): Settings[K] | unde
 /** Settings whose value the sidecar owns under its own key; never written into ui.settings. */
 const sidecarOwned: (keyof Settings)[] = ["prodConfirmations"];
 
-const settingKeys = (Object.keys(defaultSettings) as (keyof Settings)[]).filter((k) => !sidecarOwned.includes(k));
+/** Keys of saved settings that are dropped, never kept: on a plain object they reach its prototype. */
+const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const hasOwn = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
 
-/** Saved settings are untrusted: wrong types and unknown choices fall back to defaults, numbers are clamped. */
-export function sanitizeSettings(raw: unknown): { values: Partial<Settings>; extra: Record<string, unknown> } {
+/** The value older builds read in `syntaxTheme`: the five other 2026-11 themes as themselves, anything else (Default, a
+ *  later id) as "standard". A contract for every later version (plans/app-themes §3.5). */
+export const legacySyntaxMirror = (c: string): SyntaxThemeId =>
+  c !== "standard" && (SYNTAX_THEME_IDS as readonly string[]).includes(c) ? (c as SyntaxThemeId) : "standard";
+
+/** Old `syntaxTheme` → `syntaxColors`: an explicit non-Standard theme is kept; Standard (which cannot be told from the old
+ *  default), a removed id, junk or nothing become Default (plans/app-themes §3.4). */
+export const migrateSyntaxTheme = (v: unknown): SyntaxChoice =>
+  typeof v === "string" && v !== "standard" && (SYNTAX_THEME_IDS as readonly string[]).includes(v) ? (v as SyntaxThemeId) : "default";
+
+/**
+ * Saved settings are untrusted: wrong types and unknown choices fall back to defaults, numbers are clamped.
+ * `migrated`: the object predates `syntaxColors` and was given one (once; written back at once by load()).
+ * `adopted`: an older build changed `syntaxTheme` after this one wrote it (a real pick there, kept here).
+ */
+export function sanitizeSettings(raw: unknown): { values: Partial<Settings>; extra: Record<string, unknown>; migrated: boolean; adopted: boolean } {
   const values: Partial<Settings> = {};
   const extra: Record<string, unknown> = {};
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { values, extra };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { values, extra, migrated: false, adopted: false };
   for (const [k, v] of Object.entries(raw)) {
+    // JSON.parse keeps "__proto__" as an ordinary key; assigning it to `extra` would replace that object's prototype.
+    if (UNSAFE_KEYS.has(k)) continue;
     if (sidecarOwned.includes(k as keyof Settings)) continue; // read from the sidecar's key, never from ui.settings
-    if (!(k in defaultSettings)) {
+    // Own keys only: `in` also matches Object.prototype's names (toString, constructor), which are no settings.
+    if (!hasOwn(defaultSettings, k)) {
       extra[k] = v;
       continue;
     }
     const c = clean(k as keyof Settings, v);
     if (c !== undefined) (values as Record<string, unknown>)[k] = c;
   }
-  return { values, extra };
+  const has = (k: string) => hasOwn(raw, k);
+  const old = (raw as Record<string, unknown>).syntaxTheme;
+  let migrated = false, adopted = false;
+  if (!has("syntaxColors")) {
+    values.syntaxColors = migrateSyntaxTheme(old);
+    migrated = true;
+  } else if (typeof old === "string" && old !== "standard" && (SYNTAX_THEME_IDS as readonly string[]).includes(old) && old !== legacySyntaxMirror(String((raw as Record<string, unknown>).syntaxColors))) {
+    values.syntaxColors = old as SyntaxThemeId;
+    adopted = true;
+  }
+  return { values, extra, migrated, adopted };
 }
 
 const KEY = "ui.settings";
@@ -232,20 +279,40 @@ export const useSettingsStatus = create<{ save: "saved" | "pending" | "saving" |
   loadFailed: false,
 }));
 
+/**
+ * The longest one settings call may take before it counts as failed (CLAUDE §4: no unbounded waits). Longer than the
+ * store's own busy timeout (30 s, LocalStore), so a write waiting on another instance's lock is answered first (written,
+ * or storeBusy): reaching this limit means the engine is stuck, not merely waiting its turn.
+ */
+export const SETTINGS_RPC_LIMIT_MS = 35_000;
+const limited = <T>(p: Promise<T>, what: string) =>
+  withTimeLimit(p, SETTINGS_RPC_LIMIT_MS, `the engine did not answer ${what} within ${SETTINGS_RPC_LIMIT_MS / 1000} s`);
+
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
-/** Keys a newer app version wrote: kept and written back, so running an older version loses nothing. */
-let extra: Record<string, unknown> = {};
-/** Keys changed while the saved settings were unreadable; they win over what a later read returns. */
-const changedUnread = new Set<keyof Settings>();
+/**
+ * Keys set in this session since their last successful write, each with the version of its last set() (plans/app-themes
+ * §3.5): a save sends only these, merged into ui.settings by the sidecar under the store's write lock (settings.patch),
+ * so a second window's or a newer version's keys are kept, and from now on a saved key means a choice. A set() during a
+ * write keeps the key dirty.
+ */
+const dirty = new Map<keyof Settings, number>();
+let dirtyVersion = 0;
 let warned = false;
+/** What the last successful read found: whether ui.settings existed and whether it was migrated or adopted (§3.2). */
+let lastRead = { hadSaved: false, migrated: false, adopted: false };
+/** The one-time "Syntax colors now follow your color theme" notice is due (§3.6). */
+let syntaxNoticeDue = false;
 
 async function readSaved(): Promise<Partial<Settings>> {
-  const entries = await rpc("settings.get", { keys: [KEY, PROD_GUARD_KEY] });
+  const entries = await limited(rpc("settings.get", { keys: [KEY, PROD_GUARD_KEY] }), "the settings read");
   // As the sidecar reads it (QueryGuard.ParseSetting): only false is off.
   const guard = entries.find((e) => e.key === PROD_GUARD_KEY);
   const owned: Partial<Settings> = guard ? { prodConfirmations: guard.valueJson.trim() !== "false" } : {};
   const saved = entries.find((e) => e.key === KEY);
-  if (!saved) return owned;
+  if (!saved) {
+    lastRead = { hadSaved: false, migrated: false, adopted: false };
+    return owned;
+  }
   let raw: unknown;
   try {
     raw = JSON.parse(saved.valueJson);
@@ -253,8 +320,15 @@ async function readSaved(): Promise<Partial<Settings>> {
     raw = null; // unreadable JSON holds nothing to keep
   }
   const r = sanitizeSettings(raw);
-  extra = r.extra;
+  lastRead = { hadSaved: !!raw && typeof raw === "object" && !Array.isArray(raw), migrated: r.migrated, adopted: r.adopted };
   return { ...r.values, ...owned };
+}
+
+/** True once after a load that moved a saved Standard (or nothing) to Default; the app shows its notice then. */
+export function takeSyntaxMigrationNotice(): boolean {
+  const due = syntaxNoticeDue;
+  syntaxNoticeDue = false;
+  return due;
 }
 
 /**
@@ -271,10 +345,6 @@ async function writeProdConfirmations(on: boolean, before: boolean): Promise<voi
   }
 }
 
-function persisted(s: Settings): Settings {
-  return Object.fromEntries(settingKeys.map((k) => [k, s[k]])) as unknown as Settings;
-}
-
 function failed(e: unknown) {
   const error = e instanceof Error ? e.message : String(e);
   useSettingsStatus.setState({ save: "failed", error });
@@ -282,15 +352,37 @@ function failed(e: unknown) {
   warned = true;
 }
 
-async function persist(): Promise<void> {
+/** The write in flight or queued last (resolves, never rejects): writes run one after another, never side by side. */
+let writing: Promise<void> = Promise.resolve();
+/** A write queued behind the one in flight, not started yet: later calls join it (it reads `dirty` when it starts). */
+let queued: Promise<void> | undefined;
+
+/**
+ * Saves this session's changes. One write at a time: two side by side could finish out of order, and the older one
+ * would put back a value the newer one had just saved (and clear it from `dirty`). Each call is bounded
+ * (SETTINGS_RPC_LIMIT_MS), so one the engine never answers fails the save instead of holding every later one.
+ */
+function persist(): Promise<void> {
+  clearTimeout(saveTimer);
   saveTimer = undefined;
+  if (!queued) {
+    const next = writing.then(() => {
+      queued = undefined;
+      return writeSettings();
+    });
+    queued = next;
+    writing = next.catch(() => {});
+  }
+  return queued;
+}
+
+async function writeSettings(): Promise<void> {
   if (useSettingsStatus.getState().loadFailed) {
     try {
       const saved = await readSaved();
       const cur = useSettings.getState();
-      const mine = Object.fromEntries([...changedUnread].map((k) => [k, cur[k]]));
+      const mine = Object.fromEntries([...dirty.keys()].map((k) => [k, cur[k]]));
       useSettings.setState({ ...saved, ...mine });
-      changedUnread.clear();
       useSettingsStatus.setState({ loadFailed: false });
     } catch (e) {
       failed(e);
@@ -298,8 +390,23 @@ async function persist(): Promise<void> {
     }
   }
   useSettingsStatus.setState({ save: "saving" });
+  const pending = new Map(dirty);
   try {
-    await rpc("settings.set", { key: KEY, valueJson: JSON.stringify({ ...extra, ...persisted(useSettings.getState()) }) });
+    const s = useSettings.getState();
+    const json = (v: unknown) => JSON.stringify(v);
+    const set: Record<string, string> = {};
+    for (const k of pending.keys()) if (!sidecarOwned.includes(k)) set[k] = json(s[k]);
+    if (pending.has("syntaxColors")) set.syntaxTheme = json(legacySyntaxMirror(s.syntaxColors));
+    // Nothing saved yet (a fresh install's first save): the syntax colors and their mirror go in too, or the next load
+    // would read an object without them as an older build's and move it to Default with the one-time notice. An object
+    // that has keys but no syntaxColors is an older build's: load() migrates it, and shows the notice with it (§3.2). The
+    // sidecar decides "nothing saved yet" under the same lock as the write (SettingsPatchParams.setWhenNew).
+    const setWhenNew = { syntaxColors: json(s.syntaxColors), syntaxTheme: json(legacySyntaxMirror(s.syntaxColors)) };
+    // One call, merged by the sidecar under the store's write lock: keys another window or a newer version wrote stay as
+    // they are, even when that window saves at the same moment (a read here and a write in the next call could not
+    // promise that). The sidecar-owned keys never belong in ui.settings, so an old copy there is dropped.
+    await limited(rpc("settings.patch", { key: KEY, set, setWhenNew, remove: [...sidecarOwned] }), "the settings write");
+    for (const [k, v] of pending) if (dirty.get(k) === v) dirty.delete(k);
     warned = false;
     // A change made while this write was in flight has its own timer; it reports "pending" until then.
     useSettingsStatus.setState({ save: saveTimer ? "pending" : "saved", error: undefined });
@@ -308,17 +415,18 @@ async function persist(): Promise<void> {
   }
 }
 
-/** Writes a pending change now (app closing, update restart) instead of after the debounce. */
+/**
+ * Writes a pending change now (app closing, update restart) instead of after the debounce, after the write in flight;
+ * with nothing pending it still waits for that write, so closing never cuts one off.
+ */
 export async function flushSettings(): Promise<void> {
-  if (!saveTimer) return;
-  clearTimeout(saveTimer);
-  await persist();
+  if (saveTimer) await persist();
+  else await writing;
 }
 
 /** Tries a failed save again (Retry in Settings, engine restarted). */
 export async function retrySettingsSave(): Promise<void> {
   if (useSettingsStatus.getState().save !== "failed") return;
-  clearTimeout(saveTimer);
   await persist();
 }
 
@@ -330,6 +438,13 @@ export const useSettings = create<SettingsStore>((set) => ({
       const saved = await readSaved();
       set({ ...defaultSettings, ...saved, loaded: true });
       useSettingsStatus.setState({ loadFailed: false });
+      // A saved object that predates Syntax colors (or one an older build changed) is written back once, now, so the
+      // migration never runs twice and its notice shows once (plans/app-themes §3.2, §3.6).
+      if (lastRead.hadSaved && (lastRead.migrated || lastRead.adopted)) {
+        useSettings.getState().set({ syntaxColors: saved.syntaxColors });
+        if (lastRead.migrated && saved.syntaxColors === "default") syntaxNoticeDue = true;
+        void flushSettings();
+      }
     } catch {
       // Run on defaults, but keep what is on disk: it is read again before the first write.
       // loadFailed first: what follows `loaded` (the theme kept for the next start, App.tsx) must not take the
@@ -341,14 +456,20 @@ export const useSettings = create<SettingsStore>((set) => ({
   set(patch) {
     const prodBefore = useSettings.getState().prodConfirmations;
     const clean_: Partial<Settings> = {};
+    let uiChange = false;
     for (const [k, v] of Object.entries(patch)) {
       const c = clean(k as keyof Settings, v);
       if (c === undefined) continue;
       (clean_ as Record<string, unknown>)[k] = c;
-      if (useSettingsStatus.getState().loadFailed) changedUnread.add(k as keyof Settings);
+      if (sidecarOwned.includes(k as keyof Settings)) continue; // written to the sidecar's own key below
+      dirty.set(k as keyof Settings, ++dirtyVersion);
+      uiChange = true;
     }
     set(clean_);
     if (clean_.prodConfirmations !== undefined && clean_.prodConfirmations !== prodBefore) void writeProdConfirmations(clean_.prodConfirmations, prodBefore);
+    // Nothing for ui.settings (only a sidecar-owned key, or no usable value): no read and write of an unchanged object,
+    // unless a failed save is waiting for the next change to be tried again.
+    if (!uiChange && useSettingsStatus.getState().save !== "failed") return;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => void persist(), 400);
     if (useSettingsStatus.getState().save !== "failed") useSettingsStatus.setState({ save: "pending" });

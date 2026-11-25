@@ -14,6 +14,8 @@ import { useProfiles } from "../store/profiles";
 import { useConnections } from "../store/connections";
 import { snapKey, useSnapshots } from "../store/snapshots";
 import { completionStats } from "../editor/providers";
+import { useSettings } from "../store/settings";
+import { APP_THEMES } from "../theme/appThemes";
 
 const raf = () => new Promise<number>((r) => requestAnimationFrame(r));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -155,6 +157,77 @@ async function tabSwitch30(samples = 50) {
   }
   if (start) activateTab(start);
   return times;
+}
+
+/** Resolves once `done()` holds in a frame and that frame has been rendered: a task posted from its rAF callback runs
+ *  after the frame's style, layout and paint, without waiting for the next vsync. Rejects after `limitMs` when `done`
+ *  never holds (a theme that never applies), so the run ends instead of hanging. */
+function paintedWhen(done: () => boolean, limitMs = 5000): Promise<number> {
+  const until = performance.now() + limitMs;
+  return new Promise((resolve, reject) => {
+    const frame = () => {
+      if (!done()) {
+        if (performance.now() > until) return reject(new Error(`not painted within ${limitMs} ms`));
+        return void requestAnimationFrame(frame);
+      }
+      const ch = new MessageChannel();
+      ch.port1.onmessage = () => resolve(performance.now());
+      ch.port2.postMessage(null);
+    };
+    requestAnimationFrame(frame);
+  });
+}
+
+/**
+ * Metric 39switch (plans/app-themes §14): with 30 tabs open, what a click on an App Theme card does in Settings ›
+ * Appearance › Single theme (`set({ theme, darkTheme | lightTheme })`, Settings itself closed) → the frame showing the
+ * theme rendered. Steps through all nine themes in turn, so switches within a mode and across modes (Juniper → Querithm
+ * Light, Vellum → Querithm Dark) are both measured, after one warm-up round. Measured twice: with the tab that is
+ * active (in the harness, the 12k-line procedure of the typing metric: Monaco re-tokenizes the shown model and rebuilds
+ * its bracket pairs on every theme change) and with a one-line tab in front. The settings and the tab are put back.
+ */
+async function themeSwitch30(rounds = 3) {
+  const start = useTabs.getState().activeId;
+  const base = start ? useTabs.getState().tabs[start] : undefined;
+  while (useTabs.getState().order.length < 30) {
+    newQueryTab({ profileId: base?.profileId ?? "", database: base?.database, text: `SELECT ${useTabs.getState().order.length};`, activate: false, atEnd: true });
+  }
+  await sleep(500);
+  const s0 = useSettings.getState();
+  const before = { theme: s0.theme, darkTheme: s0.darkTheme, lightTheme: s0.lightTheme };
+  const root = document.documentElement;
+  const measure = async () => {
+    const within: number[] = [];
+    const across: number[] = [];
+    for (let round = 0; round <= rounds; round++) {
+      for (const t of APP_THEMES) {
+        const modeBefore = root.dataset.theme;
+        const t0 = performance.now();
+        useSettings.getState().set(t.mode === "dark" ? { theme: "dark", darkTheme: t.id } : { theme: "light", lightTheme: t.id });
+        const t1 = await paintedWhen(() => root.dataset.appTheme === t.id && root.dataset.theme === t.mode);
+        if (round > 0) (modeBefore === t.mode ? within : across).push(t1 - t0); // round 0 loads each theme once
+        await sleep(250); // Monaco's background re-tokenizing and the settings save run between clicks, not in a sample
+      }
+    }
+    return { within, across, all: [...within, ...across] };
+  };
+  let active: Awaited<ReturnType<typeof measure>>;
+  let oneLine: Awaited<ReturnType<typeof measure>> | null = null;
+  try {
+    active = await measure();
+    const small = useTabs.getState().order.find((id) => id !== start && (getModel(id)?.getLineCount() ?? 1) === 1);
+    if (small) {
+      activateTab(small);
+      await sleep(500);
+      oneLine = await measure();
+    }
+  } finally {
+    // Put back the tab and the theme also when a sample fails.
+    if (start && useTabs.getState().activeId !== start) activateTab(start);
+    useSettings.getState().set(before);
+    await sleep(250);
+  }
+  return { ...active, activeLines: start ? (getModel(start)?.getLineCount() ?? null) : null, oneLine, tabs: useTabs.getState().order.length };
 }
 
 /** Metrics 11–13: synthetic 1M × 40 result → first batch painted, scroll frame time, memory delta. */
@@ -757,6 +830,7 @@ export function installBench() {
     tier1,
     tabSwitch,
     tabSwitch30,
+    themeSwitch30,
     bigResult,
     chartToggle,
     resultLayouts,

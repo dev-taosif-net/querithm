@@ -10,6 +10,13 @@ export interface Toast {
   text: string;
   /** How many times the same message came while it was shown (M20: identical toasts are joined, not stacked). */
   count?: number;
+  /** One optional button on the toast (e.g. "Use Standard" on the syntax-colors notice); running it dismisses the toast. */
+  action?: ToastAction;
+}
+
+export interface ToastAction {
+  label: string;
+  run: () => void;
 }
 
 /**
@@ -87,7 +94,7 @@ interface UiStore {
   closeDialog(d?: Dialog): void;
   setPalette(p: Palette): void;
   setSwitcher(s: Switcher): void;
-  toast(kind: Toast["kind"], text: string): void;
+  toast(kind: Toast["kind"], text: string, action?: ToastAction): void;
   dismissToast(id: number): void;
   /** The pointer is over the toasts, or focus is inside them: their time stops until both have left. */
   holdToasts(why: "pointer" | "focus", on: boolean): void;
@@ -137,11 +144,12 @@ export const useUi = create<UiStore>((set, get) => ({
   setSwitcher(s) {
     set({ switcher: s });
   },
-  toast(kind, text) {
+  toast(kind, text, action) {
     // The same message while it is still shown: counted on that toast, its time starts over, and it is not read again.
     const same = get().toasts.find((t) => t.kind === kind && t.text === text);
     if (same) {
-      set({ toasts: get().toasts.map((t) => (t === same ? { ...t, count: (t.count ?? 1) + 1 } : t)) });
+      // The newest action replaces the shown one: it may close over newer state.
+      set({ toasts: get().toasts.map((t) => (t === same ? { ...t, count: (t.count ?? 1) + 1, ...(action ? { action } : {}) } : t)) });
       const timer = toastTimers.get(same.id);
       if (timer) {
         stopToast(same.id);
@@ -159,7 +167,7 @@ export const useUi = create<UiStore>((set, get) => ({
       stopToast(t.id);
       toastTimers.delete(t.id);
     }
-    set({ toasts: [...kept, { id, kind, text }] });
+    set({ toasts: [...kept, action ? { id, kind, text, action } : { id, kind, text }] });
     toastTimers.set(id, { left: toastDuration(kind, text), due: 0 });
     runToast(id);
     announce(kind === "error" ? `Error: ${text}` : kind === "warn" ? `Warning: ${text}` : text, kind === "error" || kind === "warn" ? "assertive" : "polite");
@@ -210,4 +218,4 @@ export function ask<T>(make: (resolve: (v: T) => void) => Dialog): Promise<T> {
   });
 }
 
-export const toast = (kind: Toast["kind"], text: string) => useUi.getState().toast(kind, text);
+export const toast = (kind: Toast["kind"], text: string, action?: ToastAction) => useUi.getState().toast(kind, text, action);

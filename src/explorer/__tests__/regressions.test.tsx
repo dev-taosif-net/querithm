@@ -69,7 +69,7 @@ beforeEach(() => {
   useProfiles.setState({ profiles: [], groups: [] });
   useConnections.setState({ servers: {}, order: [], disconnected: {} });
   useSnapshots.setState({ entries: {} });
-  useTabs.setState({ activeId: undefined, tabs: {}, order: [] } as never);
+  useTabs.setState({ activeId: undefined, tabs: {}, order: [], lastBinding: undefined } as never);
   useSettings.setState({ explorerGroupByEnv: false, explorerSchemaGroups: [], explorerVisible: true, explorerAutoHide: false, groupOrder: [], profileOrder: [] });
   useUi.setState({ dialogs: [], toasts: [], explorerWidth: 280 });
   // The Explorer's view state lives in a store (it outlives a mount: the workspace saves the expansion).
@@ -90,6 +90,59 @@ describe.each<Engine>(["mssql", "pg"])("Explorer regressions (%s)", (engine) => 
     typeSearch("Ord");
     expect(screen.queryByText(/\bmatch(es)?\b/i)).toBeNull();
     expect(screen.getAllByText(/query tab/i).length).toBeGreaterThan(0);
+  });
+
+  it("B1: with every tab closed, search reads the database the top bar shows (the last tab's), never another server", () => {
+    useProfiles.setState({ profiles: [profile("p1", engine), profile("p2", engine)] });
+    connect("p1", [orders(1, dflt)]);
+    connect("p2", [orders(2, dflt), { id: 3, schema: dflt, name: "OrderLines", kind: "table" }]);
+    useTabs.setState({ lastBinding: { profileId: "p1", database: "AppDb" } } as never);
+    render(<Explorer />);
+    expect(searchBox().getAttribute("placeholder")).toBe("Search AppDb on Srv-p1…");
+    typeSearch("Ord");
+    expect(screen.getByText("1 match")).toBeTruthy();
+    expect(document.getElementById("q-explorer-scope")!.getAttribute("title")).toMatch(/^Searches the database new queries open in: .*Srv-p1 › AppDb$/);
+    fireEvent.keyDown(searchBox(), { key: "Enter" });
+    expect(m.scriptObject).toHaveBeenLastCalledWith("p1", "AppDb", expect.objectContaining({ objectId: 1, name: "Orders" }) as never, "selectTop", true);
+  });
+
+  it("B1: with every tab closed, the scope line's Reveal selects the database it names (the last tab's)", () => {
+    useProfiles.setState({ profiles: [profile("p1", engine)] });
+    connect("p1", [orders(1, dflt)]);
+    useTabs.setState({ lastBinding: { profileId: "p1", database: "AppDb" } } as never);
+    render(<Explorer />);
+    useExplorer.getState().set({ selected: undefined });
+    fireEvent.click(screen.getByRole("button", { name: "Reveal this database in the tree" }));
+    expect(useExplorer.getState().selected).toBe("db:p1:AppDb");
+  });
+
+  it("B1: with every tab closed, a server the user disconnected since (the top bar drops it too) is not searched", () => {
+    useProfiles.setState({ profiles: [profile("p1", engine)] });
+    connect("p1", [orders(1, dflt)]);
+    useConnections.setState({ disconnected: { p1: true } } as never);
+    useTabs.setState({ lastBinding: { profileId: "p1", database: "AppDb" } } as never);
+    render(<Explorer />);
+    typeSearch("Ord");
+    expect(screen.queryByText(/\bmatch(es)?\b/i)).toBeNull();
+    expect(screen.getAllByText(/query tab/i).length).toBeGreaterThan(0);
+  });
+
+  it("B2: with every tab closed, the last tab's catalog not loaded yet is asked for", () => {
+    // A fresh mock (not a spy on the store's function, which an earlier test may have left in place with its calls).
+    const real = useSnapshots.getState().ensure;
+    const ensure = vi.fn();
+    useSnapshots.setState({ ensure } as never);
+    try {
+      useProfiles.setState({ profiles: [profile("p1", engine)] });
+      connect("p1", null);
+      useTabs.setState({ lastBinding: { profileId: "p1", database: "AppDb" } } as never);
+      render(<Explorer />);
+      typeSearch("Ord");
+      expect(ensure).toHaveBeenCalledWith("p1", "AppDb", undefined);
+      expect(screen.queryByText(/0 match/i)).toBeNull();
+    } finally {
+      useSnapshots.setState({ ensure: real } as never);
+    }
   });
 
   it("B2: searching a database whose catalog is not loaded asks for it and says it is loading", () => {

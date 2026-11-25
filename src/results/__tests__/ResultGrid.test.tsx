@@ -84,6 +84,14 @@ describe("tint / gridTheme", () => {
     expect(t.fontFamily).toContain("JetBrains Mono");
     expect(t.cellHorizontalPadding).toBeCloseTo(8 * 0.93);
   });
+  it("labels the accent fill (a selected column's header) in the theme's --q-accent-fg; white when a theme sets none", () => {
+    const s = document.documentElement.style;
+    s.setProperty("--q-accent", "#dbb970"); // Cortado: a light accent with a dark label
+    s.setProperty("--q-accent-fg", "#1f160f");
+    expect(gridTheme()).toMatchObject({ accentFg: "#1f160f", textHeaderSelected: "#1f160f" });
+    s.removeProperty("--q-accent-fg");
+    expect(gridTheme()).toMatchObject({ accentFg: "#ffffff", textHeaderSelected: "#ffffff" });
+  });
 });
 
 describe("read-only grid", () => {

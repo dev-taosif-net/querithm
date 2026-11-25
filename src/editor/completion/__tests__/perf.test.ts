@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { IDX } from "./fixture";
 import { complete } from "../complete";
 import { clearTokenCache, getStream, tokenize } from "../lexer";
+import { semanticSpans } from "../scanner";
 
 const BLOCK = (i: number) => `
   DECLARE @v${i} int = ${i};
@@ -53,6 +54,40 @@ const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.len
 // text on a keystroke) costs far more than the slack allows.
 const SLACK = process.env.QUERITHM_PERF_STRICT === "1" ? 1 : 3;
 const p95 = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length * 0.95)];
+
+// §14 #38 (App Themes §5.3): semantic colours for the visible range. Placed first, so the analyzer's code is still cold
+// for the first call; the token cache is warm (the editor's completion and highlighting have lexed the text already).
+describe("performance: semantic spans", () => {
+  it("CTE names and schema prefixes for a viewport of a ~12,000-line procedure", () => {
+    clearTokenCache();
+    const { text } = bigScript();
+    const lineStart = [0];
+    for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) lineStart.push(i + 1);
+    const view = (top: number) => [lineStart[top], lineStart[top + 60]] as const; // ~60 visible lines
+    // Monaco's model.getValue() is a new string per request: alternate two equal strings so every call pays the cache compare.
+    const copy = [text.slice(0, text.length >> 1), text.slice(text.length >> 1)].join("");
+    const s0 = performance.now();
+    getStream(text, "tsql");
+    const lexMs = performance.now() - s0;
+    const mid = lineStart.length >> 1;
+    const s1 = performance.now();
+    const first = semanticSpans(copy, "tsql", ...view(mid), IDX);
+    const firstMs = performance.now() - s1;
+    expect(first.some((x) => x.kind === "cte") && first.some((x) => x.kind === "schema")).toBe(true);
+    const times: number[] = [];
+    for (let r = 0; r < 200; r++) {
+      const top = mid - 2000 + r * 20;
+      const s = performance.now();
+      const spans = semanticSpans(r % 2 ? copy : text, "tsql", ...view(top), IDX);
+      times.push(performance.now() - s);
+      expect(spans.length).toBeGreaterThan(0);
+    }
+    const med = median(times), p = p95(times);
+    console.log(`semantic spans, ${lineStart.length} lines, 60-line viewport: first ${firstMs.toFixed(3)} ms (lexing beforehand ${lexMs.toFixed(1)} ms), median ${med.toFixed(3)} ms, p95 ${p.toFixed(3)} ms`);
+    expect(p).toBeLessThan(4 * SLACK);
+    expect(firstMs).toBeLessThan(30 * SLACK);
+  });
+});
 
 describe("performance", () => {
   it("tier-1 completion on a ~12,000-line procedure while typing", () => {

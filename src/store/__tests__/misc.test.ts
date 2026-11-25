@@ -14,7 +14,8 @@ const { rpc, onNotify, handlers } = vi.hoisted(() => {
 vi.mock("../../ipc/client", () => ({ rpc, onNotify, shell: {}, RpcError: class extends Error {} }));
 
 import { useDiag, installDiagListeners } from "../diag";
-import { useSettings, useSettingsStatus, defaultSettings, flushSettings, retrySettingsSave, schemaGroupKey, settingLimits, TAB_LAYOUTS, isSingleLineLayout } from "../settings";
+import { useSettings, useSettingsStatus, defaultSettings, flushSettings, retrySettingsSave, schemaGroupKey, settingLimits, SETTINGS_RPC_LIMIT_MS, TAB_LAYOUTS, isSingleLineLayout } from "../settings";
+import { fakeSettingsDb, patchesOf } from "./fakeSettingsDb";
 import { useToolTabs, isToolId, newToolId } from "../toolTabs";
 import { useUsages } from "../usages";
 import { useUi, ask, toast, toastDuration, TOAST_MAX_MS, TOAST_MS } from "../ui";
@@ -132,9 +133,17 @@ describe("settings store", () => {
     it("turning it off writes the sidecar's key at once, and ui.settings never carries it", async () => {
       useSettings.getState().set({ prodConfirmations: false });
       expect(rpc).toHaveBeenCalledWith("settings.set", { key: "guard.prodConfirmations", valueJson: "false" });
+      // Alone it has nothing for ui.settings: no read and write of an unchanged object.
       await vi.advanceTimersByTimeAsync(400);
-      const blob = rpc.mock.calls.find(([m, a]) => m === "settings.set" && a.key === "ui.settings")![1];
-      expect(JSON.parse(blob.valueJson)).not.toHaveProperty("prodConfirmations");
+      expect(rpc.mock.calls.map(([m, a]) => `${m} ${a?.key ?? a?.keys}`)).toEqual(["settings.set guard.prodConfirmations"]);
+      expect(useSettingsStatus.getState().save).toBe("saved");
+      useSettings.getState().set({ prodConfirmations: true, minimap: false });
+      await vi.advanceTimersByTimeAsync(400);
+      const [patch] = patchesOf(rpc.mock.calls);
+      expect(patch.set).toEqual({ minimap: "false" });
+      expect(patch.setWhenNew).not.toHaveProperty("prodConfirmations");
+      // An old copy in ui.settings (written before the sidecar owned it) is dropped.
+      expect(patch.remove).toEqual(["prodConfirmations"]);
     });
 
     it("when the sidecar does not take the change, the switch goes back to what it still enforces and says so", async () => {
@@ -163,14 +172,14 @@ describe("settings store", () => {
     useSettings.getState().set({ minimap: false });
     useSettings.getState().set({ indentSize: 2 });
     expect(rpc).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(400);
-    expect(rpc).toHaveBeenCalledTimes(1);
-    const [method, arg] = rpc.mock.calls[0];
-    expect(method).toBe("settings.set");
-    const saved = JSON.parse(arg.valueJson);
-    expect(saved).toMatchObject({ minimap: false, indentSize: 2 });
-    expect(saved).not.toHaveProperty("loaded");
-    expect(saved).not.toHaveProperty("load");
+    await vi.advanceTimersByTimeAsync(400);
+    // One debounced save: one patch of the changed keys, which the sidecar merges into what is stored under its write
+    // lock (another window's keys are kept). Values travel JSON-encoded, as settings.set's do.
+    expect(rpc.mock.calls.map((c) => c[0])).toEqual(["settings.patch"]);
+    const [patch] = patchesOf(rpc.mock.calls);
+    expect(patch.set).toEqual({ minimap: "false", indentSize: "2" });
+    expect(patch.set).not.toHaveProperty("loaded");
+    expect(patch.set).not.toHaveProperty("load");
   });
 
   it("a failed save keeps the value, reports the failure once, and a retry saves it", async () => {
@@ -186,8 +195,7 @@ describe("settings store", () => {
     rpc.mockReset();
     rpc.mockResolvedValue(undefined);
     await retrySettingsSave();
-    expect(rpc).toHaveBeenCalledWith("settings.set", expect.anything());
-    expect(JSON.parse(rpc.mock.calls[0][1].valueJson)).toMatchObject({ wordWrap: true, minimap: false });
+    expect(patchesOf(rpc.mock.calls)[0].set).toMatchObject({ wordWrap: "true", minimap: "false" });
     expect(useSettingsStatus.getState().save).toBe("saved");
   });
 
@@ -197,13 +205,12 @@ describe("settings store", () => {
     expect(useSettingsStatus.getState().loadFailed).toBe(true);
     useSettings.getState().set({ editorFontSize: 16 });
     rpc.mockReset();
-    rpc.mockImplementation(async (method: string) =>
-      method === "settings.get" ? [{ key: "ui.settings", valueJson: JSON.stringify({ theme: "light", editorFontSize: 20, indentSize: 2 }) }] : undefined,
-    );
+    const db = fakeSettingsDb({ theme: "light", editorFontSize: 20, indentSize: 2 });
+    rpc.mockImplementation(db.handle);
     await vi.advanceTimersByTimeAsync(400);
-    const saved = JSON.parse(rpc.mock.calls.find((c) => c[0] === "settings.set")![1].valueJson);
-    // What was on disk survives; the change made meanwhile wins over it.
-    expect(saved).toMatchObject({ theme: "light", indentSize: 2, editorFontSize: 16 });
+    // What was on disk survives; the change made meanwhile wins over it, and only it is sent.
+    expect(patchesOf(rpc.mock.calls)[0].set).toEqual({ editorFontSize: "16" });
+    expect(db.read()).toMatchObject({ theme: "light", indentSize: 2, editorFontSize: 16 });
     expect(useSettings.getState()).toMatchObject({ theme: "light", indentSize: 2, editorFontSize: 16 });
     expect(useSettingsStatus.getState().loadFailed).toBe(false);
   });
@@ -213,7 +220,7 @@ describe("settings store", () => {
     await useSettings.getState().load();
     useSettings.getState().set({ editorFontSize: 16 });
     await vi.advanceTimersByTimeAsync(400);
-    expect(rpc.mock.calls.some((c) => c[0] === "settings.set")).toBe(false);
+    expect(rpc.mock.calls.some((c) => c[0] === "settings.set" || c[0] === "settings.patch")).toBe(false);
     expect(useSettingsStatus.getState().save).toBe("failed");
   });
 
@@ -257,19 +264,19 @@ describe("settings store", () => {
     useSettings.getState().set({ tabLayout: "singleLine" });
   });
 
-  it("an unknown or removed syntax theme in store.db falls back to Standard; a known one loads", async () => {
+  it("a saved syntax theme from before Syntax colors: unknown, removed or Standard become Default; another one is kept", async () => {
     rpc.mockResolvedValueOnce([{ key: "ui.settings", valueJson: JSON.stringify({ syntaxTheme: "rainbow" }) }]);
     await useSettings.getState().load();
-    expect(useSettings.getState().syntaxTheme).toBe("standard");
-    useSettings.getState().set({ syntaxTheme: 42 as never });
-    expect(useSettings.getState().syntaxTheme).toBe("standard");
-    // Classic was removed on 2026-11-01; a profile that saved it opens on Standard.
+    expect(useSettings.getState().syntaxColors).toBe("default");
+    useSettings.getState().set({ syntaxColors: 42 as never });
+    expect(useSettings.getState().syntaxColors).toBe("default");
+    // Classic was removed on 2026-11-01; a profile that saved it opens on Default (before: Standard).
     rpc.mockResolvedValueOnce([{ key: "ui.settings", valueJson: JSON.stringify({ syntaxTheme: "classic" }) }]);
     await useSettings.getState().load();
-    expect(useSettings.getState().syntaxTheme).toBe("standard");
+    expect(useSettings.getState().syntaxColors).toBe("default");
     rpc.mockResolvedValueOnce([{ key: "ui.settings", valueJson: JSON.stringify({ syntaxTheme: "forest" }) }]);
     await useSettings.getState().load();
-    expect(useSettings.getState().syntaxTheme).toBe("forest");
+    expect(useSettings.getState().syntaxColors).toBe("forest");
   });
 
   it("set clamps numbers and ignores invalid values", () => {
@@ -287,14 +294,19 @@ describe("settings store", () => {
     expect(useSettings.getState().keybindings).toEqual({ "query.format": "Ctrl+Alt+F", "tab.pin": "," });
   });
 
-  it("keys from a newer version are kept and written back; store fields are never saved", async () => {
-    rpc.mockResolvedValueOnce([{ key: "ui.settings", valueJson: JSON.stringify({ theme: "light", futureThing: { a: 1 } }) }]);
+  it("keys from a newer version stay as stored; only settings keys are ever sent", async () => {
+    const db = fakeSettingsDb({ theme: "light", syntaxColors: "default", futureThing: { a: 1 } });
+    rpc.mockImplementation(db.handle);
     await useSettings.getState().load();
-    useSettings.getState().set({ minimap: false });
+    useSettings.getState().set({ minimap: false, syntaxColors: "default" });
     await vi.advanceTimersByTimeAsync(400);
-    const saved = JSON.parse(rpc.mock.calls.find((c) => c[0] === "settings.set")![1].valueJson);
-    expect(saved).toMatchObject({ theme: "light", minimap: false, futureThing: { a: 1 } });
-    expect(Object.keys(saved).filter((k) => !(k in defaultSettings) && k !== "futureThing")).toEqual([]);
+    expect(db.read()).toMatchObject({ theme: "light", minimap: false, futureThing: { a: 1 } });
+    const [patch] = patchesOf(rpc.mock.calls);
+    // syntaxTheme is the mirror older builds read (plans/app-themes §3.5): Default reads there as Standard.
+    expect(JSON.parse(patch.set!.syntaxTheme)).toBe("standard");
+    expect(db.read()!.syntaxTheme).toBe("standard");
+    const sent = [...Object.keys(patch.set!), ...Object.keys(patch.setWhenNew!)];
+    expect(sent.filter((k) => !(k in defaultSettings) && k !== "syntaxTheme")).toEqual([]);
   });
 
   it("unreadable JSON on disk loads defaults", async () => {
@@ -304,11 +316,84 @@ describe("settings store", () => {
     expect(useSettingsStatus.getState().loadFailed).toBe(false);
   });
 
+  it("writes never overlap: a change made during a slow write is saved after it, and only the change is sent", async () => {
+    const db = fakeSettingsDb({});
+    const gate: (() => void)[] = [];
+    rpc.mockImplementation(async (m: string, a: unknown) => {
+      if (m === "settings.patch") await new Promise<void>((r) => gate.push(r)); // the sidecar answers when the test says so
+      return db.handle(m, a);
+    });
+    useSettings.getState().set({ minimap: false });
+    await vi.advanceTimersByTimeAsync(400); // write 1 sent, not answered
+    useSettings.getState().set({ indentSize: 2 });
+    await vi.advanceTimersByTimeAsync(400); // write 2 is due, but waits for write 1
+    expect(patchesOf(rpc.mock.calls)).toHaveLength(1);
+    gate.shift()!();
+    await vi.advanceTimersByTimeAsync(0);
+    // Write 2 starts only now, with the key changed since write 1 (minimap is no longer pending).
+    expect(patchesOf(rpc.mock.calls).map((p) => p.set)).toEqual([{ minimap: "false" }, { indentSize: "2" }]);
+    gate.shift()!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(db.read()).toMatchObject({ minimap: false, indentSize: 2 });
+    expect(useSettingsStatus.getState().save).toBe("saved");
+  });
+
+  it("a settings write the engine never answers fails the save at the time limit, and the next change saves both (CLAUDE §4)", async () => {
+    const db = fakeSettingsDb({});
+    let hang = true;
+    rpc.mockImplementation((m: string, a: unknown) => (m === "settings.patch" && hang ? new Promise(() => {}) : db.handle(m, a)));
+    useSettings.getState().set({ wordWrap: true });
+    await vi.advanceTimersByTimeAsync(400);
+    expect(useSettingsStatus.getState().save).toBe("saving");
+    let flushed = false;
+    void flushSettings().then(() => (flushed = true));
+    await vi.advanceTimersByTimeAsync(SETTINGS_RPC_LIMIT_MS - 1);
+    expect(flushed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    // The update restart and the close wait on this: they go on, and the user is told the save failed.
+    expect(flushed).toBe(true);
+    expect(useSettingsStatus.getState()).toMatchObject({ save: "failed", error: `the engine did not answer the settings write within ${SETTINGS_RPC_LIMIT_MS / 1000} s` });
+    hang = false;
+    useSettings.getState().set({ minimap: false });
+    await vi.advanceTimersByTimeAsync(400);
+    expect(patchesOf(rpc.mock.calls).at(-1)!.set).toEqual({ wordWrap: "true", minimap: "false" });
+    expect(db.read()).toMatchObject({ wordWrap: true, minimap: false });
+    expect(useSettingsStatus.getState().save).toBe("saved");
+  });
+
+  it("a settings read the engine never answers ends the load at the time limit: defaults shown, nothing written over the store", async () => {
+    rpc.mockImplementation(() => new Promise(() => {}));
+    let done = false;
+    void useSettings.getState().load().then(() => (done = true));
+    await vi.advanceTimersByTimeAsync(SETTINGS_RPC_LIMIT_MS);
+    expect(done).toBe(true);
+    expect(useSettings.getState()).toMatchObject({ loaded: true, theme: "dark" });
+    expect(useSettingsStatus.getState().loadFailed).toBe(true);
+  });
+
+  it("flushSettings waits for a write already in flight (closing never cuts it off)", async () => {
+    let answer: (() => void) | undefined;
+    rpc.mockImplementation(async (m: string) => {
+      if (m === "settings.get") return [];
+      if (m === "settings.patch") await new Promise<void>((r) => (answer = r));
+    });
+    useSettings.getState().set({ wordWrap: true });
+    await vi.advanceTimersByTimeAsync(400);
+    expect(answer).toBeDefined();
+    let flushed = false;
+    void flushSettings().then(() => (flushed = true));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(flushed).toBe(false);
+    answer!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(flushed).toBe(true);
+  });
+
   it("flushSettings writes a pending change at once (app closing, update restart)", async () => {
     useSettings.getState().set({ wordWrap: true });
     expect(rpc).not.toHaveBeenCalled();
     await flushSettings();
-    expect(rpc).toHaveBeenCalledWith("settings.set", expect.anything());
+    expect(rpc).toHaveBeenCalledWith("settings.patch", expect.objectContaining({ key: "ui.settings", set: { wordWrap: "true" } }));
     rpc.mockClear();
     await flushSettings();
     expect(rpc).not.toHaveBeenCalled();

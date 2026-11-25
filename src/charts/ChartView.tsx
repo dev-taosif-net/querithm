@@ -280,7 +280,7 @@ function ChartControls({ spec, columns, onChange, set, onExport, canExport }: {
             key={k}
             role="radio"
             aria-checked={spec.kind === k}
-            className={`h-[22px] px-2 ${spec.kind === k ? "bg-accent-solid text-white font-semibold" : "text-fg hover:bg-hover"}`}
+            className={`h-[22px] px-2 ${spec.kind === k ? "bg-accent-solid text-accent-fg font-semibold" : "text-fg hover:bg-ghost-hover"}`}
             onClick={() => spec.kind !== k && onChange(withKind(spec, k, columns))}
           >
             {kindLabel[k]}

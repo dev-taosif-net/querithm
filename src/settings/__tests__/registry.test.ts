@@ -80,9 +80,11 @@ describe("settings registry", () => {
     expect(searchSettings("zoom").map((d) => d.id)).toEqual(expect.arrayContaining(["uiScale", "editorFontSize"]));
     expect(searchSettings("statistics").map((d) => d.id)).toEqual(["statisticsTime", "statisticsIo"]);
     expect(searchSettings("sql server").map((d) => d.id)).toEqual(expect.arrayContaining(["leadingCommas", "statisticsIo"]));
-    expect(searchSettings("dark THEME").map((d) => d.id)).toEqual(["theme", "syntaxTheme"]);
-    expect(searchSettings("color blind").map((d) => d.id)).toEqual(["syntaxTheme"]);
-    expect(searchSettings("highlighting").map((d) => d.id)).toEqual(["syntaxTheme"]);
+    expect(searchSettings("dark THEME").map((d) => d.id)).toEqual(["theme", "syntaxColors"]);
+    expect(searchSettings("color blind").map((d) => d.id)).toEqual(["syntaxColors"]);
+    expect(searchSettings("highlighting").map((d) => d.id)).toEqual(["syntaxColors"]);
+    expect(searchSettings("vellum").map((d) => d.id)).toEqual(["theme"]);
+    expect(searchSettings("italic").map((d) => d.id)).toEqual(["italicComments"]);
     expect(searchSettings("zzz")).toEqual([]);
     expect(searchSettings("  ")).toEqual([]);
   });

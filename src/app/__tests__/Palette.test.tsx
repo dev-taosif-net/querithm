@@ -171,6 +171,64 @@ describe("Palette", () => {
       await user.click(screen.getByText("one.sql"));
       expect(h.actions.activateTab).toHaveBeenCalledWith("t1");
     });
+
+    it.each([
+      ["table", "scriptObject"],
+      ["proc", "openDefinition"],
+      ["function", "openDefinition"],
+    ] as const)("with every tab closed, searches the database the top bar shows and opens a %s there", async (kind, fn) => {
+      snapshot([{ id: 5, schema: "dbo", name: "Thing", kind }]);
+      useTabs.setState({ tabs: {}, order: [], activeId: undefined, mru: [], lastBinding: { profileId: "ms1", database: "Sales" } });
+      const user = userEvent.setup();
+      render(<Palette />);
+      open({ mode: "objects" });
+      expect(screen.getByPlaceholderText("Go to object in Sales (type > for commands)")).toBeInTheDocument();
+      await user.type(screen.getByRole("textbox"), "thing{Enter}");
+      const call = (h.actions as any)[fn];
+      expect(call).toHaveBeenCalled();
+      expect(call.mock.calls[0].slice(0, 2)).toEqual(["ms1", "Sales"]);
+      expect(call.mock.calls[0][2]).toMatchObject({ schema: "dbo", name: "Thing", kind, objectId: 5 });
+    });
+
+    it("with every tab closed, loads the last tab's schema when it is not cached yet (Ctrl+T and the command box)", () => {
+      const real = useSnapshots.getState().ensure;
+      const ensure = vi.fn();
+      useSnapshots.setState({ ensure } as any);
+      try {
+        useTabs.setState({ tabs: {}, order: [], activeId: undefined, mru: [], lastBinding: { profileId: "pg1", database: "reports" } });
+        render(<Palette />);
+        open({ mode: "objects" });
+        expect(ensure).toHaveBeenCalledWith("pg1", "reports", undefined);
+        expect(screen.getByText("Metadata is loading…")).toBeInTheDocument();
+        open(null);
+        ensure.mockClear();
+        open({ mode: "commands", initial: "" });
+        expect(ensure).toHaveBeenCalledWith("pg1", "reports", undefined);
+      } finally {
+        useSnapshots.setState({ ensure: real } as any);
+      }
+    });
+
+    it("with every tab closed, never searches a server the user disconnected since, a deleted profile, or no database", () => {
+      snapshot([{ id: 5, schema: "dbo", name: "Thing", kind: "table" }]);
+      useConnections.setState({ disconnected: { ms1: true } });
+      useTabs.setState({ tabs: {}, order: [], activeId: undefined, mru: [], lastBinding: { profileId: "ms1", database: "Sales" } });
+      const { unmount } = render(<Palette />);
+      open({ mode: "objects" });
+      expect(screen.queryByText("dbo.Thing")).toBeNull();
+      expect(screen.getByText("Open a query on a database to search its objects")).toBeInTheDocument();
+      unmount();
+      for (const last of [{ profileId: "gone", database: "Sales" }, { profileId: "ms1" }]) {
+        useConnections.setState({ disconnected: {} });
+        useTabs.setState({ lastBinding: last });
+        open(null);
+        const r = render(<Palette />);
+        open({ mode: "objects" });
+        expect(screen.queryByText("dbo.Thing")).toBeNull();
+        expect(screen.getByText("Open a query on a database to search its objects")).toBeInTheDocument();
+        r.unmount();
+      }
+    });
   });
 
   describe("snippets", () => {
@@ -305,9 +363,13 @@ describe("Toasts and Banner", () => {
     });
     const region = screen.getByRole("region", { name: "Notifications" });
     const box = (text: string) => screen.getByText(text).closest("[data-q-toast]") as HTMLElement;
-    expect(box("msg-error").className).toMatch(/text-err/);
-    expect(box("msg-warn").className).toMatch(/text-warn/);
-    expect(box("msg-success").className).toMatch(/text-ok/);
+    // The kind paints through data-kind (.q-toast: edge, wash, text) and a visible glyph, never a color class alone.
+    for (const k of ["info", "error", "success", "warn"]) {
+      expect(box(`msg-${k}`).dataset.kind).toBe(k);
+      expect(box(`msg-${k}`).className).toMatch(/\bq-toast\b/);
+      expect(box(`msg-${k}`).querySelector(".q-kind-glyph[aria-hidden] svg")).not.toBeNull();
+    }
+    expect(box("msg-error").style.backdropFilter).toBe("");
     expect(box("msg-error").textContent).toBe("Error: msg-error");
     expect(box("msg-warn").textContent).toBe("Warning: msg-warn");
     expect(within(region).getAllByRole("button", { name: "Dismiss" })).toHaveLength(4);
@@ -404,7 +466,45 @@ describe("Toasts and Banner", () => {
     expect(screen.queryByText("engine down")).toBeNull();
     act(() => useUi.getState().setBanner({ kind: "warn", text: "careful" }));
     expect(screen.queryByText("Restart engine")).toBeNull();
-    expect(screen.getByRole("region", { name: "Notice" })).toBeTruthy();
+    const notice = screen.getByRole("region", { name: "Notice" });
+    // The kind shows by its glyph and edge too (data-kind), never by color alone.
+    expect(notice.dataset.kind).toBe("warn");
+    expect(notice.querySelector(".q-kind-glyph[aria-hidden] svg")).not.toBeNull();
+  });
+
+  it("a toast with an action shows its button; running it dismisses the toast", async () => {
+    render(<Toasts />);
+    const run = vi.fn();
+    act(() => useUi.getState().toast("info", "Syntax colors now follow your color theme.", { label: "Use Standard", run }));
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Use Standard" }));
+    expect(run).toHaveBeenCalledOnce();
+    expect(screen.queryByText("Syntax colors now follow your color theme.")).toBeNull();
+  });
+
+  it("the same toast again runs the newest action; an action that throws still dismisses, and the keyboard moves on", async () => {
+    render(<Toasts />);
+    const old = vi.fn(), newest = vi.fn(() => { throw new Error("boom"); });
+    act(() => useUi.getState().toast("info", "Other toast."));
+    act(() => useUi.getState().toast("info", "Same text.", { label: "Do it", run: old }));
+    act(() => useUi.getState().toast("info", "Same text.", { label: "Do it", run: newest }));
+    expect(useUi.getState().toasts.find((t) => t.text === "Same text.")?.count).toBe(2);
+    const button = screen.getByRole("button", { name: "Do it" });
+    button.focus();
+    // A keyboard press (detail 0): the error escapes the handler, as before; the toast still goes.
+    const errors: unknown[] = [];
+    const onError = (e: ErrorEvent) => { errors.push(e.error); e.preventDefault(); };
+    window.addEventListener("error", onError);
+    try {
+      fireEvent.click(button, { detail: 0 });
+    } finally {
+      window.removeEventListener("error", onError);
+    }
+    expect(old).not.toHaveBeenCalled();
+    expect(newest).toHaveBeenCalledOnce();
+    expect(screen.queryByText("Same text.")).toBeNull();
+    await act(() => new Promise((r) => requestAnimationFrame(() => r(undefined))));
+    expect(document.activeElement?.closest("[data-q-toast]")?.textContent).toContain("Other toast.");
   });
 });
 

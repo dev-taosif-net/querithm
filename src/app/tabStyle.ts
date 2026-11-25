@@ -121,7 +121,8 @@ function subscribeTheme(cb: () => void): () => void {
       fitted.clear();
       for (const l of [...themeListeners]) l();
     });
-    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    // The mode and the App Theme (plans/app-themes): two dark themes share data-theme, so both attributes are watched.
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-app-theme"] });
   }
   return () => {
     themeListeners.delete(cb);
@@ -132,9 +133,17 @@ function subscribeTheme(cb: () => void): () => void {
   };
 }
 
-/** Current `data-theme`; components that fit colours re-render when the theme changes. */
+const themeKeyNow = () => (typeof document === "undefined" ? "" : `${document.documentElement.dataset.theme ?? ""}|${document.documentElement.dataset.appTheme ?? ""}`);
+const themeModeNow = (): "dark" | "light" => (typeof document !== "undefined" && document.documentElement.dataset.theme === "light" ? "light" : "dark");
+
+/** The shown theme (mode and App Theme); components that fit colours re-render when it changes. */
 export function useThemeKey(): string {
-  return useSyncExternalStore(subscribeTheme, () => (typeof document === "undefined" ? "" : (document.documentElement.dataset.theme ?? "")));
+  return useSyncExternalStore(subscribeTheme, themeKeyNow);
+}
+
+/** Only the mode, for libraries that take "light" | "dark" (React Flow's colorMode). */
+export function useThemeMode(): "dark" | "light" {
+  return useSyncExternalStore(subscribeTheme, themeModeNow);
 }
 
 /** Number of theme observers alive (tests: one for any number of tab headers). */

@@ -6,12 +6,13 @@ import { useActiveTab } from "../store/tabs";
 import { engineBadge, envColor, envLabel, useProfiles } from "../store/profiles";
 import { dialectOf } from "../engines";
 import { useConnections } from "../store/connections";
-import { tabSnapKey, useSnapshots } from "../store/snapshots";
+import { ensureTabSnapshot, tabSnapKey, useSnapshots } from "../store/snapshots";
 import { commands, displayKeys, keysFor } from "./commands";
 import { activateTab, changeConnection, changeDatabase, newQueryTab, openDefinition, scriptObject } from "./actions";
 import { useTabs } from "../store/tabs";
 import { TabList } from "./TabList";
-import { Icon } from "./icons";
+import { useLastBinding } from "./lastBinding";
+import { Icon, type IconName } from "./icons";
 import { snippetsFor, useSnippets } from "../snippets/snippetStore";
 
 interface Item {
@@ -40,14 +41,19 @@ export function Palette() {
   const tab = useActiveTab();
   const profiles = useProfiles((s) => s.profiles);
   const servers = useConnections((s) => s.servers);
-  const disconnected = useConnections((s) => (tab?.profileId ? !!s.disconnected[tab.profileId] : false));
+  // Go to object searches the active query tab's database; with none in front, the last tab's, the one the top bar
+  // shows and a new query opens in (a pick opens a new query there either way).
+  const lastShown = useLastBinding(!!tab);
+  const objTarget = tab ?? (lastShown?.database ? lastShown : undefined);
+  const disconnected = useConnections((s) => (objTarget?.profileId ? !!s.disconnected[objTarget.profileId] : false));
   // Change database with no query tab in front lists the databases of the server a new query opens on (the last tab's,
-  // as the top bar shows it); a pick opens a new query there.
+  // as the top bar shows it); a pick opens a new query there. Not useLastBinding on purpose: it needs no database, and
+  // a server the user disconnected stays the target so the list can offer "Connect" (Palette.test "offers to connect").
   const last = useTabs((s) => (tab ? undefined : s.lastBinding));
   const dbTarget = tab ?? (last?.profileId && profiles.some((p) => p.id === last.profileId) ? last : undefined);
   const dbOffline = useConnections((s) => (dbTarget?.profileId ? !!s.disconnected[dbTarget.profileId] : false));
   // A session-owned engine's tab (SQLite) searches its own session's view (Phase D0d).
-  const snapKey = tabSnapKey(tab);
+  const snapKey = tabSnapKey(objTarget);
   const snap = useSnapshots((s) => (snapKey ? s.entries[snapKey] : undefined));
   const tabs = useTabs((s) => s.tabs);
   const snippetLib = useSnippets();
@@ -65,6 +71,8 @@ export function Palette() {
     // Opening the list reconnects a server that was never connected, never one the user disconnected.
     if (palette.mode === "databases" && dbTarget?.profileId && !servers[dbTarget.profileId] && !dbOffline) void useConnections.getState().connect(dbTarget.profileId);
     if (palette.mode === "snippets") void useSnippets.getState().load();
+    // A tab loads its schema when it opens; the last tab's may not be loaded (closed before it was, or a restart since).
+    if (!tab && (palette.mode === "objects" || palette.mode === "commands")) ensureTabSnapshot(objTarget);
   }, [palette]);
 
   const close = () => useUi.getState().setPalette(null);
@@ -84,15 +92,16 @@ export function Palette() {
         detail: o.kind,
         hint: o.kind === "table" || o.kind === "view" ? "Enter: select top 1000" : "Enter: modify",
         run: () => {
-          if (!tab?.profileId || !tab.database) return;
+          if (!objTarget?.profileId || !objTarget.database) return;
           const ref = { schema: o.schema, name: o.name, kind: o.kind, objectId: o.id };
-          if (o.kind === "table" || o.kind === "view") void scriptObject(tab.profileId, tab.database, ref, "selectTop", true);
-          else void openDefinition(tab.profileId, tab.database, ref, true);
+          if (o.kind === "table" || o.kind === "view") void scriptObject(objTarget.profileId, objTarget.database, ref, "selectTop", true);
+          else void openDefinition(objTarget.profileId, objTarget.database, ref, true);
         },
       }));
       // Open tabs are also navigable.
       list.push(...Object.values(tabs).map((t) => ({ id: `t${t.id}`, label: t.title, detail: "open tab", run: () => activateTab(t.id) })));
-      if (!objs.length && !query) list.unshift({ id: "none", label: disconnected ? "Disconnected: connect the server to search its objects" : tab?.profileId ? "Metadata is loading…" : "Connect the tab to a database to search objects", run: () => {} });
+      const why = disconnected ? "Disconnected: connect the server to search its objects" : objTarget?.profileId ? "Metadata is loading…" : tab ? "Connect the tab to a database to search objects" : "Open a query on a database to search its objects";
+      if (!objs.length && !query) list.unshift({ id: "none", label: why, run: () => {} });
     } else if (effective === "databases") {
       const pid = dbTarget?.profileId;
       const conn = pid && !dbOffline ? servers[pid] : undefined;
@@ -131,12 +140,12 @@ export function Palette() {
       .sort((a, b) => b.s - a.s)
       .slice(0, 200)
       .map((x) => x.i);
-  }, [palette, q, mode, snap?.version, profiles, servers, disconnected, tab?.id, tab?.database, dbTarget?.profileId, dbTarget?.database, dbOffline, tabs, snippetLib]);
+  }, [palette, q, mode, snap?.version, profiles, servers, disconnected, tab?.id, tab?.database, objTarget?.profileId, objTarget?.database, dbTarget?.profileId, dbTarget?.database, dbOffline, tabs, snippetLib]);
 
   if (!palette) return null;
   if (palette.mode === "tabs") return <TabList onClose={close} only={palette.only} />;
   const placeholder =
-    mode === "commands" ? "Type a command…" : mode === "objects" ? `Go to object in ${tab?.database ?? "…"} (type > for commands)` : mode === "databases" ? "Switch database…" : mode === "snippets" ? "Insert snippet…" : "Switch connection…";
+    mode === "commands" ? "Type a command…" : mode === "objects" ? `Go to object in ${objTarget?.database ?? "…"} (type > for commands)` : mode === "databases" ? "Switch database…" : mode === "snippets" ? "Insert snippet…" : "Switch connection…";
   const run = (i: Item | undefined) => {
     if (!i) return;
     close();
@@ -188,12 +197,8 @@ export function Palette() {
   );
 }
 
-const TOAST_TONE: Record<Toast["kind"], string> = {
-  error: "bg-err/15 border-err/50 text-err",
-  warn: "bg-warn/15 border-warn/50 text-warn",
-  success: "bg-ok/15 border-ok/50 text-ok",
-  info: "bg-raised border-line text-fg",
-};
+/** The glyph each status kind shows before its text (§13 S6): the kind never rests on its color alone. */
+export const KIND_ICON: Record<Toast["kind"], IconName> = { error: "errorCircle", warn: "alert", success: "check", info: "info" };
 /** Said before an error or a warning, so its kind does not rest on its color alone. */
 const TOAST_PREFIX: Partial<Record<Toast["kind"], string>> = { error: "Error: ", warn: "Warning: " };
 
@@ -234,9 +239,12 @@ export function Toasts() {
             if (e.target instanceof Element && e.target.closest("button")) return;
             if (window.getSelection()?.isCollapsed !== false) useUi.getState().dismissToast(t.id);
           }}
-          className={`q-toast-in pl-3 pr-1 py-1.5 rounded-lg shadow-xl border text-[12px] select-text cursor-default flex items-start gap-2 ${TOAST_TONE[t.kind]}`}
-          style={{ backdropFilter: "blur(6px)" }}
+          data-kind={t.kind}
+          className="q-toast q-toast-in pl-2.5 pr-1 py-1.5 rounded-lg shadow-xl text-[12px] select-text cursor-default flex items-start gap-2"
         >
+          <span aria-hidden className="q-kind-glyph pt-[3px]">
+            <Icon name={KIND_ICON[t.kind]} size={13} strokeWidth={2.2} />
+          </span>
           <span className="flex-1 min-w-0 py-0.5 break-words">
             {TOAST_PREFIX[t.kind] && <span className="sr-only">{TOAST_PREFIX[t.kind]}</span>}
             {t.text}
@@ -247,9 +255,25 @@ export function Toasts() {
               </>
             )}
           </span>
+          {t.action && (
+            <button
+              type="button"
+              className="q-btn h-[22px] shrink-0 self-center"
+              onClick={(e) => {
+                // Dismissed even if the action throws; from the keyboard, focus moves on as Dismiss moves it.
+                try {
+                  t.action!.run();
+                } finally {
+                  dismiss(t.id, e.detail === 0);
+                }
+              }}
+            >
+              {t.action.label}
+            </button>
+          )}
           <button
             type="button"
-            className="shrink-0 w-6 h-6 flex items-center justify-center rounded opacity-70 hover:opacity-100 hover:bg-hover focus-visible:opacity-100"
+            className="q-icon-btn shrink-0"
             aria-label="Dismiss"
             title="Dismiss"
             onClick={(e) => dismiss(t.id, e.detail === 0)}
@@ -270,9 +294,15 @@ export function Banner() {
     <div
       role="region"
       aria-label={banner.kind === "error" ? "Error notice" : "Notice"}
-      className={`q-banner-in min-h-[30px] py-1 px-4 flex items-center justify-between gap-3 text-xs shrink-0 border-b ${banner.kind === "error" ? "bg-err/15 border-err/40 text-err" : "bg-warn/15 border-warn/40 text-warn"}`}
+      data-kind={banner.kind}
+      className="q-banner q-banner-in min-h-[30px] py-1 pl-3.5 pr-4 flex items-center justify-between gap-3 text-xs shrink-0"
     >
-      <span className="min-w-0 select-text">{banner.text}</span>
+      <span className="min-w-0 select-text flex items-center gap-2">
+        <span aria-hidden className="q-kind-glyph">
+          <Icon name={KIND_ICON[banner.kind]} size={13} strokeWidth={2.2} />
+        </span>
+        <span>{banner.text}</span>
+      </span>
       <div className="flex gap-2 shrink-0">
         {banner.action && <button className="q-btn h-[22px]" onClick={banner.action.run}>{banner.action.label}</button>}
         <button className="q-btn q-btn-ghost h-[22px]" onClick={() => useUi.getState().setBanner(null)}>Dismiss</button>

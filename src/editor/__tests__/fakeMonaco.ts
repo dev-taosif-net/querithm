@@ -103,6 +103,7 @@ export function makeFakeMonaco() {
       create: vi.fn((host: unknown, opts: Record<string, unknown>) => { const e = new FakeEditor(host, opts); created.push(e); return e; }),
       setModelLanguage: vi.fn((m: FakeModel, l: string) => { m.lang = l; }),
       getEditors: () => created,
+      getModels: () => models,
       setModelMarkers: vi.fn(),
       registerCommand: vi.fn((id: string, fn: (...a: any[]) => void) => { commands[id] = fn; }),
       defineTheme: vi.fn(),
@@ -127,6 +128,7 @@ export function makeFakeMonaco() {
       registerSignatureHelpProvider: reg("signature"),
       registerDocumentHighlightProvider: reg("documentHighlight"),
       registerCodeActionProvider: reg("codeAction"),
+      registerDocumentRangeSemanticTokensProvider: reg("semanticTokens"),
     },
   };
   return { monaco, created, models, providers, commands };

@@ -12,6 +12,7 @@ import { findInsertMatchingHighlight, findSyntaxPairHighlight } from "./syntaxPa
 import { tier1SignatureHelp } from "./signature";
 import { addCommentMenu } from "./commentMenu";
 import { suggestWidgetVisible } from "./monacoInternals";
+import { installSemanticTokens } from "./semanticTokens";
 import { monaco } from "./monaco";
 import { modelOwner, onEditorCreated, onModelContent, onModelDisposed, tabIdOfModel } from "./editors";
 import { useTabs } from "../store/tabs";
@@ -630,6 +631,8 @@ export function installProviders() {
   };
   useSnapshots.subscribe((s, prev) => { if (s.entries !== prev.entries) refreshOpenLists(); });
   onRowCounts(refreshOpenLists);
+  // CTE names and schema prefixes (App Themes §5.3); answers only while semantic colours are switched on.
+  installSemanticTokens(DIALECT_LIST.map((d) => DIALECTS[d].language), docContext);
   for (const lang of DIALECT_LIST.map((d) => DIALECTS[d].language)) {
     monaco.languages.registerCompletionItemProvider(lang, {
       triggerCharacters: [".", " ", "@", "(", ",", "["],
