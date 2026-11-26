@@ -11,7 +11,7 @@ const h = vi.hoisted(() => ({
   explorerAction: vi.fn(),
   refresh: vi.fn(),
   diff: { setModel: vi.fn(), updateOptions: vi.fn(), dispose: vi.fn() },
-  ed: { getValue: vi.fn(() => "edited"), getModel: vi.fn(() => ({ dispose: vi.fn() })), dispose: vi.fn() },
+  ed: { getValue: vi.fn(() => "edited"), getModel: vi.fn(() => ({ dispose: vi.fn() })), dispose: vi.fn(), createDecorationsCollection: vi.fn(() => ({ set: vi.fn(), clear: vi.fn() })) },
   create: vi.fn(),
   createDiff: vi.fn(),
   createModel: vi.fn((v: string) => ({ v, dispose: vi.fn() })),
@@ -681,7 +681,7 @@ describe("cellViewer", () => {
     const onSave = vi.fn();
     render(<Dialogs />);
     show({ kind: "cellViewer", title: "Edit", value: "orig", onSave });
-    expect(h.create.mock.calls[0][1]).toMatchObject({ value: "orig", readOnly: false });
+    expect(h.create.mock.calls[0][1]).toMatchObject({ value: "orig", readOnly: false, dropIntoEditor: { enabled: false } });
     await userEvent.setup().click(screen.getByText("Stage value"));
     expect(onSave).toHaveBeenCalledWith("edited");
     expect(useUi.getState().dialogs).toHaveLength(0);

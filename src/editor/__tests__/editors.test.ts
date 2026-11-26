@@ -168,6 +168,8 @@ describe("shared group editors", () => {
     expect(e.opts.minimap.enabled).toBe(true);
     expect(e.opts.find.addExtraSpaceOnTop).toBe(false);
     expect(e.opts.suggest.snippetsPreventQuickSuggestions).toBe(false);
+    // Regression: Monaco's own drop wrote an Object Explorer name as `HrmService.EmployeeJd$0`; textDrop.ts drops instead.
+    expect(e.opts.dropIntoEditor).toEqual({ enabled: false });
     // Regression: with "on", Enter accepted an item equal to what was typed ("Loading schema…", a full keyword) and
     // seemed to do nothing. "smart" starts a new line then.
     expect(e.opts.acceptSuggestionOnEnter).toBe("smart");

@@ -6,6 +6,7 @@ import { setSemanticEnabled } from "./semanticTokens";
 import { clearSemanticTokens } from "./monacoInternals";
 import { useSettings } from "../store/settings";
 import { createOverflowHost } from "./overflowHost";
+import { installTextDrop } from "./textDrop";
 import { languageOf } from "../engines";
 import type { Engine } from "../ipc/contract";
 
@@ -136,6 +137,8 @@ function editorOptions(): monaco.editor.IStandaloneEditorConstructionOptions {
     tabCompletion: "on",
     wordBasedSuggestions: "off",
     fixedOverflowWidgets: true,
+    // Monaco's drop inserts `name$0` in the standalone editor; installTextDrop (textDrop.ts) handles drops instead.
+    dropIntoEditor: { enabled: false },
     padding: { top: 8 },
     // Ctrl+F overlays the find widget; don't push the query down to make room for it.
     find: { addExtraSpaceOnTop: false },
@@ -291,6 +294,7 @@ function createEntry(): EditorEntry {
   const overflow = createOverflowHost(document);
   setSemanticEnabled(semanticWanted());
   const editor = monaco.editor.create(host, { ...editorOptions(), overflowWidgetsDomNode: overflow });
+  installTextDrop(editor, host);
   editorCreated.forEach((l) => l(editor));
   return { editor, host, overflow };
 }

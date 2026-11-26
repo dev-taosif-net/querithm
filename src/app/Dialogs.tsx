@@ -18,6 +18,7 @@ import { ConnectDialog } from "../connections/ConnectDialog";
 import { PasswordRetention } from "../connections/PasswordRetention";
 import { ProfileEditor } from "../connections/ProfileEditor";
 import { initMonaco, monaco } from "../editor/monaco";
+import { installTextDrop } from "../editor/textDrop";
 import { newQueryTab, openDefinition, runQuery } from "./actions";
 import { GridConflictsDialog, GridPendingDialog, GridPreviewDialog } from "../results/GridDialogs";
 import { UpdateDialog } from "./UpdateDialog";
@@ -633,9 +634,12 @@ function CellViewer({ d, close }: { d: Extract<Dialog, { kind: "cellViewer" }>; 
     const ed = monaco.editor.create(host.current!, {
       value: d.onSave ? d.value : text, language: d.language ?? "plaintext", readOnly: !d.onSave, automaticLayout: true, minimap: { enabled: false }, wordWrap: "on", fontSize: 12,
       fontFamily: '"JetBrains Mono Variable", "JetBrains Mono", monospace', scrollBeyondLastLine: false,
+      dropIntoEditor: { enabled: false },
     });
     editor.current = ed;
+    const stopDrop = installTextDrop(ed, host.current!);
     return () => {
+      stopDrop();
       editor.current = null;
       ed.getModel()?.dispose();
       ed.dispose();

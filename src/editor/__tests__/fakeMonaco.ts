@@ -71,6 +71,9 @@ export class FakeEditor {
   saveViewState() { return { saved: this.model?.uri.toString() }; }
   restoreViewState = vi.fn();
   updateOptions(o: Record<string, unknown>) { Object.assign(this.options, o); }
+  getRawOptions() { return { ...this.opts, ...this.options }; }
+  getTargetAtClientPoint(): { position: Pos } | null { return null; }
+  setPosition(p: Pos) { this.position = p; }
   getPosition() { return this.position; }
   getSelection() { return this.selection; }
   hasTextFocus() { return this.focus; }
