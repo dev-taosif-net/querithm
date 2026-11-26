@@ -14,7 +14,7 @@ import { defOf } from "./registry";
 import { PageHeader, SettingRow } from "./SettingRow";
 
 export const CREDIT = "Made by Taosif";
-export const COPYRIGHT = "© 2026 Taosif · MIT License";
+export const COPYRIGHT = "© 2026 Taosif · GNU GPL v3.0";
 
 /** The version, once the shell answered; null while asking; "unavailable" when it could not answer. */
 export function useAppInfo(): AppInfo | null | "unavailable" {

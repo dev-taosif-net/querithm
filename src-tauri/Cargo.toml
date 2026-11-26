@@ -4,7 +4,7 @@ version = "0.1.6"
 description = "Querithm — a cross-platform SQL IDE for SQL Server, PostgreSQL, MySQL / MariaDB, Oracle, SQLite and DuckDB"
 edition = "2021"
 rust-version = "1.89"
-license = "MIT"
+license = "GPL-3.0-only"
 
 # §2: the shell stays thin. No SQL, parser or driver crates here (no tiberius, sqlparser-rs, tree-sitter).
 [build-dependencies]

@@ -4,7 +4,7 @@
   "version": "0.1.6",
   "description": "Querithm — a cross-platform SQL IDE for SQL Server, PostgreSQL, MySQL / MariaDB, Oracle, SQLite and DuckDB",
   "type": "module",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "scripts": {
     "dev": "node scripts/run.mjs build-sidecar --debug && tauri dev",
     "build": "node scripts/run.mjs build-sidecar --release && node scripts/gen-notices.mjs && tauri build",

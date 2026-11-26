@@ -415,7 +415,7 @@ describe("Settings: About", () => {
     expect(await screen.findByText("Version 0.1.6")).toBeInTheDocument();
     expect(screen.getByText(/Linux · Engine contract/)).toBeInTheDocument();
     expect(screen.getByText("Made by Taosif")).toBeInTheDocument();
-    expect(screen.getByText("© 2026 Taosif · MIT License")).toBeInTheDocument();
+    expect(screen.getByText("© 2026 Taosif · GNU GPL v3.0")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Copy version info" }));
     expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/^Querithm 0\.1\.6 · Linux · engine contract \d/));
     const copied = (writeText.mock.calls[0] as unknown as [string])[0];

@@ -80,7 +80,7 @@ describe("npm section", () => {
     expect(rows).toEqual([
       "| alpha | 1.0.0 | MIT |", "| beta | 2.0.0 | ISC |", "| delta | 4.0.0 | UNKNOWN |", "| eps | 5.0.0 | 0BSD |", "| gamma | 3.0.0 | MIT OR Apache-2.0 |",
     ]);
-    expect(out).toContain("Querithm itself is MIT licensed.");
+    expect(out).toContain("Querithm itself is licensed under the GNU General Public License v3.0 (GPL-3.0-only).");
   });
 
   it("keeps the path itself when realpath is unavailable", async () => {
@@ -147,7 +147,7 @@ describe("NuGet section", () => {
 describe("Rust section", () => {
   it("lists crates from cargo metadata (without the app itself), with file and unknown licenses", async () => {
     fsState.cargo = () => JSON.stringify({ packages: [
-      { name: "serde", version: "1.0.0", license: "MIT OR Apache-2.0" }, { name: "querithm", version: "0.1.0", license: "MIT" },
+      { name: "serde", version: "1.0.0", license: "MIT OR Apache-2.0" }, { name: "querithm", version: "0.1.0", license: "GPL-3.0-only" },
       { name: "ring", version: "0.17.0", license: null, license_file: "LICENSE" }, { name: "odd", version: "0.1.0", license: null },
     ] });
     const out = await run();
