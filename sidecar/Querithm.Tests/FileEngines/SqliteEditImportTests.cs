@@ -24,14 +24,11 @@ public sealed class SqliteEditImportTests
     /// <summary>Editability resolves result columns against the snapshot, so it must hold the tables first.</summary>
     static async Task RefreshAsync(SqliteHost h, Profile p, string sid, Func<SchemaSnapshot, bool> ready)
     {
+        // Wait for the refresh chain to finish before reading MetaSnapshot so polling while Empty never queues a second refresh.
         await h.Rpc.MetaRefresh(new RefreshParams { ProfileId = p.Id, Database = "main", SessionId = sid, Full = true });
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        SchemaSnapshot snap;
-        do
-        {
-            await Task.Delay(50);
-            snap = await h.Rpc.MetaSnapshot(new SnapshotParams { ProfileId = p.Id, Database = "main", SessionId = sid });
-        } while (!(snap.Objects.Length > 0 && ready(snap)) && DateTime.UtcNow < deadline);
+        await h.Services.Metadata.WaitAsync(p.Id, "main", sid).WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
+        var snap = await h.Rpc.MetaSnapshot(new SnapshotParams { ProfileId = p.Id, Database = "main", SessionId = sid });
+        Assert.True(snap.Objects.Length > 0 && ready(snap), "snapshot for main did not match ready predicate after refresh");
     }
 
     static QueryResultSetEvent ResultSet(SqliteHost h, string executionId) =>

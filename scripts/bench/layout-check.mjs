@@ -48,7 +48,9 @@ export function collectLayout() {
     return id;
   };
   const opacity = (el) => { let o = 1; for (let e = el; e; e = e.parentElement) o *= Number(cs(e).opacity); return o; };
-  const visible = (el) => { const s = cs(el); return s.display !== "none" && s.visibility === "visible" && opacity(el) > 0.05; };
+  // Screen-reader-only elements (Tailwind .sr-only) are clipped to 0×0 on purpose; elementFromPoint always falls through them.
+  const srOnly = (s) => s.clipPath === "inset(50%)" || s.clip === "rect(0px, 0px, 0px, 0px)";
+  const visible = (el) => { const s = cs(el); return s.display !== "none" && s.visibility === "visible" && !srOnly(s) && opacity(el) > 0.05; };
   /** The rect left after clipping by the node's overflow ancestors and the viewport, and the first ancestor that cut it
    *  (for a text node, its own element counts: a `truncate` span clips the text it holds). */
   const clipOf = (el, rect) => {

@@ -544,9 +544,9 @@ export function TopBar() {
     // The left toolbar never shrinks; the search box gives up its width down to icon + key, and below 1024 px to its
     // icon. Below 1100 px the gaps, the launch strip and the transaction group tighten so the bar fits the 960 px
     // minimum window with a transaction open and the Update button showing.
-    <div data-focus-region="toolbar" className="q-topbar h-[40px] bg-panel border-b border-line flex items-center justify-between px-3 shrink-0 gap-3">
-      <div ref={query} role="toolbar" aria-label="Query" className="flex items-center gap-3 max-[1100px]:gap-2 shrink-0 whitespace-nowrap" {...queryNav}>
-        <div className="flex items-center gap-1.5 font-bold text-fg text-xs tracking-tight mr-1">
+    <div data-focus-region="toolbar" className="q-topbar h-[40px] bg-panel border-b border-line flex items-center justify-between px-3 max-[1100px]:px-2 shrink-0 gap-3 max-[1100px]:gap-1.5">
+      <div ref={query} role="toolbar" aria-label="Query" className="flex items-center gap-3 max-[1100px]:gap-1.5 shrink-0 whitespace-nowrap" {...queryNav}>
+        <div className="flex items-center gap-1.5 font-bold text-fg text-xs tracking-tight mr-1 max-[1100px]:mr-0">
           <Logo className="w-[18px] h-[18px]" />
           <span className="hidden xl:inline">Querithm</span>
         </div>
@@ -573,7 +573,7 @@ export function TopBar() {
         </button>
         <button
           type="button"
-          className="mr-2 w-[200px] min-[1440px]:w-80 max-[1100px]:w-auto min-w-0 shrink bg-bg border border-line-strong rounded-md pl-2 pr-1 h-[28px] text-[12px] text-muted flex items-center justify-between gap-2 hover:border-accent"
+          className="mr-2 max-[1100px]:mr-0 w-[200px] min-[1440px]:w-80 max-[1100px]:w-auto min-w-0 shrink bg-bg border border-line-strong rounded-md pl-2 pr-1 h-[28px] text-[12px] text-muted flex items-center justify-between gap-2 hover:border-accent"
           onClick={() => useUi.getState().setPalette({ mode: "objects" })}
           title={tip("Go to table, proc, or command", "palette.objects")}
           aria-label="Go to table, proc, or command"

@@ -89,7 +89,7 @@ export function AppThemePicker({ name, labelledBy, describedBy }: { name: string
           // The radio is hidden: its keyboard focus shows on the segment, inset (the bar clips what is outside), in the
           // label color on the accent fill, where an accent ring would be the fill's own hue.
           return (
-            <label key={v} className="inline-flex cursor-pointer">
+            <label key={v} className="relative inline-flex cursor-pointer">
               <input type="radio" name={`${name}-mode`} className="peer sr-only" checked={on} onChange={() => set({ theme: v === "system" ? "system" : shownMode })} />
               <span className={`px-3 h-7 inline-flex items-center peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:-outline-offset-4 ${on ? "bg-accent-solid text-accent-fg font-semibold peer-focus-visible:outline-accent-fg" : "text-fg hover:bg-ghost-hover peer-focus-visible:outline-accent"}`}>
                 {label}

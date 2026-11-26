@@ -32,14 +32,12 @@ public class DuckDbIntegrationTests
 
     static async Task<SchemaSnapshot> RefreshAsync(DuckDbHost h, Profile p, string sid, string database, Func<SchemaSnapshot, bool> ready)
     {
+        // Wait for the refresh chain to finish before reading MetaSnapshot: polling MetaSnapshot while Empty queues a second
+        // refresh behind it, which can then run after the caller's next DDL (race on slow CI runners).
         await h.Rpc.MetaRefresh(new RefreshParams { ProfileId = p.Id, Database = database, SessionId = sid, Full = true });
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        SchemaSnapshot snap;
-        do
-        {
-            await Task.Delay(50);
-            snap = await h.Rpc.MetaSnapshot(new SnapshotParams { ProfileId = p.Id, Database = database, SessionId = sid });
-        } while (!ready(snap) && DateTime.UtcNow < deadline);
+        await h.Services.Metadata.WaitAsync(p.Id, database, sid).WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
+        var snap = await h.Rpc.MetaSnapshot(new SnapshotParams { ProfileId = p.Id, Database = database, SessionId = sid });
+        Assert.True(ready(snap), $"snapshot for {database} did not match ready predicate after refresh");
         return snap;
     }
 

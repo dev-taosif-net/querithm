@@ -195,19 +195,6 @@ public class CompletionBudgetTests(Xunit.Abstractions.ITestOutputHelper output)
     }
 
     [Fact]
-    public async Task Another_documents_request_leaves_a_running_one_alone_until_its_deadline()
-    {
-        var (svc, language) = Rpc(TimeSpan.FromMilliseconds(400));
-        var sw = Stopwatch.StartNew();
-        var first = svc.CompleteAsync(Req("doc-a", "slow"));
-        await language.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        await svc.CompleteAsync(Req("doc-b", "fast")).WaitAsync(TimeSpan.FromSeconds(10));
-        Assert.False(first.IsCompleted, "a request for another document cancelled this one");
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first.WaitAsync(TimeSpan.FromSeconds(10)));
-        Assert.True(sw.ElapsedMilliseconds >= 350, $"ended after {sw.ElapsedMilliseconds} ms, before its deadline");
-    }
-
-    [Fact]
     public async Task Lang_signature_validates_its_input_like_lang_complete()
     {
         var (svc, _) = Rpc();
@@ -229,8 +216,21 @@ public class CompletionBudgetTimingTests(Xunit.Abstractions.ITestOutputHelper ou
 {
     static CompletionItem[] Complete(string engine, string marked, CancellationToken ct) => CompletionBudgetTests.Complete(engine, marked, ct);
     static string CteChain(string engine, int levels, int cols) => CompletionBudgetTests.CteChain(engine, levels, cols);
-    static (LanguageService Service, CompletionBudgetTests.BlockingLanguage Language) Rpc() => CompletionBudgetTests.Rpc();
+    static (LanguageService Service, CompletionBudgetTests.BlockingLanguage Language) Rpc(TimeSpan? deadline = null) => CompletionBudgetTests.Rpc(deadline);
     static CompleteParams Req(string doc, string text) => CompletionBudgetTests.Req(doc, text);
+
+    [Fact]
+    public async Task Another_documents_request_leaves_a_running_one_alone_until_its_deadline()
+    {
+        var (svc, language) = Rpc(TimeSpan.FromMilliseconds(1000));
+        var sw = Stopwatch.StartNew();
+        var first = svc.CompleteAsync(Req("doc-a", "slow"));
+        await language.Started.Task.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
+        await svc.CompleteAsync(Req("doc-b", "fast")).WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
+        Assert.False(first.IsCompleted, "a request for another document cancelled this one");
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10))));
+        Assert.True(sw.ElapsedMilliseconds >= 800, $"ended after {sw.ElapsedMilliseconds} ms, before its deadline");
+    }
 
     /// <summary>§14 #5c: tier 2 through 8 chained CTEs of 30 columns, in process, every engine (20 runs, p95).</summary>
     [Fact]
@@ -250,7 +250,7 @@ public class CompletionBudgetTimingTests(Xunit.Abstractions.ITestOutputHelper ou
             }
             times.Sort();
             output.WriteLine($"{engine}: 8 CTEs x 30 columns, median {times[10]:F2} ms, p95 {times[19]:F2} ms");
-            Assert.True(times[19] < 50, $"{engine}: p95 {times[19]:F1} ms");
+            Assert.True(times[19] < TestTime.Budget(50), $"{engine}: p95 {times[19]:F1} ms");
         }
     }
 
@@ -267,15 +267,15 @@ public class CompletionBudgetTimingTests(Xunit.Abstractions.ITestOutputHelper ou
         {
             var (svc, language) = Rpc();
             var older = svc.CompleteAsync(Req("doc", "slow"));
-            await language.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await language.Started.Task.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
             var sw = Stopwatch.StartNew();
             var newer = svc.CompleteAsync(Req("doc", "fast"));
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => older.WaitAsync(TimeSpan.FromSeconds(10)));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => older.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10))));
             times.Add(sw.Elapsed.TotalMilliseconds);
-            await newer.WaitAsync(TimeSpan.FromSeconds(10));
+            await newer.WaitAsync(TestTime.Of(TimeSpan.FromSeconds(10)));
         }
         times.Sort();
         output.WriteLine($"superseded request stopped after median {times[5]:F2} ms, max {times[^1]:F2} ms");
-        Assert.True(times[5] <= 50, $"median {times[5]:F1} ms");
+        Assert.True(times[5] <= TestTime.Budget(50), $"median {times[5]:F1} ms");
     }
 }

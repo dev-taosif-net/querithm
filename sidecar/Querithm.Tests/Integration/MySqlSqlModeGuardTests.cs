@@ -103,9 +103,10 @@ public sealed class MySqlSqlModeGuardTests
     {
         await MySqlIntegrationTests.EnsureDatabaseAsync(product);
         await using var h = new MySqlIntegrationTests.Host();
-        var p = await h.Rpc.ProfileSave(MySqlIntegrationTests.ProfileFor(product));
+        var p = await h.Rpc.ProfileSave(MySqlIntegrationTests.ProfileFor(product) with { Environment = EnvironmentKind.Prod });
         var sid = (await h.Rpc.SessionOpen(new SessionOpenParams { ProfileId = p.Id, Secret = TestHost.MySqlPassword })).SessionId;
-        var options = new ExecuteOptions { ConfirmedDestructive = true };
+        var confirmed = new ExecuteOptions { ConfirmedProd = true };
+        var options = confirmed with { ConfirmedDestructive = true };
         var setup = await h.Rpc.QueryExecute(new QueryExecuteParams { SessionId = sid, Sql = "DROP TABLE IF EXISTS zz_delim_plan; CREATE TABLE zz_delim_plan (id INT);", Options = options });
         await h.Notifier.WaitDone(setup.ExecutionId!);
 
@@ -118,7 +119,7 @@ public sealed class MySqlSqlModeGuardTests
             Assert.Equal("unsupported", ex.Code);
         }
         // query.execute finds the DROP now and stops for the confirmation.
-        var blocked = await h.Rpc.QueryExecute(new QueryExecuteParams { SessionId = sid, Sql = "DELIMITER $$\nSELECT 1; DROP TABLE zz_delim_plan $$" });
+        var blocked = await h.Rpc.QueryExecute(new QueryExecuteParams { SessionId = sid, Sql = "DELIMITER $$\nSELECT 1; DROP TABLE zz_delim_plan $$", Options = confirmed });
         Assert.Equal(GuardReason.Destructive, blocked.Blocked?.Reason);
         Assert.True(await TableExists(h, sid, options, "zz_delim_plan"), "a plan or run let the hidden DROP through");
     }

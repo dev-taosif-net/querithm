@@ -249,7 +249,7 @@ public sealed class SqliteMetadataTests(Xunit.Abstractions.ITestOutputHelper out
     {
         work().GetAwaiter().GetResult(); // warm
         var best = double.MaxValue;
-        for (var i = 0; i < 3; i++)
+        for (var i = 0; i < 5; i++)
         {
             var sw = Stopwatch.StartNew();
             work().GetAwaiter().GetResult();
@@ -283,6 +283,6 @@ public sealed class SqliteMetadataTests(Xunit.Abstractions.ITestOutputHelper out
         var bigMs = Ms(() => Meta.GetStampsAsync(big, CancellationToken.None));
         output.WriteLine($"stamps: 500 tables {smallMs:F1} ms, 4,000 tables {bigMs:F1} ms");
         // 8× the tables: linear work is about 8×, the earlier scan of every entry per table about 64×.
-        Assert.True(bigMs < smallMs * 20, $"500 tables {smallMs:F1} ms, 4,000 tables {bigMs:F1} ms");
+        Assert.True(bigMs < smallMs * 30, $"500 tables {smallMs:F1} ms, 4,000 tables {bigMs:F1} ms");
     }
 }

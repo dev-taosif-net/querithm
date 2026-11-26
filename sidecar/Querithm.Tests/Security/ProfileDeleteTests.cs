@@ -94,7 +94,8 @@ public class ProfileDeleteTests
         var sid = await Open(host, p);
         var session = host.Services.Sessions.Get(sid);
         await session.ExecLock.WaitAsync();
-        var release = Task.Run(async () => { await Task.Delay(100); session.ExecLock.Release(); });
+        // Dedicated thread: under heavy parallel test load on slow CI runners, Task.Run + Task.Delay can stall past the 500 ms BusyGrace.
+        var release = Task.Factory.StartNew(() => { Thread.Sleep(50); session.ExecLock.Release(); }, TaskCreationOptions.LongRunning);
         await host.Rpc.ProfileDelete(new ProfileRef { ProfileId = p.Id });
         await release;
         Assert.Null(host.Services.Profiles.Get(p.Id));

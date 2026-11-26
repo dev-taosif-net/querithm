@@ -124,6 +124,6 @@ public class CompletionCacheTimingTests(Xunit.Abstractions.ITestOutputHelper out
         times.Sort();
         output.WriteLine($"{decls.Length / 1024} KB of declarations: median {times[10]:F1} ms, p95 {times[18]:F1} ms per keystroke");
         // Before: every keystroke cleared the cache partway and parsed all 40 (888 ms median, Release).
-        Assert.True(times[10] < 300, $"median {times[10]:F1} ms");
+        Assert.True(times[10] < TestTime.Budget(300), $"median {times[10]:F1} ms");
     }
 }
