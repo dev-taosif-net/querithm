@@ -35,6 +35,14 @@ const make = () => {
 };
 
 describe("toolbar drop-down menu", () => {
+  it("a press on its trigger does not dismiss it (the trigger toggles it); a press elsewhere does", () => {
+    render(<Harness items={make().items} />);
+    fireEvent.pointerDown(screen.getByText("caret"));
+    expect(screen.getByRole("menu", { name: "Run" })).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByText("elsewhere"));
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
   it("opens with focus on the first item; ↑/↓/Home/End move and wrap; the separator is skipped", () => {
     render(<Harness items={make().items} />);
     expect(screen.getByRole("menu", { name: "Run" })).toBeInTheDocument();
@@ -143,6 +151,19 @@ describe("context menu (at a point, with a header and a submenu)", () => {
     expect(screen.getByText("DEV · Bench › SalesDB · dbo.Orders").closest('[role^="menuitem"]')).toBeNull();
     expect(screen.getByRole("menuitem", { name: "Select top 1000" }).className).toMatch(/font-semibold/);
     expect(document.activeElement).toBe(screen.getByRole("menuitem", { name: "Select top 1000" }));
+  });
+
+  it("a press inside its anchor (the tree or tab it was opened on) but outside the menu closes it", () => {
+    render(<ContextHarness items={make().items} />);
+    expect(screen.getByRole("menu", { name: "Actions for dbo.Orders" })).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByText("row"));
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("a press inside the menu keeps it open", () => {
+    render(<ContextHarness items={make().items} />);
+    fireEvent.pointerDown(screen.getByRole("menuitem", { name: "Select top 1000" }));
+    expect(screen.getByRole("menu", { name: "Actions for dbo.Orders" })).toBeInTheDocument();
   });
 
   it("is kept inside the window", () => {

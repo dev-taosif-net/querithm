@@ -673,6 +673,21 @@ describe.each<Engine>(["mssql", "pg"])("Explorer context menus (%s)", (engine) =
     expect(m.newQueryTab).toHaveBeenCalledWith(expect.objectContaining({ profileId: "p1", database: "AppDb", title: "INSERT Orders.sql" }));
   });
 
+  it("a press on another row or empty tree space closes the menu; a right-click on another row moves it there", () => {
+    render(<Explorer />);
+    click("Database AppDb");
+    openMenu("Database AppDb");
+    fireEvent.pointerDown(item("Tables, 2"));
+    expect(screen.queryByRole("menu")).toBeNull();
+    openMenu("Database AppDb");
+    fireEvent.pointerDown(tree());
+    expect(screen.queryByRole("menu")).toBeNull();
+    openMenu("Database AppDb");
+    fireEvent.contextMenu(item("Tables, 2"), { clientX: 10, clientY: 10 });
+    expect(screen.getAllByRole("menu", { name: /^Actions for/ })).toHaveLength(1);
+    expect(menu().getAttribute("aria-label")).toMatch(/Tables/);
+  });
+
   it("Shift+F10 opens the menu of the selected row from the keyboard", () => {
     render(<Explorer />);
     click("Database AppDb");

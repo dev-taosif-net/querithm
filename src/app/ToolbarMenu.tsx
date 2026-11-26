@@ -145,8 +145,10 @@ export function DropMenu({ anchor, at, label, header, items, onClose }: {
     setSub(null);
     if (focusParent) parent?.focus();
   };
-  // Escape inside an open submenu closes only the submenu.
-  useDismiss(true, [box, subBox, anchor], dismiss, () => {
+  // Escape inside an open submenu closes only the submenu. A dropdown counts its trigger as inside (pressing it again
+  // toggles rather than closing and reopening); a context menu does not: its anchor can be a whole tree or tab, and a
+  // press anywhere outside the menu, there included, closes it.
+  useDismiss(true, at ? [box, subBox] : [box, subBox, anchor], dismiss, () => {
     if (sub === null || !subBox.current?.contains(document.activeElement)) return false;
     closeSub(true);
     return true;
