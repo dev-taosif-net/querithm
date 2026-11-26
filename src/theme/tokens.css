@@ -825,6 +825,8 @@ select {
   flex: 0 1 auto !important;
   min-width: 120px !important;
   max-width: 184px !important;
+  /* A header wider than its tab (before useFullDatabase has measured it) is cut, never painted over the next tab. */
+  overflow: hidden;
 }
 .dockview-theme-querithm .dv-tab:has(.q-tab[data-disc]) {
   min-width: 150px !important; /* "disconnected" is never cut (D8) */

@@ -419,6 +419,44 @@ describe("QueryTabHeader", () => {
     }
   });
 
+  it("one line: moved to another group (a split), the new tab element gets the minimum, so names never overlap", () => {
+    useSettings.setState({ tabLayout: "singleLine" });
+    setTab({ title: "sprPyrSalaryGenerate.sql", profileId: "pg1", database: "PeopleDeskMatador" });
+    const rect = (left: number, right: number) => ({ left, right, width: right - left, top: 0, bottom: 16, height: 16, x: left, y: 0, toJSON() {} }) as DOMRect;
+    const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.matches("[data-q-tab-db-full]")) return rect(150, 260);
+      if (this.matches(".q-tab-top")) return rect(18, 130);
+      if (this.matches(".dv-tab")) return rect(10, 130);
+      return rect(0, 0);
+    });
+    const width = vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) {
+      return this.matches(".q-tab-top") ? 242 : 0;
+    });
+    const style = document.createElement("style");
+    style.textContent = ".dv-tab { min-width: 120px; }";
+    document.head.appendChild(style);
+    try {
+      const f = fakeApi();
+      const { container } = header(f.api);
+      const before = container.querySelector(".dv-tab") as HTMLElement;
+      expect(before.style.getPropertyValue("min-width")).toBe("250px");
+      // Dockview reuses the header: it moves the same DOM into the new group's tab element, with no re-render.
+      const after = document.createElement("div");
+      after.className = "dv-tab";
+      container.appendChild(after);
+      after.appendChild(q(container));
+      f.api.group = { id: "g2" };
+      f.emit("grp");
+      expect(after.style.getPropertyValue("min-width")).toBe("250px");
+      expect(after.style.getPropertyPriority("min-width")).toBe("important");
+      expect(before.style.getPropertyValue("min-width")).toBe("");
+    } finally {
+      spy.mockRestore();
+      width.mockRestore();
+      style.remove();
+    }
+  });
+
   it("one line: a tab with no connection is measured too, so \"No connection\" never runs into the next tab", () => {
     useSettings.setState({ tabLayout: "singleLine" });
     setTab({ title: "SQLQuery15.sql", profileId: undefined, database: undefined });

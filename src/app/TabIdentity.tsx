@@ -239,12 +239,22 @@ export function TabLine2({ f, surfaces = TAB_SURFACES, fullDatabase = false, lay
  */
 export function useFullDatabase(root: RefObject<HTMLElement | null>, tabEl: MutableRefObject<HTMLElement | null>, key: string) {
   useLayoutEffect(() => {
-    const el = tabEl.current;
     // One line: whatever closes the line ("No connection", a server with no database) is measured as the database is.
     const db = root.current?.querySelector<HTMLElement>("[data-q-tab-db-full]") ?? root.current?.querySelector<HTMLElement>(".q-tab-top > .q-tab-tail");
-    if (!el) return;
+    // Dockview moves the same header into a new tab element when the tab goes to another group (a split, a drag) and
+    // the header does not re-render then: the tab element is looked up on every fit, and the old one let go, so the
+    // min-width never stays on a detached element while the new one overflows onto its neighbours.
+    let el: HTMLElement | null = null;
+    const current = () => {
+      const now = root.current?.closest<HTMLElement>(".dv-tab") ?? tabEl.current;
+      if (now !== el) {
+        el?.style.removeProperty("min-width");
+        el = now;
+      }
+      return el;
+    };
     if (!db) {
-      el.style.removeProperty("min-width");
+      current()?.style.removeProperty("min-width");
       return;
     }
     // One-line layouts: the database sits on line 1 after the name, before the close slot's spacer, so the minimum is
@@ -252,6 +262,8 @@ export function useFullDatabase(root: RefObject<HTMLElement | null>, tabEl: Muta
     const line = db.closest<HTMLElement>(".q-tab-top");
     const name = line?.querySelector<HTMLElement>(".q-tab-l1");
     const fit = () => {
+      const el = current();
+      if (!el) return;
       const r = db.getBoundingClientRect();
       if (!r.width) return; // not laid out (hidden group, tests)
       el.style.removeProperty("min-width");
@@ -267,9 +279,11 @@ export function useFullDatabase(root: RefObject<HTMLElement | null>, tabEl: Muta
     ro?.observe(db);
     // The name moves the database: a rename, the TX pill or the spinner appearing (none of them grows with the tab).
     if (name) ro?.observe(name);
+    // A move to another group resizes the header (the new tab element has no min-width yet): measured again then.
+    if (root.current) ro?.observe(root.current);
     return () => {
       ro?.disconnect();
-      el.style.removeProperty("min-width");
+      el?.style.removeProperty("min-width");
     };
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps -- refs; re-measured when line 2's text changes
 }

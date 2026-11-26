@@ -265,8 +265,15 @@ export function QueryTabHeader(props: IDockviewPanelHeaderProps<Params>) {
   const root = useRef<HTMLDivElement>(null);
   const tabEl = useRef<HTMLElement | null>(null);
   const facts: TabFacts | undefined = v && { kind: "query", ...v, profile, disconnected: !!profile && disconnected, suffix };
+  // A move to another group (a split, a drag) puts this header in a new tab element without re-rendering it: the group
+  // is part of the measuring key so the new element gets the header's min-width.
+  const [groupId, setGroupId] = useState(() => props.api.group?.id ?? "");
+  useEffect(() => {
+    const d = props.api.onDidGroupChange?.(() => setGroupId(props.api.group?.id ?? ""));
+    return () => d?.dispose();
+  }, [props.api]);
   useTabSemantics(root, tabEl, facts, setMenu, () => setEditing(true));
-  useFullDatabase(root, tabEl, `${profile?.id ?? ""}|${facts?.database ?? ""}|${facts?.disconnected ?? false}|${layout}|${!!v?.dirty}|${!!v?.pinned}`);
+  useFullDatabase(root, tabEl, `${profile?.id ?? ""}|${facts?.database ?? ""}|${facts?.disconnected ?? false}|${layout}|${!!v?.dirty}|${!!v?.pinned}|${groupId}`);
   if (!v || !facts) return null;
   const finishRename = (value: string | null) => {
     setEditing(false);
