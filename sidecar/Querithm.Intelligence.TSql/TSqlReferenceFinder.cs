@@ -18,14 +18,21 @@ public sealed class TSqlReferenceFinder : IReferenceFinder
 
     static TSqlFragment? Parse(string text, out bool failed)
     {
-        var fragment = Parsers.Value!.Parse(new StringReader(text), out var errors);
+        var fragment = TSqlParsing.ParseText(Parsers.Value!, text, out var errors);
         failed = errors.Count > 0;
         return fragment;
     }
 
+    /// <summary>Parses and walks on a deep stack (<see cref="DeepStack"/>): a long chain in a module must not end the process.</summary>
+    /// <remarks>A large text's chunks parse on their own deep stacks, so that path runs outside one (as the diagnostics do).</remarks>
     public RefScan Find(string text, RefTarget target, RefContext ctx)
     {
         if (text.Length >= ChunkedDiagnostics.MinLength && !(target.Column != null && DefinesTrigger(text)) && FindChunked(text, target, ctx) is { } chunked) return chunked;
+        return DeepStack.Run(() => FindWhole(text, target, ctx));
+    }
+
+    static RefScan FindWhole(string text, RefTarget target, RefContext ctx)
+    {
         var fragment = Parse(text, out var failed);
         if (fragment == null) return new RefScan([], false, true);
         var v = new Finder(target, ctx);
@@ -40,7 +47,8 @@ public sealed class TSqlReferenceFinder : IReferenceFinder
     static bool DefinesTrigger(string text)
     {
         if (!RefText.ContainsWord(text, "trigger", 0, text.Length)) return false;
-        var tokens = Parsers.Value!.GetTokenStream(new StringReader(text), out _);
+        // Text too deep to lex is not cut into chunks: the whole-text parse then refuses it.
+        if (TSqlParsing.Lex(Parsers.Value!, text, out _) is not { } tokens) return true;
         TSqlTokenType? last = null;
         foreach (var t in tokens)
         {
@@ -63,12 +71,20 @@ public sealed class TSqlReferenceFinder : IReferenceFinder
         var hits = new System.Collections.Concurrent.ConcurrentBag<RefHit>();
         var dynamic = 0;
         var failed = 0;
-        Parallel.ForEach(chunks, c =>
+        // Each chunk runs on a thread-pool thread: parse and walk it on a deep stack too (about 130 µs a chunk, 2026-11-25),
+        // but only a chunk that can hold a hit — the word check needs no deep stack, and skips the thread start (~90 µs).
+        Parallel.ForEach(chunks, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, c =>
         {
             var length = c.End - c.Start;
             // Chunks end at statement boundaries, so a column of the target table is only in a chunk that names the table.
             var named = RefText.ContainsWord(text, needle, c.Start, length) && (target.Column == null || RefText.ContainsWord(text, target.Name, c.Start, length));
             if (!named && !RefText.ContainsWord(text, "exec", c.Start, length) && !RefText.ContainsWord(text, "execute", c.Start, length)) return;
+            DeepStack.Run(() => FindInChunk(c, length));
+        });
+        return new RefScan(hits.OrderBy(h => h.Offset).ToList(), dynamic == 1, failed == 1);
+
+        void FindInChunk(ChunkedDiagnostics.Chunk c, int length)
+        {
             var wrapped = ChunkedDiagnostics.Wrap(text, c);
             var prefix = 6 * c.StartDepth;
             var fragment = Parse(wrapped, out var f);
@@ -79,27 +95,26 @@ public sealed class TSqlReferenceFinder : IReferenceFinder
             if (v.Dynamic) Interlocked.Exchange(ref dynamic, 1);
             foreach (var h in v.Hits.Values)
                 if (h.Offset >= prefix && h.Offset - prefix + h.Length <= length) hits.Add(h with { Offset = c.Start + h.Offset - prefix });
-        });
-        return new RefScan(hits.OrderBy(h => h.Offset).ToList(), dynamic == 1, failed == 1);
+        }
     }
 
-    public RefTarget? TargetAt(string text, int offset, RefContext ctx)
+    public RefTarget? TargetAt(string text, int offset, RefContext ctx) => DeepStack.Run(() =>
     {
         var fragment = Parse(text, out _);
         if (fragment == null) return null;
         var v = new Locator(offset, ctx);
         fragment.Accept(v);
         return v.Found;
-    }
+    });
 
-    public IReadOnlyList<(int Offset, int Length)>? LocalOccurrences(string text, int offset)
+    public IReadOnlyList<(int Offset, int Length)>? LocalOccurrences(string text, int offset) => DeepStack.Run(() =>
     {
         var fragment = Parse(text, out _);
         if (fragment == null) return null;
         var v = new Locals(offset);
         fragment.Accept(v);
         return v.Result();
-    }
+    });
 
     static bool Regular(string s) => s.Length > 0 && (char.IsAsciiLetter(s[0]) || s[0] == '_') && s.All(ch => char.IsAsciiLetterOrDigit(ch) || ch == '_');
 

@@ -1,0 +1,38 @@
+{
+  "date": "2026-11-25T12:00:10.286Z",
+  "os": "Windows_NT 10.0.26300",
+  "cpu": "13th Gen Intel(R) Core(TM) i5-1335U",
+  "cores": 12,
+  "memGb": 24,
+  "results": {
+    "4b": {
+      "metric": "Tier-1 completion on a 5,000-table schema (21 columns, 3,000 FKs): FROM | / FROM Tab| / JOIN |, slowest engine and statement (p95, node)",
+      "unit": "ms",
+      "target": 5,
+      "value": 4,
+      "pass": true,
+      "slowest": "tsql|SELECT * FROM Tab",
+      "p95": {
+        "tsql|SELECT * FROM ": 2.34,
+        "tsql|SELECT * FROM Tab": 4,
+        "tsql|SELECT * FROM Table0001 a JOIN ": 3.32,
+        "pg|SELECT * FROM ": 2.57,
+        "pg|SELECT * FROM Tab": 2.18,
+        "pg|SELECT * FROM Table0001 a JOIN ": 2.6,
+        "mySql|SELECT * FROM ": 1.63,
+        "mySql|SELECT * FROM Tab": 1.91,
+        "mySql|SELECT * FROM Table0001 a JOIN ": 2.14,
+        "sqlite|SELECT * FROM ": 1.84,
+        "sqlite|SELECT * FROM Tab": 2.03,
+        "sqlite|SELECT * FROM Table0001 a JOIN ": 2.13,
+        "duckDb|SELECT * FROM ": 1.67,
+        "duckDb|SELECT * FROM Tab": 1.85,
+        "duckDb|SELECT * FROM Table0001 a JOIN ": 2.1,
+        "oracle|SELECT * FROM ": 2.08,
+        "oracle|SELECT * FROM Tab": 2.28,
+        "oracle|SELECT * FROM Table0001 a JOIN ": 2.23
+      },
+      "samplesPerCase": 200
+    }
+  }
+}

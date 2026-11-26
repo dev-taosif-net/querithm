@@ -134,6 +134,20 @@ public sealed record ObjectsParams
     public string? SessionId { get; init; }
 }
 
+/// <summary>
+/// meta.foreignKeys: the foreign keys of the given tables (an FK belongs to the table it is declared on), for patching a
+/// cached snapshot after an incremental refresh (completion audit 2026-11-25, H12).
+/// </summary>
+public sealed record ForeignKeysParams
+{
+    public required string ProfileId { get; init; }
+    public required string Database { get; init; }
+    /// <summary>The tables whose foreign keys are wanted (at most <c>MetadataService.MaxObjectIds</c>).</summary>
+    public required long[] Ids { get; init; }
+    /// <summary>Phase D0d: the session whose view this is, as for meta.objects.</summary>
+    public string? SessionId { get; init; }
+}
+
 public sealed record RefreshParams
 {
     public required string ProfileId { get; init; }

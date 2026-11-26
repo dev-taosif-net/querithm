@@ -56,7 +56,8 @@ public sealed class MetadataStore(LocalStore store)
         using var cmd = c.Cmd("SELECT object_id, modify_date FROM obj WHERE profile_id=$p AND database=$d", null, ("$p", profileId), ("$d", database));
         using var r = cmd.ExecuteReader();
         var map = new Dictionary<long, long>();
-        while (r.Read()) map[r.GetInt64(0)] = r.Long(1) ?? 0;
+        // A cleared marker (the v13 migration) equals no real one, so its object is read again (0 could be a real hash).
+        while (r.Read()) map[r.GetInt64(0)] = r.Long(1) ?? long.MinValue;
         return map;
     }
 
@@ -79,14 +80,17 @@ public sealed class MetadataStore(LocalStore store)
             var touched = changed.Select(s => s.Id).Concat(removed).ToArray();
             foreach (var chunk in touched.Chunk(500))
             {
-                var ids = string.Join(",", chunk);
+                // The ids as one JSON parameter (G#10): joined into the SQL with the current culture, a negative id read
+                // "−7" (U+2212) under sv-SE, fi-FI and others, and the statement failed.
+                (string, object?)[] ps = [.. Key(), ("$ids", IdsJson(chunk))];
                 foreach (var t in new[] { "col", "param", "idx", "definition_cache" })
-                    c.Cmd($"DELETE FROM {t} WHERE profile_id=$p AND database=$d AND object_id IN ({ids})", tx, Key()).ExecuteNonQuery();
-                c.Cmd($"DELETE FROM fk WHERE profile_id=$p AND database=$d AND parent_object_id IN ({ids})", tx, Key()).ExecuteNonQuery();
-                c.Cmd($"DELETE FROM obj WHERE profile_id=$p AND database=$d AND object_id IN ({ids})", tx, Key()).ExecuteNonQuery();
+                    c.Cmd($"DELETE FROM {t} WHERE profile_id=$p AND database=$d AND object_id IN (SELECT value FROM json_each($ids))", tx, ps).ExecuteNonQuery();
+                c.Cmd("DELETE FROM fk WHERE profile_id=$p AND database=$d AND parent_object_id IN (SELECT value FROM json_each($ids))", tx, ps).ExecuteNonQuery();
+                c.Cmd("DELETE FROM obj WHERE profile_id=$p AND database=$d AND object_id IN (SELECT value FROM json_each($ids))", tx, ps).ExecuteNonQuery();
             }
         }
 
+        var detailNotes = (details.Notes ?? []).GroupBy(x => x.ObjectId).ToDictionary(g => g.Key, g => string.Join("; ", g.Select(x => x.Note)));
         var members = (details.Members ?? []).GroupBy(x => x.ObjectId)
             .ToDictionary(g => g.Key, g => JsonSerializer.Serialize(g.OrderBy(x => x.Ordinal).Select(x => x.Text).ToArray(), StoreJsonContext.Default.StringArray));
         using (var cmd = c.Cmd("INSERT OR REPLACE INTO obj (profile_id, database, object_id, schema_name, name, kind, modify_date, return_type, parent_object_id, no_rollback_engine, note, spec_object_id, members, target_object_id, row_address) VALUES ($p,$d,$id,$s,$n,$k,$m,$rt,$par,$nr,$note,$spec,$mem,$tgt,$ra)", tx))
@@ -103,7 +107,7 @@ public sealed class MetadataStore(LocalStore store)
                 id.Value = o.Id; s.Value = o.Schema; n.Value = o.Name; k.Value = EnumText.Of(o.Kind); m.Value = o.Marker; rt.Value = (object?)o.ReturnType ?? DBNull.Value;
                 par.Value = (object?)o.ParentObjectId ?? DBNull.Value;
                 nr.Value = (object?)o.NoRollbackEngine ?? DBNull.Value;
-                note.Value = (object?)o.Note ?? DBNull.Value;
+                note.Value = (object?)o.Note ?? (detailNotes.TryGetValue(o.Id, out var dn) ? dn : DBNull.Value as object);
                 cmd.ExecuteNonQuery();
             }
         }
@@ -177,8 +181,10 @@ public sealed class MetadataStore(LocalStore store)
     {
         using var c = store.Open();
         var row = GetSnapshotRow(profileId, database);
-        var filter = onlyIds == null ? "" : $" AND object_id IN ({string.Join(",", onlyIds.Length == 0 ? [-1] : onlyIds)})";
-        (string, object?)[] key = [("$p", profileId), ("$d", database)];
+        // The ids as one JSON parameter, culture-invariant (G#10): the empty list's old `IN (-1)` sentinel, written with the
+        // current culture, read `IN (−1)` under sv-SE and failed every meta.objects call for no ids.
+        var filter = onlyIds == null ? "" : " AND object_id IN (SELECT value FROM json_each($ids))";
+        (string, object?)[] key = onlyIds == null ? [("$p", profileId), ("$d", database)] : [("$p", profileId), ("$d", database), ("$ids", IdsJson(onlyIds))];
 
         var pkCols = new Dictionary<long, HashSet<string>>();
         using (var cmd = c.Cmd($"SELECT object_id, columns_json FROM idx WHERE profile_id=$p AND database=$d AND is_primary=1{filter}", null, key))
@@ -249,6 +255,25 @@ public sealed class MetadataStore(LocalStore store)
             Objects = objects.ToArray(),
             Fks = fks.ToArray(),
         };
+    }
+
+    /// <summary>Object ids as a JSON array for <c>json_each</c>, whatever the current culture's negative sign (G#10).</summary>
+    internal static string IdsJson(IEnumerable<long> ids) =>
+        "[" + string.Join(",", ids.Select(id => id.ToString(System.Globalization.CultureInfo.InvariantCulture))) + "]";
+
+    /// <summary>The foreign keys declared on <paramref name="parentIds"/> (meta.foreignKeys), the ids passed as one JSON parameter.</summary>
+    public SnapFk[] ForeignKeysOf(string profileId, string database, long[] parentIds)
+    {
+        if (parentIds.Length == 0) return [];
+        using var c = store.Open();
+        using var cmd = c.Cmd("""
+            SELECT name, parent_object_id, referenced_object_id, columns_json FROM fk
+            WHERE profile_id=$p AND database=$d AND parent_object_id IN (SELECT value FROM json_each($ids))
+            """, null, ("$p", profileId), ("$d", database), ("$ids", IdsJson(parentIds)));
+        using var r = cmd.ExecuteReader();
+        var list = new List<SnapFk>();
+        while (r.Read()) list.Add(ReadFk(r));
+        return [.. list];
     }
 
     static SnapFk ReadFk(SqliteDataReader r) => new()

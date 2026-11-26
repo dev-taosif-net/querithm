@@ -9,7 +9,8 @@ namespace Querithm.Intelligence.TSql.Completion;
 /// </summary>
 static class Declarations
 {
-    public static Env Build(DocModel doc, Batch batch, int stmtStart, SchemaScope schema)
+    /// <summary>Reads every statement above the cursor; <paramref name="ct"/> (a newer request, the deadline) is checked per statement.</summary>
+    public static Env Build(DocModel doc, Batch batch, int stmtStart, SchemaScope schema, CancellationToken ct)
     {
         var env = new Env(schema);
         var resolver = new Resolver(env);
@@ -17,6 +18,7 @@ static class Declarations
         {
             var seg = doc.Segs[s];
             if (seg.StartOffset >= stmtStart) break;
+            ct.ThrowIfCancellationRequested();
             var sameBatch = seg.Batch == batch.Index;
             try
             {

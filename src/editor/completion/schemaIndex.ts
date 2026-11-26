@@ -1,5 +1,5 @@
 // O(1) lookups over one (profile, database) SchemaSnapshot for tier-1 completion (§9).
-import type { Dialect, ObjectKind, SchemaSnapshot, SnapObject } from "../../ipc/contract";
+import type { Dialect, ObjectKind, SchemaSnapshot, SnapFk, SnapObject } from "../../ipc/contract";
 import type { SchemaIndex, TableInScope } from "./types";
 import { DIALECTS, foldIdentifier, knownDialect } from "../../engines";
 
@@ -103,16 +103,48 @@ export function isDefaultSchema(idx: SchemaIndex, schema: string): boolean {
 export const ALL_KINDS: ReadonlySet<ObjectKind> = new Set<ObjectKind>(["table", "view", "proc", "func", "tvf", "type", "sequence", "synonym"]);
 export { RELATION_KINDS };
 
-/** What a column references through a foreign key: `schema.table.column`, or undefined when it is not an FK column. */
+/** An index's foreign keys by the table that holds them and by the table they reference. */
+export interface FkLookup { byParent: Map<number, SnapFk[]>; byReferenced: Map<number, SnapFk[]> }
+
+/**
+ * The foreign keys of an index by table, built once per SchemaIndex (a schema change builds a new index; `fks` is never
+ * changed in place): column details and JOIN items asked every FK of the schema for each column or table (completion audit H9).
+ */
+const FK_LOOKUP = new WeakMap<SchemaIndex, FkLookup>();
+export function fkLookup(idx: SchemaIndex): FkLookup {
+  let l = FK_LOOKUP.get(idx);
+  if (!l) {
+    l = { byParent: new Map(), byReferenced: new Map() };
+    for (const fk of idx.fks ?? []) {
+      if (!fk) continue;
+      let p = l.byParent.get(fk.parent);
+      if (!p) l.byParent.set(fk.parent, (p = []));
+      p.push(fk);
+      let r = l.byReferenced.get(fk.referenced);
+      if (!r) l.byReferenced.set(fk.referenced, (r = []));
+      r.push(fk);
+    }
+    FK_LOOKUP.set(idx, l);
+  }
+  return l;
+}
+
+/**
+ * What a column references through a foreign key: `schema.table.column` (`schema.table` when the referenced column is not
+ * known), or undefined when it is not an FK column.
+ */
 export function fkReference(idx: SchemaIndex | null, objectId: number, column: string): string | undefined {
   if (!idx) return undefined;
   const lower = column.toLowerCase();
-  for (const fk of idx.fks) {
+  for (const fk of fkLookup(idx).byParent.get(objectId) ?? []) {
     if (fk.parent !== objectId) continue;
     const pair = fk.columns?.find((p) => p.parent.toLowerCase() === lower);
     if (!pair) continue;
     const ref = idx.byId.get(fk.referenced);
-    return ref ? `${ref.schema}.${ref.name}.${pair.referenced}` : undefined;
+    // SQLite's `REFERENCES customers` without a column list may come without the referenced column: the table alone,
+    // not `main.customers.` (code audit 2026-11-26, L10).
+    if (!ref) return undefined;
+    return pair.referenced ? `${ref.schema}.${ref.name}.${pair.referenced}` : `${ref.schema}.${ref.name}`;
   }
   return undefined;
 }

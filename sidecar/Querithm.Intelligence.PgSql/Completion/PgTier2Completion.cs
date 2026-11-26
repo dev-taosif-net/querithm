@@ -11,16 +11,35 @@ namespace Querithm.Intelligence.PgSql.Completion;
 /// </summary>
 public static class PgTier2Completion
 {
-    public static CompletionItem[] Complete(CompleteParams p, ISchemaSource source)
+    /// <summary>
+    /// An empty answer leaves tier 1 alone. A cancelled request (<paramref name="ct"/>: a newer one for the document, or
+    /// its deadline) throws instead, so the webview never caches an empty answer for a word it still shows.
+    /// </summary>
+    public static CompletionItem[] Complete(CompleteParams p, ISchemaSource source, CancellationToken ct)
     {
-        try { return Run(p, source); }
-        catch { return []; }
+        using var cancel = Tier2Cancellation.Use(ct); // the tokenizers and splitters below stop on it too
+        try { return Run(p, source, ct); }
+        catch (Exception e) when (e is not OperationCanceledException) { Report(e); return []; }
     }
 
-    public static SignatureHelp Signature(SignatureParams p, ISchemaSource source)
+    public static SignatureHelp Signature(SignatureParams p, ISchemaSource source, CancellationToken ct)
     {
-        try { return Sig(p, source); }
-        catch { return new SignatureHelp { Signatures = [] }; }
+        using var cancel = Tier2Cancellation.Use(ct);
+        try { return Sig(p, source, ct); }
+        catch (Exception e) when (e is not OperationCanceledException) { Report(e); return new SignatureHelp { Signatures = [] }; }
+    }
+
+    /// <summary>
+    /// Told about an exception tier 2 swallowed (the answer is then empty and tier 1 answers alone): the host logs it, so a
+    /// resolver bug is no longer only a missing list (completion audit 2026-11-25, low). The message may hold document
+    /// text — the host scrubs it and logs at Debug. Never throws back into completion.
+    /// </summary>
+    public static Action<Exception>? OnError { get; set; }
+
+    static void Report(Exception e)
+    {
+        try { OnError?.Invoke(e); }
+        catch { /* a logging failure must not change the answer */ }
     }
 
     static SchemaSnapshot? Snapshot(ISchemaSource source, string? profileId, string? database)
@@ -49,15 +68,16 @@ public static class PgTier2Completion
         public CompletionItem[] ToArray() => _items.Values.ToArray();
     }
 
-    static CompletionItem[] Run(CompleteParams p, ISchemaSource source)
+    static CompletionItem[] Run(CompleteParams p, ISchemaSource source, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(p.Text)) return [];
+        ct.ThrowIfCancellationRequested();
         var doc = PgDocument.Get(p.Text, p.DocId);
         var offset = Math.Clamp(p.Offset, 0, p.Text.Length);
         var ctx = PgCompletionContext.At(doc, offset);
         if (ctx == null) return [];
         var schema = SchemaOf(source, p.ProfileId, p.Database);
-        var r = new PgResolver(schema, doc, ctx.WordStart);
+        var r = new PgResolver(schema, doc, ctx.WordStart, ct);
         var scope = PgScopeBuilder.Build(ctx.Statement);
         var vars = ctx.InBody ? PlpgsqlBlockScanner.Scan(ctx.Header, ctx.Code, ctx.WordStart, r) : [];
         var items = new Items();
@@ -152,6 +172,14 @@ public static class PgTier2Completion
 
     static void Expression(PgCompletionContext ctx, Scope scope, List<Var> vars, PgResolver r, Items items)
     {
+        // A SET target (UPDATE … SET |, … SET a = 1, |, MERGE … UPDATE SET |, ON CONFLICT … DO UPDATE SET |, ON DUPLICATE KEY
+        // UPDATE |): only the target's columns, bare — PostgreSQL, SQLite and DuckDB reject a qualified target, and no other
+        // source's column can be set (audit M9). The value after '=' sees every source, below.
+        if (SetTargetSlot(ctx.Before) is { } set && SetTarget(ctx.Before, set, scope) is { } target)
+        {
+            foreach (var c in r.Columns(target, scope)) items.Add(c.Name, CompletionKind.Column, c.Type, "0", PgIdent.Quote(c.Name), $"{target.Label}.{c.Name}");
+            return;
+        }
         var visible = scope.VisibleAt(ctx.WordStart).Where(s => !s.InsertTarget || ctx.Statement.Any(t => t.Is("RETURNING") && t.Offset < ctx.WordStart)).ToList();
         // UPDATE … SET | and INSERT … RETURNING | see the target's columns.
         var labels = visible.Select(s => s.Label).Distinct().Count();
@@ -180,7 +208,7 @@ public static class PgTier2Completion
             var bare = rules.Unqualified(o.Schema);
             var label = bare ? o.Name : $"{o.Schema}.{o.Name}";
             var insert = bare ? PgIdent.Quote(o.Name) : $"{PgIdent.Quote(o.Schema)}.{PgIdent.Quote(o.Name)}";
-            items.Add(label, Kind(o), KindText(o), o.Schema == rules.DefaultSchema ? "2" : "3", insert);
+            items.Add(label, Kind(o), KindText(o), rules.Names.Equals(o.Schema, rules.DefaultSchema) ? "2" : "3", insert);
         }
         foreach (var s in schema.Schemas.Where(s => !rules.Unqualified(s)).Order()) items.Add(s, CompletionKind.Schema, "schema", "4", PgIdent.Quote(s));
     }
@@ -189,9 +217,12 @@ public static class PgTier2Completion
     {
         foreach (var t in PgCompletionRules.Current.BuiltinTypes) items.Add(t, CompletionKind.Type, "built-in type", "1");
         if (schema == null) return;
+        var rules = PgCompletionRules.Current;
         foreach (var o in schema.Snapshot.Objects.Where(o => o.Kind == ObjectKind.Type))
-            items.Add(o.Schema == PgCompletionRules.Current.DefaultSchema ? o.Name : $"{o.Schema}.{o.Name}", CompletionKind.Type, "type", "0",
-                o.Schema == PgCompletionRules.Current.DefaultSchema ? PgIdent.Quote(o.Name) : $"{PgIdent.Quote(o.Schema)}.{PgIdent.Quote(o.Name)}");
+        {
+            var bare = rules.Names.Equals(o.Schema, rules.DefaultSchema);
+            items.Add(bare ? o.Name : $"{o.Schema}.{o.Name}", CompletionKind.Type, "type", "0", bare ? PgIdent.Quote(o.Name) : $"{PgIdent.Quote(o.Schema)}.{PgIdent.Quote(o.Name)}");
+        }
     }
 
     /// <summary>The name slot of a DECLARE entry (DECLARE | / …; |) — a new name, nothing to offer.</summary>
@@ -233,7 +264,8 @@ public static class PgTier2Completion
         if (k < 0 || !b[k].IsIdent) return null;
         var first = k;
         while (first - 2 >= 0 && b[first - 1].IsP(".") && b[first - 2].IsIdent) first -= 2;
-        if (first < 2 || !b[first - 1].Is("INTO") || !(b[first - 2].Is("INSERT") || b[first - 2].Is("REPLACE"))) return null;
+        // INSERT IGNORE INTO / INSERT OR REPLACE INTO: the dialect's modifiers stand between the verb and INTO.
+        if (first < 2 || !b[first - 1].Is("INTO") || !PgScopeBuilder.IsTargetInto(b, first - 1, out var insert) || !insert) return null;
         return (first < k ? b[k - 2].Name : null, b[k].Name);
     }
 
@@ -269,13 +301,98 @@ public static class PgTier2Completion
         {
             if (b[k].IsP(")")) depth++;
             else if (b[k].IsP("(")) { if (depth-- == 0) return false; }
-            else if (depth == 0 && b[k].Kind == PgTokenKind.Word && ClauseWords.Contains(b[k].Text))
+            else if (depth == 0 && IsClauseWord(b, k))
                 return b[k].Is("SET") || (b[k].Is("UPDATE") && k >= 1 && b[k - 1].Is("KEY"));
         }
         return false;
     }
 
-    static readonly HashSet<string> ObjectWords =new(["FROM", "JOIN", "INTO", "UPDATE", "TABLE", "ONLY", "LATERAL", "USING"], StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// A clause word at <paramref name="k"/> — except VALUES called as a function in an expression (MySQL's
+    /// <c>ON DUPLICATE KEY UPDATE a = VALUES(a)</c>: after '=', an operator, ',' or '('), which is no VALUES clause.
+    /// </summary>
+    static bool IsClauseWord(List<Tok> b, int k) =>
+        b[k].Kind == PgTokenKind.Word && ClauseWords.Contains(b[k].Text)
+        && !(b[k].Is("VALUES") && k >= 1 && k + 1 < b.Count && b[k + 1].IsP("(") && (b[k - 1].Kind == PgTokenKind.Operator || b[k - 1].IsP(",") || b[k - 1].IsP("(")))
+        && !PgScopeBuilder.IsDistinctFrom(b, k);
+
+    /// <summary>
+    /// The cursor names a SET target: the nearest token before it at its nesting level that is a clause word, ',' or '='
+    /// is SET (or MySQL's KEY UPDATE) or a comma of the SET list, never '=' (the value side). Returns the index of that
+    /// SET / UPDATE word in <paramref name="b"/>.
+    /// </summary>
+    static int? SetTargetSlot(List<Tok> b)
+    {
+        if (!InSetList(b)) return null;
+        var depth = 0;
+        var pastComma = false; // a comma of the SET list was passed: the cursor starts the next assignment
+        for (var k = b.Count - 1; k >= 0; k--)
+        {
+            // ARRAY[1, |: the comma is the array's, not the SET list's (code audit 2026-11-25, L3).
+            if (b[k].IsP(")") || b[k].IsP("]")) { depth++; continue; }
+            if (b[k].IsP("(") || b[k].IsP("[")) { if (depth-- == 0) return null; continue; }
+            if (depth > 0) continue;
+            if (b[k].IsP(",")) pastComma = true;
+            // An operator run is one token in some dialects (MySQL's `=-`): an assignment is any run that starts with '='
+            // (code audit 2026-11-25, L6), never '=>' (a named argument).
+            else if (IsAssignment(b[k]) && !pastComma) return null;
+            else if (IsClauseWord(b, k)) return b[k].Is("SET") || b[k].Is("UPDATE") ? k : null;
+        }
+        return null;
+    }
+
+    static bool IsAssignment(Tok t) =>
+        t.Kind is PgTokenKind.Operator or PgTokenKind.Punct && t.Text.StartsWith('=') && !t.Text.StartsWith("=>", StringComparison.Ordinal);
+
+    /// <summary>
+    /// The table a SET list at <paramref name="set"/> updates: the UPDATE target, the MERGE INTO target (… THEN UPDATE SET),
+    /// or the INSERT target (ON CONFLICT … DO UPDATE SET, ON DUPLICATE KEY UPDATE). Null for a MySQL multi-table UPDATE,
+    /// whose SET list takes every table's columns (<see cref="PgCompletionRules.MultiTableUpdate"/>), and when the target
+    /// is not a plain table name.
+    /// </summary>
+    static Source? SetTarget(List<Tok> b, int set, Scope scope)
+    {
+        // The UPDATE word of this SET list: SET itself is preceded by its target (UPDATE t [AS] x SET); KEY UPDATE is its own.
+        var update = b[set].Is("UPDATE") ? set : -1;
+        // At the SET's own level: a subquery's FOR UPDATE before it is not this SET's verb (code audit 2026-11-25, L3).
+        for (int k = set - 1, level = 0; k >= 0 && update < 0; k--)
+            if (b[k].IsP(")")) level++;
+            else if (b[k].IsP("(")) { if (level-- == 0) break; }
+            else if (level > 0) continue;
+            else if (b[k].Is("UPDATE") && !(k > 0 && b[k - 1].Is("FOR"))) update = k;
+            else if (b[k].IsP(";")) break;
+        if (update < 0) return null;
+        var before = update > 0 ? b[update - 1] : default;
+        int intro;
+        // INSERT IGNORE INTO / INSERT OR IGNORE INTO: the dialect's modifiers stand between the verb and INTO.
+        if (before.Is("KEY") || before.Is("DO"))
+            intro = b.FindLastIndex(update, t => t.Is("INTO")) is var i && PgScopeBuilder.IsTargetInto(b, i, out var insert) && insert ? i : -1;
+        else if (before.Is("THEN"))
+            intro = b.FindLastIndex(update, t => t.Is("INTO")) is var i && PgScopeBuilder.IsTargetInto(b, i, out var insert) && !insert ? i : -1;
+        else intro = update;
+        if (intro < 0) return null;
+        // UPDATE IGNORE t / UPDATE OR REPLACE t: the target follows the modifiers.
+        var j = intro == update ? PgScopeBuilder.AfterUpdateModifiers(b, update) : intro + 1;
+        while (j < b.Count && b[j].Is("ONLY")) j++;
+        if (j >= b.Count || !b[j].IsIdent) return null;
+        var chain = PgScopeBuilder.Chain(b, j);
+        var target = scope.Sources.FirstOrDefault(s => s.Kind == SourceKind.Relation && s.Offset == b[chain[^1]].Offset);
+        if (target == null) return null;
+        if (intro == update && PgCompletionRules.Current.MultiTableUpdate)
+        {
+            // UPDATE a JOIN b … / UPDATE a, b …: more than one table before SET.
+            var depth = 0;
+            for (var k = chain[^1] + 1; k < set; k++)
+            {
+                if (b[k].IsP("(")) depth++;
+                else if (b[k].IsP(")")) depth--;
+                else if (depth == 0 && (b[k].Is("JOIN") || b[k].Is("STRAIGHT_JOIN") || b[k].IsP(","))) return null;
+            }
+        }
+        return target;
+    }
+
+    static readonly HashSet<string> ObjectWords = new(["FROM", "JOIN", "STRAIGHT_JOIN", "INTO", "UPDATE", "TABLE", "ONLY", "LATERAL", "USING"], StringComparer.OrdinalIgnoreCase);
     static readonly HashSet<string> FromEnd = new(["WHERE", "GROUP", "ORDER", "HAVING", "LIMIT", "OFFSET", "ON", "SET", "RETURNING", "WINDOW", "UNION", "EXCEPT", "INTERSECT", "SELECT", "VALUES"], StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The cursor names a table: after FROM / JOIN / INTO / UPDATE …, or after a comma in a FROM list.</summary>
@@ -285,29 +402,39 @@ public static class PgTier2Completion
         var prev = b[^1];
         if (prev.Kind == PgTokenKind.Word && ObjectWords.Contains(prev.Text))
         {
-            if (prev.Is("INTO")) return b.Count >= 2 && (b[^2].Is("INSERT") || b[^2].Is("MERGE") || b[^2].Is("REPLACE"));
-            if (prev.Is("UPDATE")) return b.Count == 1 || !(b[^2].Is("FOR") || b[^2].Is("KEY") || b[^2].Is("DO") || b[^2].Is("THEN"));
-            if (prev.Is("USING")) return true;
+            if (prev.Is("INTO")) return PgScopeBuilder.IsTargetInto(b, b.Count - 1, out _);
+            if (prev.Is("UPDATE")) return StatementUpdate(b, b.Count - 1);
+            if (prev.Is("FROM")) return !PgScopeBuilder.IsDistinctFrom(b, b.Count - 1);
             return true;
         }
+        // UPDATE IGNORE | / UPDATE LOW_PRIORITY | (MySQL), UPDATE OR REPLACE | (SQLite, DuckDB): the dialect's modifiers
+        // stand between the verb and the target (code audit 2026-11-25, M9).
+        if (prev.Kind == PgTokenKind.Word && PgScopeBuilder.VerbBefore(b, b.Count - 1) is var verb && verb >= 0 && verb < b.Count - 1 && b[verb].Is("UPDATE"))
+            return StatementUpdate(b, verb);
         if (!prev.IsP(",")) return false;
         var depth = 0;
         for (var k = b.Count - 2; k >= 0; k--)
         {
             if (b[k].IsP(")")) depth++;
             else if (b[k].IsP("(")) { if (depth-- == 0) return false; }
-            else if (depth == 0 && b[k].Is("FROM")) return true;
+            else if (depth == 0 && b[k].Is("FROM")) return !PgScopeBuilder.IsDistinctFrom(b, k);
+            // UPDATE a, | (MySQL / MariaDB multi-table UPDATE, code audit 2026-11-25, M8).
+            else if (depth == 0 && b[k].Is("UPDATE")) return PgCompletionRules.Current.MultiTableUpdate && StatementUpdate(b, k);
             else if (depth == 0 && b[k].Kind == PgTokenKind.Word && FromEnd.Contains(b[k].Text)) return false;
         }
         return false;
     }
 
+    /// <summary>UPDATE at <paramref name="k"/> starts an UPDATE statement, not FOR UPDATE / ON DUPLICATE KEY UPDATE / DO UPDATE / THEN UPDATE.</summary>
+    static bool StatementUpdate(List<Tok> b, int k) => k == 0 || !(b[k - 1].Is("FOR") || b[k - 1].Is("KEY") || b[k - 1].Is("DO") || b[k - 1].Is("THEN"));
+
     // ---------------------------------------------------------------------------------------------- signature help
 
-    static SignatureHelp Sig(SignatureParams p, ISchemaSource source)
+    static SignatureHelp Sig(SignatureParams p, ISchemaSource source, CancellationToken ct)
     {
         var none = new SignatureHelp { Signatures = [] };
         if (string.IsNullOrEmpty(p.Text)) return none;
+        ct.ThrowIfCancellationRequested();
         var doc = PgDocument.Get(p.Text, p.DocId);
         var ctx = PgCompletionContext.At(doc, Math.Clamp(p.Offset, 0, p.Text.Length));
         var schema = SchemaOf(source, p.ProfileId, p.Database);

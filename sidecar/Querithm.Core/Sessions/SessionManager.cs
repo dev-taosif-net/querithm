@@ -561,14 +561,18 @@ public sealed class SessionManager : IAsyncDisposable
     public async Task<string> ConnectionLostAsync(Session s, PhysicalConnection conn)
     {
         if (s.Pinned == conn) s.Pinned = null;
+        var ended = s.TxState != TxState.None;
         s.TxState = TxState.None;
         s.TxStartedAt = null;
+        // Marked lost before anyone hears the transaction ended: a deferred refresh must not start against the lost
+        // in-memory database (review 2026-11-26).
+        if (s.InMemory) s.MemoryLost = true;
         await conn.Pool.DiscardAsync(conn).ConfigureAwait(false);
-        if (s.InMemory)
-        {
-            s.MemoryLost = true;
-            return MemoryLostMessage;
-        }
+        // The transaction went with the connection: a refresh deferred until it ended runs now (A#11). Before, a run that
+        // lost its pinned connection ended the transaction without saying so, and every refresh of the database stayed
+        // Stale until the tab ran something again.
+        if (ended || s.RefreshDeferred) TransactionEnded?.Invoke(s);
+        if (s.InMemory) return MemoryLostMessage;
         return "The connection was lost; any open transaction was rolled back by the server.";
     }
 
@@ -739,13 +743,27 @@ public sealed class SessionManager : IAsyncDisposable
         finally
         {
             if (locked) s.ExecLock.Release();
+            // Also when the discard or the pool's close threw (review 2026-11-26): the session is gone either way.
+            // A forced close ended the transaction (the server rolls back): a refresh it deferred runs now, or the
+            // snapshot its DDL marked stale stayed so.
+            // Unless this close also forgets the profile's password (temporary retention, last tab): that read could not
+            // sign in, would mark the snapshot failed, and a strict server counts the failed sign-in (Gemini review
+            // 2026-11-26). The snapshot stays stale for the next tab.
+            if (s.RefreshDeferred)
+            {
+                if (ForgetsCredentials(s)) s.TakeDeferral();
+                else TransactionEnded?.Invoke(s);
+            }
+            SessionClosed?.Invoke(s);
         }
-        SessionClosed?.Invoke(s);
         // The shell owns temporary retention; the sidecar needs credentials only while sessions exist.
-        if (_profiles.Get(s.Profile.Id)?.PasswordRetention is "once" or "session" or "duration"
-            && !_sessions.Values.Any(other => other.Profile.Id == s.Profile.Id && !other.Closed))
-            ForgetProfile(s.Profile.Id);
+        if (ForgetsCredentials(s)) ForgetProfile(s.Profile.Id);
     }
+
+    /// <summary>Closing <paramref name="s"/> leaves its profile with temporary retention and no open session: its password goes.</summary>
+    bool ForgetsCredentials(Session s) =>
+        _profiles.Get(s.Profile.Id)?.PasswordRetention is "once" or "session" or "duration"
+        && !_sessions.Values.Any(other => other.Profile.Id == s.Profile.Id && !other.Closed);
 
     /// <summary>
     /// The bound on a COMMIT / ROLLBACK the user asked for. tx.commit and tx.rollback have no RPC deadline: a large
@@ -802,7 +820,9 @@ public sealed class SessionManager : IAsyncDisposable
                 var commit = op == "commit";
                 if (s.Pinned == null)
                 {
+                    var ended = s.TxState != TxState.None;
                     s.TxState = TxState.None;
+                    if (ended || s.RefreshDeferred) TransactionEnded?.Invoke(s);
                     // After a COMMIT whose connection was lost, a second COMMIT must not read as the one that committed.
                     var earlier = s.CommitOutcomeUnknown;
                     s.CommitOutcomeUnknown = false;
@@ -840,7 +860,6 @@ public sealed class SessionManager : IAsyncDisposable
                         // The connection went with it: nothing is open any more, but a COMMIT may or may not have reached
                         // the server before it did.
                         await ConnectionLostAsync(s, pinned).ConfigureAwait(false);
-                        TransactionEnded?.Invoke(s);
                         _notifier.Notify("session.stateChanged", s.State());
                         if (commit)
                         {
@@ -948,7 +967,6 @@ public sealed class SessionManager : IAsyncDisposable
             if (!conn.IsOpen)
             {
                 await ConnectionLostAsync(s, conn).ConfigureAwait(false);
-                TransactionEnded?.Invoke(s);
                 _notifier.Notify("session.stateChanged", s.State());
                 throw new QuerithmException("txLost", $"{what}, and its connection broke: the transaction that was open on this tab is gone (the server rolled it back).");
             }
@@ -989,6 +1007,7 @@ public sealed class SessionManager : IAsyncDisposable
             s.TxState = TxState.None;
             s.TxStartedAt = null;
             await conn.Pool.DiscardAsync(conn).ConfigureAwait(false);
+            if (s.RefreshDeferred) TransactionEnded?.Invoke(s); // the rollback ended what its DDL deferred
             return;
         }
         if (state == TxState.Open)

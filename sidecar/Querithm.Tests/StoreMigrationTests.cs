@@ -430,7 +430,7 @@ public class StoreMigrationTests : IDisposable
     {
         var path = V11File();
         var store = new LocalStore(path);
-        Assert.Equal(12L, Scalar(path, "PRAGMA user_version"));
+        Assert.Equal((long)LocalStore.Version, Scalar(path, "PRAGMA user_version"));
         Assert.True(HasTable(path, "profile_group"));
         // Nothing was imported or rewritten: the old setting stays, the column keeps its spellings.
         Assert.Equal(0L, Scalar(path, "SELECT count(*) FROM profile_group"));
@@ -455,8 +455,69 @@ public class StoreMigrationTests : IDisposable
         Assert.Equal(11L, Scalar(path, "PRAGMA user_version"));
         Assert.False(HasTable(path, "profile_group"));
         _ = new LocalStore(path);
-        Assert.Equal(12L, Scalar(path, "PRAGMA user_version"));
+        Assert.Equal((long)LocalStore.Version, Scalar(path, "PRAGMA user_version"));
         Assert.True(HasTable(path, "profile_group"));
+    }
+
+    /// <summary>A v12 file: the fk table keyed by (profile, database, name), one FK row, a fresh and a failed snapshot.</summary>
+    string V12File()
+    {
+        var path = Path.Combine(_dir, $"v12-{Guid.NewGuid():N}.db");
+        _ = new LocalStore(path);
+        SqliteConnection.ClearAllPools();
+        Exec(path, """
+            DROP TABLE fk;
+            CREATE TABLE fk (profile_id TEXT, database TEXT, name TEXT, parent_object_id INTEGER, referenced_object_id INTEGER, columns_json TEXT,
+              PRIMARY KEY (profile_id, database, name));
+            INSERT INTO fk VALUES ('p', 'db', 'FK_Order_Customer', 10, 20, '[{"parent":"CustomerId","referenced":"Id"}]');
+            INSERT INTO schema_snapshot (profile_id, database, refreshed_at, server_version, status, error) VALUES ('p', 'db', 1000, '16', 'fresh', NULL);
+            INSERT INTO schema_snapshot (profile_id, database, refreshed_at, server_version, status, error) VALUES ('p', 'down', 1000, '16', 'error', 'no route');
+            INSERT INTO obj (profile_id, database, object_id, schema_name, name, kind, modify_date) VALUES ('p', 'down', 30, 'dbo', 'Lines', 'table', 777), ('p', 'db', 10, 'sales', 'Orders', 'table', 888);
+            PRAGMA user_version = 12;
+            """);
+        return path;
+    }
+
+    [Fact]
+    public void A_v12_file_keys_foreign_keys_by_their_table_so_two_schemas_keep_one_name_each()
+    {
+        var path = V12File();
+        var store = new LocalStore(path);
+        Assert.Equal((long)LocalStore.Version, Scalar(path, "PRAGMA user_version"));
+        Assert.Equal("FK_Order_Customer", Scalar(path, "SELECT name FROM fk WHERE parent_object_id = 10"));
+        Assert.Equal(4L, Scalar(path, "SELECT count(*) FROM pragma_table_info('fk') WHERE pk > 0"));
+        // FKs lost to the old key come back with a full refresh; a failed snapshot keeps its error.
+        Assert.Equal("empty", Scalar(path, "SELECT status FROM schema_snapshot WHERE database = 'db'"));
+        Assert.Equal("error", Scalar(path, "SELECT status FROM schema_snapshot WHERE database = 'down'"));
+        // … and its markers are cleared, so its next (incremental) refresh reads every object again (round-3 review).
+        Assert.Equal(DBNull.Value, Scalar(path, "SELECT modify_date FROM obj WHERE database = 'down'") ?? DBNull.Value);
+        Assert.Equal(888L, Scalar(path, "SELECT modify_date FROM obj WHERE database = 'db'"));
+
+        // The same name on two tables (two schemas on SQL Server / Oracle, two tables on PostgreSQL): both kept.
+        var meta = new MetadataStore(store);
+        ObjectStamp T(long id, string schema) => new(id, schema, "Orders", ObjectKind.Table, 1, null, null);
+        meta.ApplyRefresh("p", "db", true, [T(10, "sales"), T(11, "archive"), T(20, "sales")], [], new MetadataBundle([], [], [],
+        [
+            new FkRow("FK_Order_Customer", 10, 20, [new FkColumnPair { Parent = "CustomerId", Referenced = "Id" }]),
+            new FkRow("FK_Order_Customer", 11, 20, [new FkColumnPair { Parent = "BuyerId", Referenced = "Id" }]),
+        ]), "16");
+        var fks = meta.Load("p", "db").Fks.OrderBy(f => f.Parent).ToArray();
+        Assert.Equal([(10L, "CustomerId"), (11L, "BuyerId")], fks.Select(f => (f.Parent, f.Columns.Single().Parent)));
+    }
+
+    [Fact]
+    public void The_v13_step_on_a_file_that_already_has_the_new_key_changes_nothing()
+    {
+        var path = Path.Combine(_dir, $"v13-{Guid.NewGuid():N}.db");
+        _ = new LocalStore(path);
+        SqliteConnection.ClearAllPools();
+        Exec(path, """
+            INSERT INTO fk VALUES ('p', 'db', 'FK_A', 10, 20, '[]');
+            INSERT INTO schema_snapshot (profile_id, database, refreshed_at, server_version, status, error) VALUES ('p', 'db', 1000, '16', 'fresh', NULL);
+            PRAGMA user_version = 1;
+            """); // builds up to 0.1.6 reset user_version to 1 on every open
+        _ = new LocalStore(path);
+        Assert.Equal(1L, Scalar(path, "SELECT count(*) FROM fk"));
     }
 }
 

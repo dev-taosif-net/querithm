@@ -240,7 +240,13 @@ public sealed class SqlServerSchemaCompare : ISchemaCompareDialect
 
     // ---------------------------------------------------------------------------------------------- tokens
 
-    static IList<TSqlParserToken> Tokens(string sql) => TSqlParsing.NewParser().GetTokenStream(new StringReader(sql), out _);
+    /// <summary>
+    /// The text's tokens. Text whose comments nest too deep to lex (<see cref="TSqlParsing.Lex"/>) is one opaque literal
+    /// token: every rewrite then gives it back unchanged and comparisons compare it as written. With no tokens at all
+    /// (review 2026-11-26) the rewrites rebuilt it as "", so a schema compare dropped the module and created it empty.
+    /// </summary>
+    static IList<TSqlParserToken> Tokens(string sql) =>
+        TSqlParsing.Lex(TSqlParsing.NewParser(), sql, out _) ?? [new TSqlParserToken(TSqlTokenType.AsciiStringLiteral, sql) { Offset = 0 }];
 
     static bool Trivia(TSqlParserToken t) =>
         t.TokenType is TSqlTokenType.WhiteSpace or TSqlTokenType.SingleLineComment or TSqlTokenType.MultilineComment or TSqlTokenType.EndOfFile;

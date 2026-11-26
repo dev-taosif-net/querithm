@@ -176,7 +176,7 @@ public sealed class LocalStore
     }
 
     /// <summary>The schema version Schema.sql describes (PRAGMA user_version).</summary>
-    public const int Version = 12;
+    public const int Version = 13;
 
     /// <summary>
     /// Steps from version N-1 to N for files written by older builds, run before Schema.sql so its CREATE … IF NOT
@@ -282,7 +282,41 @@ public sealed class LocalStore
         // transaction. Additive: an older build ignores the table and keeps reading profile.group_name as before. Nothing is
         // imported from the old "profile.groups" setting (no released build wrote it from the UI).
         (12, (_, _, _) => { }),
+        // Completion audit 2026-11-25, M20: a foreign key's name is unique per schema (SQL Server, Oracle) or per table
+        // (PostgreSQL), not per database, and the key (profile, database, name) let one schema's FK replace another's of
+        // the same name. The table is rebuilt keyed by (profile, database, parent table, name), rows kept. Downgrade-safe
+        // (§8): an older build writes and reads the same columns, and its INSERT OR REPLACE / DELETE by parent work the
+        // same under the wider key. An FK already lost that way is not in the cache any more and an incremental refresh
+        // reads only changed tables, so every snapshot not in error is marked empty: its next refresh is a full one.
+        (13, (_, c, tx) =>
+        {
+            if (!HasTable(c, tx, "fk") || KeyColumns(c, tx, "fk").SequenceEqual(["profile_id", "database", "parent_object_id", "name"])) return;
+            c.Cmd("""
+                CREATE TABLE fk_v13 (
+                  profile_id TEXT, database TEXT, name TEXT, parent_object_id INTEGER, referenced_object_id INTEGER, columns_json TEXT,
+                  PRIMARY KEY (profile_id, database, parent_object_id, name));
+                INSERT OR REPLACE INTO fk_v13 (profile_id, database, name, parent_object_id, referenced_object_id, columns_json)
+                  SELECT profile_id, database, name, parent_object_id, referenced_object_id, columns_json FROM fk;
+                DROP TABLE fk;
+                ALTER TABLE fk_v13 RENAME TO fk;
+                """, tx).ExecuteNonQuery();
+            if (HasTable(c, tx, "schema_snapshot")) c.Cmd("UPDATE schema_snapshot SET status = 'empty' WHERE status <> 'error';", tx).ExecuteNonQuery();
+            // A snapshot in error keeps its message, so its next refresh is incremental: its markers are cleared instead,
+            // and that refresh reads every object again (review 2026-11-26: keys the old key had lost stayed lost there).
+            if (HasTable(c, tx, "schema_snapshot") && HasTable(c, tx, "obj"))
+                c.Cmd("UPDATE obj SET modify_date = NULL WHERE EXISTS (SELECT 1 FROM schema_snapshot s WHERE s.profile_id = obj.profile_id AND s.database = obj.database AND s.status = 'error');", tx).ExecuteNonQuery();
+        }),
     ];
+
+    /// <summary>A table's primary key columns, in key order.</summary>
+    static string[] KeyColumns(SqliteConnection c, SqliteTransaction tx, string table)
+    {
+        using var cmd = c.Cmd("SELECT name FROM pragma_table_info($t) WHERE pk > 0 ORDER BY pk;", tx, ("$t", table));
+        using var r = cmd.ExecuteReader();
+        var list = new List<string>();
+        while (r.Read()) list.Add(r.GetString(0));
+        return [.. list];
+    }
 
     static bool HasTable(SqliteConnection c, SqliteTransaction tx, string table)
     {

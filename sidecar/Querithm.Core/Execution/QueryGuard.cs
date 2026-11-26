@@ -46,11 +46,16 @@ public sealed class QueryGuard(SessionManager sessions)
         if (!sessions.IsProdConfirmed(session) && !confirmedProd) return Block(session, GuardReason.ProdFirstRun, []);
         var findings = classification.Destructive.ToList();
         if (classification.ParseErrors.Length > 0 && findings.Count == 0)
+        {
+            // The first error says why: a syntax error, or a script too deep or too long to analyse (a valid script then,
+            // which "syntax errors" misdescribed — completion audit 2026-11-25 review).
+            var first = classification.ParseErrors[0];
             findings.Add(new DestructiveFinding
             {
-                Rule = "unparsed", Statement = "", Line = classification.ParseErrors[0].Line, Column = classification.ParseErrors[0].Column,
-                Description = "The script has syntax errors, so it could not be checked for destructive statements.",
+                Rule = "unparsed", Statement = "", Line = first.Line, Column = first.Column,
+                Description = $"The script could not be checked for destructive statements. Line {first.Line}: {first.Message}",
             });
+        }
         if (findings.Count > 0 && !confirmedDestructive) return Block(session, GuardReason.Destructive, findings.ToArray());
         sessions.ConfirmProd(session);
         return null;

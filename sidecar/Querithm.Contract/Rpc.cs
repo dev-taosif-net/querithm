@@ -89,6 +89,7 @@ public interface IQuerithmRpc
     [RpcMethod("meta.databases")] Task<DatabaseInfo[]> MetaDatabases(SessionRef p);
     [RpcMethod("meta.snapshot")] Task<SchemaSnapshot> MetaSnapshot(SnapshotParams p);
     [RpcMethod("meta.objects")] Task<SnapObject[]> MetaObjects(ObjectsParams p);
+    [RpcMethod("meta.foreignKeys")] Task<SnapFk[]> MetaForeignKeys(ForeignKeysParams p);
     [RpcMethod("meta.refresh")] Task<JobRef> MetaRefresh(RefreshParams p);
     [RpcMethod("meta.objectDetails")] Task<ObjectDetails> MetaObjectDetails(ObjectDetailsParams p);
     [RpcMethod("meta.definition")] Task<DefinitionResult> MetaDefinition(DefinitionParams p);

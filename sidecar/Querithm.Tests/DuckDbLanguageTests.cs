@@ -246,7 +246,7 @@ public class DuckDbLanguageTests
     {
         var at = marked.IndexOf('|');
         return L.Complete(new CompleteParams { DocId = Guid.NewGuid().ToString(), Text = marked.Remove(at, 1), Offset = at, Dialect = Dialect.DuckDb, ProfileId = "p", Database = "shop" },
-            new FakeSchema(Shop, "shop"));
+            new FakeSchema(Shop, "shop"), CancellationToken.None);
     }
 
     [Fact]
@@ -298,7 +298,7 @@ public class DuckDbLanguageTests
     public void Signature_help_shows_a_macros_parameters()
     {
         const string text = "SELECT twice(";
-        var help = L.Signature(new SignatureParams { DocId = "d", Text = text, Offset = text.Length, Dialect = Dialect.DuckDb, ProfileId = "p", Database = "shop" }, new FakeSchema(Shop, "shop"));
+        var help = L.Signature(new SignatureParams { DocId = "d", Text = text, Offset = text.Length, Dialect = Dialect.DuckDb, ProfileId = "p", Database = "shop" }, new FakeSchema(Shop, "shop"), CancellationToken.None);
         Assert.Equal("main.twice(x)", Assert.Single(help.Signatures).Label);
     }
 

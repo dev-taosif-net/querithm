@@ -142,6 +142,8 @@ public sealed class ObjectService(SessionManager sessions, MetadataService metad
 
     public async Task<RowCount[]> RowCountsAsync(RowCountsParams p, CancellationToken ct)
     {
+        if (p is null || string.IsNullOrEmpty(p.SessionId)) throw QuerithmException.Invalid("meta.rowCounts needs its params and a sessionId.");
+        MetadataService.CheckIds(p.ObjectIds, p.SessionId, p.Database);
         var s = sessions.Get(p.SessionId);
         if (p.ObjectIds.Length == 0) return [];
         return await WithConnectionAsync(s, c => s.Provider.Metadata.GetRowCountsAsync(c.Db, p.ObjectIds, ct), ct, p.Database).ConfigureAwait(false);
@@ -174,8 +176,11 @@ public sealed class ObjectService(SessionManager sessions, MetadataService metad
     public void InvalidateCapabilities() => _caps.Clear();
 }
 
-/// <summary>lang.*: routes to the dialect service; CPU-bound work runs off the RPC reader thread.</summary>
-public sealed class LanguageService(ProviderRegistry providers, ISchemaSource schema)
+/// <summary>
+/// lang.*: routes to the dialect service; CPU-bound work runs off the RPC reader thread. <paramref name="tier2Deadline"/>
+/// overrides <see cref="Tier2Deadline"/> (tests).
+/// </summary>
+public sealed class LanguageService(ProviderRegistry providers, ISchemaSource schema, TimeSpan? tier2Deadline = null)
 {
     IDialectService For(Dialect d) =>
         providers.ForDialect(d)?.Language ?? throw QuerithmException.Invalid($"No language service for dialect '{d}'.");
@@ -183,28 +188,125 @@ public sealed class LanguageService(ProviderRegistry providers, ISchemaSource sc
     /// <summary>Phase D0d: completion sees the tab's own view (an in-memory database, temporary tables).</summary>
     ISchemaSource For(string? sessionId) => sessionId != null && schema is SchemaCache cache ? new ScopedSchemaSource(cache, sessionId) : schema;
 
+    readonly ConcurrentDictionary<string, CancellationTokenSource> _completing = new(StringComparer.Ordinal);
+    readonly ConcurrentDictionary<string, CancellationTokenSource> _signing = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The longest a tier-2 answer may take (§9). Tier 1 answered within milliseconds; an answer this late is for a word
+    /// typed long ago, so the work is ended instead of holding a pool thread.
+    /// </summary>
+    public static readonly TimeSpan Tier2Deadline = TimeSpan.FromSeconds(3);
+
     public Task<CompletionItem[]> CompleteAsync(CompleteParams p)
     {
         // RPC boundary (§13 rule 7): the document id keys the parse caches and the text is parsed on every request.
-        if (string.IsNullOrEmpty(p.DocId) || p.DocId.Length > MaxDocIdLength) throw QuerithmException.Invalid($"docId must be 1–{MaxDocIdLength} characters.");
-        if (p.Text is null || p.Text.Length > MaxCompletionText) throw QuerithmException.Invalid($"Completion reads documents of up to {MaxCompletionText:N0} characters.");
-        if (p.Offset < 0 || p.Offset > p.Text.Length) throw QuerithmException.Invalid("The cursor offset is outside the document.");
-        return Task.Run(() => CompletionFilter.Apply(For(p.Dialect).Complete(p, For(p.SessionId)), p.Text, p.Offset));
+        CheckDocument(p.DocId, p.Text, p.Offset);
+        CheckNames(p.ProfileId, p.Database, p.SessionId, p.Schema);
+        return Latest(_completing, p.DocId, ct => CompletionFilter.Apply(For(p.Dialect).Complete(p, For(p.SessionId), ct), p.Text, p.Offset));
     }
 
     /// <summary>The largest document completion parses (16 million UTF-16 characters, beyond any script an editor tab holds).</summary>
     public const int MaxCompletionText = 16_000_000;
-    public Task<Diagnostic[]> DiagnosticsAsync(DiagnosticsParams p) => Task.Run(() => For(p.Dialect).Diagnostics(p));
-    public Task<FormatResult> FormatAsync(FormatParams p) => Task.Run(() => For(p.Dialect).Format(p));
-    public Task<SignatureHelp> SignatureAsync(SignatureParams p) => Task.Run(() => For(p.Dialect).Signature(p, For(p.SessionId)));
-    public Task<FoldingRange[]> FoldingAsync(FoldingParams p) => Task.Run(() => For(p.Dialect).Folding(p));
-    public Task<Classification> ClassifyAsync(ClassifyParams p) => Task.Run(() => For(p.Dialect).Classify(p.Text));
+
+    /// <summary>The longest profile id, database, session id or schema name lang.* accepts: they key caches; real ones are far shorter.</summary>
+    public const int MaxNameLength = 1024;
+
+    public Task<Diagnostic[]> DiagnosticsAsync(DiagnosticsParams p)
+    {
+        CheckDocument(p.DocId, p.Text, null);
+        return Task.Run(() => For(p.Dialect).Diagnostics(p));
+    }
+
+    public Task<FormatResult> FormatAsync(FormatParams p)
+    {
+        CheckText(p.Text); // §13 rule 13 (A#9): before, lang.format took text of any length
+        return Task.Run(() => For(p.Dialect).Format(p));
+    }
+
+    public Task<SignatureHelp> SignatureAsync(SignatureParams p)
+    {
+        CheckDocument(p.DocId, p.Text, p.Offset);
+        CheckNames(p.ProfileId, p.Database, p.SessionId, p.Schema);
+        return Latest(_signing, p.DocId, ct => For(p.Dialect).Signature(p, For(p.SessionId), ct));
+    }
+
+    public Task<FoldingRange[]> FoldingAsync(FoldingParams p)
+    {
+        CheckDocument(p.DocId, p.Text, null);
+        return Task.Run(() => For(p.Dialect).Folding(p));
+    }
+
+    /// <summary>
+    /// Runs <paramref name="work"/> as the document's newest request of its kind: one already running for the document
+    /// is cancelled (the webview asks again on every word typed after its debounce, and only the newest answer is shown),
+    /// and this one ends at <see cref="Tier2Deadline"/>. A cancelled request fails with code "cancelled", which the
+    /// webview ignores without caching anything for the word.
+    /// </summary>
+    async Task<T> Latest<T>(ConcurrentDictionary<string, CancellationTokenSource> running, string docId, Func<CancellationToken, T> work)
+    {
+        var cts = new CancellationTokenSource(tier2Deadline ?? Tier2Deadline);
+        running.AddOrUpdate(docId, cts, (_, older) =>
+        {
+            try { older.Cancel(); } catch (ObjectDisposedException) { /* it finished meanwhile */ }
+            return cts;
+        });
+        try { return await Task.Run(() => work(cts.Token), cts.Token).ConfigureAwait(false); }
+        finally
+        {
+            running.TryRemove(new KeyValuePair<string, CancellationTokenSource>(docId, cts));
+            cts.Dispose();
+            // Forgotten while this ran: whatever it cached for the document after the forget goes now (Gemini review
+            // 2026-11-26: a cancel is only a request, and the work could store the closed tab's text after it).
+            if (_forgotten.ContainsKey(docId) && !_completing.ContainsKey(docId) && !_signing.ContainsKey(docId) && _forgotten.TryRemove(docId, out _))
+                ForgetEngines(docId);
+        }
+    }
+
+    readonly ConcurrentDictionary<string, byte> _forgotten = new(StringComparer.Ordinal);
+
+    void ForgetEngines(string docId)
+    {
+        foreach (var language in providers.All.Select(p => p.Language).Distinct()) language.Forget(docId);
+    }
+
+    static void CheckDocument(string? docId, string? text, int? offset)
+    {
+        if (string.IsNullOrEmpty(docId) || docId.Length > MaxDocIdLength) throw QuerithmException.Invalid($"docId must be 1–{MaxDocIdLength} characters.");
+        if (text is null || text.Length > MaxCompletionText) throw QuerithmException.Invalid($"The editor services read documents of up to {MaxCompletionText:N0} characters.");
+        if (offset is { } o && (o < 0 || o > text.Length)) throw QuerithmException.Invalid("The cursor offset is outside the document.");
+    }
+
+    static void CheckNames(params string?[] names)
+    {
+        foreach (var n in names)
+            if (n is { Length: > MaxNameLength }) throw QuerithmException.Invalid($"Names are at most {MaxNameLength} characters.");
+    }
+
+    /// <summary>Text-only calls (lang.format, lang.classify): no document id, the same size bound as the others.</summary>
+    static void CheckText(string? text)
+    {
+        if (text is null || text.Length > MaxCompletionText) throw QuerithmException.Invalid($"The editor services read documents of up to {MaxCompletionText:N0} characters.");
+    }
+
+    public Task<Classification> ClassifyAsync(ClassifyParams p)
+    {
+        CheckText(p.Text); // §13 rule 13 (A#9)
+        return Task.Run(() => For(p.Dialect).Classify(p.Text));
+    }
 
     /// <summary>M12, lang.forget: every engine's caches for the document, since a tab's dialect follows its connection.</summary>
     public void Forget(string docId)
     {
         if (string.IsNullOrEmpty(docId) || docId.Length > MaxDocIdLength) throw QuerithmException.Invalid($"docId must be 1–{MaxDocIdLength} characters.");
-        foreach (var language in providers.All.Select(p => p.Language).Distinct()) language.Forget(docId);
+        // A request still running for the closed document stops first: it ran on to its deadline, then cached the document
+        // again after the forget (review 2026-11-26).
+        foreach (var running in new[] { _completing, _signing })
+            if (running.TryGetValue(docId, out var cts))
+            {
+                _forgotten[docId] = 0; // the request's own end forgets the document again
+                try { cts.Cancel(); } catch (ObjectDisposedException) { /* it finished meanwhile */ }
+            }
+        ForgetEngines(docId);
     }
 
     /// <summary>A webview model key (a tab id, or a notebook id and cell id); far longer is not a document id.</summary>

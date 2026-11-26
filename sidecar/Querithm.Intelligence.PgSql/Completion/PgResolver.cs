@@ -6,33 +6,83 @@ namespace Querithm.Intelligence.PgSql.Completion;
 /// Columns of sources, CTEs, temp tables and subqueries: the snapshot for real relations, the script for the rest.
 /// Projection names follow PostgreSQL (an alias, else the column or function name; casts keep the inner name).
 /// </summary>
-sealed class PgResolver(PgSchema? schema, PgDocument doc, int cursor)
+sealed class PgResolver(PgSchema? schema, PgDocument doc, int cursor, CancellationToken ct)
 {
     public PgSchema? Schema => schema;
     public PgDocument Doc => doc;
     readonly Dictionary<TempTable, List<Col>> _temps = [];
+    readonly Dictionary<(TempTable, int), List<Col>> _tempsCut = [];
     readonly HashSet<object> _resolving = [];
     int _depth;
+
+    /// <summary>
+    /// Columns already worked out for a CTE or derived table, per scope that asked. Each select-list item's type reads
+    /// the columns of the sources below it, so without this a chain of k CTEs (or nested derived tables) of n columns
+    /// costs about n^(k-1) projections: 6 CTEs of 10 columns took 1.5 s on 2026-11-25. With it, each level is worked
+    /// out once per scope. Callers only read the lists.
+    /// </summary>
+    readonly Dictionary<(object Key, Scope? Scope), List<Col>> _memo = [];
+
+    /// <summary>
+    /// <see cref="Guard"/> and the memo in one: only what <paramref name="work"/> worked out is kept. The guard's answer
+    /// for a recursive reference or the depth limit (nothing) is not, so a shallower read of the same object works it out
+    /// (Gemini review 2026-11-25; for CTEs and derived tables the per-scope key already kept them apart, for temp tables it
+    /// did not).
+    /// </summary>
+    List<Col> GuardedMemo(object key, Scope? scope, Func<List<Col>> work)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (_memo.TryGetValue((key, scope), out var hit)) return hit;
+        if (!Enter(key)) return [];
+        try
+        {
+            var cols = work();
+            _memo[(key, scope)] = cols;
+            return cols;
+        }
+        finally { Exit(key); }
+    }
+
+    /// <summary>How many reads the depth limit has cut short so far (a recursive reference is not counted: it is the same from anywhere).</summary>
+    int _cutoffs;
+
+    bool Enter(object key)
+    {
+        if (_depth > 8) { _cutoffs++; return false; }
+        if (!_resolving.Add(key)) return false;
+        _depth++;
+        return true;
+    }
+
+    void Exit(object key)
+    {
+        _depth--;
+        _resolving.Remove(key);
+    }
 
     /// <summary>The temp table the script created last before the cursor under this name.</summary>
     public TempTable? Temp(string name) => doc.TempTables.LastOrDefault(t => doc.Rules.Names.Equals(t.Name, name) && t.Offset < cursor);
 
-    public IEnumerable<TempTable> Temps => doc.TempTables.Where(t => t.Offset < cursor).GroupBy(t => t.Name).Select(g => g.Last());
+    // Fourth round (M9): names compare by the dialect's rules (DuckDB, MySQL and SQLite: case-insensitively), not ordinally.
+    public IEnumerable<TempTable> Temps => doc.TempTables.Where(t => t.Offset < cursor).GroupBy(t => t.Name, doc.Rules.Names).Select(g => g.Last());
 
-    /// <summary>Guards recursion (a recursive CTE reading itself, a temp table AS SELECT from itself).</summary>
+    /// <summary>
+    /// Guards recursion (a recursive CTE reading itself, a temp table AS SELECT from itself). Every nested resolution
+    /// passes here, so this is where a cancelled request (a newer keystroke, the deadline) stops.
+    /// </summary>
     T Guard<T>(object key, Func<T> work, T fallback)
     {
-        if (_depth > 8 || !_resolving.Add(key)) return fallback;
-        _depth++;
+        ct.ThrowIfCancellationRequested();
+        if (!Enter(key)) return fallback;
         try { return work(); }
-        finally { _depth--; _resolving.Remove(key); }
+        finally { Exit(key); }
     }
 
     public List<Col> Columns(Source src, Scope scope)
     {
         var cols = src.Kind switch
         {
-            SourceKind.Derived => Guard(src, () => Projection(src.Query!, scope), []),
+            SourceKind.Derived => GuardedMemo(src, scope, () => Projection(src.Query!, scope)),
             SourceKind.Function => src.ColumnDefs ?? FunctionColumns(src),
             _ => Relation(src.Schema, src.Name, scope, src.Offset) ?? [],
         };
@@ -64,18 +114,38 @@ sealed class PgResolver(PgSchema? schema, PgDocument doc, int cursor)
         schema?.Find(schemaName, name, schema.IsRowset) != null;
 
     /// <summary>A CTE's columns; its body also sees the CTEs of <paramref name="scope"/> (a later CTE reading an earlier one).</summary>
-    public List<Col> CteColumns(Cte cte, Scope? scope = null) => Guard(cte, () =>
+    public List<Col> CteColumns(Cte cte, Scope? scope = null) => GuardedMemo(cte, scope, () =>
     {
         var cols = Projection(cte.Body, scope);
         if (cte.ColumnNames is { Length: > 0 } names)
             cols = names.Select((n, i) => new Col(n, i < cols.Count ? cols[i].Type : null)).Where(c => c.Name.Length > 0).ToList();
         return cols;
-    }, []);
+    });
 
     public List<Col> TempColumns(TempTable t)
     {
+        ct.ThrowIfCancellationRequested();
         if (_temps.TryGetValue(t, out var cached)) return cached;
-        var cols = Guard(t, () =>
+        var depth = _depth;
+        // Fourth round (H10): an answer the depth limit cut short is short for the caller too — counted as a cutoff, so the
+        // caller does not keep its own answer as the full one.
+        if (_tempsCut.TryGetValue((t, depth), out var cut)) { _cutoffs++; return cut; }
+        if (!Enter(t)) return [];
+        var cutoffs = _cutoffs;
+        List<Col> cols;
+        try { cols = TempDefinition(t); }
+        finally { Exit(t); }
+        // The full answer is kept per table. One the depth limit cut short somewhere below holds only for reads with the
+        // same depth left, so it is kept per (table, depth) — before, it was kept per table, and the chain t12 → … → t3
+        // left t3 empty for a direct read of t3 later in the same request (Gemini review 2026-11-25). Never recomputing
+        // a (table, depth) keeps the cost linear (audit H1).
+        if (_cutoffs == cutoffs) _temps[t] = cols;
+        else _tempsCut[(t, depth)] = cols;
+        return cols;
+    }
+
+    List<Col> TempDefinition(TempTable t)
+    {
         {
             var d = t.Definition;
             if (d.Count == 0) return new List<Col>();
@@ -101,9 +171,7 @@ sealed class PgResolver(PgSchema? schema, PgDocument doc, int cursor)
             }
             var asAt = d.FindIndex(x => x.Is("AS"));
             return asAt >= 0 ? Projection(d.GetRange(asAt + 1, d.Count - asAt - 1)) : [];
-        }, []);
-        _temps[t] = cols;
-        return cols;
+        }
     }
 
     static readonly HashSet<string> ConstraintWords = new(["CONSTRAINT", "PRIMARY", "UNIQUE", "CHECK", "FOREIGN", "EXCLUDE"], StringComparer.OrdinalIgnoreCase);
@@ -181,7 +249,7 @@ sealed class PgResolver(PgSchema? schema, PgDocument doc, int cursor)
             if (item.Count == 3 && item[0].IsIdent && item[1].Text == ".*" || item.Count >= 2 && item[^1].IsP(".*"))
             {
                 var label = item[0].Name;
-                if (scope.VisibleAt(item[0].Offset).FirstOrDefault(s => s.Label == label) is { } src) cols.AddRange(Columns(src, scope));
+                if (scope.VisibleAt(item[0].Offset).FirstOrDefault(s => doc.Rules.Names.Equals(s.Label, label)) is { } src) cols.AddRange(Columns(src, scope));
                 continue;
             }
             if (Item(item, scope) is { } c) cols.Add(c);
@@ -202,43 +270,58 @@ sealed class PgResolver(PgSchema? schema, PgDocument doc, int cursor)
         else if (it.Count >= 2 && it[^1].IsIdent && !(it[^1].Kind == PgTokenKind.Word && (NotAliasWords.Contains(it[^1].Text) || PgCompletionRules.Current.IsReserved(it[^1].Text)))
                  && (it[^2].IsIdent || it[^2].IsP(")") || it[^2].Kind is PgTokenKind.Number or PgTokenKind.String))
         { alias = it[^1].Name; expr = it[..^1]; }
-        var (name, type) = Expr(expr, scope);
+        var (name, type) = Expr(expr, scope, 0);
         // Unnamed (?column?) still holds its place for an alias list: (SELECT 1, 2) AS d(a, b).
         return new Col(alias ?? name ?? Unnamed, type);
     }
 
-    (string? Name, string? Type) Expr(List<Tok> e, Scope scope)
+    /// <summary>The deepest CAST / function argument an expression's name and type are read through.</summary>
+    const int MaxExprDepth = 32;
+
+    (string? Name, string? Type) Expr(List<Tok> e, Scope scope, int level)
     {
-        if (e.Count == 0) return (null, null);
-        // expr::type — the cast decides the type; the name is the inner expression's.
-        var depth = 0;
-        for (var i = e.Count - 1; i > 0; i--)
+        if (e.Count == 0 || level > MaxExprDepth) return (null, null);
+        ct.ThrowIfCancellationRequested();
+        // expr::type — the outermost cast decides the type; the name is the innermost expression's. Fourth round (H5): the
+        // casts are peeled in a loop (x::int::int … 10,000 times recursed once per cast and copied the rest each time).
+        string? castType = null;
+        var end = e.Count;
+        while (true)
         {
-            if (e[i].IsP(")")) depth++;
-            else if (e[i].IsP("(")) depth--;
-            else if (depth == 0 && e[i].IsP("::")) return (Expr(e[..i], scope).Name, PgScopeBuilder.Join(e, i + 1, e.Count));
+            var depth = 0;
+            var cast = -1;
+            for (var i = end - 1; i > 0 && cast < 0; i--)
+            {
+                if (e[i].IsP(")")) depth++;
+                else if (e[i].IsP("(")) depth--;
+                else if (depth == 0 && e[i].IsP("::")) cast = i;
+            }
+            if (cast < 0) break;
+            castType ??= PgScopeBuilder.Join(e, cast + 1, end);
+            end = cast;
         }
+        if (castType != null) return (Expr(e.GetRange(0, end), scope, level + 1).Name, castType);
         if (e[0].IsIdent && PgScopeBuilder.Chain(e, 0) is var chain && chain[^1] == e.Count - 1)
             return (e[^1].Name, ColumnType(chain.Select(k => e[k].Name).ToList(), scope, e[0].Offset));
         if (e[0].Is("CAST") && e.Count > 2 && e[1].IsP("("))
         {
             var close = PgScopeBuilder.Matches(e)[1];
             var asAt = -1;
-            depth = 0;
+            var depth = 0;
             for (var i = 2; i < close; i++)
             {
                 if (e[i].IsP("(")) depth++;
                 else if (e[i].IsP(")")) depth--;
                 else if (depth == 0 && e[i].Is("AS")) asAt = i;
             }
-            return asAt < 0 ? (null, null) : (Expr(e.GetRange(2, asAt - 2), scope).Name, PgScopeBuilder.Join(e, asAt + 1, close));
+            return asAt < 0 ? (null, null) : (Expr(e.GetRange(2, asAt - 2), scope, level + 1).Name, PgScopeBuilder.Join(e, asAt + 1, close));
         }
         if (e[0].Is("CASE")) return ("case", null);
         if (e[0].IsIdent && PgScopeBuilder.Chain(e, 0) is var fn && fn[^1] + 1 < e.Count && e[fn[^1] + 1].IsP("(") && PgScopeBuilder.Matches(e)[fn[^1] + 1] == e.Count - 1)
         {
             var fname = e[fn[^1]].Name;
             var args = PgScopeBuilder.Split(e, fn[^1] + 2, e.Count - 1);
-            return (fname, FunctionType(fn.Count >= 2 ? e[fn[^2]].Name : null, fname, args, scope));
+            return (fname, FunctionType(fn.Count >= 2 ? e[fn[^2]].Name : null, fname, args, scope, level));
         }
         return e.Count == 1 ? (null, Literal(e)) : (null, null);
     }
@@ -251,7 +334,7 @@ sealed class PgResolver(PgSchema? schema, PgDocument doc, int cursor)
         _ => null,
     };
 
-    string? FunctionType(string? schemaName, string name, List<List<Tok>> args, Scope scope)
+    string? FunctionType(string? schemaName, string name, List<List<Tok>> args, Scope scope, int level)
     {
         switch (name)
         {
@@ -264,7 +347,7 @@ sealed class PgResolver(PgSchema? schema, PgDocument doc, int cursor)
             case "gen_random_uuid": return "uuid";
             case "length" or "char_length": return "integer";
             case "coalesce" or "max" or "min" or "nullif" or "greatest" or "least" or "abs" or "round":
-                return args.Count > 0 ? Expr(args[0], scope).Type : null;
+                return args.Count > 0 ? Expr(args[0], scope, level + 1).Type : null;
         }
         return schema?.Routines(schemaName, name).FirstOrDefault(o => o.ReturnType != null)?.ReturnType;
     }
@@ -279,7 +362,7 @@ sealed class PgResolver(PgSchema? schema, PgDocument doc, int cursor)
                 if (Columns(src, scope).FirstOrDefault(c => doc.Rules.Names.Equals(c.Name, col)) is { } c) return c.Type;
             return null;
         }
-        if (parts.Count == 2 && scope.VisibleAt(at).FirstOrDefault(s => s.Label == parts[0]) is { } q)
+        if (parts.Count == 2 && scope.VisibleAt(at).FirstOrDefault(s => doc.Rules.Names.Equals(s.Label, parts[0])) is { } q)
             return Columns(q, scope).FirstOrDefault(c => doc.Rules.Names.Equals(c.Name, col))?.Type;
         var table = parts[^2];
         var sch = parts.Count >= 3 ? parts[^3] : null;

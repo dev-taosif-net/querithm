@@ -80,6 +80,12 @@ public static class Classifier
                 Add(node, "truncate", "TRUNCATE TABLE removes every row.");
                 return;
             }
+            // RESTORE DATABASE / LOG overwrites the database it restores into (round-3 review 2026-11-26: not classified).
+            if (node is RestoreStatement { Kind: RestoreStatementKind.Database or RestoreStatementKind.TransactionLog })
+            {
+                Add(node, "restore", "RESTORE overwrites the database with the backup's contents.");
+                return;
+            }
             if (name.StartsWith("Drop", StringComparison.Ordinal))
             {
                 HasDdl = true;
@@ -126,9 +132,7 @@ public static class Classifier
                 case ExecutableProcedureReference { ProcedureReference.ProcedureReference.Name.BaseIdentifier.Value: var name } proc
                     when string.Equals(name, "sp_executesql", StringComparison.OrdinalIgnoreCase):
                     // The statement is the first parameter (positional, or @stmt =).
-                    var stmt = proc.Parameters.FirstOrDefault(x => x.Variable?.Name is { } n && string.Equals(n, "@stmt", StringComparison.OrdinalIgnoreCase))
-                               ?? proc.Parameters.FirstOrDefault(x => x.Variable == null);
-                    Dynamic(node, stmt?.ParameterValue is StringLiteral literal ? literal.Value : null, "sp_executesql");
+                    Dynamic(node, Argument(proc, "@stmt", 0)?.ParameterValue is StringLiteral literal ? literal.Value : null, "sp_executesql");
                     break;
                 // sp_sqlexec (the legacy form of the same): its text is the first parameter.
                 case ExecutableProcedureReference { ProcedureReference.ProcedureReference.Name.BaseIdentifier.Value: var legacy } sqlexec
@@ -141,10 +145,65 @@ public static class Classifier
                     when string.Equals(each, "sp_MSforeachtable", StringComparison.OrdinalIgnoreCase) || string.Equals(each, "sp_MSforeachdb", StringComparison.OrdinalIgnoreCase):
                     Add(node, "dynamicSql", $"{each} runs its command text once for every {(each.EndsWith("db", StringComparison.OrdinalIgnoreCase) ? "database" : "table")}, which cannot be checked for destructive statements.");
                     break;
+                // The RPC-level procedures that prepare or run statement text (round-3 review 2026-11-26: sp_prepexec … ran
+                // a DROP with no finding). The text is classified where it is a literal at its documented position.
+                case ExecutableProcedureReference { ProcedureReference.ProcedureReference.Name.BaseIdentifier.Value: var rpc } prep
+                    when StatementPosition(rpc) is { } at:
+                    Dynamic(node, Argument(prep, "@stmt", at)?.ParameterValue is StringLiteral prepared ? prepared.Value : null, rpc);
+                    break;
+                // Procedures that run text of their own or a handle prepared earlier: nothing here to check.
+                case ExecutableProcedureReference { ProcedureReference.ProcedureReference.Name.BaseIdentifier.Value: var runs }
+                    when RunsUncheckedText(runs):
+                    Add(node, "dynamicSql", $"{runs} runs text (a prepared statement, a cursor, a command line or a script) that cannot be checked for destructive statements.");
+                    break;
                 case ExecutableProcedureReference { ProcedureReference.ProcedureVariable: not null }:
                     Add(node, "dynamicSql", "EXEC @name runs a procedure whose name is only known at run time, so it cannot be checked for destructive statements.");
                     break;
             }
+        }
+
+        /// <summary>The 0-based position of the statement text of the procedures that take one (sp_prepexec, sp_prepare, the cursor procedures).</summary>
+        static int? StatementPosition(string name) => name.ToUpperInvariant() switch
+        {
+            "SP_PREPEXEC" or "SP_PREPARE" or "SP_CURSORPREPARE" => 2,
+            "SP_CURSORPREPEXEC" => 3,
+            "SP_CURSOROPEN" => 1,
+            _ => null,
+        };
+
+        static bool RunsUncheckedText(string name) => name.ToUpperInvariant() is "SP_EXECUTE" or "SP_CURSOREXECUTE" or "SP_PREPEXECRPC"
+            or "XP_CMDSHELL" or "SP_EXECUTE_EXTERNAL_SCRIPT" or "SP_CURSOR";
+
+        /// <summary>
+        /// A procedure's argument at <paramref name="position"/> when the arguments up to it are positional (T-SQL puts
+        /// positional arguments first), else the one named <paramref name="name"/>; null for none or a name given twice
+        /// (the caller then counts the text as unknown). Gemini review 2026-11-26: the name was looked up first, so in
+        /// <c>sp_executesql N'DROP …', N'@stmt nvarchar(20)', @stmt = N'SELECT 1'</c> — the dynamic query's own parameter
+        /// named @stmt — the SELECT was classified and the DROP ran.
+        /// </summary>
+        static ExecuteParameter? Argument(ExecutableProcedureReference proc, string name, int position)
+        {
+            var ps = proc.Parameters;
+            if (position < ps.Count && ps.Take(position + 1).All(x => x.Variable == null)) return ps[position];
+            ExecuteParameter? match = null;
+            foreach (var p in ps)
+                if (p.Variable?.Name is { } n && string.Equals(n, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (match != null) return null;
+                    match = p;
+                }
+            return match;
+        }
+
+        /// <summary>OPENQUERY / OPENROWSET pass their text to another server, which runs it as it is (round-3 review 2026-11-26).</summary>
+        public override void Visit(OpenQueryTableReference node)
+        {
+            if (_module == 0) Add(node, "dynamicSql", "OPENQUERY runs its text on a linked server, which cannot be checked for destructive statements.");
+        }
+
+        public override void Visit(OpenRowsetTableReference node)
+        {
+            if (_module == 0 && node.Query != null) Add(node, "dynamicSql", "OPENROWSET runs its query text on another server, which cannot be checked for destructive statements.");
         }
 
         /// <summary>Literal text is classified as a script of its own; text built at run time (or nested too deep) is unknown.</summary>

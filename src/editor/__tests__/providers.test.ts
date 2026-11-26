@@ -7,6 +7,11 @@ import { useSettings } from "../../store/settings";
 import { useConnections } from "../../store/connections";
 import { snapKey, useSnapshots } from "../../store/snapshots";
 import { useSnippets } from "../../snippets/snippetStore";
+import { buildSchemaIndex } from "../completion/schemaIndex";
+import { DIALECTS } from "../../engines";
+
+/** An index of a snapshot without objects (a first read still running, a failed one). */
+const buildIndex = () => buildSchemaIndex({ profileId: "p1", database: "SalesDB", status: "fresh", objects: [], fks: [] }, "tsql", []);
 
 const hooks = vi.hoisted(() => ({
   content: [] as Array<(tabId: string, model: unknown) => void>,
@@ -54,6 +59,21 @@ function doc(engine: Engine, text: string, tabId = `pt${++seq}`) {
   return model;
 }
 const pos = (model: FakeModel, off: number) => model.getPositionAt(off);
+/** A MySQL tab (D4): its own profile and a small snapshot. */
+function mysqlDoc(text: string, tabId = `my${++seq}`) {
+  const lang = DIALECTS.mySql.language;
+  const model = new FakeModel(text, lang, { toString: () => `u://${tabId}` }) as FakeModel & { tabId: string };
+  model.tabId = tabId;
+  useProfiles.setState({ profiles: [...useProfiles.getState().profiles.filter((p: any) => p.id !== "my"), { id: "my", engine: "mySql", environment: "dev" } as never] });
+  useTabs.setState({ tabs: { ...useTabs.getState().tabs, [tabId]: { id: tabId, title: "q", profileId: "my", database: "shop" } as never } });
+  const idx = buildSchemaIndex({ profileId: "my", database: "shop", status: "fresh", fks: [], objects: [
+    { id: 1, schema: "shop", name: "Customers", kind: "table", columns: [
+      { name: "CustomerId", type: "int", nullable: false, identity: false, computed: false, pk: true, ordinal: 1 },
+      { name: "Status", type: "int", nullable: true, identity: false, computed: false, pk: false, ordinal: 2 },
+    ] }] }, "mySql", ["shop"]);
+  useSnapshots.setState({ entries: { ...useSnapshots.getState().entries, [snapKey("my", "shop")]: { key: snapKey("my", "shop"), profileId: "my", database: "shop", status: "fresh", index: idx, version: 1 } } });
+  return model;
+}
 
 beforeAll(() => P.installProviders());
 beforeEach(() => {
@@ -188,11 +208,69 @@ describe("completion provider", () => {
     // A table keeps tier 1's description (columns, rows; the schema is typed): the sidecar's wording says less (§9).
     expect(orders.detail).toBe("5 cols");
     expect(orders.label.description).toBe("5 cols");
-    expect(second.suggestions.some((s: any) => s.label.label === "OrdersExtra" && s.sortText === "5OrdersExtra" && s.documentation.value === "doc")).toBe(true);
+    const extra = second.suggestions.find((s: any) => s.label.label === "OrdersExtra");
+    expect(extra.documentation.value).toBe("doc");
+    // Ranked like tier 1's items by how "Ord" matches it (audit M17): both are prefix matches, tier 1's table first.
+    expect(extra.sortText > orders.sortText).toBe(true);
     expect(P.completionStats.tier2.length).toBeGreaterThan(0);
     expect(P.completionStats.tier1.length).toBeGreaterThan(0);
     expect(P.lastTier1Latency()).toBeGreaterThanOrEqual(0);
     fake.created.length = 0;
+  });
+
+  it("a tier-2 answer is not reused once the rest of the statement after the word changed (audit M15)", async () => {
+    vi.useFakeTimers();
+    const head = "select x.";
+    const m1 = doc("tsql", head + " from dbo.Orders x", "m15");
+    rpc.mockResolvedValue([{ label: "OnlyFromOrders", kind: "column", isSnippet: false }]);
+    completion("tsql").provideCompletionItems(m1, pos(m1, head.length));
+    await vi.advanceTimersByTimeAsync(130);
+    expect(rpc).toHaveBeenCalledTimes(1);
+    // The same tab, the same text before the word, another table after it: asked again, never the old answer.
+    const m2 = doc("tsql", head + " from dbo.Customers x", "m15");
+    rpc.mockResolvedValue([{ label: "OnlyFromCustomers", kind: "column", isSnippet: false }]);
+    const again = completion("tsql").provideCompletionItems(m2, pos(m2, head.length));
+    expect(again.suggestions.some((s: any) => s.label.label === "OnlyFromOrders")).toBe(false);
+    await vi.advanceTimersByTimeAsync(130);
+    expect(rpc).toHaveBeenCalledTimes(2);
+  });
+
+  it("inside a routine body tier 1 reads as a string, the rest of the body is part of the key too (M15, second review)", async () => {
+    vi.useFakeTimers();
+    const head = "DO LANGUAGE plpgsql $$ BEGIN PERFORM x.";
+    const m1 = doc("pg", head + " FROM orders x; END $$", "m15b");
+    rpc.mockResolvedValue([{ label: "only_from_orders", kind: "column", isSnippet: false }]);
+    completion("pgsql").provideCompletionItems(m1, pos(m1, head.length));
+    await vi.advanceTimersByTimeAsync(130);
+    expect(rpc).toHaveBeenCalledTimes(1);
+    const m2 = doc("pg", head + " FROM customers x; END $$", "m15b");
+    rpc.mockResolvedValue([{ label: "only_from_customers", kind: "column", isSnippet: false }]);
+    const again = completion("pgsql").provideCompletionItems(m2, pos(m2, head.length));
+    expect(again.suggestions.some((s: any) => s.label === "only_from_orders" || s.label?.label === "only_from_orders")).toBe(false);
+    await vi.advanceTimersByTimeAsync(130);
+    expect(rpc).toHaveBeenCalledTimes(2);
+  });
+
+  it("an item only tier 2 offers is ranked by how the word matches it, like tier 1's (audit M17)", async () => {
+    vi.useFakeTimers();
+    const text = "select * from Item";
+    const m = doc("tsql", text);
+    // Tier 1: OrderItems matches "Item" as a substring. Tier 2 alone: ItemArchive (a prefix match) and Unrelated (none).
+    rpc.mockResolvedValue([
+      { label: "ItemArchive", kind: "table", isSnippet: false },
+      { label: "Unrelated", kind: "table", isSnippet: false },
+    ]);
+    completion("tsql").provideCompletionItems(m, pos(m, text.length));
+    await vi.advanceTimersByTimeAsync(130);
+    const r = completion("tsql").provideCompletionItems(m, pos(m, text.length));
+    const t2 = r.suggestions.find((s: any) => s.label.label === "ItemArchive");
+    const t1 = r.suggestions.find((s: any) => s.label.label === "OrderItems");
+    expect(t2 && t1).toBeTruthy();
+    expect(t2.filterText.startsWith("Item")).toBe(true);
+    expect(t2.sortText < t1.sortText, `${t2.sortText} vs ${t1.sortText}`).toBe(true);
+    // An item that does not match the word keeps Monaco's own filtering (no typed-prefix filter text).
+    const other = r.suggestions.find((s: any) => s.label.label === "Unrelated");
+    expect(other?.filterText?.startsWith("Item") ?? false).toBe(false);
   });
 
   it("T-SQL: tier-2 failures are swallowed and tier 1 still works", async () => {
@@ -371,6 +449,46 @@ describe("completion provider", () => {
     expect(P.dollarWordStart("DO $fn$", 7, 7)).toBe(7);
     expect(P.dollarWordStart("x $", 3)).toBe(2);
     expect(P.dollarWordStart('a."Q', 4)).toBe(2);
+  });
+
+  it("dollarWordStart: a quote inside a string literal is no opened name (accepting replaced the string's text)", () => {
+    // Completion audit (low, tier 1): an odd count of `"` on the line, one of them inside '…', put the word's start in the string.
+    for (const [text, word] of [
+      [`DO $$ BEGIN RAISE NOTICE 'say "hi'; PERFORM v_x`, "v_x"],
+      [`DO $$ BEGIN RAISE NOTICE 'a "b'; PERFORM r."Li`, '"Li'],
+      [`DO $$ BEGIN x := 'it''s "q'; RETURN $1`, "$1"],
+      [`DO $$ BEGIN -- a "quote\nRETURN v_t`, "v_t"],
+    ] as const) {
+      expect(P.dollarWordStart(text, text.length, 6), text).toBe(text.length - word.length);
+    }
+  });
+
+  it("dollarWordStart: a line that begins inside a string or comment opened on an earlier line (second audit review)", () => {
+    // Lexing from the line start read `second'; PERFORM v_x` as a string: the range was empty and accepting `v_xyz` gave
+    // `PERFORM v_xv_xyz`.
+    for (const [text, word] of [
+      [`DO $$ BEGIN RAISE NOTICE 'first\nsecond'; PERFORM v_x`, "v_x"],
+      [`DO $$ BEGIN /* a\n it's */ PERFORM v_x`, "v_x"],
+      [`DO $$ BEGIN RAISE NOTICE 'a\nb "c'; PERFORM r."Li`, '"Li'],
+      [`DO $$ BEGIN RAISE NOTICE 'x'; PERFORM v_x`, "v_x"],
+    ] as const) {
+      expect(P.dollarWordStart(text, text.length, 6), text).toBe(text.length - word.length);
+    }
+    // The word stops at the cursor; a string the cursor sits in is no word.
+    expect(P.dollarWordStart("DO $$ BEGIN PERFORM v_xyz; END $$", 22, 5)).toBe(20);
+    expect(P.dollarWordStart("DO $$ BEGIN x := 'ab\ncd ef' ; END $$", 24, 5)).toBe(24);
+  });
+
+  it("PostgreSQL: accepting an item in a routine body after a string with a quote in it replaces the word only", async () => {
+    vi.useFakeTimers();
+    const text = `DO $$ BEGIN RAISE NOTICE 'say "hi'; PERFORM v_x`;
+    const m = doc("pg", text);
+    rpc.mockResolvedValue([{ label: "v_xyz", kind: "variable", isSnippet: false }]);
+    completion("pgsql").provideCompletionItems(m, pos(m, text.length));
+    await vi.advanceTimersByTimeAsync(130);
+    const item = completion("pgsql").provideCompletionItems(m, pos(m, text.length)).suggestions.find((x: any) => (x.label.label ?? x.label) === "v_xyz");
+    const range = item.range.replace ?? item.range;
+    expect(text.slice(0, range.startColumn - 1) + item.insertText + text.slice(range.endColumn - 1)).toBe(text.slice(0, -3) + "v_xyz");
   });
 
   it("PostgreSQL: inside a quoted string or a comment the sidecar is never asked and no popup is forced open", async () => {
@@ -954,6 +1072,20 @@ describe("snippet completion (Phase A3)", () => {
     expect(snippetLabels(completion("tsql").provideCompletionItems(blank, pos(blank, 7)))).toEqual([]);
   });
 
+  it("offers no snippet where a new name is typed (an alias after AS) or inside an opened quote", () => {
+    // Completion audit (low, tier 1): a snippet's body replaced an alias being typed, or landed inside `[sel…]`.
+    vi.useFakeTimers();
+    useSnippets.setState({ loaded: true, snippets: lib });
+    for (const [text, lang, engine] of [
+      ["select * from Orders AS sel", "tsql", "tsql"], ["select OrderId AS sel from Orders", "tsql", "tsql"],
+      ["select * from [sel", "tsql", "tsql"], ['select * from "sel', "pgsql", "pg"],
+    ] as const) {
+      const m = doc(engine, text);
+      const at = text.includes(" from Orders") && !text.endsWith("sel") ? text.indexOf(" from") : text.length;
+      expect(snippetLabels(completion(lang).provideCompletionItems(m, pos(m, at))), text).toEqual([]);
+    }
+  });
+
   it("loads the library on first use and offers it once loaded", async () => {
     vi.useFakeTimers();
     useSnippets.setState({ loaded: false, snippets: [] });
@@ -1022,6 +1154,54 @@ describe("completion provider: merge, quoting, trigger and range (review regress
       const r = completion("tsql").provideCompletionItems(m, pos(m, text.length), trigger);
       expect(r.suggestions.length > 0, `${text} ${JSON.stringify(trigger)}`).toBe(shown);
     }
+  });
+
+  it("a decimal point opens no list, so the next Enter cannot turn 1.5 into 1.5CustomerId (audit H8)", () => {
+    vi.useFakeTimers();
+    const dot = { triggerKind: 1, triggerCharacter: "." };
+    for (const [engine, text] of [["tsql", "select * from dbo.Orders where TotalAmount > 1."], ["tsql", "select * from dbo.Orders where TotalAmount > 1.5"],
+      ["pg", "select * from orders where total > 1."]] as const) {
+      const m = doc(engine, text);
+      expect(completion(CONF[engine].lang).provideCompletionItems(m, pos(m, text.length), dot).suggestions, text).toEqual([]);
+    }
+    // Still: a qualifier's dot lists its columns.
+    const q = "select * from dbo.Orders o where o.";
+    const m = doc("tsql", q);
+    expect(completion("tsql").provideCompletionItems(m, pos(m, q.length), dot).suggestions.length).toBeGreaterThan(0);
+  });
+
+  it("documentation past the first rows is built when Monaco shows the item (resolveCompletionItem, audit H9)", async () => {
+    vi.useFakeTimers();
+    const { buildSchemaIndex } = await import("../completion/schemaIndex");
+    const objects = Array.from({ length: 120 }, (_, k) => ({
+      id: 1000 + k, schema: "dbo", name: `Big${k}`, kind: "table" as const,
+      columns: [{ name: "id", type: "int", nullable: false, identity: false, computed: false, pk: true, ordinal: 1 }],
+    }));
+    const big = buildSchemaIndex({ profileId: "p1", database: "SalesDB", status: "fresh", objects, fks: [] }, "tsql", ["SalesDB"]);
+    const text = "select * from Big";
+    const m = doc("tsql", text);
+    const key = snapKey("p1", "SalesDB");
+    const before = useSnapshots.getState().entries[key];
+    useSnapshots.setState({ entries: { ...useSnapshots.getState().entries, [key]: { ...before, index: big } } });
+    try {
+      const r = completion("tsql").provideCompletionItems(m, pos(m, text.length));
+      const bigs = r.suggestions.filter((s: any) => String(s.label.label).startsWith("Big"));
+      expect(bigs.length).toBe(120);
+      expect(bigs.filter((s: any) => s.documentation).length).toBeGreaterThan(0); // the first rows: built
+      const late = bigs.find((s: any) => !s.documentation);
+      expect(late).toBeDefined();
+      expect(completion("tsql").resolveCompletionItem(late).documentation.value).toContain("| Column |");
+      // An item with nothing to build is returned as it is.
+      expect(P.resolveCompletionItem({ label: "x", insertText: "x", kind: 0 } as any).documentation).toBeUndefined();
+    } finally {
+      useSnapshots.setState({ entries: { ...useSnapshots.getState().entries, [key]: before } });
+    }
+  });
+
+  it("[ triggers completion only where [x] is a delimited name (SQL Server, SQLite) (audit H8)", () => {
+    expect(completion("tsql").triggerCharacters).toContain("[");
+    expect(completion("sqlite").triggerCharacters).toContain("[");
+    for (const lang of ["pgsql", "mysql", "duckdb", "oracle"]) expect(completion(lang).triggerCharacters, lang).not.toContain("[");
   });
 
   it("accepting inside a word replaces the whole word", () => {
@@ -1108,6 +1288,39 @@ describe("Enter always reaches the editor: no list opened from code takes it", (
     completion("pgsql").provideCompletionItems(m, pos(m, DO.pg.length));
     m.setValue(DO.pg + "_t");
     editor.position = m.getPositionAt(m.text.length);
+    await vi.advanceTimersByTimeAsync(130);
+    expect(editor.triggered).toEqual(["tier2:editor.action.triggerSuggest"]);
+  });
+
+  // Completion audit (low, was Suspected): Monaco re-focuses the first row of a list re-opened from code, so an answer
+  // arriving after the user moved the selection made Enter accept another item than the one they had picked.
+  it("a late tier-2 answer leaves an open list alone once the user moved its selection", async () => {
+    const { m, editor } = setup();
+    completion("pgsql").provideCompletionItems(m, pos(m, DO.pg.length));
+    editor.suggestVisible = true;
+    editor.pressKey(fake.monaco.KeyCode.DownArrow);
+    await vi.advanceTimersByTimeAsync(130);
+    expect(rpc).toHaveBeenCalledWith("lang.complete", expect.anything());
+    expect(editor.triggered).toEqual([]);
+    // Kept for the next keystroke's list.
+    const r = completion("pgsql").provideCompletionItems(m, pos(m, DO.pg.length));
+    expect(r.suggestions.some((s: any) => (s.label.label ?? s.label) === "v_enter_total")).toBe(true);
+  });
+
+  it("a schema or row counts arriving leave an open list alone once the user moved its selection", () => {
+    const { m, editor } = setup();
+    completion("pgsql").provideCompletionItems(m, pos(m, DO.pg.length));
+    editor.suggestVisible = true;
+    editor.pressKey(fake.monaco.KeyCode.PageDown);
+    useSnapshots.setState({ entries: { ...useSnapshots.getState().entries } });
+    expect(editor.triggered).toEqual([]);
+  });
+
+  it("after typing again an answer refreshes the open list as before", async () => {
+    const { m, editor } = setup();
+    editor.suggestVisible = true;
+    editor.pressKey(fake.monaco.KeyCode.UpArrow);
+    completion("pgsql").provideCompletionItems(m, pos(m, DO.pg.length)); // a keystroke: Monaco asked for a new list
     await vi.advanceTimersByTimeAsync(130);
     expect(editor.triggered).toEqual(["tier2:editor.action.triggerSuggest"]);
   });
@@ -1211,6 +1424,80 @@ describe("completion provider: schema status row", () => {
     const m = doc("tsql", "select * from Ord");
     expect(statusOf(completion("tsql").provideCompletionItems(m, pos(m, 17)))).toBeUndefined();
   });
+
+  // Completion audit M21: the row went away as soon as an index existed, even an empty one (a first refresh still
+  // running, a load the sidecar answered with an error and nothing cached), so the list said nothing at all.
+  const EMPTY = buildIndex();
+  function entry(status: string, extra: Record<string, unknown> = {}) {
+    useSnapshots.setState({ entries: { [snapKey("p1", "SalesDB")]: {
+      key: snapKey("p1", "SalesDB"), profileId: "p1", database: "SalesDB", status: status as never, version: 1,
+      snapshot: { profileId: "p1", database: "SalesDB", status: status as never, objects: [], fks: [] }, index: EMPTY, ...extra,
+    } } });
+  }
+  it("says the schema is loading while a refresh or a first read runs and nothing is cached yet", () => {
+    vi.useFakeTimers();
+    const m = doc("tsql", "select * from Ord");
+    for (const status of ["refreshing", "stale", "empty", "loading"]) {
+      entry(status);
+      expect(labelOf(statusOf(completion("tsql").provideCompletionItems(m, pos(m, 17)))), status).toBe("Loading schema…");
+    }
+  });
+  it("says the load failed when the sidecar answered with an error and nothing is cached", () => {
+    vi.useFakeTimers();
+    const m = doc("tsql", "select * from Ord");
+    entry("error", { error: "login failed" });
+    expect(labelOf(statusOf(completion("tsql").provideCompletionItems(m, pos(m, 17))))).toBe("Schema not loaded");
+  });
+  it("says nothing for a database that is really empty (a fresh snapshot without objects)", () => {
+    vi.useFakeTimers();
+    const m = doc("tsql", "select * from Ord");
+    entry("fresh");
+    expect(statusOf(completion("tsql").provideCompletionItems(m, pos(m, 17)))).toBeUndefined();
+  });
+  it("says nothing while a refresh runs over a schema already cached", () => {
+    vi.useFakeTimers();
+    const m = doc("tsql", "select * from Ord");
+    useSnapshots.setState({ entries: { [snapKey("p1", "SalesDB")]: { key: snapKey("p1", "SalesDB"), profileId: "p1", database: "SalesDB", status: "refreshing", index: IDX, snapshot: SNAPSHOT, version: 2 } } });
+    expect(statusOf(completion("tsql").provideCompletionItems(m, pos(m, 17)))).toBeUndefined();
+  });
+
+  // Second audit review: an error answer with nothing cached still builds an (empty) index, so typing never reached
+  // ensure() and the row said "retrying" while nothing retried.
+  it("a failed load with nothing cached is retried from typing, not only on a tab or connection change", () => {
+    vi.useFakeTimers();
+    const m = doc("tsql", "select * from Ord");
+    entry("error", { error: "timeout", failedAt: Date.now() - 60_000, retries: 0 });
+    rpc.mockReturnValue(new Promise(() => {}));
+    completion("tsql").provideCompletionItems(m, pos(m, 17));
+    expect(rpc).toHaveBeenCalledWith("meta.snapshot", { profileId: "p1", database: "SalesDB" });
+  });
+  it("once the retries are used up the row says how to read it again, and typing asks no more", () => {
+    vi.useFakeTimers();
+    const m = doc("tsql", "select * from Ord");
+    entry("error", { error: "timeout", failedAt: Date.now() - 3_600_000, retries: 8 });
+    rpc.mockReturnValue(new Promise(() => {}));
+    const row = statusOf(completion("tsql").provideCompletionItems(m, pos(m, 17)));
+    expect(rpc).not.toHaveBeenCalledWith("meta.snapshot", expect.anything());
+    expect(labelOf(row)).toBe("Schema not loaded");
+    expect(row.detail).not.toContain("retrying");
+  });
+  it("no loading row for a session's own empty view (a new in-memory database before it ran anything)", () => {
+    vi.useFakeTimers();
+    useProfiles.setState({ profiles: [{ id: "mem", name: "Mem", engine: "duckDb", location: "memory", environment: "dev" } as never] });
+    const m = new FakeModel("select * from Ord", "duckdb", { toString: () => "u://mem1" }) as FakeModel & { tabId: string };
+    m.tabId = "mem1";
+    useTabs.setState({ tabs: { ...useTabs.getState().tabs, mem1: { id: "mem1", title: "q", profileId: "mem", database: "memory", sessionId: "s1" } as never } });
+    const k = snapKey("mem", "memory", "s1");
+    useSnapshots.setState({ entries: { [k]: {
+      key: k, profileId: "mem", database: "memory", sessionId: "s1", status: "empty", version: 1,
+      snapshot: { profileId: "mem", database: "memory", sessionId: "s1", status: "empty", objects: [], fks: [] }, index: EMPTY,
+    } } });
+    try {
+      expect(statusOf(completion("duckdb").provideCompletionItems(m, pos(m, 17)))).toBeUndefined();
+    } finally {
+      useProfiles.setState({ profiles: [] });
+    }
+  });
 });
 
 describe("tier 2 cache: a capped answer", () => {
@@ -1283,5 +1570,150 @@ describe("completion provider: icons", () => {
     expect(tvf.kind).toBe(fake.monaco.languages.CompletionItemKind.Constructor);
     const t = completion("tsql").provideCompletionItems(doc("tsql", "select * from Ord"), { lineNumber: 1, column: 18 } as never).suggestions.find((s: any) => s.label.label === "Orders");
     expect(t.kind).toBe(fake.monaco.languages.CompletionItemKind.Struct);
+  });
+});
+
+// Code audit 2026-11-26 (providers): every case failed before its fix.
+describe("completion provider: code audit 2026-11-26", () => {
+  const labelOf = (s: any) => (typeof s.label === "string" ? s.label : s.label.label);
+  const apply = (text: string, item: any) => {
+    const r = item.range.replace ?? item.range;
+    const lines = text.split("\n");
+    const at = (line: number, col: number) => lines.slice(0, line - 1).reduce((n, l) => n + l.length + 1, 0) + col - 1;
+    return text.slice(0, at(r.startLineNumber, r.startColumn)) + item.insertText + text.slice(at(r.endLineNumber, r.endColumn));
+  };
+
+  it("H12: a `$` typed in a routine body is not put in front of every item's filter text", () => {
+    vi.useFakeTimers();
+    useSettings.setState({ tier2: false });
+    const text = "CREATE FUNCTION f(int) RETURNS int LANGUAGE plpgsql AS $$ BEGIN RETURN $";
+    const m = doc("pg", text);
+    const r = completion("pgsql").provideCompletionItems(m, pos(m, text.length));
+    const dollared = r.suggestions.filter((s: any) => s.filterText?.startsWith("$") && !labelOf(s).startsWith("$"));
+    expect(dollared.map(labelOf).slice(0, 10)).toEqual([]);
+  });
+  it("H12: still, a word typed in a routine body is put in front (tier 1's order holds)", () => {
+    vi.useFakeTimers();
+    useSettings.setState({ tier2: false });
+    const text = "CREATE FUNCTION f(int) RETURNS int LANGUAGE plpgsql AS $$ BEGIN PERFORM * FROM ord";
+    const m = doc("pg", text);
+    const item = completion("pgsql").provideCompletionItems(m, pos(m, text.length)).suggestions.find((s: any) => labelOf(s) === "orders");
+    expect(item.filterText).toBe("ordorders");
+  });
+
+  it("H12: an item only tier 2 offers in an opened quote gets the quote once in its filter text", async () => {
+    vi.useFakeTimers();
+    const text = "select * from [Ord";
+    const m = doc("tsql", text);
+    rpc.mockResolvedValue([{ label: "OrdersArchive", kind: "table", isSnippet: false }]);
+    completion("tsql").provideCompletionItems(m, pos(m, text.length));
+    await vi.advanceTimersByTimeAsync(130);
+    const item = completion("tsql").provideCompletionItems(m, pos(m, text.length)).suggestions.find((s: any) => labelOf(s) === "OrdersArchive");
+    expect(item.filterText).toBe("[OrdOrdersArchive");
+  });
+
+  it("M15: an opened quote in a routine body is replaced, closing quote included, by the quoted name", () => {
+    vi.useFakeTimers();
+    useSettings.setState({ tier2: false });
+    const head = 'DO $$ BEGIN PERFORM * FROM "Order';
+    const text = head + 'Arc" x; END $$';
+    const m = doc("pg", text);
+    const item = completion("pgsql").provideCompletionItems(m, pos(m, head.length)).suggestions.find((s: any) => labelOf(s) === "OrderArchive");
+    expect(item, JSON.stringify(completion("pgsql").provideCompletionItems(m, pos(m, head.length)).suggestions.map(labelOf).slice(0, 20))).toBeDefined();
+    expect(apply(text, item)).toBe('DO $$ BEGIN PERFORM * FROM "OrderArchive" x; END $$');
+  });
+
+  it("L8: an opened bracket is replaced up to its own closing bracket, a doubled one inside it included", () => {
+    vi.useFakeTimers();
+    useSettings.setState({ tier2: false });
+    const head = "select * from [Order D";
+    const text = head + "]]x] o";
+    const m = doc("tsql", text);
+    const item = completion("tsql").provideCompletionItems(m, pos(m, head.length)).suggestions.find((s: any) => labelOf(s) === "Order Details");
+    expect(apply(text, item)).toBe("select * from [Order Details] o");
+  });
+
+  it("R3-4: an opened quote with no closer of its own does not take the next name's opening quote", () => {
+    vi.useFakeTimers();
+    useSettings.setState({ tier2: false });
+    const cases = [
+      ["tsql", "select [Cust", ", [Status] from dbo.Customers", "CustomerId", "select [CustomerId], [Status] from dbo.Customers"],
+      // The FROM before the cursor: after it, the lexer's mispaired quotes hide it from tier 1 as well.
+      ["pg", 'select * from public.customers order by "Cust', ', "email"', "customer_id", 'select * from public.customers order by "customer_id", "email"'],
+      ["mySql", "select * from Customers order by `Cust", ", `Status`", "CustomerId", "select * from Customers order by `CustomerId`, `Status`"],
+      ["tsql", "select * from dbo.Customers order by [Cust", ", [Name]", "CustomerId", "select * from dbo.Customers order by [CustomerId], [Name]"],
+    ] as const;
+    for (const [d, head, tail, label, want] of cases) {
+      const text = head + tail;
+      const m = d === "mySql" ? mysqlDoc(text) : doc(d, text);
+      const r = completion(DIALECTS[d].language).provideCompletionItems(m, pos(m, head.length));
+      const item = r.suggestions.find((s: any) => labelOf(s).toLowerCase() === label.toLowerCase());
+      expect(item, `${d}: ${r.suggestions.map(labelOf).slice(0, 15).join(", ")}`).toBeDefined();
+      const got = apply(text, item);
+      expect(got, d).toBe(want);
+    }
+  });
+  it("R3-4: still, an opened quote around a name with a space is replaced up to its own closing quote", () => {
+    vi.useFakeTimers();
+    useSettings.setState({ tier2: false });
+    const head = "select * from [Order";
+    const text = head + " Details] o";
+    const m = doc("tsql", text);
+    const item = completion("tsql").provideCompletionItems(m, pos(m, head.length)).suggestions.find((s: any) => labelOf(s) === "Order Details");
+    expect(apply(text, item)).toBe("select * from [Order Details] o");
+  });
+
+  it("M18: a refresh running after a failed load says the schema is loading, not that the load failed", () => {
+    vi.useFakeTimers();
+    const m = doc("tsql", "select * from Ord");
+    useSnapshots.setState({ entries: { [snapKey("p1", "SalesDB")]: { key: snapKey("p1", "SalesDB"), profileId: "p1", database: "SalesDB", status: "refreshing", version: 2, failedAt: Date.now() - 1000, retries: 1 } } });
+    const row = completion("tsql").provideCompletionItems(m, pos(m, 17)).suggestions.find((s: any) => s.sortText === "!");
+    expect(labelOf(row)).toBe("Loading schema…");
+  });
+
+  it("L8: cancelTier2() also drops a request already sent, so its late answer changes nothing", async () => {
+    vi.useFakeTimers();
+    const text = "select * from Ord";
+    const m = doc("tsql", text);
+    const editor = new FakeEditor(null, {});
+    editor.model = m;
+    editor.suggestVisible = true;
+    fake.created.push(editor);
+    let answer!: (v: unknown) => void;
+    rpc.mockReturnValue(new Promise((r) => { answer = r; }));
+    completion("tsql").provideCompletionItems(m, pos(m, text.length));
+    await vi.advanceTimersByTimeAsync(130);
+    expect(rpc).toHaveBeenCalledWith("lang.complete", expect.anything());
+    P.cancelTier2();
+    answer([{ label: "OrdersLate", kind: "table", isSnippet: false }]);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(editor.triggered).toEqual([]);
+    fake.created.length = 0;
+  });
+
+  it("M17: item documentation is untrusted markdown without HTML", () => {
+    vi.useFakeTimers();
+    useSettings.setState({ tier2: false });
+    const text = "select * from Ord";
+    const m = doc("tsql", text);
+    const items = completion("tsql").provideCompletionItems(m, pos(m, text.length)).suggestions;
+    const withDoc = items.map((s: any) => P.resolveCompletionItem(s)).filter((s: any) => s.documentation);
+    expect(withDoc.length).toBeGreaterThan(0);
+    for (const s of withDoc) expect(s.documentation).toMatchObject({ isTrusted: false, supportHtml: false });
+  });
+
+  it("M18: one keystroke reads the model's text once, tier 2 scheduled included", () => {
+    vi.useFakeTimers();
+    const text = "select * from Ord";
+    const m = doc("tsql", text);
+    rpc.mockResolvedValue([]);
+    const getValue = vi.spyOn(m, "getValue");
+    completion("tsql").provideCompletionItems(m, pos(m, text.length));
+    expect(getValue).toHaveBeenCalledTimes(1);
+    const pg = "DO $$ DECLARE v_total int; BEGIN v_to";
+    const b = doc("pg", pg);
+    const bodyValue = vi.spyOn(b, "getValue");
+    completion("pgsql").provideCompletionItems(b, pos(b, pg.length));
+    expect(bodyValue).toHaveBeenCalledTimes(1);
   });
 });

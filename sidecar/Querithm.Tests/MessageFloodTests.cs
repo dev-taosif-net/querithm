@@ -16,6 +16,8 @@ namespace Querithm.Tests;
 /// line, in order with its result sets; the notifier's queue is bounded. L13: past 65,535 result sets a run stops
 /// streaming more instead of wrapping the u16 result index.
 /// </summary>
+// 65,540 result sets through the pipeline: 2 s alone, but it timed out at 30 s once in the full parallel suite (M-11).
+[Collection("timing")]
 public class MessageFloodTests
 {
     static readonly TimeSpan Wait = TestTime.Of(TimeSpan.FromSeconds(30));

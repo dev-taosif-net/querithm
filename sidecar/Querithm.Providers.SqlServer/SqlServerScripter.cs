@@ -164,7 +164,7 @@ public sealed class SqlServerScripter : IObjectScripter
     internal static IReadOnlyDictionary<string, string?>? ParamDefaults(string? definition)
     {
         if (string.IsNullOrWhiteSpace(definition)) return null;
-        var script = TSqlParsing.NewParser().Parse(new StringReader(definition), out var errors) as TSqlScript;
+        var script = TSqlParsing.ParseText(TSqlParsing.NewParser(), definition, out var errors) as TSqlScript;
         if (errors.Count > 0 || script == null) return null;
         var body = script.Batches.SelectMany(b => b.Statements).OfType<ProcedureStatementBody>().FirstOrDefault();
         if (body == null) return null;

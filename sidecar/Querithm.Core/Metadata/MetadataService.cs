@@ -192,6 +192,26 @@ public sealed class MetadataService
         return s.SessionOwned ? s : null;
     }
 
+    /// <summary>
+    /// A stored refresh error as the webview may see it: scrubbed again on the way out, since a row an older build wrote
+    /// kept the driver's message as it was (audit S3).
+    /// </summary>
+    static string? Scrubbed(string? error) => error == null ? null : Logging.LogScrubber.Scrub(error);
+
+    /// <summary>
+    /// The most object ids one meta.objects or meta.rowCounts call takes (§13 rule 7). The webview asks for at most 300
+    /// changed objects and the row counts of one schema's tables (up to 5,000); an ER diagram sends its tables.
+    /// </summary>
+    public const int MaxObjectIds = 50_000;
+
+    /// <summary>The RPC boundary of the id-array reads: a bounded array, bounded names.</summary>
+    public static void CheckIds(long[]? ids, params string?[] names)
+    {
+        if (ids is null || ids.Length > MaxObjectIds) throw QuerithmException.Invalid($"Up to {MaxObjectIds:N0} object ids per call.");
+        foreach (var n in names)
+            if (n is { Length: > LanguageService.MaxNameLength }) throw QuerithmException.Invalid($"Names are at most {LanguageService.MaxNameLength} characters.");
+    }
+
     /// <summary>Cached rows immediately; stale (older than 10 min or not refreshed since launch) triggers a background refresh.</summary>
     public SchemaSnapshot Snapshot(SnapshotParams p)
     {
@@ -205,7 +225,7 @@ public sealed class MetadataService
         var cached = (scope != null ? _cache.Get(p.ProfileId, p.Database, scope.Id) : _cache.Get(p.ProfileId, p.Database)) ?? _store.Load(p.ProfileId, p.Database);
         var snap = cached with
         {
-            Status = row?.Status ?? SnapshotStatus.Empty, RefreshedAt = row?.RefreshedAt, ServerVersion = row?.ServerVersion, Error = row?.Error, Notes = row?.Notes,
+            Status = row?.Status ?? SnapshotStatus.Empty, RefreshedAt = row?.RefreshedAt, ServerVersion = row?.ServerVersion, Error = Scrubbed(row?.Error), Notes = row?.Notes,
         };
         var stale = snap.Status == SnapshotStatus.Empty
                     || !_refreshedThisLaunch.ContainsKey(Key(p.ProfileId, p.Database))
@@ -229,7 +249,7 @@ public sealed class MetadataService
         var snap = _cache.SessionView(s.Profile.Id, database, s.Id) with
         {
             Database = database, SessionId = s.Id,
-            Status = row?.Status ?? SnapshotStatus.Empty, RefreshedAt = row?.RefreshedAt, ServerVersion = row?.ServerVersion, Error = row?.Error, Notes = row?.Notes,
+            Status = row?.Status ?? SnapshotStatus.Empty, RefreshedAt = row?.RefreshedAt, ServerVersion = row?.ServerVersion, Error = Scrubbed(row?.Error), Notes = row?.Notes,
         };
         // Nothing to read before the tab's first execution: refreshing would open the database just to find it empty.
         if (snap.Status is SnapshotStatus.Empty or SnapshotStatus.Stale && s.Connected && !s.MemoryLost)
@@ -293,7 +313,7 @@ public sealed class MetadataService
         while (true)
         {
             try { await RunAsync(next, key).ConfigureAwait(false); }
-            catch (Exception ex) { _log.LogWarning("Metadata refresh failed for {Key}: {Message}", key, ex.Message); }
+            catch (Exception ex) { _log.LogWarning("Metadata refresh failed for {Key}: {Message}", key, Logging.LogScrubber.Scrub(ex.Message)); }
             lock (_again)
             {
                 if (_again.TryRemove(key, out next!)) { Began(key, next); continue; }
@@ -305,12 +325,94 @@ public sealed class MetadataService
         }
     }
 
-    /// <summary>Phase D0d: a refresh deferred while its session's transaction was open runs now (the transaction ended).</summary>
+    /// <summary>
+    /// §8 step 5: a run with DDL ended. Its database is read again — and the one it started in, when a USE moved it (audit
+    /// M22). A session-owned session reads on its own connection after the execution (Phase D0d). A pooled session whose
+    /// transaction is open (PostgreSQL, SQL Server: DDL is transactional) defers the read until the transaction ends: a
+    /// pool connection does not see the uncommitted DDL, so the read found the catalog as before and called it fresh, and
+    /// the COMMIT then read nothing again (audit H11). Meanwhile the snapshot is marked stale.
+    /// <paramref name="endedIn"/> is the database the run ended in, read before it let go of the tab: by the time this
+    /// runs, a queued run (USE other) may already have moved <see cref="Session.Database"/> (G#5).
+    /// </summary>
+    public void OnDdlExecuted(Session s, string? startedIn, string? endedIn)
+    {
+        // Raised from the run's finally: a store that cannot be read or written (busy, locked by another instance) must not
+        // fault the run — the edit recheck after this still has to start (A#7). The next meta.snapshot finds it stale.
+        try { DdlRan(s, startedIn, endedIn); }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _log.LogWarning("Metadata after DDL: {Message}", Logging.LogScrubber.Scrub(ex.Message));
+        }
+    }
+
+    void DdlRan(Session s, string? startedIn, string? endedIn)
+    {
+        var databases = new List<string>(2);
+        if (endedIn != null) databases.Add(endedIn);
+        // A session-owned session reaches one database (a file): nothing else to read.
+        if (!s.SessionOwned && startedIn != null && !databases.Contains(startedIn, StringComparer.Ordinal)) databases.Add(startedIn);
+        // The handoff first, then Stale (review 2026-11-26): a refresh publishing from the handoff on sees the deferral and
+        // keeps the snapshot Stale — with Stale written first, one publishing in between called it Fresh until the COMMIT —
+        // and a store that cannot be written (busy, locked) no longer loses the deferral with it.
+        // Only where DDL is transactional (PostgreSQL, SQL Server): MySQL and Oracle commit it at once, and every connection
+        // sees it — deferring kept every tab's snapshot without the new table until the user committed (review 2026-11-26).
+        if (!s.SessionOwned && !s.Provider.Transactions.Traits.DdlCommitsImplicitly && s.TxState != TxState.None && !s.Closed
+            && s.DeferIfInTransaction(databases))
+        {
+            foreach (var db in databases)
+            {
+                try
+                {
+                    if (_store.GetSnapshotRow(s.Profile.Id, db)?.Status is SnapshotStatus.Fresh or SnapshotStatus.Refreshing)
+                        _store.SetStatus(s.Profile.Id, db, SnapshotStatus.Stale);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _log.LogWarning("Metadata after DDL: could not mark {Db} stale: {Message}", db, Logging.LogScrubber.Scrub(ex.Message));
+                }
+                _notifier.Notify("meta.updated", new MetaUpdatedEvent { ProfileId = s.Profile.Id, Database = db, Status = SnapshotStatus.Stale });
+            }
+            // Still deferred: the transaction's end reads it. Taken meanwhile (a COMMIT landed): that read may have
+            // published before the Stale above, so one more follows it (Refresh queues behind one still running).
+            if (s.RefreshDeferred) return;
+        }
+        foreach (var db in databases) RefreshAfter(s, db);
+    }
+
+    /// <summary>
+    /// A refresh a run or a transaction's end asks for: the session's own view while it is open, the shared one once it
+    /// closed — a close landing between the check and the request makes <see cref="ScopeOf"/> throw, and the read is
+    /// asked again without the session (review 2026-11-26: the DDL of a tab closed mid-run was never read).
+    /// </summary>
+    void RefreshAfter(Session s, string db)
+    {
+        var own = s.SessionOwned && !s.Closed;
+        try { Refresh(new RefreshParams { ProfileId = s.Profile.Id, Database = db, SessionId = own ? s.Id : null }); }
+        catch (QuerithmException e) when (own && e.Code == "notFound")
+        {
+            Refresh(new RefreshParams { ProfileId = s.Profile.Id, Database = db });
+        }
+    }
+
+    /// <summary>A refresh deferred while its session's transaction was open runs now (the transaction ended: commit, rollback or a lost connection).</summary>
+    /// <remarks>
+    /// Raised from a run's finally and from commit, rollback and close: it never throws (a failure must not leave the run's
+    /// lock held). A closed tab's deferral still reads — the server rolled its DDL back, and the snapshot it marked stale
+    /// would stay so — as the shared view (its own view went with it). A lost in-memory database has nothing to read.
+    /// </remarks>
     public void OnTransactionEnded(Session s)
     {
-        if (!s.RefreshDeferred || s.Closed || s.Database == null) return;
-        s.RefreshDeferred = false;
-        Refresh(new RefreshParams { ProfileId = s.Profile.Id, Database = s.Database, SessionId = s.Id });
+        try
+        {
+            if (s.TakeDeferral() is not { } deferred || s.MemoryLost) return;
+            var databases = deferred.ToList();
+            if (s.Database != null && !databases.Contains(s.Database, StringComparer.Ordinal)) databases.Insert(0, s.Database);
+            foreach (var db in databases) RefreshAfter(s, db);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _log.LogWarning("Metadata after the transaction ended: {Message}", Logging.LogScrubber.Scrub(ex.Message));
+        }
     }
 
     /// <summary>Phase D0d: a closed session's own view goes with it; a refresh still running for it writes nothing.</summary>
@@ -324,7 +426,14 @@ public sealed class MetadataService
         var profile = _sessions.GetProfile(p.ProfileId);
         var provider = _sessions.Providers.Get(profile.Engine);
         var session = p.SessionId != null ? _sessions.All.FirstOrDefault(x => x.Id == p.SessionId) : null;
-        if (p.SessionId != null && session is not { Closed: false }) return; // closed since: nothing to read, nothing to report
+        if (p.SessionId != null && session is not { Closed: false })
+        {
+            // Closed since: its own view went with it, but a file database's shared snapshot still needs the read — the
+            // DDL a closing tab ran was never read (review 2026-11-26). An in-memory database went with its tab.
+            if (ProfileRules.LocationOf(profile) == LocationKind.Memory) return;
+            session = null;
+        }
+        if (session is { MemoryLost: true }) return; // nothing left to read: its tab reports the loss (SessionSnapshot)
         var owned = provider.LifetimeFor(profile) == ConnectionLifetime.SessionOwned;
         var inMemory = session?.InMemory == true;
         if (owned && session == null && ProfileRules.LocationOf(profile) == LocationKind.Memory) return; // only its tab can read it
@@ -333,9 +442,10 @@ public sealed class MetadataService
         var mainDb = inMemory ? SchemaCache.SessionDatabase(p.Database, session!.Id) : p.Database;
         // Metadata read inside the owner's transaction is that transaction's: never published (Phase D0d). Marked stale,
         // and read again once the transaction ends.
-        if (session is { SessionOwned: true } && session.TxState != TxState.None)
+        // The deferral is decided with the transaction state in one step (G#5): a COMMIT landing at this moment either finds
+        // it (and reads again) or ends the transaction first (and this reads now).
+        if (session is { SessionOwned: true } && session.DeferIfInTransaction([]))
         {
-            session.RefreshDeferred = true;
             // Refreshing too: a refresh still running would otherwise end Fresh over this transaction's pending DDL.
             if (mainStore.GetSnapshotRow(p.ProfileId, mainDb)?.Status is SnapshotStatus.Fresh or SnapshotStatus.Refreshing)
                 mainStore.SetStatus(p.ProfileId, mainDb, SnapshotStatus.Stale);
@@ -357,6 +467,18 @@ public sealed class MetadataService
                 // The session's own connection, after its execution (Phase D0d: helpers wait for the execution lock).
                 // Closing the tab cancels the reads, so the close is never left waiting on them.
                 lease = await _sessions.LeaseAsync(session, cts.Token).ConfigureAwait(false);
+                // Decided again under the lease (review 2026-11-26): a run queued ahead of this read may have left a
+                // transaction open (BEGIN; CREATE TABLE …), and what this connection reads now is that transaction's.
+                if (session.DeferIfInTransaction([]))
+                {
+                    // Stale before the lease goes: while it is held the transaction cannot end, so no read the COMMIT
+                    // starts can publish Fresh before this write (Gemini review 2026-11-26).
+                    mainStore.SetStatus(p.ProfileId, mainDb, SnapshotStatus.Stale);
+                    await lease.DisposeAsync().ConfigureAwait(false);
+                    lease = null;
+                    _notifier.Notify("meta.updated", new MetaUpdatedEvent { ProfileId = p.ProfileId, Database = p.Database, Status = SnapshotStatus.Stale, SessionId = inMemory ? session.Id : null });
+                    return;
+                }
                 db = lease.Conn.Db;
                 ct = lease.Token;
             }
@@ -397,7 +519,11 @@ public sealed class MetadataService
                 mainStore.ApplyRefresh(p.ProfileId, mainDb, p.Full, mainChanged, mainRemoved, Only(details, mainChanged), version, notes);
                 // A tab of this file deferred its refresh while this one ran (DDL inside its transaction): the snapshot stays
                 // Stale until that refresh runs, instead of this one calling it Fresh.
-                if (!inMemory && owned && _sessions.All.Any(x => x.Profile.Id == p.ProfileId && !x.Closed && x.RefreshDeferred))
+                // A pooled tab's transaction holds DDL of this database (H11): the same, until its COMMIT or ROLLBACK reads it.
+                // Its current database, or one it left after the DDL (USE other inside the transaction, G#6): before, only
+                // the current one counted, and a refresh of the database the DDL ran in called it Fresh.
+                if (!inMemory && _sessions.All.Any(x => x.Profile.Id == p.ProfileId && !x.Closed && x.RefreshDeferred
+                                                        && (owned || x.DefersRefreshOf(p.Database))))
                 {
                     mainStore.SetStatus(p.ProfileId, mainDb, SnapshotStatus.Stale);
                     status = SnapshotStatus.Stale;
@@ -436,7 +562,8 @@ public sealed class MetadataService
             {
                 // The old connection's failure is not the re-pointed profile's.
                 if (!inMemory && GenerationOf(p.ProfileId) != generation) { Superseded(p); return; }
-                mainStore.SetStatus(p.ProfileId, mainDb, SnapshotStatus.Error, ex.Message);
+                // Scrubbed before it is stored (audit S3): the row outlives the log line and is sent with every snapshot.
+                mainStore.SetStatus(p.ProfileId, mainDb, SnapshotStatus.Error, Logging.LogScrubber.Scrub(ex.Message));
             }
             _notifier.Notify("meta.updated", new MetaUpdatedEvent
             {
@@ -510,17 +637,31 @@ public sealed class MetadataService
         var ids = objects.Select(o => o.Id).ToHashSet();
         return new MetadataBundle(b.Columns.Where(c => ids.Contains(c.ObjectId)).ToList(), b.Params.Where(x => ids.Contains(x.ObjectId)).ToList(),
             b.Indexes.Where(i => ids.Contains(i.ObjectId)).ToList(), b.Fks.Where(f => ids.Contains(f.Parent)).ToList(),
-            b.Members?.Where(m => ids.Contains(m.ObjectId)).ToList());
+            b.Members?.Where(m => ids.Contains(m.ObjectId)).ToList(), b.Notes?.Where(n => ids.Contains(n.ObjectId)).ToList());
     }
 
     // ---- scoped reads for meta.objects / meta.objectDetails / meta.search (Phase D0d) ----
 
     public SnapObject[] Objects(ObjectsParams p)
     {
+        // `"params": null` reaches here as null: an invalid request, not an internal error (review 2026-11-26).
+        if (p is null) throw QuerithmException.Invalid("meta.objects needs its params.");
+        CheckIds(p.Ids, p.ProfileId, p.Database, p.SessionId);
         var scope = ScopeOf(p.ProfileId, p.SessionId);
         if (scope == null) return _store.Load(p.ProfileId, p.Database, p.Ids).Objects;
         var own = _cache.Ephemeral.Load(p.ProfileId, SchemaCache.SessionDatabase(p.Database, scope.Id), p.Ids).Objects;
         return scope.InMemory ? own : [.. _store.Load(p.ProfileId, p.Database, p.Ids).Objects, .. own];
+    }
+
+    /// <summary>meta.foreignKeys: the cached foreign keys declared on <see cref="ForeignKeysParams.Ids"/> (H12), with a session's own view's.</summary>
+    public SnapFk[] ForeignKeys(ForeignKeysParams p)
+    {
+        if (p is null) throw QuerithmException.Invalid("meta.foreignKeys needs its params.");
+        CheckIds(p.Ids, p.ProfileId, p.Database, p.SessionId);
+        var scope = ScopeOf(p.ProfileId, p.SessionId);
+        if (scope == null) return _store.ForeignKeysOf(p.ProfileId, p.Database, p.Ids);
+        var own = _cache.Ephemeral.ForeignKeysOf(p.ProfileId, SchemaCache.SessionDatabase(p.Database, scope.Id), p.Ids);
+        return scope.InMemory ? own : [.. _store.ForeignKeysOf(p.ProfileId, p.Database, p.Ids), .. own];
     }
 
     public ObjectDetails Details(ObjectDetailsParams p)

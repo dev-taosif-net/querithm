@@ -10,17 +10,57 @@ namespace Querithm.Intelligence.TSql;
 /// </summary>
 public static class Formatting
 {
+    /// <summary>
+    /// Chain operators in one statement past which the generator is not run. ScriptDom's script generator is quadratic in
+    /// a chain's length (measured 2026-11-26, ScriptDom 180.140.0, Windows, one OR chain on a deep stack: 10,000 terms
+    /// 0.38 s, 20,000 0.65 s, 40,000 2.4 s, 80,000 9.0 s), and lang.format has no cancel, so a pasted load script kept a
+    /// thread busy for minutes. Parsing stays bounded by <see cref="TSqlParsing.MaxChainOperators"/>.
+    /// </summary>
+    public const int MaxChainOperators = 20_000;
+
+    /// <summary>
+    /// Statements nested in IF / WHILE / BEGIN … END / TRY … CATCH past which the generator is not run: it indents every
+    /// level, so its output grows with the square of the depth (round-3 review 2026-11-26, measured with ScriptDom
+    /// 180.140.0: 4,000 nested IFs, 28 KB in, came out as 32M characters; 10,000 nested BEGINs as 400M). 1,000 levels
+    /// stay near 2M characters.
+    /// </summary>
+    public const int MaxStatementDepth = 1_000;
+
+    sealed class StatementDepth : TSqlFragmentVisitor
+    {
+        int _depth;
+        public int Max { get; private set; }
+
+        void In(Action visit)
+        {
+            if (++_depth > Max) Max = _depth;
+            try { visit(); } finally { _depth--; }
+        }
+
+        public override void ExplicitVisit(IfStatement node) => In(() => base.ExplicitVisit(node));
+        public override void ExplicitVisit(WhileStatement node) => In(() => base.ExplicitVisit(node));
+        public override void ExplicitVisit(BeginEndBlockStatement node) => In(() => base.ExplicitVisit(node));
+        public override void ExplicitVisit(TryCatchStatement node) => In(() => base.ExplicitVisit(node));
+    }
+
     public static FormatResult Format(string text, FormatOptions? options)
     {
         var parsed = TSqlParsing.Parse(text);
         if (parsed.Errors.Count > 0 || parsed.Script == null)
             return new FormatResult { Text = text, Error = $"Cannot format: line {parsed.Errors[0].Line}: {parsed.Errors[0].Message}" };
+        // Parentheses (subqueries) and CASE nest the generator's indentation too: the same depth limit (Gemini review 2026-11-26).
+        if (TSqlParsing.TooDeep(parsed.Tokens, MaxStatementDepth, MaxChainOperators, controlWeight: 0) is { } tooLong)
+            return new FormatResult { Text = text, Error = "Cannot format: " + tooLong.Replace("to analyse", "to format", StringComparison.Ordinal) };
+        var depth = new StatementDepth();
+        parsed.Script.Accept(depth); // on the caller's deep stack (lang.format runs on DeepStack)
+        if (depth.Max > MaxStatementDepth)
+            return new FormatResult { Text = text, Error = $"Cannot format: this script nests statements (IF, WHILE, BEGIN … END, TRY … CATCH) more than {MaxStatementDepth:N0} levels deep, too deep to format." };
 
         var o = options ?? new FormatOptions();
         var gen = new Sql160ScriptGenerator(new SqlScriptGeneratorOptions
         {
             KeywordCasing = o.KeywordCase switch { KeywordCase.Lower => KeywordCasing.Lowercase, KeywordCase.Preserve => KeywordCasing.PascalCase, _ => KeywordCasing.Uppercase },
-            IndentationSize = o.IndentSize ?? 4,
+            IndentationSize = Math.Clamp(o.IndentSize ?? 4, 0, 16), // -1 threw, 10,000,000 allocated without end
             NewLineBeforeJoinClause = o.NewlineBeforeJoin ?? true,
             AlignClauseBodies = false,
             IncludeSemicolons = true,

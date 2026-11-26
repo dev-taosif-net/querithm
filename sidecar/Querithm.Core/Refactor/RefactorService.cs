@@ -184,7 +184,7 @@ public sealed class RefactorService(SessionManager sessions, MetadataService met
         // Packages too (Oracle, D4 S11): a body that reads the target breaks with it like any routine.
         var modules = snap.Objects.Where(o => o.Kind is ObjectKind.View or ObjectKind.Proc or ObjectKind.Func or ObjectKind.Tvf or ObjectKind.Trigger
             or ObjectKind.Package or ObjectKind.PackageBody).ToList();
-        Parallel.ForEach(modules, new ParallelOptions { CancellationToken = ct }, o =>
+        Parallel.ForEach(modules, new ParallelOptions { CancellationToken = ct, MaxDegreeOfParallelism = Environment.ProcessorCount }, o =>
         {
             if (!defs.TryGetValue(o.Id, out var def)) return;
             if (def == null)
@@ -211,7 +211,7 @@ public sealed class RefactorService(SessionManager sessions, MetadataService met
         if (_scans.Count > 20_000) _scans.Clear();
         var mentioned = (tabs ?? []).Where(t => t.Text.Length <= 4_000_000 && RefText.ContainsWord(t.Text, needle) &&
                                                 (resolved.Column == null || RefText.ContainsWord(t.Text, resolved.Name)));
-        Parallel.ForEach(mentioned, new ParallelOptions { CancellationToken = ct }, tab =>
+        Parallel.ForEach(mentioned, new ParallelOptions { CancellationToken = ct, MaxDegreeOfParallelism = Environment.ProcessorCount }, tab =>
         {
             var scan = f.Find(tab.Text, rt, Context(snap, DefaultSchema(s, s.Provider, db), names));
             foreach (var h in scan.Hits) found.Add(new Found(null, tab.TabId, tab.Text, h));

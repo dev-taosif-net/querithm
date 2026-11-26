@@ -1,4 +1,5 @@
 using System.Data.Common;
+using Microsoft.Data.Sqlite;
 using System.Text;
 using Querithm.Contract;
 using Querithm.Contract.Providers;
@@ -59,6 +60,21 @@ public sealed class SqliteMetadata : IMetadataProvider
         var entries = await ReadSchemaAsync(connection, ct).ConfigureAwait(false);
         var bySchemaTable = entries.Where(e => e.Type is "table" or "view")
             .ToDictionary(e => (e.Schema, e.Name.ToLowerInvariant()), e => e);
+        // A table's indexes and triggers, grouped once (names folded: SQLite compares names case-insensitively). Before, each
+        // table scanned every entry: 4,000 tables with an index each took 593 ms against 16 ms for 500 (audit M23).
+        var dependents = entries.Where(d => d.Type is "index" or "trigger").ToLookup(d => (d.Schema, d.TableName.ToLowerInvariant()));
+        // A view's columns come from the tables and views it reads, which SQLite does not record: its marker also covers
+        // every table's and view's SQL, so a base table dropped and created again (or changed) reads the view again —
+        // before, a view described while its table was missing kept no columns until a full refresh (M11).
+        // Hashed once per read (only when there is a view): one view's marker then costs its own SQL, not every table's.
+        // A view of main reads only main (SQLite refuses a reference to temp there), so its marker leaves temp out: a tab's
+        // TEMP table changed every main view's marker in the shared store, and the next tab's refresh changed it back
+        // (code audit 2026-11-25, H7 / L14). A temp view can read both.
+        string? mainRelations = null, allRelations = null;
+        string HashRelations(bool withTemp) => Hash(entries.Where(d => d.Type is "table" or "view" && (withTemp || d.Schema == "main"))
+            .OrderBy(d => d.Schema, StringComparer.Ordinal).ThenBy(d => d.Name, StringComparer.Ordinal)
+            .SelectMany(d => new[] { d.Schema, d.Name, d.Sql }).ToArray()).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        string Relations(string schema) => schema == "temp" ? allRelations ??= HashRelations(withTemp: true) : mainRelations ??= HashRelations(withTemp: false);
         var stamps = new List<ObjectStamp>();
         foreach (var e in entries)
         {
@@ -66,11 +82,15 @@ public sealed class SqliteMetadata : IMetadataProvider
             var marker = e.Sql;
             if (kind == ObjectKind.Table)
             {
-                // A table's indexes and triggers change with it (names folded: SQLite compares names case-insensitively).
-                var deps = entries.Where(d => d.Schema == e.Schema && d.Type is "index" or "trigger" && string.Equals(d.TableName, e.Name, StringComparison.OrdinalIgnoreCase))
+                var deps = dependents[(e.Schema, e.Name.ToLowerInvariant())]
                     .OrderBy(d => d.Type, StringComparer.Ordinal).ThenBy(d => d.Name, StringComparer.Ordinal).Select(d => $"{d.Type}:{d.Name}:{d.Sql}");
                 marker = string.Join("\n", deps.Prepend(e.Sql ?? ""));
+                // Fourth round (L5): REFERENCES parent without columns names the parent's key, which is the parent's SQL:
+                // a parent created, dropped or changed later changes the child's foreign key, so it changes its marker.
+                foreach (var referenced in KeylessReferences(e.Sql))
+                    marker += "\nref:" + (bySchemaTable.TryGetValue((e.Schema, referenced.ToLowerInvariant()), out var p) ? p.Sql : "\0none");
             }
+            else if (kind == ObjectKind.View) marker = (e.Sql ?? "") + "\n" + Relations(e.Schema);
             long? parent = kind == ObjectKind.Trigger && bySchemaTable.TryGetValue((e.Schema, e.TableName.ToLowerInvariant()), out var owner)
                 ? IdOf(owner.Schema, owner.Type, owner.Name) : null;
             stamps.Add(new ObjectStamp(IdOf(e.Schema, e.Type, e.Name), e.Schema, e.Name, kind, Hash(marker), null, parent, SessionLocal: e.Schema == "temp"));
@@ -86,32 +106,101 @@ public sealed class SqliteMetadata : IMetadataProvider
         var columns = new List<ColumnRow>();
         var pkCols = new Dictionary<long, List<(int Pk, string Name)>>();
         var tableSql = entries.ToDictionary(e => IdOf(e.Schema, e.Type, e.Name), e => e.Sql ?? "");
+        // Only the objects asked for are read (audit M23: an incremental read of one table read every table's columns),
+        // their names passed as JSON arrays (parameters, never SQL text).
+        var asked = entries.Where(e => wanted.Contains(IdOf(e.Schema, e.Type, e.Name))).ToList();
+        // Written with Utf8JsonWriter, not JsonSerializer: reflection serialization is a trim warning in this rooted
+        // assembly (scripts/trim-warnings.mjs, code audit 2026-11-25 M5); each list is built once.
+        var mainTables = Names(asked, "main", "table");
+        var tempTables = Names(asked, "temp", "table");
+        var columnAt = new Dictionary<(long, string), int>();
+        var notes = new List<ObjectNote>();
+        void AddColumn(long id, SqliteColumnRow row)
+        {
+            if (row.Pk > 0) (pkCols.TryGetValue(id, out var l) ? l : pkCols[id] = []).Add((row.Pk, row.Name));
+            columnAt[(id, row.Name)] = columns.Count;
+            columns.Add(new ColumnRow(id, row.Cid + 1, row.Name, row.Type, null, null, null, Nullable: !row.NotNull, Identity: false, Computed: row.Hidden is 2 or 3,
+                Default: row.Default));
+        }
+        // Tables in one query per schema; a table's columns always read.
         await using (var cmd = connection.CreateCommand())
         {
             cmd.CommandText = """
                 SELECT 'main', m.name, p.cid, p.name, p.type, p."notnull", p.dflt_value, p.pk, p.hidden FROM main.sqlite_schema m JOIN pragma_table_xinfo(m.name, 'main') p
-                  WHERE m.type IN ('table','view') AND m.name NOT LIKE 'sqlite\_%' ESCAPE '\'
+                  WHERE m.type = 'table' AND m.name IN (SELECT value FROM json_each($mainTables))
                 UNION ALL
                 SELECT 'temp', m.name, p.cid, p.name, p.type, p."notnull", p.dflt_value, p.pk, p.hidden FROM temp.sqlite_schema m JOIN pragma_table_xinfo(m.name, 'temp') p
-                  WHERE m.type IN ('table','view') AND m.name NOT LIKE 'sqlite\_%' ESCAPE '\'
+                  WHERE m.type = 'table' AND m.name IN (SELECT value FROM json_each($tempTables))
                 """;
+            cmd.Parameters.Add(new SqliteParameter("$mainTables", mainTables));
+            cmd.Parameters.Add(new SqliteParameter("$tempTables", tempTables));
             await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             while (await r.ReadAsync(ct).ConfigureAwait(false))
+                if (ids.TryGetValue((r.GetString(0), r.GetString(1).ToLowerInvariant()), out var id))
+                    AddColumn(id, SqliteColumnRow.Read(r));
+        }
+        // Views in one query first (code audit 2026-11-25, M6: one query per view, 500 views meant 500 commands); a view
+        // whose table was dropped cannot be described, and its error fails that query (audit H14), so then one at a time.
+        var views = asked.Where(e => e.Type == "view").ToList();
+        if (views.Count > 1)
+        {
+            ct.ThrowIfCancellationRequested();
+            List<(string Schema, string Name, SqliteColumnRow Row)>? rows = [];
+            try
             {
-                if (!ids.TryGetValue((r.GetString(0), r.GetString(1).ToLowerInvariant()), out var id) || !wanted.Contains(id)) continue;
-                var name = r.GetString(3);
-                var type = r.IsDBNull(4) ? "" : r.GetString(4);
-                var pk = r.GetInt32(7);
-                var hidden = r.GetInt32(8);
-                if (pk > 0) (pkCols.TryGetValue(id, out var l) ? l : pkCols[id] = []).Add((pk, name));
-                columns.Add(new ColumnRow(id, r.GetInt32(2) + 1, name, type, null, null, null, Nullable: r.GetInt32(5) == 0, Identity: false, Computed: hidden is 2 or 3,
-                    Default: r.IsDBNull(6) ? null : r.GetString(6)));
+                await using var cmd = connection.CreateCommand();
+                cmd.CommandText = """
+                    SELECT 'main', m.name, p.cid, p.name, p.type, p."notnull", p.dflt_value, p.pk, p.hidden FROM main.sqlite_schema m JOIN pragma_table_xinfo(m.name, 'main') p
+                      WHERE m.type = 'view' AND m.name IN (SELECT value FROM json_each($mainViews))
+                    UNION ALL
+                    SELECT 'temp', m.name, p.cid, p.name, p.type, p."notnull", p.dflt_value, p.pk, p.hidden FROM temp.sqlite_schema m JOIN pragma_table_xinfo(m.name, 'temp') p
+                      WHERE m.type = 'view' AND m.name IN (SELECT value FROM json_each($tempViews))
+                    ORDER BY 1, 2, 3
+                    """;
+                cmd.Parameters.Add(new SqliteParameter("$mainViews", Names(asked, "main", "view")));
+                cmd.Parameters.Add(new SqliteParameter("$tempViews", Names(asked, "temp", "view")));
+                await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+                while (await r.ReadAsync(ct).ConfigureAwait(false)) rows.Add((r.GetString(0), r.GetString(1), SqliteColumnRow.Read(r)));
+            }
+            catch (SqliteException ex) when (ex.SqliteErrorCode == SqliteError) { rows = null; } // a broken view: one at a time
+            if (rows != null)
+            {
+                foreach (var (schema, name, row) in rows)
+                    if (ids.TryGetValue((schema, name.ToLowerInvariant()), out var id)) AddColumn(id, row);
+                views.Clear();
+            }
+        }
+        foreach (var view in views)
+        {
+            ct.ThrowIfCancellationRequested();
+            var id = IdOf(view.Schema, view.Type, view.Name);
+            try
+            {
+                await using var cmd = connection.CreateCommand();
+                cmd.CommandText = "SELECT 0, 0, p.cid, p.name, p.type, p.\"notnull\", p.dflt_value, p.pk, p.hidden FROM pragma_table_xinfo($name, $schema) p";
+                cmd.Parameters.Add(new SqliteParameter("$name", view.Name));
+                cmd.Parameters.Add(new SqliteParameter("$schema", view.Schema));
+                var rows = new List<SqliteColumnRow>();
+                await using (var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false))
+                    while (await r.ReadAsync(ct).ConfigureAwait(false)) rows.Add(SqliteColumnRow.Read(r));
+                foreach (var row in rows) AddColumn(id, row);
+            }
+            // SQLITE_ERROR only: the view names a table or column that no longer exists (audit H14). It is listed without
+            // columns and says why (M11). A busy, locked or failing file is not that — it fails the read as before, so a
+            // passing lock never leaves a healthy view without its columns.
+            catch (SqliteException ex) when (ex.SqliteErrorCode == SqliteError)
+            {
+                notes.Add(new ObjectNote(id, "invalid: its columns cannot be read (" + Reason(ex) + ")"));
             }
         }
         // A rowid alias (a single INTEGER PRIMARY KEY column) is never NULL and the engine numbers it.
+        // Fourth round (M10): WITHOUT ROWID is read from the table's tokens after its column list, not found anywhere in its
+        // SQL ('WITHOUT ROWID' in a default made a rowid table one; WITHOUT\nROWID was missed).
+        var withoutRowid = new Dictionary<long, bool>();
+        bool WithoutRowid(long id) => withoutRowid.TryGetValue(id, out var w) ? w : withoutRowid[id] = IsWithoutRowid(tableSql.GetValueOrDefault(id, ""));
         foreach (var (id, pks) in pkCols)
-            if (pks.Count == 1 && columns.FindIndex(c => c.ObjectId == id && c.Name == pks[0].Name) is var i and >= 0
-                && string.Equals(columns[i].TypeName, "INTEGER", StringComparison.OrdinalIgnoreCase) && !tableSql[id].Contains("WITHOUT ROWID", StringComparison.OrdinalIgnoreCase))
+            if (pks.Count == 1 && columnAt.TryGetValue((id, pks[0].Name), out var i)
+                && string.Equals(columns[i].TypeName, "INTEGER", StringComparison.OrdinalIgnoreCase) && !WithoutRowid(id))
                 columns[i] = columns[i] with { Nullable = false, Identity = true };
 
         var indexes = new List<IndexRow>();
@@ -119,12 +208,14 @@ public sealed class SqliteMetadata : IMetadataProvider
         {
             cmd.CommandText = """
                 SELECT 'main', m.name, il.name, il."unique", il.origin, ii.seqno, ii.name, il.partial FROM main.sqlite_schema m
-                  JOIN pragma_index_list(m.name, 'main') il JOIN pragma_index_info(il.name, 'main') ii WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite\_%' ESCAPE '\'
+                  JOIN pragma_index_list(m.name, 'main') il JOIN pragma_index_info(il.name, 'main') ii WHERE m.type = 'table' AND m.name IN (SELECT value FROM json_each($mainTables))
                 UNION ALL
                 SELECT 'temp', m.name, il.name, il."unique", il.origin, ii.seqno, ii.name, il.partial FROM temp.sqlite_schema m
-                  JOIN pragma_index_list(m.name, 'temp') il JOIN pragma_index_info(il.name, 'temp') ii WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite\_%' ESCAPE '\'
+                  JOIN pragma_index_list(m.name, 'temp') il JOIN pragma_index_info(il.name, 'temp') ii WHERE m.type = 'table' AND m.name IN (SELECT value FROM json_each($tempTables))
                 ORDER BY 1, 2, 3, 6
                 """;
+            cmd.Parameters.Add(new SqliteParameter("$mainTables", mainTables));
+            cmd.Parameters.Add(new SqliteParameter("$tempTables", tempTables));
             await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             var rows = new List<(long Id, string Index, bool Unique, bool Pk, string? Column, bool Partial)>();
             while (await r.ReadAsync(ct).ConfigureAwait(false))
@@ -135,9 +226,11 @@ public sealed class SqliteMetadata : IMetadataProvider
                 indexes.Add(new IndexRow(g.Key.Id, g.Key.Index, g.First().Unique, g.First().Pk, g.Select(x => x.Column ?? "(expression)").ToArray(),
                     NotAKey: g.First().Partial || g.Any(x => x.Column == null)));
         }
-        // A rowid-alias primary key has no index of its own: the key is the declared PRIMARY KEY columns.
+        // A rowid-alias primary key has no index of its own: the key is the declared PRIMARY KEY columns. (M11: a set, not a
+        // scan of every index per table.)
+        var withPrimary = indexes.Where(x => x.Primary).Select(x => x.ObjectId).ToHashSet();
         foreach (var (id, pks) in pkCols)
-            if (!indexes.Any(x => x.ObjectId == id && x.Primary))
+            if (!withPrimary.Contains(id))
                 indexes.Add(new IndexRow(id, "PRIMARY KEY", true, true, pks.OrderBy(p => p.Pk).Select(p => p.Name).ToArray()));
         // Phase D1: an ordinary rowid table's PRIMARY KEY may hold NULLs (a SQLite legacy) unless its columns are NOT NULL;
         // such a key does not identify a row, so it is reported as a plain unique index, never as the primary key.
@@ -145,36 +238,143 @@ public sealed class SqliteMetadata : IMetadataProvider
         {
             var ix = indexes[k];
             if (!ix.Primary) continue;
-            var nullable = ix.Columns.Any(n => columns.FirstOrDefault(c => c.ObjectId == ix.ObjectId && c.Name == n) is { Nullable: true });
+            var nullable = ix.Columns.Any(n => columnAt.TryGetValue((ix.ObjectId, n), out var at) && columns[at].Nullable);
             // WITHOUT ROWID tables enforce NOT NULL on their primary key themselves.
-            if (nullable && !tableSql.GetValueOrDefault(ix.ObjectId, "").Contains("WITHOUT ROWID", StringComparison.OrdinalIgnoreCase)) indexes[k] = ix with { Primary = false };
+            if (nullable && !WithoutRowid(ix.ObjectId)) indexes[k] = ix with { Primary = false };
         }
 
         var fks = new List<FkRow>();
+        var rowsFk = new List<(string Schema, long Id, string Table, int Fk, string Ref, string From, string? To)>();
         await using (var cmd = connection.CreateCommand())
         {
             cmd.CommandText = """
                 SELECT 'main', m.name, f.id, f.seq, f."table", f."from", f."to" FROM main.sqlite_schema m JOIN pragma_foreign_key_list(m.name, 'main') f
-                  WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite\_%' ESCAPE '\'
+                  WHERE m.type = 'table' AND m.name IN (SELECT value FROM json_each($mainTables))
                 UNION ALL
                 SELECT 'temp', m.name, f.id, f.seq, f."table", f."from", f."to" FROM temp.sqlite_schema m JOIN pragma_foreign_key_list(m.name, 'temp') f
-                  WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite\_%' ESCAPE '\'
+                  WHERE m.type = 'table' AND m.name IN (SELECT value FROM json_each($tempTables))
                 ORDER BY 1, 2, 3, 4
                 """;
+            cmd.Parameters.Add(new SqliteParameter("$mainTables", mainTables));
+            cmd.Parameters.Add(new SqliteParameter("$tempTables", tempTables));
             await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            var rows = new List<(string Schema, long Id, string Table, int Fk, string Ref, string From, string? To)>();
             while (await r.ReadAsync(ct).ConfigureAwait(false))
-                if (ids.TryGetValue((r.GetString(0), r.GetString(1).ToLowerInvariant()), out var id) && wanted.Contains(id))
-                    rows.Add((r.GetString(0), id, r.GetString(1), r.GetInt32(2), r.GetString(4), r.GetString(5), r.IsDBNull(6) ? null : r.GetString(6)));
-            foreach (var g in rows.GroupBy(x => (x.Id, x.Fk)))
-            {
-                var first = g.First();
-                if (!ids.TryGetValue((first.Schema, first.Ref.ToLowerInvariant()), out var refId)) continue; // a reference to a missing table
-                var pairs = g.Select(x => new FkColumnPair { Parent = x.From, Referenced = x.To ?? "" }).ToArray();
-                fks.Add(new FkRow($"fk_{first.Table}_{first.Fk}", first.Id, refId, pairs));
-            }
+                if (ids.TryGetValue((r.GetString(0), r.GetString(1).ToLowerInvariant()), out var id))
+                    rowsFk.Add((r.GetString(0), id, r.GetString(1), r.GetInt32(2), r.GetString(4), r.GetString(5), r.IsDBNull(6) ? null : r.GetString(6)));
         }
-        return new MetadataBundle(columns, [], indexes, fks);
+        // REFERENCES parent without a column list means the parent's primary key, in its declared order (audit M26: the
+        // pair came out with an empty column, and tier 1 offered the join `o.customer_id = c.""`).
+        var parentKeys = new Dictionary<(string, string), string[]>();
+        async Task<string[]> KeyOf(string schema, string table)
+        {
+            if (parentKeys.TryGetValue((schema, table.ToLowerInvariant()), out var known)) return known;
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT name FROM pragma_table_info($name, $schema) WHERE pk > 0 ORDER BY pk";
+            cmd.Parameters.Add(new SqliteParameter("$name", table));
+            cmd.Parameters.Add(new SqliteParameter("$schema", schema));
+            var names = new List<string>();
+            try
+            {
+                await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+                while (await r.ReadAsync(ct).ConfigureAwait(false)) names.Add(r.GetString(0));
+            }
+            // A parent that cannot be described (a view over a dropped table, G#11): it has no key, so the FK is left out
+            // instead of failing the whole read.
+            catch (SqliteException ex) when (ex.SqliteErrorCode == SqliteError) { names.Clear(); }
+            return parentKeys[(schema, table.ToLowerInvariant())] = [.. names];
+        }
+        foreach (var g in rowsFk.GroupBy(x => (x.Id, x.Fk)))
+        {
+            var first = g.First();
+            if (!ids.TryGetValue((first.Schema, first.Ref.ToLowerInvariant()), out var refId)) continue; // a reference to a missing table
+            var list = g.ToList();
+            string[] referenced;
+            if (list.All(x => x.To != null)) referenced = list.Select(x => x.To!).ToArray();
+            else
+            {
+                // M11: a parent read in this call already has its key in pkCols (one query per parent otherwise).
+                referenced = wanted.Contains(refId)
+                    ? (pkCols.TryGetValue(refId, out var known) ? known.OrderBy(p => p.Pk).Select(p => p.Name).ToArray() : [])
+                    : await KeyOf(first.Schema, first.Ref).ConfigureAwait(false);
+                // No primary key, or one of another width: SQLite reports a mismatch when the key is used; no pair is made up.
+                if (referenced.Length != list.Count) continue;
+            }
+            var pairs = list.Select((x, i) => new FkColumnPair { Parent = x.From, Referenced = referenced[i] }).ToArray();
+            fks.Add(new FkRow($"fk_{first.Table}_{first.Fk}", first.Id, refId, pairs));
+        }
+        return new MetadataBundle(columns, [], indexes, fks, Notes: notes);
+    }
+
+    /// <summary>
+    /// The CREATE TABLE ends with the WITHOUT ROWID table option: read from its tokens after the column list's ')' (the
+    /// options are comma-separated words there: WITHOUT ROWID, STRICT).
+    /// </summary>
+    internal static bool IsWithoutRowid(string sql)
+    {
+        if (sql.IndexOf("ROWID", StringComparison.OrdinalIgnoreCase) < 0) return false;
+        var code = SqliteTokenizer.Tokenize(sql).Where(t => !t.IsTrivia).ToList();
+        var open = code.FindIndex(t => t.IsP("("));
+        if (open < 0) return false;
+        var depth = 0;
+        var close = -1;
+        for (var i = open; i < code.Count && close < 0; i++)
+            if (code[i].IsP("(")) depth++;
+            else if (code[i].IsP(")") && --depth == 0) close = i;
+        for (var i = close + 1; close >= 0 && i + 1 < code.Count; i++)
+            if (code[i].Is("WITHOUT") && code[i + 1].Is("ROWID")) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// The tables a CREATE TABLE references without a column list (<c>REFERENCES parent</c>: the parent's primary key), by
+    /// tokens; empty when its SQL names no REFERENCES.
+    /// </summary>
+    internal static IEnumerable<string> KeylessReferences(string? sql)
+    {
+        if (sql == null || sql.IndexOf("REFERENCES", StringComparison.OrdinalIgnoreCase) < 0) yield break;
+        var code = SqliteTokenizer.Tokenize(sql).Where(t => !t.IsTrivia).ToList();
+        for (var i = 0; i + 1 < code.Count; i++)
+        {
+            if (!code[i].Is("REFERENCES")) continue;
+            var name = i + 1;
+            if (name + 2 < code.Count && code[name + 1].IsP(".")) name += 2; // schema.table
+            if (name + 1 < code.Count && code[name + 1].IsP("(")) continue;
+            yield return SqliteTokenizer.Unquote(code[name]);
+        }
+    }
+
+    /// <summary>The names of the asked objects of one schema and type, as a JSON array (a parameter, never SQL text).</summary>
+    static string Names(List<Entry> asked, string schema, string type)
+    {
+        using var buffer = new MemoryStream();
+        using (var w = new System.Text.Json.Utf8JsonWriter(buffer))
+        {
+            w.WriteStartArray();
+            foreach (var e in asked)
+                if (e.Schema == schema && e.Type == type) w.WriteStringValue(e.Name);
+            w.WriteEndArray();
+        }
+        return Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
+    }
+
+    /// <summary>SQLITE_ERROR, the primary code of "no such table / column": a statement that cannot be prepared.</summary>
+    const int SqliteError = 1;
+
+    /// <summary>SQLite's own reason, without Microsoft.Data.Sqlite's "SQLite Error 1: '…'." wrapper, bounded (it is shown and stored).</summary>
+    static string Reason(SqliteException ex)
+    {
+        var m = ex.Message;
+        var open = m.IndexOf('\'');
+        var close = m.LastIndexOf('\'');
+        if (open >= 0 && close > open) m = m[(open + 1)..close];
+        return m.Length > 200 ? m[..200] : m;
+    }
+
+    /// <summary>One row of pragma_table_xinfo, columns 2–8 of the detail queries.</summary>
+    readonly record struct SqliteColumnRow(int Cid, string Name, string Type, bool NotNull, string? Default, int Pk, int Hidden)
+    {
+        public static SqliteColumnRow Read(DbDataReader r) =>
+            new(r.GetInt32(2), r.GetString(3), r.IsDBNull(4) ? "" : r.GetString(4), r.GetInt32(5) != 0, r.IsDBNull(6) ? null : r.GetString(6), r.GetInt32(7), r.GetInt32(8));
     }
 
     public async Task<string?> GetDefinitionAsync(DbConnection connection, ObjectRef obj, CancellationToken ct)

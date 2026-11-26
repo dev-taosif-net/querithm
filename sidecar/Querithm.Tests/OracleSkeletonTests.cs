@@ -59,7 +59,7 @@ public class OracleSkeletonTests
     [Fact]
     public void Editor_services_answer_empty_and_formatting_says_why()
     {
-        Assert.Empty(_oracle.Language.Complete(new CompleteParams { DocId = "d", Text = "SEL", Offset = 3, Dialect = Dialect.Oracle }, new NoSchema()));
+        Assert.Empty(_oracle.Language.Complete(new CompleteParams { DocId = "d", Text = "SEL", Offset = 3, Dialect = Dialect.Oracle }, new NoSchema(), CancellationToken.None));
         Assert.Empty(_oracle.Language.Diagnostics(new DiagnosticsParams { DocId = "d", Text = "SELECT", Dialect = Dialect.Oracle }));
         var f = _oracle.Language.Format(new FormatParams { Text = "select 1 from dual", Dialect = Dialect.Oracle });
         Assert.Equal(("select 1 from dual", OracleLanguageService.NoFormatter), (f.Text, f.Error));

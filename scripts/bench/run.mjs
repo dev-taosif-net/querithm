@@ -10,21 +10,23 @@
 //   pnpm bench -- --mysql      # MySQL per-engine metrics only (the mysql84 fixture)
 //   pnpm bench -- --duckdb     # DuckDB per-engine metrics only (temp-dir files, no Docker)
 //   pnpm bench -- --oracle     # Oracle per-engine metrics only (the oracle fixture, --profile oracle), and 3 / 4 on Oracle
+//   pnpm bench -- --tier1      # tier-1 completion metrics only (4b: the completion engine under node, no Docker, no sidecar)
 //   pnpm bench -- --app <bin>  # also measure the bundled app (cold start, RSS, orphan check) — Linux/macOS
 import { spawn, spawnSync, execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, mkdtempSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
-import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { bigPlpgsql, bigPlsqlTier2, bigProc, bigResultQuery } from "./gen-schema.mjs";
 import { fixturePassword } from "../fixture/fixture-secrets.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const args = process.argv.slice(2);
-const only = args.includes("--engine") ? "engine" : args.includes("--ui") ? "ui" : args.includes("--sqlite") ? "sqlite" : args.includes("--mysql") ? "mysql" : args.includes("--duckdb") ? "duckdb" : args.includes("--oracle") ? "oracle" : "all";
+const only = args.includes("--engine") ? "engine" : args.includes("--ui") ? "ui" : args.includes("--sqlite") ? "sqlite" : args.includes("--mysql") ? "mysql" : args.includes("--duckdb") ? "duckdb" : args.includes("--oracle") ? "oracle" : args.includes("--tier1") ? "tier1" : "all";
 const appBin = args.includes("--app") ? args[args.indexOf("--app") + 1] : null;
 const RUNS = 5;
 
@@ -109,6 +111,9 @@ const TARGETS = {
   // D4 S06: the editor on an Oracle tab (oracle language, Oracle lexer rules, the app user's snapshot).
   "3.oracle": ["Oracle: typing latency in a 12k-line PL/SQL package body (p95)", "ms", 16],
   "4.oracle": ["Oracle: tier-1 completion latency in a 12k-line PL/SQL package body (p95)", "ms", 5],
+  // Completion audit 2026-11-25 (H9): tier 1 on a 5,000-table schema, run here so the 20 % rule covers it (perf.test
+  // asserts this p95 only under QUERITHM_PERF_STRICT=1).
+  "4b": ["Tier-1 completion on a 5,000-table schema (21 columns, 3,000 FKs): FROM | / FROM Tab| / JOIN |, slowest engine and statement (p95, node)", "ms", 5],
   // D4 S09: tier 2 on the app user's snapshot of the bench schema (600 tables × 15 columns).
   "5.oracle": ["Oracle: tier-2 completion latency, 10k-line script on the 600-table fixture (p95)", "ms", 150],
   // D4 S10: grid edit preview and import on Oracle (the #20 / #23 shapes, the app user's own schema).
@@ -1595,6 +1600,59 @@ async function appMetrics() {
   record(16, alive, { via: "bundled app" });
 }
 
+/**
+ * Metric 4b (§14 #4b): the tier-1 completion engine on the 5,000-table schema of perf.test.ts (fixtures/largeSchema.ts),
+ * bundled with the repo's esbuild and run in a fresh node process: 20 warm-up calls, then 200 timed ones per engine and
+ * statement. No sidecar, no Docker.
+ */
+async function tier1Metrics() {
+  console.log("tier-1 metrics (completion engine under node)");
+  const vite = createRequire(fileURLToPath(import.meta.resolve("vite/package.json")));
+  const esbuild = await import(pathToFileURL(vite.resolve("esbuild")).href);
+  const dir = mkdtempSync(path.join(os.tmpdir(), "qbench-tier1-"));
+  try {
+    await tier1Run(esbuild, dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true }); // the bundle and its entry: nothing of the run is kept there
+  }
+}
+
+async function tier1Run(esbuild, dir) {
+  const src = (f) => JSON.stringify(path.join(root, "src", "editor", "completion", f).replace(/\\/g, "/"));
+  const entry = path.join(dir, "entry.ts");
+  writeFileSync(entry, [
+    `import { complete } from ${src("complete")};`,
+    `import { buildSchemaIndex } from ${src("schemaIndex")};`,
+    `import { LARGE_SCHEMA_ENGINES, LARGE_SCHEMA_STATEMENTS, largeSchema } from ${src("__tests__/fixtures/largeSchema")};`,
+    "const out: Record<string, number[]> = {};",
+    "for (const d of LARGE_SCHEMA_ENGINES) {",
+    "  const { snapshot, loginSchema } = largeSchema(d);",
+    "  const schema = buildSchemaIndex(snapshot, d, [\"db\"], loginSchema);",
+    "  for (const sql of LARGE_SCHEMA_STATEMENTS) {",
+    "    for (let w = 0; w < 20; w++) complete({ text: sql, offset: sql.length, dialect: d, schema });",
+    "    const times: number[] = [];",
+    "    for (let r = 0; r < 200; r++) {",
+    "      const s = performance.now();",
+    "      const res = complete({ text: sql, offset: sql.length, dialect: d, schema });",
+    "      times.push(performance.now() - s);",
+    "      if (res.items.length !== 500) throw new Error(`${d} ${sql}: ${res.items.length} items, not 500`);",
+    "    }",
+    "    out[`${d}|${sql}`] = times;",
+    "  }",
+    "}",
+    "process.stdout.write(JSON.stringify(out));",
+  ].join("\n"));
+  const outfile = path.join(dir, "tier1.mjs");
+  await esbuild.build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "error" });
+  // Bounded: a completion engine that loops must fail the step, not hang the bench (Gemini review 2026-11-26).
+  const r = spawnSync(process.execPath, [outfile], { encoding: "utf8", maxBuffer: 64 * 2 ** 20, timeout: 300_000 });
+  if (r.status !== 0) throw new Error(`tier-1 bench failed: ${r.stderr || r.error?.message || "exit " + r.status}`);
+  const times = JSON.parse(r.stdout);
+  const perCase = Object.fromEntries(Object.entries(times).map(([k, t]) => [k, Math.round(p95(t) * 100) / 100]));
+  const worst = Object.entries(perCase).sort((a, b) => b[1] - a[1])[0];
+  record("4b", worst[1], { slowest: worst[0], p95: perCase, samplesPerCase: 200 });
+}
+
 function compare(file) {
   const dir = path.dirname(file);
   const cur = JSON.parse(readFileSync(file, "utf8"));
@@ -1626,7 +1684,15 @@ if (only === "all" || only === "engine" || only === "sqlite") await sqliteMetric
 if (only === "all" || only === "engine" || only === "mysql") await mysqlMetrics();
 if (only === "all" || only === "engine" || only === "duckdb") await duckdbMetrics();
 if (only === "all" || only === "engine" || only === "oracle") await oracleMetrics();
+// A metric step that broke off measured nothing: it fails the run (exit 1) instead of reading as a skipped metric.
+const stepErrors = [];
+if (only === "all" || only === "tier1") await tier1Metrics().catch((e) => {
+  stepErrors.push("tier-1");
+  results["4b"] = { metric: TARGETS["4b"][0], unit: TARGETS["4b"][1], target: TARGETS["4b"][2], value: null, error: String(e?.message ?? e), pass: false };
+  console.log(`  tier-1 metrics failed: ${e.message}`);
+});
 if (only === "all" || only === "oracle") await oracleUiMetrics().catch((e) => {
+  stepErrors.push("oracle ui");
   for (const k of ["3.oracle", "4.oracle"]) if (!results[k]) results[k] = { metric: TARGETS[k][0], unit: TARGETS[k][1], target: TARGETS[k][2], value: null, error: String(e?.message ?? e), pass: false };
   console.log(`  oracle ui metrics failed: ${e.message}`);
 });
@@ -1641,5 +1707,5 @@ const file = path.join(outDir, `${new Date().toISOString().slice(0, 19).replace(
 writeFileSync(file, JSON.stringify({ date: new Date().toISOString(), os: `${os.type()} ${os.release()}`, cpu: os.cpus()[0]?.model, cores: os.cpus().length, memGb: Math.round(os.totalmem() / 2 ** 30), results }, null, 2));
 const failed = Object.values(results).filter((r) => r?.metric && !r.pass).length;
 const regressions = compare(file);
-console.log(`\nwrote ${path.relative(root, file)} — ${failed} metric(s) outside target, ${regressions} regression(s)${uiError ? ", ui metrics FAILED" : ""}`);
-process.exit(regressions > 0 || uiError ? 1 : 0);
+console.log(`\nwrote ${path.relative(root, file)} — ${failed} metric(s) outside target, ${regressions} regression(s)${uiError ? ", ui metrics FAILED" : ""}${stepErrors.length ? `, ${stepErrors.join(" and ")} metrics FAILED` : ""}`);
+process.exit(regressions > 0 || uiError || stepErrors.length > 0 ? 1 : 0);

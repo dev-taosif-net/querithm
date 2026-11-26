@@ -25,6 +25,7 @@ public static class SqliteTokenizer
         var line = 1;
         while (i < s.Length)
         {
+            Tier2Cancellation.Check(list.Count);
             var start = i;
             var startLine = line;
             var c = s[i];
@@ -177,16 +178,29 @@ public static class SqliteSplitter
         var code = new List<SqliteToken>(); // non-trivia tokens of the current statement
         var depth = 0; // BEGIN/CASE … END inside a trigger body
         var inTrigger = false;
+        var parens = 0;
+        var seen = 0;
         foreach (var t in tokens)
         {
+            Tier2Cancellation.Check(seen++);
             current.Add(t);
             if (t.IsTrivia) continue;
             code.Add(t);
-            if (!inTrigger && code.Count <= 4 && t.Is("TRIGGER") && code[0].Is("CREATE")) inTrigger = true;
-            if (inTrigger)
+            if (t.IsP("(")) parens++;
+            else if (t.IsP(")")) parens = Math.Max(0, parens - 1);
+            // Fourth round (C12): TRIGGER and BEGIN are names in SQLite (CREATE TEMP TABLE trigger (begin INT)), and the
+            // ';' after it kept a DROP inside "the trigger". Only CREATE [TEMP] TRIGGER starts one; its body is the first
+            // BEGIN outside parentheses (not NEW.begin); inside it only CASE … END nests.
+            if (!inTrigger && t.Is("TRIGGER") && code[0].Is("CREATE")
+                && (code.Count == 2 || (code.Count == 3 && (code[1].Is("TEMP") || code[1].Is("TEMPORARY")))))
+                inTrigger = true;
+            if (inTrigger && parens == 0)
             {
-                if (t.Is("BEGIN") || (depth > 0 && t.Is("CASE"))) depth++;
-                else if (t.Is("END") && depth > 0) depth--;
+                var prev = code.Count >= 2 ? code[^2] : default;
+                var dotted = prev.IsP(".");
+                if (depth == 0 && t.Is("BEGIN") && !dotted) depth = 1;
+                else if (depth > 0 && t.Is("CASE") && !dotted) depth++;
+                else if (depth > 0 && t.Is("END") && !dotted) depth--;
             }
             if (t.IsP(";") && depth == 0)
             {
@@ -194,6 +208,7 @@ public static class SqliteSplitter
                 current = [];
                 code.Clear();
                 inTrigger = false;
+                parens = 0;
             }
         }
         if (current.Any(t => !t.IsTrivia)) statements.Add(current);

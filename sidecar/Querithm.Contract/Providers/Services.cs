@@ -13,10 +13,18 @@ public interface ISchemaSource
 public interface IDialectService
 {
     Classification Classify(string text);
-    CompletionItem[] Complete(CompleteParams p, ISchemaSource schema);
+
+    /// <summary>
+    /// Tier-2 completion. CPU work only (no I/O), but it can grow with the script: <paramref name="ct"/> fires when a
+    /// newer request for the same document arrives or the request's deadline passes (§9), and the engine then throws
+    /// <see cref="OperationCanceledException"/> at its next check instead of finishing an answer nobody reads.
+    /// </summary>
+    CompletionItem[] Complete(CompleteParams p, ISchemaSource schema, CancellationToken ct);
     Diagnostic[] Diagnostics(DiagnosticsParams p);
     FormatResult Format(FormatParams p);
-    SignatureHelp Signature(SignatureParams p, ISchemaSource schema);
+
+    /// <summary>Signature help; <paramref name="ct"/> as for <see cref="Complete"/>.</summary>
+    SignatureHelp Signature(SignatureParams p, ISchemaSource schema, CancellationToken ct);
     FoldingRange[] Folding(FoldingParams p);
 
     /// <summary>
@@ -55,12 +63,20 @@ public sealed record IndexRow(long ObjectId, string Name, bool Unique, bool Prim
 
 public sealed record FkRow(string Name, long Parent, long Referenced, FkColumnPair[] Columns);
 
+/// <param name="Notes">
+/// What could not be read of an object, found while reading its details (a SQLite view over a dropped table): kept as
+/// the object's <see cref="SnapObject.Note"/> until it is read again, unless its stamp carries a note of its own.
+/// </param>
 public sealed record MetadataBundle(
     IReadOnlyList<ColumnRow> Columns,
     IReadOnlyList<ParamRow> Params,
     IReadOnlyList<IndexRow> Indexes,
     IReadOnlyList<FkRow> Fks,
-    IReadOnlyList<MemberRow>? Members = null);
+    IReadOnlyList<MemberRow>? Members = null,
+    IReadOnlyList<ObjectNote>? Notes = null);
+
+/// <summary>A note on one object from its detail read (<see cref="MetadataBundle.Notes"/>).</summary>
+public sealed record ObjectNote(long ObjectId, string Note);
 
 /// <summary>Phase D4 (Oracle): one subprogram of a package specification as declared, display text only (<see cref="SnapObject.Members"/>).</summary>
 public sealed record MemberRow(long ObjectId, int Ordinal, string Text);

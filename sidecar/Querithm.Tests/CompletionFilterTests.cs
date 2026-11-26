@@ -47,7 +47,7 @@ public class CompletionFilterTests(ITestOutputHelper output)
         };
         var schema = new FakeSchema(snap, "SalesDB");
         const string text = "SELECT * FROM Table01";
-        CompletionItem[] Raw() => TSqlCompletion.Complete(new CompleteParams { DocId = "m10k", Text = text, Offset = text.Length, Dialect = Dialect.Tsql, ProfileId = "p1", Database = "SalesDB" }, schema);
+        CompletionItem[] Raw() => TSqlCompletion.Complete(new CompleteParams { DocId = "m10k", Text = text, Offset = text.Length, Dialect = Dialect.Tsql, ProfileId = "p1", Database = "SalesDB" }, schema, CancellationToken.None);
         Raw(); // warm-up
         var raw = Raw();
         var filtered = CompletionFilter.Apply(raw, text, text.Length);

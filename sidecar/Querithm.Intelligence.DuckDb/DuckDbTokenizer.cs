@@ -19,6 +19,7 @@ public static class DuckDbTokenizer
         var list = new List<PgToken>(raw.Count);
         for (var i = 0; i < raw.Count; i++)
         {
+            Tier2Cancellation.Check(i);
             var t = raw[i];
             if (!ReferenceEquals(mapped, s)) t = t with { Text = s.Substring(t.Offset, t.Length) };
             if (t is { Kind: PgTokenKind.Operator, Text: "$" } && i + 1 < raw.Count && raw[i + 1] is { Kind: PgTokenKind.Word } w && w.Offset == t.Offset + 1)
@@ -32,6 +33,14 @@ public static class DuckDbTokenizer
         return list;
     }
 
+    /// <summary>The text holds a character DuckDB's StripUnicodeSpaces may map to an ASCII space.</summary>
+    public static bool HasMappedSpace(string s)
+    {
+        foreach (var c in s)
+            if (c is ' ' or (>= ' ' and <= '​') or ' ' or ' ' or '⁠' or '　' or '﻿') return true;
+        return false;
+    }
+
     /// <summary>
     /// The text as DuckDB's scanner reads it (PT7-1): Parser::StripUnicodeSpaces replaces U+00A0, U+2000–U+200B, U+202F,
     /// U+205F, U+2060, U+3000 and U+FEFF with an ASCII space before parsing — but only where its own small state machine is
@@ -42,10 +51,7 @@ public static class DuckDbTokenizer
     /// </summary>
     public static string MapUnicodeSpaces(string s)
     {
-        var any = false;
-        foreach (var c in s)
-            if (c is '\u00A0' or (>= '\u2000' and <= '\u200B') or '\u202F' or '\u205F' or '\u2060' or '\u3000' or '\uFEFF') { any = true; break; }
-        if (!any) return s;
+        if (!HasMappedSpace(s)) return s;
         var q = System.Text.Encoding.UTF8.GetBytes(s);
         var found = StripPositions(q);
         if (found.Count == 0) return s;
@@ -146,8 +152,10 @@ public static class DuckDbTokenizer
         var result = new List<List<PgToken>>();
         var cur = new List<PgToken>();
         var depth = 0;
+        var seen = 0;
         foreach (var t in tokens)
         {
+            Tier2Cancellation.Check(seen++);
             if (t is { Kind: PgTokenKind.Punct, Text: "(" }) depth++;
             else if (t is { Kind: PgTokenKind.Punct, Text: ")" }) depth = Math.Max(0, depth - 1);
             cur.Add(t);

@@ -102,6 +102,8 @@ public sealed class DuckDbMetadata : IMetadataProvider
     public async Task<IReadOnlyList<ObjectStamp>> GetStampsAsync(DbConnection connection, CancellationToken ct)
     {
         var entries = await ReadSchemaAsync(connection, ct).ConfigureAwait(false);
+        // A table's indexes, grouped once: before, each table scanned every entry (audit M23).
+        var indexesOf = entries.Where(d => d.Type == "index" && d.Parent != null).ToLookup(d => (d.Schema, d.Parent!.ToLowerInvariant()));
         var stamps = new List<ObjectStamp>();
         // Macros may be overloaded: one object per name, its marker over every overload.
         foreach (var g in entries.Where(e => KindOf(e.Type) != null).GroupBy(e => (e.Schema, Group(e.Type), e.Name.ToLowerInvariant())))
@@ -110,8 +112,7 @@ public sealed class DuckDbMetadata : IMetadataProvider
             var kind = KindOf(e.Type)!.Value;
             var marker = kind switch
             {
-                ObjectKind.Table => string.Join("\n", entries
-                    .Where(d => d.Type == "index" && d.Schema == e.Schema && string.Equals(d.Parent, e.Name, StringComparison.OrdinalIgnoreCase))
+                ObjectKind.Table => string.Join("\n", indexesOf[(e.Schema, e.Name.ToLowerInvariant())]
                     .OrderBy(d => d.Name, StringComparer.Ordinal).Select(d => d.Sql).Prepend(e.Sql)),
                 ObjectKind.Sequence => SequenceMarker(e.Sql),
                 _ => string.Join("\n", g.Select(x => $"{x.Params}|{x.Sql}").Order(StringComparer.Ordinal)),

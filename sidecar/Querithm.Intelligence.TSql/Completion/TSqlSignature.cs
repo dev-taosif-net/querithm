@@ -11,8 +11,10 @@ public static class TSqlSignature
 {
     static readonly SignatureHelp None = new() { Signatures = [] };
 
-    public static SignatureHelp Help(SignatureParams p, ISchemaSource schema)
+    /// <summary>Token work, linear in the document; <paramref name="ct"/> (a newer request, the deadline) is checked before it.</summary>
+    public static SignatureHelp Help(SignatureParams p, ISchemaSource schema, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         try { return Run(p, schema) ?? None; }
         catch { return None; }
     }

@@ -4,8 +4,10 @@ import { rpc } from "../ipc/client";
 import { applyKeywordCase, complete, keywordCaseEdit, resolveObjectAt } from "./completion";
 import type { SchemaIndex, Tier1Item } from "./completion/types";
 import { sqlRegionAtOffset } from "./completion/sqlRegion";
-import { closeQuoteOf, monacoFilterText, objectDescription, objectForItem, openQuoteAt } from "./completion/complete";
-import { getStream } from "./completion/lexer";
+import { closeQuoteOf, monacoFilterText, objectDescription, objectForItem, openQuoteToken } from "./completion/complete";
+import { getStream, tokenize, type Token } from "./completion/lexer";
+import { prefixHash, tailHash } from "./prefixHash";
+import { MATCH_NONE, bestMatch, sortText } from "./completion/rank";
 import { lastStartingBefore } from "./completion/scanner";
 import { expandWildcardAtOffset } from "./expandWildcard";
 import { findInsertMatchingHighlight, findSyntaxPairHighlight } from "./syntaxPairs";
@@ -17,7 +19,7 @@ import { monaco } from "./monaco";
 import { modelOwner, onEditorCreated, onModelContent, onModelDisposed, tabIdOfModel } from "./editors";
 import { useTabs } from "../store/tabs";
 import { useProfiles } from "../store/profiles";
-import { ensureTabSnapshot, loginSchemaOf, tabScope, tabSnapshot, useSnapshots } from "../store/snapshots";
+import { ensureTabSnapshot, loginSchemaOf, tabScope, tabSnapshot, useSnapshots, willRetry } from "../store/snapshots";
 import { isDisconnected } from "../store/connections";
 import { useSettings } from "../store/settings";
 import { snippetsFor, useSnippets } from "../snippets/snippetStore";
@@ -130,15 +132,17 @@ function pushStat(arr: number[], v: number) {
   arr.push(v);
 }
 
-/** FNV-1a over a string: identifies the text before the word without keeping it. */
-function textHash(s: string): string {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
-  return (h >>> 0).toString(36) + ":" + s.length;
-}
-
-export function tier2Key(model: monaco.editor.ITextModel, ctx: DocContext, text: string, wordStart: number): string {
-  return [String(model.uri), ctx.profileId ?? "", ctx.database ?? "", ctx.sessionId ?? "", ctx.snapVersion ?? 0, ctx.dialect, wordStart, textHash(text.slice(0, wordStart))].join("|");
+/**
+ * Where tier 2's answer for a word may be reused: the model, connection, snapshot, the word's start and the text
+ * before it — and the rest of the statement after the word (`tailStart`..`tailEnd`): `x.|` asked over
+ * `FROM dbo.Orders x` must ask again once that reads `FROM dbo.Customers x` (completion audit 2026-11-25, M15). The text
+ * before the word stays whole in the key (a declaration above the statement is part of tier 2's answer); prefixHash
+ * re-reads only what changed of it. The tail is read at its two ends (tailHash): a long `VALUES` list after the cursor
+ * was hashed whole on every keystroke.
+ */
+export function tier2Key(model: monaco.editor.ITextModel, ctx: DocContext, text: string, wordStart: number, tailStart = wordStart, tailEnd = tailStart): string {
+  const tail = tailHash(text, tailStart, tailEnd);
+  return [String(model.uri), ctx.profileId ?? "", ctx.database ?? "", ctx.sessionId ?? "", ctx.snapVersion ?? 0, ctx.dialect, wordStart, prefixHash(model, text, wordStart), tail].join("|");
 }
 
 const covers = (askedFor: string, items: CompletionItem[], typed: string) =>
@@ -171,9 +175,14 @@ export function resetTier2Cache() {
   tier2Cache.clear();
 }
 
-/** Drops a model's pending tier-2 request (its model went away), or every model's without a key. */
+/**
+ * Drops a model's pending tier-2 request (its model went away), or every model's without a key: one still in its
+ * debounce and one already sent alike (L8: without a key only the debounced ones went, and a sent one's late answer
+ * still re-opened a list).
+ */
 export function cancelTier2(modelKey?: string) {
-  for (const k of modelKey === undefined ? [...tier2Timers.keys()] : [modelKey]) {
+  const keys = modelKey === undefined ? new Set([...tier2Timers.keys(), ...tier2Pending.keys(), ...tier2Latest.keys()]) : [modelKey];
+  for (const k of keys) {
     clearTimeout(tier2Timers.get(k));
     tier2Timers.delete(k);
     tier2Pending.delete(k);
@@ -199,6 +208,23 @@ const escapes = new WeakMap<monaco.editor.ITextModel, number>();
 const escapesOf = (model: monaco.editor.ITextModel) => escapes.get(model) ?? 0;
 
 /**
+ * Models whose open list the user moved the selection in (arrow keys, Page Up / Down) since Monaco last asked for items.
+ * A list re-opened from code gets its first row focused again (SuggestController shows it at the memory's index), so a
+ * late answer would make Enter accept another row than the one picked (completion audit 2026-11-25, low): such a list is
+ * left as it is, and the answer, cached, joins the next keystroke's list.
+ */
+const navigated = new WeakSet<monaco.editor.ITextModel>();
+const isNavKey = (k: number) => {
+  const K = monaco.KeyCode;
+  return k === K.UpArrow || k === K.DownArrow || k === K.PageUp || k === K.PageDown;
+};
+/** Whether a list may be refreshed from code now: none is open, or the user has not moved its selection. */
+const mayRefresh = (editor: monaco.editor.ICodeEditor) => {
+  const model = editor.getModel();
+  return !model || !navigated.has(model);
+};
+
+/**
  * Whether the cursor is still in the word a tier-2 request was made for: after `wordStart`, on the same line, with only
  * the word typed since (`typed` extended, no whitespace). Enter or a space moves past it, and a list opened there would
  * take the next Enter.
@@ -212,12 +238,12 @@ export function cursorInWord(editor: monaco.editor.ICodeEditor, model: monaco.ed
   return !/\s/.test(word) && word.toLowerCase().startsWith(typed);
 }
 
-function scheduleTier2(model: monaco.editor.ITextModel, ctx: DocContext, offset: number, base: string, tier1Labels: Set<string>, wordStart = offset) {
+function scheduleTier2(model: monaco.editor.ITextModel, ctx: DocContext, text: string, offset: number, base: string, tier1Labels: Set<string>, wordStart = offset) {
   if (!useSettings.getState().tier2) return;
   const m = ctx.docId ?? ctx.tabId; // the model key (a notebook cell's own)
   // The text and the offset are sent as they are now, together: the word the sidecar filters on is the word the entry is
-  // cached under (an offset from now with the text 120 ms later could point past a shortened document).
-  const text = model.getValue();
+  // cached under (an offset from now with the text 120 ms later could point past a shortened document). `text` is the
+  // keystroke's own model.getValue(): a second copy cost a full read, and prefixHash then compared the two whole (M18).
   const typed = text.slice(wordStart, offset).toLowerCase();
   const inFlight = tier2Pending.get(m);
   // A request for a shorter form of this word covers it (unless its answer hits the cap: then the next keystroke asks).
@@ -225,7 +251,7 @@ function scheduleTier2(model: monaco.editor.ITextModel, ctx: DocContext, offset:
   const pending = { base, typed };
   tier2Pending.set(m, pending);
   clearTimeout(tier2Timers.get(m));
-  const before = textHash(text.slice(0, wordStart));
+  const before = prefixHash(model, text, wordStart);
   const escapesBefore = escapesOf(model);
   tier2Timers.set(m, setTimeout(async () => {
     tier2Timers.delete(m);
@@ -250,10 +276,11 @@ function scheduleTier2(model: monaco.editor.ITextModel, ctx: DocContext, offset:
       // before it unchanged) — or, when tier 1 had nothing to show (so no popup opened), open it with tier 2's items.
       // A new list opens only while the cursor is still in that word and the user has not closed a list with Escape
       // since: a list opened on the next line (Enter typed meanwhile) or after Escape would take the next Enter.
-      const sameWord = textHash(model.getValue().slice(0, wordStart)) === before;
+      const curText = model.getValue();
+      const sameWord = curText.length >= wordStart && prefixHash(model, curText, wordStart) === before;
       const mayOpen = () => !!editor && tier1Labels.size === 0 && items.length > 0 && editor.hasTextFocus()
         && escapesOf(model) === escapesBefore && cursorInWord(editor, model, wordStart, typed);
-      if (editor && changed && sameWord && (suggestWidgetVisible(editor) || mayOpen())) refreshSuggest(editor, "tier2");
+      if (editor && changed && sameWord && (suggestWidgetVisible(editor) ? mayRefresh(editor) : mayOpen())) refreshSuggest(editor, "tier2");
     } catch {
       /* tier 2 is best effort */
     } finally {
@@ -297,13 +324,34 @@ function installKeywordCaseOnType(editor: monaco.editor.ICodeEditor) {
   });
 }
 
+/**
+ * Item documentation as markdown with no command links and no HTML (M17): names and types in it come from the server.
+ * Monaco's defaults say the same; written out, a later default or option cannot turn them on.
+ */
+const untrusted = (value: string): monaco.IMarkdownString => ({ value, isTrusted: false, supportHtml: false });
+
+/** Documentation built when Monaco shows an item's details (resolveCompletionItem): items past the first rows of a long list. */
+const lazyDocs = new WeakMap<monaco.languages.CompletionItem, () => string>();
+
+export function resolveCompletionItem(item: monaco.languages.CompletionItem): monaco.languages.CompletionItem {
+  const doc = lazyDocs.get(item);
+  if (doc && !item.documentation) item.documentation = untrusted(doc());
+  return item;
+}
+
 function toMonaco(item: Tier1Item | CompletionItem, range: monaco.IRange | monaco.languages.CompletionItemRanges, tier: 1 | 2, usageScope?: [string, string]): monaco.languages.CompletionItem {
+  const out = toMonacoItem(item, range, tier, usageScope);
+  if ("resolveDocumentation" in item && item.resolveDocumentation && !item.documentation) lazyDocs.set(out, item.resolveDocumentation);
+  return out;
+}
+
+function toMonacoItem(item: Tier1Item | CompletionItem, range: monaco.IRange | monaco.languages.CompletionItemRanges, tier: 1 | 2, usageScope?: [string, string]): monaco.languages.CompletionItem {
   return {
     // An object shows its bare name, its schema leading the description on the right (§9); `label` stays its identity.
     label: { label: ("display" in item && item.display) || item.label, description: item.detail ?? undefined },
     kind: kindMap[item.kind] ?? monaco.languages.CompletionItemKind.Text,
     detail: item.detail ?? undefined,
-    documentation: item.documentation ? { value: item.documentation } : undefined,
+    documentation: item.documentation ? untrusted(item.documentation) : undefined,
     insertText: item.insertText ?? (item.kind === "keyword" ? keywordText(item.label) : item.label),
     insertTextRules: item.isSnippet ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
     sortText: item.sortText ?? (tier === 2 ? `5${item.label}` : undefined),
@@ -312,6 +360,9 @@ function toMonaco(item: Tier1Item | CompletionItem, range: monaco.IRange | monac
     command: { id: "querithm.noteUsage", title: "", arguments: ["usageKey" in item && item.usageKey ? item.usageKey : item.label, ...(usageScope ?? [])] },
   };
 }
+
+/** Dialects where `[x]` is a delimited name, so a typed `[` may start one (the completion trigger). */
+export const BRACKET_NAMES: ReadonlySet<string> = new Set(["tsql", "sqlite"]);
 
 /** Clauses whose next word is an object name: a list opened by typing a space there is wanted (`FROM |`). */
 const SPACE_TRIGGER_CLAUSES = new Set(["from", "join", "update", "insertInto", "delete", "exec", "use"]);
@@ -338,10 +389,15 @@ function mergeKey(kind: CompletionKind, label: string): string {
 /**
  * End of the name the cursor is in, so accepting replaces all of it (`Cust|omerId` → `CustomerId`, not
  * `CustomerIdomerId`). Inside an opened quote (`open` = `[`, `"` or a backtick) the name runs to its closing quote on
- * the same line, which is replaced too; without one, to the end of the word.
+ * the same line, which is replaced too; without one, to the end of the word. `quotedEnd`: where the lexer's token of
+ * that quoted name ends (-1: unknown, or not closed), so a doubled closing quote inside it (`[a]]b]`) stays in it (L8).
  */
-export function wordEndAt(text: string, offset: number, open = ""): number {
-  if (open) {
+export function wordEndAt(text: string, offset: number, open = "", quotedEnd = -1): number {
+  if (open && quotedEnd >= offset && quotedEnd - offset <= 256) {
+    let lineBreak = false;
+    for (let e = offset; e < quotedEnd && !lineBreak; e++) lineBreak = text[e] === "\n" || text[e] === "\r";
+    if (!lineBreak) return quotedEnd;
+  } else if (open) {
     const close = closeQuoteOf(open);
     for (let e = offset; e < text.length && e - offset < 256; e++) {
       const c = text[e];
@@ -354,12 +410,34 @@ export function wordEndAt(text: string, offset: number, open = ""): number {
   return end;
 }
 
+/**
+ * The closed quoted name `t` the cursor (at `offset`) is in ends at a closing quote of its own: what lies between the
+ * cursor and that quote, lexed, holds no list or statement punctuation (`,` `;` `(` `)`), operator, string or quoted
+ * name. `"Cust|, "Name"`: the lexer closes the name at the next name's opening quote, and `, ` is between.
+ * `[Order| Details]` and `[a|]]b]` (a doubled quote) end at their own.
+ */
+export function closesOwnName(text: string, offset: number, t: Token, dialect: Dialect): boolean {
+  if (t.open || t.end - 1 <= offset) return true;
+  if (t.end - offset > 256) return false; // as wordEndAt: a quote that far is not this name's
+  const close = text[t.end - 1];
+  for (const x of tokenize(text.slice(offset, t.end - 1), dialect)) {
+    // A doubled closing quote is the name's own character (`]]` lexes as two `]` operators, `""` as an empty name).
+    if (x.kind === "operator" && x.value === close) continue;
+    if (x.kind === "qident" && x.value === "" && x.end - x.start === 2 && text[offset + x.start] === close) continue;
+    if (x.kind === "operator" || x.kind === "string" || x.kind === "qident") return false;
+    if (x.kind === "punct" && (x.value === "," || x.value === ";" || x.value === "(" || x.value === ")")) return false;
+  }
+  return true;
+}
+
 function provideCompletion(model: monaco.editor.ITextModel, position: monaco.Position, trigger?: monaco.languages.CompletionContext): monaco.languages.CompletionList {
+  navigated.delete(model); // Monaco asks again: the list it shows next is focused anew anyway
   const ctx = docContext(model);
   if (!ctx) return { suggestions: [] };
   // No schema cached for a connected tab (never loaded, or the load failed): load it now, so the next request —
-  // `incomplete: true` re-asks on every keystroke — has its tables. ensure() is a no-op while a load is in flight.
-  if (!ctx.schema && ctx.profileId) ensureTabSnapshot(useTabs.getState().tabs[ctx.tabId]);
+  // `incomplete: true` re-asks on every keystroke — has its tables. ensure() is a no-op while a load is in flight. An
+  // index without objects counts as none: a failed answer builds an empty one (second audit review: the retry never ran).
+  if (!ctx.schema?.objects.length && ctx.profileId) ensureTabSnapshot(useTabs.getState().tabs[ctx.tabId]);
   const t0 = performance.now();
   const offset = model.getOffsetAt(position);
   const text = model.getValue();
@@ -372,29 +450,44 @@ function provideCompletion(model: monaco.editor.ITextModel, position: monaco.Pos
   if (result.context.inStringOrComment) {
     return inDollarBody(text, offset, ctx.dialect) ? dollarBodyCompletion(model, ctx, text, offset, position) : { suggestions: [] };
   }
+  if (result.context.inNumber) return { suggestions: [] };
   if (!wantsList(trigger, result.context)) return { suggestions: [], incomplete: true };
-  // In a routine body tier 2 answers `$1` and `"Quoted"`: the range must cover a typed `$` or opening `"` too.
-  const bodyStart = dollarBodyStart(text, offset, ctx.dialect);
-  // An opened quote (`[Ord|`, `"Ord|`) is replaced with the item's fully quoted name, its closing quote included.
-  const open = bodyStart >= 0 ? "" : openQuoteAt(text, result.context.prefixStart, ctx.dialect);
+  // In a routine body tier 2 answers `$1` and `"Quoted"`: the range must cover a typed `$` or opening `"` too. The body
+  // tier 1 read (result.context.body) is the one used: no second slice of it per keystroke (R4).
+  const read = result.context.body;
+  const body = read ? { start: read.base, end: read.base + read.text.length } : dollarBody(text, offset, ctx.dialect);
+  // An opened quote (`[Ord|`, `"Ord|`) is replaced with the item's fully quoted name, its closing quote included. In a
+  // routine body it is read on the body's own tokens, as tier 1 reads it: the outer text holds the body as one string,
+  // so no quote was seen there and `"Order|Arc"` became `"OrderArchive"Arc"` (M15).
+  const region = read ? { text: read.text, offset: offset - read.base, base: read.base } : body ? sqlRegionAtOffset(text, offset, ctx.dialect) : { text, offset, base: 0 };
+  const quoted = openQuoteToken(region.text, result.context.prefixStart - region.base, ctx.dialect);
+  const open = quoted ? region.text[quoted.start] : "";
   const startOffset = open ? result.context.prefixStart - 1
-    : bodyStart >= 0 ? Math.min(result.context.prefixStart, dollarWordStart(text, offset, bodyStart)) : result.context.prefixStart;
+    : body ? Math.min(result.context.prefixStart, dollarWordStart(text, offset, body.start, body.end, read?.text)) : result.context.prefixStart;
   const start = model.getPositionAt(startOffset);
-  const end = model.getPositionAt(wordEndAt(text, offset, open));
+  // A quoted name closed by the next name's opening quote (`"Cust|, "Name"` lexes `"Cust, "` as one name) is replaced
+  // up to the word only: its "closing" quote is not its own (R3-4).
+  const ownClose = !!quoted && !quoted.open && closesOwnName(region.text, region.offset, quoted, ctx.dialect);
+  const wordEnd = quoted && !ownClose ? wordEndAt(text, offset) : wordEndAt(text, offset, open, ownClose ? quoted!.end + region.base : -1);
+  const end = model.getPositionAt(wordEnd);
   const insert = new monaco.Range(start.lineNumber, start.column, position.lineNumber, position.column);
   const range = { insert, replace: new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column) };
-  const baseKey = tier2Key(model, ctx, text, startOffset);
+  const baseKey = tier2Key(model, ctx, text, startOffset, wordEnd, Math.max(wordEnd, result.context.statementEnd));
   const merged = new Map<string, monaco.languages.CompletionItem>();
   // Tier 1 already matched (prefix, camel hump, substring) and ranked these items. Monaco sorts by its own fuzzy score
   // first and uses sortText only for ties, which put `ORDER BY` above `OrderId` for `ORD` and dropped `tblmenu` for
   // `menu`. A filter text that starts with what was typed gives every tier-1 item the same score, so tier 1's order
   // holds. (The text typed includes an opened quote: the range starts there.)
   const typed = text.slice(startOffset, offset);
+  // Only a word tier 1 read (or an opened quote) goes in front: a `$` typed in a routine body (`RETURN $|`) is no part of
+  // tier 1's word, and with it every keyword's filter text matched it, so the list kept them all and accepting one
+  // removed the `$` (H12).
+  const typedWord = result.context.prefix || open ? typed : "";
   // Tier-1 items built from a snapshot object: their description (schema, columns, rows) is kept over tier 2's.
   const described = new Set<string>();
   for (const i of result.items) {
     const item = toMonaco(i, range, 1, scope);
-    if (typed) item.filterText = monacoFilterText(typed, i);
+    if (typedWord) item.filterText = monacoFilterText(typedWord, i);
     const k = mergeKey(i.kind, i.label);
     merged.set(k, item);
     if (i.schemaObject) described.add(k);
@@ -422,11 +515,31 @@ function provideCompletion(model: monaco.editor.ITextModel, position: monaco.Pos
         next.detail = description;
         next.filterText ??= i.label; // Monaco still filters on `schema.name`, as before
       }
-      merged.set(k, prev ? { ...prev, detail: next.detail ?? prev.detail, label: { label: (prev.label as monaco.languages.CompletionItemLabel).label, description: i.detail ?? (prev.label as monaco.languages.CompletionItemLabel).description } } : next);
+      if (!prev && typedWord) {
+        // An item only tier 2 offers, matching the word, is ranked like tier 1's (completion audit 2026-11-25, M17):
+        // the same filter text scheme (so Monaco's fuzzy score is equal) and a sort key by how the word matches it, so
+        // a prefix match no longer falls below every tier-1 substring match. Group 4: after tier 1's columns and
+        // objects, before keywords. One that does not match (an older word's answer) keeps Monaco's own filtering.
+        const word = result.context.prefix;
+        const m = bestMatch(word, [i.label, i.label.slice(i.label.lastIndexOf(".") + 1)]);
+        if (m !== MATCH_NONE) {
+          // The opened quote is in `typed` already (it was put before the label above too: `[Ord[OrdersArchive`).
+          next.filterText = typedWord + (open ? i.label : next.filterText ?? i.label);
+          next.sortText = sortText({ tier: 0, match: m, group: 4, usage: 0, order: 0, rest: Math.max(0, i.label.length - word.length), label: i.label });
+        }
+      }
+      const out = prev ? { ...prev, detail: next.detail ?? prev.detail, label: { label: (prev.label as monaco.languages.CompletionItemLabel).label, description: i.detail ?? (prev.label as monaco.languages.CompletionItemLabel).description } } : next;
+      const lazy = prev && lazyDocs.get(prev);
+      if (lazy) lazyDocs.set(out, lazy); // the merged copy keeps tier 1's documentation still to build
+      merged.set(k, out);
     }
   }
-  if (!exact) scheduleTier2(model, ctx, offset, baseKey, new Set(merged.keys()), startOffset);
-  for (const item of snippetSuggestions(ctx.dialect, text, result.context.prefixStart, offset, insert)) merged.set(`snippet:${item.filterText}`, item);
+  if (!exact) scheduleTier2(model, ctx, text, offset, baseKey, new Set(merged.keys()), startOffset);
+  // Library snippets only where a statement or an expression may start: never where a new name is typed (an alias
+  // after AS, a column definition) or inside an opened quote, whose name they would replace (completion audit, low).
+  const nameSlot = result.context.slot === "alias" || result.context.slot === "name";
+  const snippets = nameSlot || open ? [] : snippetSuggestions(ctx.dialect, text, result.context.prefixStart, offset, insert);
+  for (const item of snippets) merged.set(`snippet:${item.filterText}`, item);
   const status = schemaStatusItem(ctx, result.context, text.slice(startOffset, offset), insert);
   if (status) merged.set("status:", status);
   return { suggestions: [...merged.values()], incomplete: true };
@@ -439,7 +552,9 @@ const NAME_CLAUSES = new Set(["from", "join", "update", "insertInto", "delete", 
  * server is disconnected. Accepting it changes nothing (it re-inserts what was typed). Shown only where names belong.
  */
 function schemaStatusItem(ctx: DocContext, c: { clause: string; slot?: string }, typed: string, range: monaco.IRange): monaco.languages.CompletionItem | null {
-  if (ctx.schema || !NAME_CLAUSES.has(c.clause) || c.slot === "alias" || c.slot === "name") return null;
+  // Shown until names are there: an index without objects (a first refresh still running, a read that failed with
+  // nothing cached) says nothing by itself (completion audit M21).
+  if (ctx.schema?.objects.length || !NAME_CLAUSES.has(c.clause) || c.slot === "alias" || c.slot === "name") return null;
   const tab = useTabs.getState().tabs[ctx.tabId];
   if (!tab?.profileId) return null;
   let label: string;
@@ -448,7 +563,13 @@ function schemaStatusItem(ctx: DocContext, c: { clause: string; slot?: string },
   else {
     const entry = tabSnapshot(tab);
     if (!tabScope(tab)) return null; // no database picked: nothing to load
-    if (entry && entry.status !== "loading" && entry.failedAt) { label = "Schema not loaded"; detail = "the load failed; retrying"; }
+    // Read, and the database has no objects; or a session's own view before its first run (nothing to read yet, D0d).
+    if (entry?.index && (entry.status === "fresh" || (entry.status === "empty" && entry.sessionId))) return null;
+    // A load or refresh running says loading, whatever failed before it (M18).
+    if (entry && entry.status !== "loading" && entry.status !== "refreshing" && (entry.failedAt || entry.status === "error")) {
+      label = "Schema not loaded";
+      detail = willRetry(entry) ? "the load failed; retrying" : "the load failed; refresh the database to try again";
+    }
     else { label = "Loading schema…"; detail = "tables and columns appear when it arrives"; }
   }
   return {
@@ -464,11 +585,17 @@ export function inDollarBody(text: string, offset: number, dialect: Dialect): bo
 
 /** Offset just after the opening `$tag$` of the body holding the cursor, or -1 outside one (or without such bodies). */
 function dollarBodyStart(text: string, offset: number, dialect: Dialect): number {
-  if (!DIALECTS[dialect].dollarQuotedBodies) return -1;
+  return dollarBody(text, offset, dialect)?.start ?? -1;
+}
+
+/** The body holding the cursor: after its opening `$tag$` up to its closing one (the text's end while it is open). */
+function dollarBody(text: string, offset: number, dialect: Dialect): { start: number; end: number } | undefined {
+  if (!DIALECTS[dialect].dollarQuotedBodies) return undefined;
   const code = getStream(text, dialect).code;
   const t = code[lastStartingBefore(code, offset)];
-  if (!t || t.kind !== "string" || !t.tag) return -1;
-  return offset >= t.start + t.tag && (t.open ? offset <= t.end : offset <= t.end - t.tag) ? t.start + t.tag : -1;
+  if (!t || t.kind !== "string" || !t.tag) return undefined;
+  const start = t.start + t.tag, end = t.open ? t.end : t.end - t.tag;
+  return offset >= start && offset <= end ? { start, end } : undefined;
 }
 
 /**
@@ -476,12 +603,16 @@ function dollarBodyStart(text: string, offset: number, dialect: Dialect): number
  * decides, and it answers nothing for a real string. So the cursor's word is completed from tier 2 alone (§9).
  */
 function dollarBodyCompletion(model: monaco.editor.ITextModel, ctx: DocContext, text: string, offset: number, position: monaco.Position): monaco.languages.CompletionList {
-  const start = dollarWordStart(text, offset, Math.max(0, dollarBodyStart(text, offset, ctx.dialect)));
+  const body = dollarBody(text, offset, ctx.dialect) ?? { start: 0, end: text.length };
+  const start = dollarWordStart(text, offset, body.start, body.end);
   const from = model.getPositionAt(start);
   const range = new monaco.Range(from.lineNumber, from.column, position.lineNumber, position.column);
-  const key = tier2Key(model, ctx, text, start);
+  // The rest of the body after the word is in the key as a statement's rest is outside one (M15): tier 1 cannot tell
+  // where the body's statement ends here.
+  const wordEnd = wordEndAt(text, offset);
+  const key = tier2Key(model, ctx, text, start, wordEnd, Math.max(wordEnd, body.end));
   const { exact, stale } = lookupTier2(key, text.slice(start, offset).toLowerCase());
-  if (!exact) scheduleTier2(model, ctx, offset, key, new Set(), start);
+  if (!exact) scheduleTier2(model, ctx, text, offset, key, new Set(), start);
   const t2 = exact ?? stale;
   return { suggestions: t2 ? t2.map((i) => toMonaco(i, range, 2)) : [], incomplete: true };
 }
@@ -490,21 +621,25 @@ function dollarBodyCompletion(model: monaco.editor.ITextModel, ctx: DocContext, 
  * Start of the PostgreSQL token being typed at `offset` inside a routine body, so the completion replaces it whole:
  * an identifier (Unicode letters included), a positional parameter (`$`, `$1`) or an unterminated quoted identifier (`"Li`).
  */
-export function dollarWordStart(text: string, offset: number, bodyStart = 0): number {
-  const lineStart = Math.max(bodyStart, text.lastIndexOf("\n", offset - 1) + 1);
-  // An open quoted identifier on this line: an odd number of `"` before the cursor.
-  const q = text.lastIndexOf('"', offset - 1);
-  if (q >= lineStart) {
-    let n = 0;
-    for (let i = lineStart; i < offset; i++) if (text[i] === '"') n++;
-    if (n % 2 === 1) return q;
+export function dollarWordStart(text: string, offset: number, bodyStart = 0, bodyEnd = text.length, bodyText?: string): number {
+  // The body's tokens, PostgreSQL's lexer, from the body's start: a `"` inside '…' or a comment is no opened name
+  // (counting quotes on the line put the word's start inside a string literal — completion audit, low), and a line
+  // that begins inside a string or comment opened on an earlier line is read as one (lexing from the line start took
+  // `second'; PERFORM v_x` for a string, so the range was empty — second audit review). The stream is the cached one
+  // tier 1 lexes for the same body (scanBody); `bodyText`, that body's own string, is a cache hit without a compare.
+  const { code, comments } = getStream(bodyText ?? text.slice(bodyStart, Math.max(offset, Math.min(bodyEnd, text.length))), "pg");
+  const rel = offset - bodyStart;
+  const c = comments[lastStartingBefore(comments, rel)];
+  if (c && rel <= c.end) return offset; // in a comment, or right after one
+  const t = code[lastStartingBefore(code, rel)];
+  if (!t || rel > t.end) return offset;
+  switch (t.kind) {
+    case "qident": return t.open || t.end > rel ? bodyStart + t.start : offset; // `"Li`, still open at the cursor
+    case "ident": case "keyword": case "param": return bodyStart + t.start; // a name, `$1` (up to the cursor)
+    // `$` alone: a parameter being typed, unless it closes a dollar-quote tag (`$$`, `$fn$`).
+    case "operator": return t.value === "$" ? bodyStart + t.start : offset;
+    default: return offset;
   }
-  const part = (ch: string) => /[\p{L}\p{N}_]/u.test(ch);
-  let start = offset;
-  while (start > lineStart && part(text[start - 1])) start--;
-  // `$` or `$12`: a parameter, unless the `$` closes a dollar-quote tag (`$$`, `$fn$`).
-  if (start > lineStart && text[start - 1] === "$" && /^[0-9]*$/.test(text.slice(start, offset)) ) start--;
-  return start;
 }
 
 /**
@@ -642,17 +777,21 @@ export function installProviders() {
   // row counts arriving add themselves to the open list's table items.
   const refreshOpenLists = () => {
     for (const editor of monaco.editor.getEditors()) {
-      if (suggestWidgetVisible(editor)) refreshSuggest(editor, "schema");
+      if (suggestWidgetVisible(editor) && mayRefresh(editor)) refreshSuggest(editor, "schema");
     }
   };
   useSnapshots.subscribe((s, prev) => { if (s.entries !== prev.entries) refreshOpenLists(); });
   onRowCounts(refreshOpenLists);
   // CTE names and schema prefixes (App Themes §5.3); answers only while semantic colours are switched on.
   installSemanticTokens(DIALECT_LIST.map((d) => DIALECTS[d].language), docContext);
-  for (const lang of DIALECT_LIST.map((d) => DIALECTS[d].language)) {
+  for (const d of DIALECT_LIST) {
+    const lang = DIALECTS[d].language;
     monaco.languages.registerCompletionItemProvider(lang, {
-      triggerCharacters: [".", " ", "@", "(", ",", "["],
+      // `[` opens a bracketed name only where `[x]` is one (SQL Server, SQLite): elsewhere it is an array subscript or a
+      // JSON path (`arr[1]`), and a list opened there took the next Enter (completion audit 2026-11-25, H8).
+      triggerCharacters: BRACKET_NAMES.has(d) ? [".", " ", "@", "(", ",", "["] : [".", " ", "@", "(", ","],
       provideCompletionItems: (model, position, context) => provideCompletion(model, position, context),
+      resolveCompletionItem: (item) => resolveCompletionItem(item),
     });
     monaco.languages.registerHoverProvider(lang, { provideHover: (model, position) => provideHover(model, position) });
     monaco.languages.registerFoldingRangeProvider(lang, {
@@ -832,6 +971,7 @@ export function installProviders() {
     editor.onKeyDown((e) => {
       const model = editor.getModel();
       if (model && e.keyCode === monaco.KeyCode.Escape) escapes.set(model, escapesOf(model) + 1);
+      if (model && isNavKey(e.keyCode) && suggestWidgetVisible(editor)) navigated.add(model);
     });
     addCommentMenu(editor);
 

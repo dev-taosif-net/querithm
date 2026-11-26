@@ -239,9 +239,15 @@ describe("scanner: statements and batches", () => {
     expect(names(c)).toEqual(["Orders t", "Customers s"]);
   });
   it("MERGE: WHEN MATCHED THEN UPDATE SET", () => {
-    const c = ctxOf("MERGE dbo.Orders AS t USING (SELECT CustomerId FROM dbo.Customers) AS s ON t.CustomerId = s.CustomerId WHEN MATCHED THEN UPDATE SET |");
+    const head = "MERGE dbo.Orders AS t USING (SELECT CustomerId FROM dbo.Customers) AS s ON t.CustomerId = s.CustomerId WHEN MATCHED THEN UPDATE SET ";
+    const c = ctxOf(`${head}|`);
     expect(c.clause).toBe("set");
-    expect(c.tablesInScope.find((x) => x.alias === "s")?.columns).toEqual(["CustomerId"]);
+    // The target slot holds the merged table only (completion audit M9); the value after `=` sees the source.
+    expect(c.setTarget).toBe(true);
+    expect(c.tablesInScope.map((x) => x.alias)).toEqual(["t"]);
+    const v = ctxOf(`${head}Status = |`);
+    expect(v.setTarget).toBeUndefined();
+    expect(v.tablesInScope.find((x) => x.alias === "s")?.columns).toEqual(["CustomerId"]);
   });
   it("MERGE: WHEN NOT MATCHED THEN INSERT (", () => {
     const c = ctxOf("MERGE dbo.Orders AS t USING dbo.Customers AS s ON t.CustomerId = s.CustomerId WHEN NOT MATCHED THEN INSERT (|");

@@ -80,6 +80,10 @@ public sealed class DuckDbLanguageService : IDialectService
         string? refusal = SqlChars.NulRefusal(text, "DuckDB");
         bool ddl = false, begins = false, ends = false;
         var prepared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Fourth round (M17): the batch-alone reading below differs only where DuckDB maps a Unicode space; without one it
+        // is the same reading, so it is skipped, and the findings seen are kept in one set (it was rebuilt per statement).
+        var mapsSpaces = DuckDbTokenizer.HasMappedSpace(text);
+        var seen = new HashSet<(string, int)>();
         foreach (var st in DuckDbTokenizer.Split(tokens))
         {
             var code = st.Where(t => !t.IsTrivia).ToList();
@@ -92,22 +96,24 @@ public sealed class DuckDbLanguageService : IDialectService
                 Index = batches.Count, StartLine = first.Line, EndLine = last.Line, StartOffset = first.Offset, Length = length,
             });
             var excerpt = Excerpt(text, first, last);
-            refusal ??= Refused(code);
-            Statement(code, excerpt, "", findings, prepared, ref ddl, ref begins, ref ends);
+            refusal ??= Refused(code, 0);
+            var before = findings.Count;
+            Statement(code, excerpt, "", findings, prepared, ref ddl, ref begins, ref ends, 0);
+            for (var f = before; f < findings.Count; f++) seen.Add((findings[f].Rule, findings[f].Line));
+            if (!mapsSpaces) continue;
             // PT7-1: DuckDB maps Unicode spaces to ASCII spaces in each command text it is given (DuckDbTokenizer), and each
             // batch runs as a command of its own, so the batch alone can read differently from the whole text (an open quote
             // before it, in DuckDB's view, stops the mapping). Classify the batch as DuckDB reads it too; a finding from
             // either reading counts.
             var batchText = text.Substring(first.Offset, length);
-            var seen = findings.Select(f => (f.Rule, f.Line)).ToHashSet();
             var alone = new List<DestructiveFinding>();
             foreach (var inner in DuckDbTokenizer.Split(DuckDbTokenizer.Tokenize(batchText)))
             {
                 var innerCode = inner.Where(t => !t.IsTrivia)
                     .Select(t => t with { Offset = t.Offset + first.Offset, Line = t.Line + first.Line - 1 }).ToList();
                 if (innerCode.Count == 0 || (innerCode.Count == 1 && innerCode[0].Text == ";")) continue;
-                refusal ??= Refused(innerCode);
-                Statement(innerCode, excerpt, "", alone, prepared, ref ddl, ref begins, ref ends);
+                refusal ??= Refused(innerCode, 0);
+                Statement(innerCode, excerpt, "", alone, prepared, ref ddl, ref begins, ref ends, 0);
             }
             findings.AddRange(alone.Where(f => seen.Add((f.Rule, f.Line))));
         }
@@ -122,19 +128,27 @@ public sealed class DuckDbLanguageService : IDialectService
     /// One statement's findings. <c>PREPARE name AS statement</c> classifies the statement it stores (it runs on EXECUTE);
     /// <c>EXECUTE</c> of a statement not prepared in this text cannot be checked and counts as destructive (<c>dynamicSql</c>).
     /// </summary>
-    static void Statement(List<PgToken> code, string excerpt, string context, List<DestructiveFinding> findings, HashSet<string> prepared, ref bool ddl, ref bool begins, ref bool ends)
+    /// <summary>How deep EXPLAIN ANALYZE / PREPARE … AS read the statement they hold (fourth round, H6: unbounded, 15,000 of them overflowed the stack).</summary>
+    internal const int MaxNesting = 64;
+
+    static void Statement(List<PgToken> code, string excerpt, string context, List<DestructiveFinding> findings, HashSet<string> prepared, ref bool ddl, ref bool begins, ref bool ends, int depth)
     {
         var first = code[0];
         void Add(string rule, string description) =>
             findings.Add(new DestructiveFinding { Rule = rule, Statement = excerpt, Line = first.Line, Column = 1, Description = description + context });
+        if (depth >= MaxNesting)
+        {
+            Add("unparsed", $"Statements are nested more than {MaxNesting} levels deep here; Querithm did not read further, so it could not be checked for destructive statements.");
+            return;
+        }
         if (first.Is("EXPLAIN"))
         {
-            if (ExplainTarget(code) is { Count: > 0 } target) Statement(target, excerpt, " EXPLAIN ANALYZE runs the statement.", findings, prepared, ref ddl, ref begins, ref ends);
+            if (ExplainTarget(code) is { Count: > 0 } target) Statement(target, excerpt, " EXPLAIN ANALYZE runs the statement.", findings, prepared, ref ddl, ref begins, ref ends, depth + 1);
             return;
         }
         if (first.Is("PREPARE") && code.Count > 1)
         {
-            if (PreparedBody(code) is { Count: > 0 } body) Statement(body, excerpt, " It runs when the prepared statement is executed.", findings, prepared, ref ddl, ref begins, ref ends);
+            if (PreparedBody(code) is { Count: > 0 } body) Statement(body, excerpt, " It runs when the prepared statement is executed.", findings, prepared, ref ddl, ref begins, ref ends, depth + 1);
             prepared.Add(DuckDbTokenizer.Unquote(code[1]));
             return;
         }
@@ -230,7 +244,9 @@ public sealed class DuckDbLanguageService : IDialectService
     {
         var i = 1;
         var analyze = false;
-        if (i < code.Count && code[i].Is("ANALYZE")) { analyze = true; i++; }
+        // Fourth round (C13): DuckDB's (PostgreSQL) grammar takes the British ANALYSE too, and ANALYZE OFF / NO plans only.
+        static bool IsAnalyze(PgToken t) => t.Is("ANALYZE") || t.Is("ANALYSE");
+        if (i < code.Count && IsAnalyze(code[i])) { analyze = true; i++; }
         if (i < code.Count && code[i].Text == "(")
         {
             var depth = 0;
@@ -238,7 +254,8 @@ public sealed class DuckDbLanguageService : IDialectService
             {
                 if (code[i].Text == "(") depth++;
                 else if (code[i].Text == ")" && --depth == 0) { i++; break; }
-                else if (code[i].Is("ANALYZE") && code[i - 1].Text is "(" or ",") analyze = !(i + 1 < code.Count && (code[i + 1].Is("FALSE") || code[i + 1].Text == "0"));
+                else if (IsAnalyze(code[i]) && code[i - 1].Text is "(" or ",")
+                    analyze = !(i + 1 < code.Count && (code[i + 1].Is("FALSE") || code[i + 1].Is("OFF") || code[i + 1].Is("NO") || code[i + 1].Text == "0"));
             }
         }
         if (!analyze || i >= code.Count) return null;
@@ -246,13 +263,15 @@ public sealed class DuckDbLanguageService : IDialectService
     }
 
     /// <summary>The file and configuration policy (Phase D3): what no grant allows, whatever the user confirms.</summary>
-    internal static string? Refused(List<PgToken> code)
+    internal static string? Refused(List<PgToken> code, int depth = 0)
     {
         var first = code[0];
         var at = 0;
-        if (first.Is("EXPLAIN") && ExplainTarget(code) is { Count: > 0 } target) return Refused(target);
+        if (depth >= MaxNesting && (first.Is("EXPLAIN") || first.Is("PREPARE")))
+            return $"Statements are nested more than {MaxNesting} levels deep here (EXPLAIN ANALYZE or PREPARE … AS); Querithm cannot check them against the file and extension policy.";
+        if (first.Is("EXPLAIN") && ExplainTarget(code) is { Count: > 0 } target) return Refused(target, depth + 1);
         // A prepared statement runs on EXECUTE: what it stores is refused here, where the classifier can see it.
-        if (first.Is("PREPARE") && PreparedBody(code) is { Count: > 0 } body) return Refused(body);
+        if (first.Is("PREPARE") && PreparedBody(code) is { Count: > 0 } body) return Refused(body, depth + 1);
         if (first.Is("WITH")) at = VerbIndex(code);
         var verb = code[at];
         if (verb.Is("INSTALL") || verb.Is("LOAD") || (verb.Is("FORCE") && code.Count > at + 1 && code[at + 1].Is("INSTALL"))
@@ -343,19 +362,38 @@ public sealed class DuckDbLanguageService : IDialectService
     static bool Plain(string name) =>
         name.Length > 0 && (char.IsAsciiLetter(name[0]) || name[0] == '_') && name.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '$') && !ReservedWords.Contains(name);
 
-    static readonly System.Collections.Concurrent.ConcurrentDictionary<string, PgCompletionRules> RulesBySchema = new(StringComparer.OrdinalIgnoreCase);
+    static readonly HashSet<string> SampleMethods = new(["RESERVOIR", "BERNOULLI", "SYSTEM"], StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// A word after a FROM item that starts a clause instead of naming the alias (audit H10): a reserved or type/function-name
+    /// keyword, which no bare alias can be (QUALIFY, ASOF / SEMI / ANTI / POSITIONAL JOIN, PIVOT, AT), or SAMPLE before its
+    /// size or method (<c>USING SAMPLE 10%</c>, <c>USING SAMPLE reservoir(50 ROWS)</c>), where USING names no source.
+    /// </summary>
+    static bool EndsFromItem(string word, string? next) =>
+        ReservedWords.Contains(word)
+        || (word.Equals("SAMPLE", StringComparison.OrdinalIgnoreCase) && next is { Length: > 0 } && (char.IsAsciiDigit(next[0]) || SampleMethods.Contains(next)));
+
+    /// <summary>One instance per default schema, bounded (audit M13): a USE typed in the script grows a letter at a time.</summary>
+    static readonly RulesCache<string> RulesBySchema = new(CreateRules, StringComparer.OrdinalIgnoreCase);
+
+    internal static int CachedRules => RulesBySchema.Count;
 
     /// <summary>Tier-2 rules with <paramref name="schema"/> as the default (one instance per schema: each caches its snapshot index).</summary>
-    internal static PgCompletionRules RulesFor(string schema) => RulesBySchema.GetOrAdd(schema, s => new PgCompletionRules
+    internal static PgCompletionRules RulesFor(string schema) => RulesBySchema.Get(schema);
+
+    static PgCompletionRules CreateRules(string s) => new()
     {
-        Id = "duckdb:" + s.ToLowerInvariant(), Names = StringComparer.OrdinalIgnoreCase, FoldsUnquoted = false, DefaultSchema = s,
+        Id = "duckdb:" + s.ToLowerInvariant(), DocumentKey = "duckdb", Names = StringComparer.OrdinalIgnoreCase, FoldsUnquoted = false, DefaultSchema = s,
         IsReserved = ReservedWords.Contains, IsPlain = Plain, DollarBodiesAreCode = false, Tokenize = DuckDbTokenizer.Tokenize, Statements = (_, tokens) => DuckDbTokenizer.Split(tokens),
+        // FROM t, (SELECT t.x) s and JOIN (SELECT t.x …) d both run: DuckDB's derived tables see the items before them.
+        // INSERT OR REPLACE / OR IGNORE INTO t: the conflict clause stands before INTO.
+        ImplicitLateral = true, OrConflictClause = true, EndsFromItem = EndsFromItem,
         BuiltinTypes =
         [
             "INTEGER", "BIGINT", "SMALLINT", "TINYINT", "HUGEINT", "UINTEGER", "UBIGINT", "DECIMAL", "DOUBLE", "FLOAT", "BOOLEAN", "VARCHAR", "BLOB",
             "DATE", "TIME", "TIMESTAMP", "TIMESTAMPTZ", "INTERVAL", "UUID", "JSON", "BIT", "STRUCT", "MAP", "UNION", "ENUM",
         ],
-    });
+    };
 
     static string SchemaAt(List<(int End, string Schema)> switches, int offset)
     {
@@ -417,16 +455,21 @@ public sealed class DuckDbLanguageService : IDialectService
         return SchemaAt(switches, Math.Clamp(offset, 0, text.Length));
     }
 
-    public CompletionItem[] Complete(CompleteParams p, ISchemaSource schema)
+    public CompletionItem[] Complete(CompleteParams p, ISchemaSource schema, CancellationToken ct)
     {
+        // A request already superseded does no work; the schema-switch scan stops on the token too.
+        ct.ThrowIfCancellationRequested();
+        using var cancel = Tier2Cancellation.Use(ct);
         using var _ = PgCompletionRules.Use(RulesFor(SchemaFor(p.DocId, p.Text, p.Offset, p.Database)));
-        return PgTier2Completion.Complete(p, schema);
+        return PgTier2Completion.Complete(p, schema, ct);
     }
 
-    public SignatureHelp Signature(SignatureParams p, ISchemaSource schema)
+    public SignatureHelp Signature(SignatureParams p, ISchemaSource schema, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
+        using var cancel = Tier2Cancellation.Use(ct);
         using var _ = PgCompletionRules.Use(RulesFor(SchemaFor(p.DocId, p.Text, p.Offset, p.Database)));
-        return PgTier2Completion.Signature(p, schema);
+        return PgTier2Completion.Signature(p, schema, ct);
     }
 
     public Diagnostic[] Diagnostics(DiagnosticsParams p) => [];

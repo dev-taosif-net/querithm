@@ -282,7 +282,8 @@ sealed class Resolver(Env env)
                             case SelectScalarExpression sse:
                             {
                                 var name = sse.ColumnName?.Value ?? (sse.Expression is ColumnReferenceExpression cr && cr.MultiPartIdentifier?.Identifiers is { Count: > 0 } ids ? ids[^1].Value : null);
-                                if (name == null) continue;
+                                // The word being typed is parsed as a placeholder column: it is no column of the projection.
+                                if (name == null || name.EndsWith(StatementAnalysis.Placeholder, StringComparison.Ordinal)) continue;
                                 cols.Add(new Col(name, TypeOf(sse.Expression, sources, ctes)));
                                 break;
                             }

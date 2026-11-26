@@ -158,6 +158,8 @@ const LEXING: Record<Dialect, LexRules> = {
 
 interface SyncState {
   min: number;
+  /** Before this position (the end of the edited line), an old `GO` word is lexed again, never reused: GO depends on its line. */
+  goUntil: number;
   delta: number;
   oldCode: Token[];
   oldCom: Token[];
@@ -184,7 +186,9 @@ function lexFrom(text: string, pos: number, dialect: Dialect, code: Token[], com
       const oc = sync.oldCode, om = sync.oldCom;
       while (sync.ci < oc.length && oc[sync.ci].start < target) sync.ci++;
       while (sync.mi < om.length && om[sync.mi].start < target) sync.mi++;
-      if ((sync.ci < oc.length && oc[sync.ci].start === target) || (sync.mi < om.length && om[sync.mi].start === target)) {
+      const atCode = sync.ci < oc.length && oc[sync.ci].start === target;
+      const goWord = atCode && pos < sync.goUntil && (oc[sync.ci].kind === "go" || oc[sync.ci].upper === "GO");
+      if ((atCode && !goWord) || (sync.mi < om.length && om[sync.mi].start === target)) {
         sync.at = pos;
         return;
       }
@@ -485,7 +489,8 @@ export function tokenize(text: string, dialect: Dialect): Token[] {
 const CACHE_SIZE = 4;
 const cache: TokenStream[] = [];
 
-function commonPrefix(a: string, b: string): number {
+/** Length of the common prefix of two strings, compared 2,048 characters at a time. */
+export function commonPrefix(a: string, b: string): number {
   const n = Math.min(a.length, b.length);
   const C = 2048;
   let i = 0;
@@ -511,7 +516,7 @@ function fullLex(text: string, dialect: Dialect): TokenStream {
 }
 
 /** First index in `arr` whose token ends after `pos` (i.e. contains or follows pos). */
-function firstEndingAfter(arr: Token[], pos: number): number {
+export function firstEndingAfter(arr: Token[], pos: number): number {
   let lo = 0, hi = arr.length;
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
@@ -529,27 +534,49 @@ function firstStartingAtOrAfter(arr: Token[], pos: number): number {
   return lo;
 }
 
+/**
+ * The line `[lineStart, end)` starts with an old `GO` word (a separator, or a name spelled GO). Only a line's first word
+ * can be a separator (isGoLine: nothing but whitespace before it), so later ones never change with an edit after them.
+ */
+function goWordOnLine(code: Token[], lineStart: number, end: number): boolean {
+  const i = firstStartingAtOrAfter(code, lineStart);
+  return i < code.length && code[i].start < end && (code[i].kind === "go" || code[i].upper === "GO");
+}
+
 function incremental(old: TokenStream, text: string, p: number, s: number): TokenStream {
   const ot = old.text;
   const delta = text.length - ot.length;
-  // Restart at the start of the line containing the first change (GO detection looks at the whole line),
-  // or earlier if a multi-line token (string/comment) spans that line start.
-  let lineStart = p;
-  while (lineStart > 0 && ot.charCodeAt(lineStart - 1) !== C_NL) lineStart--;
-  let r = lineStart;
-  const ic = firstEndingAfter(old.code, lineStart);
-  const im = firstEndingAfter(old.comments, lineStart);
+  const go = LEXING[old.dialect].go;
+  // Restart at the start of the run of non-space characters holding the first change — no token is wider than its run
+  // unless it holds whitespace itself (a string, a comment, a quoted name: then at that token's start, below). It was the
+  // line's start, which on a one-line 458 KB script re-lexed all of it per keystroke (completion audit M16). T-SQL's GO
+  // depends on its whole line: a line with a GO word before the change still restarts at its start.
+  // Only T-SQL needs the line's start (its GO check): elsewhere the run's walk back stops at the first space, a line
+  // break included, and the walk to the line's start read a whole one-line script per keystroke (code audit L9).
+  let lineStart = 0;
+  if (go) { lineStart = p; while (lineStart > 0 && ot.charCodeAt(lineStart - 1) !== C_NL) lineStart--; }
+  // A CR does not end the run: a `--` comment stops before the CR of its CRLF, and an edit to the LF after it moves the
+  // comment's end.
+  let r = p;
+  while (r > lineStart && (!isSpace(ot.charCodeAt(r - 1)) || ot.charCodeAt(r - 1) === C_CR)) r--;
+  if (go && r > lineStart && goWordOnLine(old.code, lineStart, p)) r = lineStart;
+  // A token that ends right at `r` is lexed again too: one that ends in whitespace there is unterminated (a quoted name
+  // or a `--` comment stopped by the line's end), and what is typed after it extends it.
+  const ic = firstEndingAfter(old.code, r - 1);
+  const im = firstEndingAfter(old.comments, r - 1);
   if (ic < old.code.length && old.code[ic].start < r) r = old.code[ic].start;
   if (im < old.comments.length && old.comments[im].start < r) r = old.comments[im].start;
   const keepC = firstStartingAtOrAfter(old.code, r);
   const keepM = firstStartingAtOrAfter(old.comments, r);
-  // Sync only after the end of the line holding the end of the edit (in new-text coordinates).
+  // Old tokens are reused from the first one past the edit's end and its first character (in new-text coordinates): the
+  // text from there on is the old text, and the lexer keeps no state between tokens; a `:name` parameter looks one
+  // character back. A GO word on the edited line is lexed again (goUntil).
   const editEndNew = text.length - s;
-  let min = text.indexOf("\n", editEndNew);
-  min = min < 0 ? text.length : min + 1;
+  let lineEnd = text.indexOf("\n", editEndNew);
+  lineEnd = lineEnd < 0 ? text.length : lineEnd + 1;
   const newC: Token[] = [];
   const newM: Token[] = [];
-  const sync: SyncState = { min, delta, oldCode: old.code, oldCom: old.comments, ci: keepC, mi: keepM, at: -1 };
+  const sync: SyncState = { min: editEndNew + 1, goUntil: go ? lineEnd : -1, delta, oldCode: old.code, oldCom: old.comments, ci: keepC, mi: keepM, at: -1 };
   lexFrom(text, r, old.dialect, newC, newM, sync);
   let code: Token[];
   let comments: Token[];
@@ -602,6 +629,10 @@ export function getStream(text: string, dialect: Dialect): TokenStream {
     if (e.dialect !== dialect) continue;
     const p = commonPrefix(e.text, text);
     const s = commonSuffix(e.text, text, Math.min(e.text.length, text.length) - p);
+    // The new text is the old one's tail (an unclosed PostgreSQL `$$` body beside the document holding it): it matches
+    // in full but shares no token with it — the body's code is one string there — so it was a full lex, chosen over
+    // the body's own last stream (H13).
+    if (p === 0 && s === text.length && e.text.length > text.length) continue;
     if (p + s > bestScore) { bestScore = p + s; best = i; bestP = p; bestS = s; }
   }
   let stream: TokenStream;

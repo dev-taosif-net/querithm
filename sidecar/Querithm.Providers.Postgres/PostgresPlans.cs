@@ -15,8 +15,28 @@ namespace Querithm.Providers.Postgres;
 /// </summary>
 public sealed class PostgresPlans : IPlanProvider
 {
+    public const string ReadingRefusal = "This text reads differently when the session has standard_conforming_strings off (it holds a backslash), so the server could split it into statements Querithm did not check, and a plan sends the text to the server. Plan a text without the backslash that changes the split.";
+
+    /// <summary>
+    /// Either plan sends each statement, split the standard way, as EXPLAIN + statement. With standard_conforming_strings
+    /// off the server (and Npgsql's own split) reads <c>SELECT 'a\'' ; UPDATE … -- '</c> as two statements, so the text
+    /// sent as one statement runs a second one (completion audit 2026-11-25, M7) — an estimated plan too, with no
+    /// transaction around it (code audit 2026-11-25, H1 / C3). A text both readings split the same way gets its plan.
+    /// </summary>
+    public string? Refusal(string sql, PlanMode mode)
+    {
+        if (sql.IndexOf('\\') < 0) return null;
+        return Spans(PgTokenizer.Tokenize(sql)).SequenceEqual(Spans(PgTokenizer.Tokenize(sql, standardStrings: false))) ? null : ReadingRefusal;
+    }
+
+    static List<(int, int)> Spans(List<PgToken> tokens) =>
+        PgTokenizer.Statements(tokens).Select(st => st.Where(t => !t.IsTrivia).ToList()).Where(st => st.Count > 0)
+            .Select(st => (st[0].Offset, st[^1].Offset + st[^1].Length)).ToList();
+
     public async Task<PlanResult> GetPlanAsync(DbConnection c, string sql, PlanMode mode, CancellationToken ct)
     {
+        // Core asks Refusal first; checked again here, so no caller sends a text that splits two ways.
+        if (Refusal(sql, mode) is { } refusal) throw new NotSupportedException(refusal);
         var tokens = PgTokenizer.Tokenize(sql);
         var statements = PgTokenizer.Statements(tokens)
             .Select(st => st.Where(t => !t.IsTrivia).ToList())

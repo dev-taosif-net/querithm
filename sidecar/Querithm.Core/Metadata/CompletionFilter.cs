@@ -1,4 +1,5 @@
 using Querithm.Contract;
+using Querithm.Contract.Providers;
 
 namespace Querithm.Core.Metadata;
 
@@ -17,10 +18,40 @@ public static class CompletionFilter
     {
         var prefix = WordBefore(text, offset);
         IEnumerable<CompletionItem> kept = prefix.Length == 0 ? items : items.Where(i => i.Kind == CompletionKind.Snippet || Matches(prefix, i.Label));
-        if (prefix.Length == 0 && items.Length <= MaxItems) return items;
+        if (prefix.Length == 0 && items.Length <= MaxItems) return Documented(items);
         var list = kept as CompletionItem[] ?? kept.ToArray();
-        if (list.Length <= MaxItems) return list;
-        return list.OrderBy(i => i.SortText ?? "￿", StringComparer.Ordinal).ThenBy(i => i.Label, StringComparer.OrdinalIgnoreCase).Take(MaxItems).ToArray();
+        if (list.Length <= MaxItems) return Documented(list);
+        // The cut keeps the best matches first, as tier 1 ranks them (prefix > camel hump > substring), then sort order:
+        // by sort text alone, 500 substring matches could push out the one name that starts with the word (audit M3).
+        return Documented(list.OrderBy(i => Tier(prefix, i)).ThenBy(i => i.SortText ?? "￿", StringComparer.Ordinal).ThenBy(i => i.Label, StringComparer.OrdinalIgnoreCase)
+            .Take(MaxItems).ToArray());
+    }
+
+    /// <summary>The kept items with the documentation their service deferred (<see cref="DeferredDocs"/>, audit M4) built.</summary>
+    static CompletionItem[] Documented(CompletionItem[] items)
+    {
+        // Copy on write: the array may be the dialect's own (a cached answer), never changed in place (Gemini review 2026-11-26).
+        CompletionItem[]? copy = null;
+        for (var i = 0; i < items.Length; i++)
+        {
+            var resolved = DeferredDocs.Resolve(items[i]);
+            if (ReferenceEquals(resolved, items[i])) continue;
+            copy ??= (CompletionItem[])items.Clone();
+            copy[i] = resolved;
+        }
+        return copy ?? items;
+    }
+
+    /// <summary>0: the label or its last dotted part starts with the word; 1: camel hump; 2: substring; 3: no match (a snippet).</summary>
+    static int Tier(string prefix, CompletionItem item)
+    {
+        if (prefix.Length == 0) return 0;
+        var bare = Unquote(item.Label);
+        var dot = bare.LastIndexOf('.');
+        var last = dot >= 0 ? bare[(dot + 1)..] : bare;
+        if (last.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) || bare.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return 0;
+        if (Hump(prefix, last) || Hump(prefix, bare)) return 1;
+        return bare.Contains(prefix, StringComparison.OrdinalIgnoreCase) ? 2 : 3;
     }
 
     /// <summary>The name being typed before <paramref name="offset"/>: letters, digits, _ $ # @ (an opening quote ends it).</summary>

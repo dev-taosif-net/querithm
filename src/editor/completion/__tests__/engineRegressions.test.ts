@@ -286,7 +286,10 @@ describe("completion: an object's name is shown once, its schema on the right (e
     const idx = buildSchemaIndex({ profileId: "p", database: "app", status: "fresh", objects, fks: [] }, "tsql", ["app"]);
     const items = complete({ text: "SELECT * FROM t", offset: 15, dialect: "tsql", schema: idx }).items.filter((i) => i.schemaObject);
     expect(items).toHaveLength(500);
-    expect(items.every((i) => i.documentation?.includes("| Column |"))).toBe(true);
+    // The first rows carry it built; the rest build it when Monaco shows them (resolveCompletionItem, audit H9).
+    expect(items.slice(0, 40).every((i) => i.documentation?.includes("| Column |"))).toBe(true);
+    expect(items.every((i) => (i.documentation ?? i.resolveDocumentation?.())?.includes("| Column |"))).toBe(true);
+    expect(items.slice(60).every((i) => i.documentation === undefined)).toBe(true);
   });
 });
 
@@ -375,8 +378,12 @@ describe("completion: SELECT * in a derived table or CTE (every engine)", () => 
 describe("completion: PostgreSQL MERGE stays one statement", () => {
   it("pg: WHEN MATCHED THEN UPDATE SET | and THEN INSERT (| see the target and source", () => {
     const head = "MERGE INTO orders t USING customers s ON t.customer_id = s.customer_id ";
+    // The SET target is a column of the merged table, bare (completion audit M9); the value sees the source too.
     const set = run(`${head}WHEN MATCHED THEN UPDATE SET |`, "pg").map((i) => i.label);
-    expect(set).toEqual(expect.arrayContaining(["t.total", "s.full_name"]));
+    expect(set).toContain("total");
+    expect(set).not.toContain("s.full_name");
+    const value = run(`${head}WHEN MATCHED THEN UPDATE SET total = |`, "pg").map((i) => i.label);
+    expect(value).toEqual(expect.arrayContaining(["t.total", "s.full_name"]));
     const src = run(`${head}WHEN MATCHED THEN UPDATE SET total = s.|`, "pg").map((i) => i.label);
     expect(src).toContain("full_name");
     const ins = run(`${head}WHEN NOT MATCHED THEN INSERT (|`, "pg");

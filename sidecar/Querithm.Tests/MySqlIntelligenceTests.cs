@@ -122,7 +122,7 @@ public class MySqlIntelligenceTests
     {
         var at = marked.IndexOf('|');
         return (service ?? L).Complete(new CompleteParams { DocId = Guid.NewGuid().ToString(), Text = marked.Remove(at, 1), Offset = at, Dialect = Dialect.MySql, ProfileId = "p", Database = "shop" },
-            new PerDatabase());
+            new PerDatabase(), CancellationToken.None);
     }
 
     static string[] Labels(string marked, MySqlLanguageService? service = null) => Complete(marked, service).Select(c => c.Label).Order(StringComparer.Ordinal).ToArray();
@@ -178,10 +178,10 @@ public class MySqlIntelligenceTests
     public void Signature_help_shows_a_stored_procedures_parameters_and_no_named_arguments_are_offered()
     {
         const string text = "CALL add_order(1, ";
-        var help = L.Signature(new SignatureParams { DocId = "s", Text = text, Offset = text.Length, Dialect = Dialect.MySql, ProfileId = "p", Database = "shop" }, new PerDatabase());
+        var help = L.Signature(new SignatureParams { DocId = "s", Text = text, Offset = text.Length, Dialect = Dialect.MySql, ProfileId = "p", Database = "shop" }, new PerDatabase(), CancellationToken.None);
         Assert.Equal("shop.add_order(p_customer int, p_qty int)", Assert.Single(help.Signatures).Label);
         Assert.Equal(1, help.ActiveParameter);
         Assert.DoesNotContain(Complete("CALL add_order(|"), c => c.Label.EndsWith("=>", StringComparison.Ordinal));
-        Assert.Empty(L.Signature(new SignatureParams { DocId = "s", Text = "USE crm; CALL add_order(", Offset = 24, Dialect = Dialect.MySql, ProfileId = "p", Database = "shop" }, new PerDatabase()).Signatures);
+        Assert.Empty(L.Signature(new SignatureParams { DocId = "s", Text = "USE crm; CALL add_order(", Offset = 24, Dialect = Dialect.MySql, ProfileId = "p", Database = "shop" }, new PerDatabase(), CancellationToken.None).Signatures);
     }
 }

@@ -14,6 +14,11 @@ export interface TableInScope {
   isDerived: boolean;
   /** Column names known from the source text (CTE column list, derived-table projection), when tier 1 can see them. */
   columns?: string[];
+  /**
+   * The ones of `columns` written quoted in the source text. A source-text column is inserted as written — re-quoting
+   * it by catalog rules made Oracle's unquoted `id` into `"id"`, a column that does not exist (completion audit H7).
+   */
+  quotedColumns?: string[];
   /** Offset of the reference in the source text (used to rank columns of the nearest table first). */
   offset?: number;
   /** The name / schema was written quoted: exact, never folded (D4 S12, dialects that fold unquoted names). */
@@ -33,7 +38,7 @@ export interface CursorContext {
   statementStart: number;
   statementEnd: number;
   tablesInScope: TableInScope[];
-  ctes: { name: string; columns?: string[]; quoted?: boolean }[];
+  ctes: { name: string; columns?: string[]; quotedColumns?: string[]; quoted?: boolean }[];
   /** DECLARE @x and proc params seen above the cursor (T-SQL), plpgsql DECLARE vars (pg). */
   variables: { name: string; type?: string; kind?: "variable" | "parameter" }[];
   /** Text before the last '.', e.g. 'o' in 'o.Ord'; 'dbo' in 'dbo.Ord'; 'SalesDB.dbo' in 'SalesDB.dbo.Ord'. */
@@ -51,6 +56,17 @@ export interface CursorContext {
   /** Cursor is inside a string or comment: offer nothing. */
   inStringOrComment: boolean;
   /**
+   * Cursor is inside or right after a number (`> 1.|`): no completion list (completion audit 2026-11-25, H8: the `.`
+   * of a decimal opened one, whose next Enter turned `1.5` into `1.5CustomerId`). Signature help still applies.
+   */
+  inNumber?: boolean;
+  /**
+   * The cursor is in a PostgreSQL AS / DO `$$` body (the innermost one): the body's text, as the scanner read it, and
+   * where it starts in the document. The builder and the editor read the body's own tokens from it, without slicing and
+   * comparing the body again per keystroke (code audit 2026-11-26, R4).
+   */
+  body?: { text: string; base: number };
+  /**
    * Finer position inside the clause: 'afterReference' = right after a complete table reference (next is an alias
    * or a clause keyword); 'alias' = after AS (a new name is being typed); 'name' = a new variable/column name is
    * being typed (DECLARE @|, column definitions); 'argValue' = a value position (`@p = |`, inside VALUES (...)).
@@ -58,8 +74,13 @@ export interface CursorContext {
   slot?: "afterReference" | "alias" | "name" | "argValue";
   /** Explicit INSERT column list, when present. */
   insertColumnList?: string[];
+  /**
+   * The cursor names a SET list's target (`SET |`, `SET a = 1, |`): `tablesInScope` holds only the written table, whose
+   * columns are offered bare (completion audit 2026-11-25, M9).
+   */
+  setTarget?: boolean;
   /** Aliases the select list defines, for ORDER BY (and GROUP BY where the engine allows them). */
-  selectAliases?: string[];
+  selectAliases?: { name: string; quoted: boolean }[];
   /** Non-aggregated columns extracted from SELECT projection for GROUP BY. */
   nonAggregatedColumns?: string[];
 }
@@ -94,6 +115,11 @@ export interface Tier1Item {
   display?: string;
   /** Built from a schema object of the snapshot: its detail (schema, columns, rows) is kept over tier 2's. */
   schemaObject?: boolean;
+  /**
+   * Documentation not built yet (an item past the first rows of a long list): the provider's resolveCompletionItem runs
+   * it when Monaco shows the item's details (completion audit 2026-11-25, H9).
+   */
+  resolveDocumentation?: () => string;
   kind: CompletionKind;
   detail?: string;
   /** Text inserted; defaults to label. Snippet syntax when isSnippet. */

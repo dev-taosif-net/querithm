@@ -198,6 +198,42 @@ describe("lexer: token stream cache", () => {
       expect(shape(got)).toEqual(shape(tokenize(text, "pg")));
     }
   });
+  // The re-lex restarts at the run of non-space characters holding an edit, not at its line (completion audit M16):
+  // random edits on one long line and on GO lines, every dialect, must still give a fresh tokenization's tokens.
+  it("incremental re-lex mid-line matches a fresh tokenization (random edits, every dialect)", () => {
+    const pieces = ["'", '"', "`", "[", "]", "--", "/*", "*/", "$$", "$1", ":x", "::", "q'[", "N'", "E'\\'", "#", " ", "\n", "GO", "\nGO\n", "GO 2", "x", "1.5", "-", "(", ")", ";", "@v", "\r\n"];
+    let seed = 7;
+    const rnd = (n: number) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+    for (const d of ["tsql", "pg", "mySql", "sqlite", "duckDb", "oracle"] as const) {
+      clearTokenCache();
+      let text = Array.from({ length: 40 }, (_, i) => `SELECT o.c${i}, 'v ${i}', "q ${i}" FROM t${i} o WHERE o.x = :p AND y::int > 1; `).join("") +
+        "\nGO\nSELECT 1\n  GO  \nSELECT a FROM b -- c\n";
+      getStream(text, d);
+      for (let e = 0; e < 150; e++) {
+        const pos = rnd(text.length + 1);
+        const del = rnd(4) === 0 ? rnd(6) : 0;
+        const ins = del && rnd(2) ? "" : pieces[rnd(pieces.length)];
+        text = text.slice(0, pos) + ins + text.slice(pos + del);
+        const s = getStream(text, d);
+        const fresh = tokenize(text, d);
+        expect(shape([...s.code, ...s.comments].sort((x, y) => x.start - y.start)), `${d} edit ${e} at ${pos}: -${del} +${JSON.stringify(ins)}`).toEqual(shape(fresh));
+        const marks = fresh.filter((t) => t.kind === "go" || ((t.kind === "keyword" || t.kind === "ident") && ["DECLARE", "CREATE", "ALTER"].includes(t.upper)));
+        expect(s.marks.map((t) => t.start), `${d} marks after edit ${e}`).toEqual(marks.map((t) => t.start));
+      }
+    }
+  });
+  it("incremental re-lex: an unterminated name or a -- comment at a line's end is lengthened by what is typed after it", () => {
+    const filler = "SELECT a, b FROM t; ".repeat(150); // over the incremental re-lex's 2,000 characters
+    for (const [text, at, del, ins] of [
+      [`${filler}SELECT "q x FROM t WHERE \r\nSELECT 1`, `${filler}SELECT "q x FROM t WHERE `.length, 0, "x"], // a quoted name stopped by the CR
+      [`${filler}SELECT 1 -- note \r\nSELECT 2 -- two\r\nSELECT 3`, `${filler}SELECT 1 -- note \r`.length, 1, ""], // the LF after its CR deleted
+    ] as const) {
+      clearTokenCache();
+      getStream(text, "pg");
+      const next = text.slice(0, at) + ins + text.slice(at + del);
+      expect(shape([...getStream(next, "pg").code, ...getStream(next, "pg").comments].sort((x, y) => x.start - y.start))).toEqual(shape(tokenize(next, "pg")));
+    }
+  });
   it("incremental re-lex with CRLF line endings matches a fresh tokenization", () => {
     let text = Array.from({ length: 150 }, (_, i) => `SELECT [c${i}], N'x' FROM dbo.T${i}\r\nGO`).join("\r\n");
     getStream(text, "tsql");

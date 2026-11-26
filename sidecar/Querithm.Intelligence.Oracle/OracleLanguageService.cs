@@ -31,10 +31,15 @@ public sealed class OracleLanguageService : IDialectService
         "FLASHBACK", "ASSOCIATE", "DISASSOCIATE",
     };
 
-    public Classification Classify(string text)
+    public Classification Classify(string text) => Classify(text, 0);
+
+    /// <summary>How deep EXECUTE IMMEDIATE literals are read inside each other (q'…' quoting nests at no cost in length).</summary>
+    internal const int MaxNesting = 32;
+
+    Classification Classify(string text, int depth)
     {
         text ??= "";
-        var state = new ClassifyState(text);
+        var state = new ClassifyState(text) { Depth = depth };
         foreach (var st in OracleSplitter.Split(text))
         {
             if (st.Kind == OracleStatementKind.ClientCommand)
@@ -69,6 +74,7 @@ public sealed class OracleLanguageService : IDialectService
         public readonly List<ServerOutputToggle> ServerOutput = [];
         public string? Refusal;
         public bool Ddl, Begins, Ends;
+        public int Depth;
 
         public void Add(string rule, string statement, OracleToken at, string description) =>
             Destructive.Add(new DestructiveFinding { Rule = rule, Statement = statement, Line = at.Line, Column = 1, Description = description });
@@ -113,6 +119,15 @@ public sealed class OracleLanguageService : IDialectService
         var at = code[0];
         var session = verb == "ALTER" && code.Count > 1 && (code[1].Is("SESSION") || code[1].Is("SYSTEM"));
         if (DdlVerbs.Contains(verb) && !session) s.Ddl = true;
+        // Fourth round (C11): CALL DBMS_UTILITY.EXEC_DDL_STATEMENT(…) is SQL, not a block, and a DML statement inside a
+        // block can call such a package too: every statement is searched for the calls.
+        for (var i = 0; i + 2 < code.Count; i++)
+            if (code[i + 1].IsP(".") && DynamicSqlCall(Name(code[i]), Name(code[i + 2])) is { } package)
+            {
+                s.Ddl = true;
+                s.Add("dynamicSql", stmtText, code[i], $"{package} runs SQL text built at run time, which cannot be checked for destructive statements.");
+                break;
+            }
         switch (verb)
         {
             case "DROP":
@@ -172,7 +187,8 @@ public sealed class OracleLanguageService : IDialectService
     {
         if (code.Count == 0) return;
         if (code[0].Is("CREATE")) { s.Ddl = true; return; }
-        if (code[0].Is("WITH")) return; // WITH FUNCTION … SELECT: a query
+        // WITH FUNCTION … SELECT: the query runs the function, whose body may hold DML or dynamic SQL (allowed with PRAGMA
+        // AUTONOMOUS_TRANSACTION): read like a block (code audit 2026-11-25, third round). It used to be skipped.
         for (var i = 0; i < code.Count; i++)
         {
             var t = code[i];
@@ -180,10 +196,17 @@ public sealed class OracleLanguageService : IDialectService
             var next = i + 1 < code.Count ? code[i + 1] : default;
             if (t.Is("EXECUTE") && next.Is("IMMEDIATE"))
             {
-                if (LiteralSql(code, i + 2) is { } sql)
+                if (s.Depth >= MaxNesting)
                 {
-                    var inner = new OracleLanguageService().Classify(sql);
+                    s.Add("unparsed", stmtText, t, $"EXECUTE IMMEDIATE is nested more than {MaxNesting} levels deep; Querithm did not read further, so it could not be checked for destructive statements.");
+                }
+                else if (LiteralSql(code, i + 2) is { } sql)
+                {
+                    var inner = Classify(sql, s.Depth + 1);
                     s.Ddl |= inner.HasDdl;
+                    // Fourth round (M12): EXECUTE IMMEDIATE 'COMMIT' ends the transaction an actual plan rolls back.
+                    s.Begins |= inner.BeginsTransaction;
+                    s.Ends |= inner.EndsTransaction;
                     foreach (var f in inner.Destructive)
                         s.Destructive.Add(f with { Statement = stmtText, Line = t.Line, Description = f.Description + " It runs as EXECUTE IMMEDIATE's dynamic SQL." });
                 }
@@ -197,11 +220,12 @@ public sealed class OracleLanguageService : IDialectService
             }
             // D4 S11: DBMS_SQL.RETURN_RESULT / GET_NEXT_RESULT hand back a cursor already open (an Execute block's OUT values
             // and ref cursors); they run no SQL of their own. Every other DBMS_SQL call can.
-            var returnsCursor = t.Is("DBMS_SQL") && next.IsP(".") && i + 2 < code.Count && (code[i + 2].Is("RETURN_RESULT") || code[i + 2].Is("GET_NEXT_RESULT"));
-            if (!returnsCursor && (t.Is("DBMS_SQL") && next.IsP(".") || t.Is("DBMS_UTILITY") && next.IsP(".") && i + 2 < code.Count && code[i + 2].Is("EXEC_DDL_STATEMENT")))
+            // Third round: names compare by identity, so "DBMS_SQL" (quoted) is the package too; DBMS_SCHEDULER and DBMS_JOB
+            // create jobs that run PL/SQL text, and DBMS_DDL.CREATE_WRAPPED runs DDL.
+            if (next.IsP(".") && i + 2 < code.Count && DynamicSqlCall(Name(t), Name(code[i + 2])) is { } package)
             {
                 s.Ddl = true;
-                s.Add("dynamicSql", stmtText, t, $"{t.Text.ToUpperInvariant()} runs SQL text built at run time, which cannot be checked for destructive statements.");
+                s.Add("dynamicSql", stmtText, t, $"{package} runs SQL text built at run time, which cannot be checked for destructive statements.");
                 continue;
             }
             // Static DML: a DELETE / UPDATE / MERGE word that is not a collection method (v.DELETE, v.DELETE(1)) or FOR UPDATE.
@@ -218,6 +242,22 @@ public sealed class OracleLanguageService : IDialectService
             if (t.Is("COMMIT") || (t.Is("ROLLBACK") && !(next.Is("TO") || (next.Is("WORK") && i + 2 < code.Count && code[i + 2].Is("TO"))))) s.Ends = true;
         }
     }
+
+    /// <summary>A name as the dictionary spells it (a word folded to upper case, a quoted name as written); null for anything else.</summary>
+    static string? Name(OracleToken t) => t.Kind is OracleTokenKind.Word or OracleTokenKind.QuotedIdent ? OracleIdentifiers.Identity(t) : null;
+
+    /// <summary>
+    /// The package of a call that runs SQL text built at run time, or null. DBMS_SQL.RETURN_RESULT / GET_NEXT_RESULT hand back
+    /// a cursor already open (D4 S11) and run none.
+    /// </summary>
+    static string? DynamicSqlCall(string? package, string? member) => package switch
+    {
+        "DBMS_SQL" when member is not ("RETURN_RESULT" or "GET_NEXT_RESULT") => package,
+        "DBMS_UTILITY" when member == "EXEC_DDL_STATEMENT" => package,
+        "DBMS_DDL" when member == "CREATE_WRAPPED" => package,
+        "DBMS_SCHEDULER" or "DBMS_JOB" or "DBMS_SYS_SQL" => package,
+        _ => null,
+    };
 
     /// <summary>
     /// The SQL text of <c>EXECUTE IMMEDIATE</c> when it is literal: one string, or strings joined with <c>||</c>, then the
@@ -312,19 +352,24 @@ public sealed class OracleLanguageService : IDialectService
     }
 
     /// <summary>Tier 2 (D4 S09): <see cref="OracleCompletion"/> in the schema the cursor's statement runs in.</summary>
-    public CompletionItem[] Complete(CompleteParams p, ISchemaSource schema)
+    public CompletionItem[] Complete(CompleteParams p, ISchemaSource schema, CancellationToken ct)
     {
+        // A request already superseded does no work; the scans below (the schema switches) stop on the token too.
+        ct.ThrowIfCancellationRequested();
+        using var cancel = Querithm.Intelligence.PgSql.Tier2Cancellation.Use(ct);
         var text = p.Text ?? "";
         using var _ = OracleCompletion.Use(OracleCompletion.SchemaAt(p.DocId, text, Math.Clamp(p.Offset, 0, text.Length), LoginSchema(p.Schema)));
-        return PgTier2Completion.Complete(p, schema);
+        return PgTier2Completion.Complete(p, schema, ct);
     }
 
     /// <summary>Standalone routines from the snapshot (ALL_ARGUMENTS) and package subprograms from their member lines (D4 S09).</summary>
-    public SignatureHelp Signature(SignatureParams p, ISchemaSource schema)
+    public SignatureHelp Signature(SignatureParams p, ISchemaSource schema, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
+        using var cancel = Querithm.Intelligence.PgSql.Tier2Cancellation.Use(ct);
         var text = p.Text ?? "";
         using var _ = OracleCompletion.Use(OracleCompletion.SchemaAt(p.DocId, text, Math.Clamp(p.Offset, 0, text.Length), LoginSchema(p.Schema)));
-        return PgTier2Completion.Signature(p, schema);
+        return PgTier2Completion.Signature(p, schema, ct);
     }
 
     /// <summary>The webview's login schema (untrusted): a possible Oracle name, else none.</summary>
@@ -393,5 +438,9 @@ public sealed class OracleLanguageService : IDialectService
     };
 
     /// <summary>M12: the shared engine's document and scan caches (PostgreSQL's <see cref="DocumentCaches"/> holds both).</summary>
-    public void Forget(string docId) => DocumentCaches.Forget(docId);
+    public void Forget(string docId)
+    {
+        DocumentCaches.Forget(docId);
+        OracleCompletion.ClearShared();
+    }
 }

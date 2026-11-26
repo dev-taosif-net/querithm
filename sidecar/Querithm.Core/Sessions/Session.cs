@@ -10,7 +10,18 @@ public sealed class Session(string id, Profile profile, IDbProvider provider, st
     public Profile Profile { get; } = profile;
     public IDbProvider Provider { get; } = provider;
     public string? Database { get; set; } = database;
-    public TxState TxState { get; set; } = TxState.None;
+
+    /// <summary>
+    /// Read and written under the same lock as the deferred refresh (<see cref="DeferIfInTransaction"/>): a transaction
+    /// that ends while DDL defers its read either sees the deferral or is seen by it (G#5, completion audit follow-up).
+    /// </summary>
+    public TxState TxState
+    {
+        get { lock (_deferredDatabases) return _txState; }
+        set { lock (_deferredDatabases) _txState = value; }
+    }
+
+    TxState _txState = TxState.None;
     public long? TxStartedAt { get; set; }
     /// <summary>Held while a transaction is open or a Trace is running. Never shared.</summary>
     public PhysicalConnection? Pinned { get; set; }
@@ -20,7 +31,14 @@ public sealed class Session(string id, Profile profile, IDbProvider provider, st
     public ProductInfo? Product { get; set; }
     public int? Spid { get; set; }
     public string? ActiveExecutionId { get; set; }
-    public bool Closed { get; set; }
+    /// <summary>Under the deferral lock like <see cref="TxState"/>: <see cref="DeferIfInTransaction"/> reads it there (Gemini review 2026-11-26).</summary>
+    public bool Closed
+    {
+        get { lock (_deferredDatabases) return _closed; }
+        set { lock (_deferredDatabases) _closed = value; }
+    }
+
+    bool _closed;
     /// <summary>
     /// Phase D4: server output (Oracle DBMS_OUTPUT) is read back after each batch. Set by the run option or a script's
     /// <c>SET SERVEROUTPUT</c>; applied to whichever connection the next run borrows.
@@ -42,7 +60,54 @@ public sealed class Session(string id, Profile profile, IDbProvider provider, st
     /// </summary>
     public bool CommitOutcomeUnknown { get; set; }
     /// <summary>A metadata refresh was asked for while this session's transaction was open: it runs once the transaction ends.</summary>
-    public bool RefreshDeferred { get; set; }
+    public bool RefreshDeferred
+    {
+        get { lock (_deferredDatabases) return _refreshDeferred; }
+    }
+
+    bool _refreshDeferred;
+
+    /// <summary>Also the lock of <see cref="TxState"/> and <see cref="RefreshDeferred"/>; nothing else is taken inside it.</summary>
+    readonly HashSet<string> _deferredDatabases = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Defers a metadata refresh of <paramref name="databases"/> (besides <see cref="Database"/>, read when the transaction
+    /// ends) while a transaction is open, in one step with the transaction-state check: false when none is open (or the
+    /// session closed) — the caller reads now. Before (G#5), the check, the deferral and the end's look at the flag were
+    /// separate unlocked reads and writes: a COMMIT landing between them could leave the refresh deferred for good.
+    /// </summary>
+    public bool DeferIfInTransaction(IEnumerable<string> databases)
+    {
+        lock (_deferredDatabases)
+        {
+            if (_txState == TxState.None || _closed) return false;
+            foreach (var db in databases) _deferredDatabases.Add(db);
+            _refreshDeferred = true;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// The deferred refresh, taken at once (the transaction ended): the databases it covers besides <see cref="Database"/>,
+    /// or null when nothing was deferred.
+    /// </summary>
+    public string[]? TakeDeferral()
+    {
+        lock (_deferredDatabases)
+        {
+            if (!_refreshDeferred) return null;
+            _refreshDeferred = false;
+            var list = _deferredDatabases.ToArray();
+            _deferredDatabases.Clear();
+            return list;
+        }
+    }
+
+    /// <summary>A refresh of <paramref name="database"/> is deferred until this session's transaction ends (G#6: after a USE, not only its current database).</summary>
+    public bool DefersRefreshOf(string database)
+    {
+        lock (_deferredDatabases) return _refreshDeferred && (_deferredDatabases.Contains(database) || string.Equals(Database, database, StringComparison.Ordinal));
+    }
 
     /// <summary>One execution at a time per session; later ones queue (§7).</summary>
     public SemaphoreSlim ExecLock { get; } = new(1, 1);

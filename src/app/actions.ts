@@ -17,7 +17,7 @@ import { newTabBinding } from "./tabBinding";
 import { isUntitledTitle, objectLabel, tabTitleText } from "./tabTitle";
 import { announce } from "../store/announce";
 import { announceQueryDone } from "./announcements";
-import { ensureTabSnapshot, sessionParam, tabScope } from "../store/snapshots";
+import { ensureTabSnapshot, sessionParam, tabScope, useSnapshots } from "../store/snapshots";
 import { snapshotOf, useClosedTabs } from "../store/closedTabs";
 import { useSettings } from "../store/settings";
 import { ask, toast, useUi } from "../store/ui";
@@ -1340,6 +1340,8 @@ function engineLost(restarted: boolean): string[] {
 /** After a sidecar restart every session id is gone; transactions are lost and the user is told (§4 step 3). */
 export function onSidecarRestarted() {
   const lost = engineLost(true);
+  // No refresh the old engine ran reports back: the schemas it was reading may be refreshed again (M21).
+  useSnapshots.getState().engineRestarted();
   useConnections.getState().resetSessions();
   // A group change whose reply the restart swallowed may have committed: read profiles and groups again (a failure
   // keeps what is shown; the next change reads them anyway).
@@ -1358,5 +1360,6 @@ export function onSidecarRestarted() {
  * the Explorer's servers reconnect once the engine is restarted (onSidecarRestarted).
  */
 export function onSidecarFailed(): string[] {
+  useSnapshots.getState().engineRestarted();
   return engineLost(false);
 }

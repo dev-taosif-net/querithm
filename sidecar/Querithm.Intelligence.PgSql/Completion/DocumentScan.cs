@@ -19,13 +19,22 @@ public static class DocumentScan<T>
             if (key.EndsWith(suffix, StringComparison.Ordinal)) Cache.TryRemove(key, out _);
     }, docId => Cache.Keys.Any(k => k.EndsWith("|" + docId, StringComparison.Ordinal)));
 
-    public static T Get(string key, string text, Func<string, T> scan)
+    /// <param name="release">Lets go of what the scan keeps per thread, after a background scan (Oracle's copy of the text).</param>
+    public static T Get(string key, string text, Func<string, T> scan, Action? release = null)
     {
         if (Cache.TryGetValue(key, out var c) && string.Equals(c.Text, text, StringComparison.Ordinal)) return c.Value;
+        // A long text is scanned once in the background, so the scan ends even when each request's deadline does not (M6).
+        if (text.Length >= BackgroundBuild.MinChars)
+            return BackgroundBuild.Run("scan:" + typeof(T).FullName + ":" + key, text, () => scan(text), v => Store(key, text, v), v => Cache.TryRemove(new KeyValuePair<string, (string, T)>(key, (text, v))), release);
         var value = scan(text);
+        Store(key, text, value);
+        return value;
+    }
+
+    static void Store(string key, string text, T value)
+    {
         if (Cache.Count > 64) Cache.Clear();
         Cache[key] = (text, value);
-        return value;
     }
 }
 
@@ -45,6 +54,7 @@ public static class DocumentCaches
 
     public static void Forget(string docId)
     {
+        BackgroundBuild.Forget(docId); // first: a read still running must not store the document again afterwards
         PgDocument.Forget(docId);
         List<(Action<string> Forget, Func<string, bool> Holds)> scans;
         lock (Gate) scans = [.. Scans];

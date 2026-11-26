@@ -81,15 +81,16 @@ public static class ResultSources
         return result;
     }
 
-    static Batch? Compute(string text, SchemaSnapshot snapshot)
+    /// <summary>Parses and walks on a deep stack (<see cref="DeepStack"/>): a long chain in the run's text must not end the process.</summary>
+    static Batch? Compute(string text, SchemaSnapshot snapshot) => DeepStack.Run(() =>
     {
         if (SchemaIndex.For(snapshot) is not { } index) return null;
-        if (TSqlParsing.NewParser().Parse(new StringReader(text), out var errors) is not TSqlScript script || errors.Count > 0) return null;
+        if (TSqlParsing.ParseText(TSqlParsing.NewParser(), text, out var errors) is not TSqlScript script || errors.Count > 0) return null;
         var walk = new Walk(index, snapshot.Database);
         foreach (var batch in script.Batches)
             if (!walk.Run(batch.Statements)) break;
         return new Batch(walk.Sets, walk.Open);
-    }
+    });
 
     /// <summary>Walks a batch's statements in execution order, adding one <see cref="Set"/> per data result set.</summary>
     sealed class Walk(SchemaIndex index, string? database)

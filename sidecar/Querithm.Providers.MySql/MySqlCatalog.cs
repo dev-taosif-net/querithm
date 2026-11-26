@@ -314,20 +314,54 @@ public sealed class MySqlPlans : IPlanProvider
 {
     public const string WriteRefusal = "An actual plan runs the statement, and MySQL / MariaDB cannot always undo it (DDL commits, some tables are not transactional): only SELECT and TABLE statements get one. Use the estimated plan.";
 
-    public string? Refusal(string sql, PlanMode mode) =>
-        mode == PlanMode.Actual && MySqlSplitter.Split(sql).Select(st => st.Tokens.Where(t => !t.IsTrivia).ToList()).Any(code => code.Count > 0 && !ReadOnly(code))
-            ? WriteRefusal : null;
+    public const string ReadingRefusal = "This text reads differently depending on the server's settings or version (a backslash or double quote under some sql_mode, a version-gated /*!…*/ comment, or an optimizer hint), so the server could split it into statements Querithm did not check, and a plan sends the text to the server. Plan a text without what changes the split.";
+
+    public const string DelimiterRefusal = "A statement here holds a semicolon under a client DELIMITER. The server knows no DELIMITER: it would run what follows the semicolon as a statement of its own instead of planning it. Plan the statements one at a time, without DELIMITER.";
+
+    /// <summary>
+    /// Either plan sends the text to the server (EXPLAIN + statement), and the server splits and reads it by its own
+    /// sql_mode, which Querithm does not know: under NO_BACKSLASH_ESCAPES <c>SELECT 'a\'; DROP TABLE t; -- '</c> is a SELECT
+    /// and a DROP, and an estimated plan has no transaction around it (code audit 2026-11-25, H1 / C1). So a text must split
+    /// the same way in every reading for either plan; an actual plan, which runs the statements, also needs every one of
+    /// them read-only in every reading (M7). The server also knows no client DELIMITER: a statement holding a semicolon is
+    /// two statements to it (C2), so it gets no plan.
+    /// </summary>
+    public string? Refusal(string sql, PlanMode mode)
+    {
+        var actual = mode == PlanMode.Actual;
+        var baseline = Statements(sql, MySqlLexMode.Default);
+        if (baseline.Any(st => st.Code.Any(t => t.IsP(";")))) return DelimiterRefusal;
+        if (baseline.Any(st => Hint(sql, st.Tokens))) return ReadingRefusal;
+        // Fourth round (C1): a plan reads the text once per server version its gated comments name, also where none of
+        // them changes the split (`/*!99999 SELECT 1 */ /*!80000 DELETE FROM t */` is a DELETE on MySQL 8); past the
+        // readings' bound the text gets no plan.
+        var (mysql, maria) = MySqlTokenizer.GateVersions(sql);
+        if (mysql.Count > MySqlLanguageService.MaxGateVersions || maria.Count > MySqlLanguageService.MaxGateVersions) return ReadingRefusal;
+        if (actual && baseline.Any(st => !ReadOnly(st.Code))) return WriteRefusal;
+        foreach (var m in MySqlLanguageService.ModesToRead(sql, MySqlLexMode.Default, everyVersion: true))
+        {
+            if (m == MySqlLexMode.Default) continue;
+            var other = Statements(sql, m);
+            // C2: each reading's hints too (a hint another reading hides in a string).
+            if (other.Count != baseline.Count || other.Where((st, i) => st.Start != baseline[i].Start || st.End != baseline[i].End
+                    || st.Code.Any(t => t.IsP(";")) || Hint(sql, st.Tokens) || (actual && !ReadOnly(st.Code))).Any())
+                return ReadingRefusal;
+        }
+        return null;
+    }
+
+    static bool Hint(string sql, List<MySqlToken> tokens) => tokens.Exists(t => MySqlTokenizer.HintEndsElsewhere(sql, t));
+
+    static List<(int Start, int End, List<MySqlToken> Tokens, List<MySqlToken> Code)> Statements(string sql, MySqlLexMode mode) =>
+        MySqlSplitter.Split(sql, mode).Select(st => (st.Start, st.End, st.Tokens, Code: st.Tokens.Where(t => !t.IsTrivia).ToList())).Where(x => x.Code.Count > 0).ToList();
 
     public async Task<PlanResult> GetPlanAsync(DbConnection c, string sql, PlanMode mode, CancellationToken ct)
     {
+        // Core asks Refusal first; checked again here, in both modes, so no caller reaches the server with a text that
+        // could split into statements Querithm did not check (or, for an actual plan, write).
+        if (Refusal(sql, mode) is { } refusal) throw new NotSupportedException(refusal);
         var statements = MySqlSplitter.Split(sql).Where(st => st.Tokens.Any(t => !t.IsTrivia)).ToList();
-        string prefix = "EXPLAIN FORMAT=JSON ";
-        if (mode == PlanMode.Actual)
-        {
-            foreach (var st in statements)
-                if (!ReadOnly(st.Tokens.Where(t => !t.IsTrivia).ToList())) throw new NotSupportedException(WriteRefusal);
-            prefix = await ActualPrefixAsync(c, ct).ConfigureAwait(false);
-        }
+        var prefix = mode == PlanMode.Actual ? await ActualPrefixAsync(c, ct).ConfigureAwait(false) : "EXPLAIN FORMAT=JSON ";
         var raws = new List<(string Text, string Plan)>();
         foreach (var st in statements)
         {

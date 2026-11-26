@@ -409,7 +409,7 @@ public class CancelRecoveryTests
         // stayed missing from completion until a manual refresh.
         await using var rig = new Rig();
         var refreshed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        rig.Executions.DdlExecuted += _ => refreshed.TrySetResult();
+        rig.Executions.DdlExecuted += (_, _, _) => refreshed.TrySetResult();
         rig.StuckOn("WAITFOR", (cmd, _) => UntilClosed(cmd));
         var s = rig.Open();
 

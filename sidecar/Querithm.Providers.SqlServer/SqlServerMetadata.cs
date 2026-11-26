@@ -51,8 +51,9 @@ public sealed class SqlServerMetadata : IMetadataProvider
         var fks = new List<FkRow>();
         foreach (var chunk in objectIds.Chunk(500))
         {
-            // Object ids are integers from the catalog, so the IN list is built from numbers only.
-            var ids = string.Join(",", chunk);
+            // Object ids are integers from the catalog, so the IN list is built from numbers only — culture-invariant, as
+            // below: the current culture's negative sign can be U+2212 (G#10).
+            var ids = string.Join(",", chunk.Select(i => i.ToString(System.Globalization.CultureInfo.InvariantCulture)));
             await using (var cmd = c.CreateCommand())
             {
                 cmd.CommandText = $"""
@@ -107,7 +108,7 @@ public sealed class SqlServerMetadata : IMetadataProvider
             await using (var cmd = c.CreateCommand())
             {
                 cmd.CommandText = $"""
-                    SELECT fk.name, fk.parent_object_id, fk.referenced_object_id, pc.name, rc.name
+                    SELECT fk.name, fk.parent_object_id, fk.referenced_object_id, pc.name, rc.name, fk.object_id
                     FROM sys.foreign_keys fk
                     JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
                     JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id
@@ -116,14 +117,16 @@ public sealed class SqlServerMetadata : IMetadataProvider
                     ORDER BY fk.object_id, fkc.constraint_column_id
                     """;
                 await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-                var byName = new Dictionary<string, (long P, long R, List<FkColumnPair> Cols)>();
+                // One FK per constraint object: a name is unique per schema only, and grouping by name gave one schema's FK
+                // the other's columns as well (completion audit 2026-11-25, M20).
+                var byObject = new Dictionary<int, (string Name, long P, long R, List<FkColumnPair> Cols)>();
                 while (await r.ReadAsync(ct).ConfigureAwait(false))
                 {
-                    var name = r.GetString(0);
-                    if (!byName.TryGetValue(name, out var fk)) byName[name] = fk = (r.GetInt32(1), r.GetInt32(2), []);
+                    var id = r.GetInt32(5);
+                    if (!byObject.TryGetValue(id, out var fk)) byObject[id] = fk = (r.GetString(0), r.GetInt32(1), r.GetInt32(2), []);
                     fk.Cols.Add(new FkColumnPair { Parent = r.GetString(3), Referenced = r.GetString(4) });
                 }
-                fks.AddRange(byName.Select(kv => new FkRow(kv.Key, kv.Value.P, kv.Value.R, kv.Value.Cols.ToArray())));
+                fks.AddRange(byObject.Values.Select(v => new FkRow(v.Name, v.P, v.R, v.Cols.ToArray())));
             }
         }
         return new MetadataBundle(columns, parms, indexes, fks);
@@ -222,7 +225,7 @@ public sealed class SqlServerMetadata : IMetadataProvider
     /// <summary>CREATE → CREATE OR ALTER (2016 SP1+) or ALTER, found on the token stream (§15 rule 6).</summary>
     public string ToEditableScript(string definition, Capabilities caps)
     {
-        var tokens = TSqlParsing.NewParser().GetTokenStream(new StringReader(definition), out _);
+        if (TSqlParsing.Lex(TSqlParsing.NewParser(), definition, out _) is not { } tokens) return definition; // too deep to lex: unchanged
         for (var i = 0; i < tokens.Count; i++)
         {
             var t = tokens[i];

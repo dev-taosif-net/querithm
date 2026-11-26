@@ -50,10 +50,11 @@ public static class OracleSplitter
 
     static readonly HashSet<string> PlSqlUnits = new(StringComparer.OrdinalIgnoreCase) { "PROCEDURE", "FUNCTION", "PACKAGE", "TRIGGER", "LIBRARY", "JAVA" };
 
-    public static List<OracleStatement> Split(string text)
+    public static List<OracleStatement> Split(string text) => Split(text ??= "", OracleTokenizer.Tokenize(text));
+
+    /// <summary>The statements of <paramref name="text"/> from its tokens (<see cref="OracleTokenizer.Tokenize"/>), lexed once by a caller that needs both.</summary>
+    public static List<OracleStatement> Split(string text, List<OracleToken> tokens)
     {
-        text ??= "";
-        var tokens = OracleTokenizer.Tokenize(text);
         var result = new List<OracleStatement>();
         var current = new List<OracleToken>();
         var code = new List<OracleToken>();
@@ -76,6 +77,7 @@ public static class OracleSplitter
 
         for (var i = 0; i < tokens.Count; i++)
         {
+            Querithm.Intelligence.PgSql.Tier2Cancellation.Check(i);
             var t = tokens[i];
             if (t.IsP("/") && AloneOnLine(text, t))
             {
@@ -111,7 +113,11 @@ public static class OracleSplitter
     {
         if (code.Count == 0) return false;
         if (code[0].Is("DECLARE") || code[0].Is("BEGIN") || code[0].IsP("<<")) return true;
-        if (code[0].Is("WITH")) return code.Count > 1 && (code[1].Is("FUNCTION") || code[1].Is("PROCEDURE"));
+        // WITH FUNCTION / PROCEDURE f … opens a query with PL/SQL declarations, also after DML with the WITH_PLSQL hint
+        // (INSERT /*+ WITH_PLSQL */ INTO t WITH FUNCTION …; fourth round, M14). `WITH function AS (…)` is a CTE named function.
+        for (var k = 0; k + 2 < code.Count; k++)
+            if (code[k].Is("WITH") && (code[k + 1].Is("FUNCTION") || code[k + 1].Is("PROCEDURE")) && !code[k + 2].Is("AS")) return true;
+        if (code[0].Is("WITH")) return false;
         if (!code[0].Is("CREATE")) return false;
         var i = 1;
         if (i + 1 < code.Count && code[i].Is("OR") && code[i + 1].Is("REPLACE")) i += 2;
@@ -149,9 +155,16 @@ public static class OracleSplitter
         {
             var nl = text.IndexOf('\n', end);
             var lineEnd = nl < 0 ? text.Length : nl;
-            var trimmed = text[start..lineEnd].TrimEnd();
+            // This line only (code audit 2026-11-25, L7): from the command's start, a blank line after a continued one still
+            // "ended in -" and took the next line (a SQL statement) into the command, and each line re-copied every line
+            // before it. Compared in place, without copying.
+            var last = lineEnd - 1;
+            while (last >= end && char.IsWhiteSpace(text[last])) last--;
+            // A trailing "--" starts a comment, not a continuation (fourth round, M15: SET SERVEROUTPUT ON -- took the next
+            // line's SQL into the command, where it never ran).
+            var continued = last >= end && text[last] == '-' && !(last - 1 >= end && text[last - 1] == '-');
             end = lineEnd;
-            if (trimmed.EndsWith('-') && nl >= 0) { end = nl + 1; continue; }
+            if (continued && nl >= 0) { end = nl + 1; continue; }
             break;
         }
         var k = i;

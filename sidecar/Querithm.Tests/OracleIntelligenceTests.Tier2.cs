@@ -58,7 +58,7 @@ public partial class OracleIntelligenceTests
         return L.Complete(new CompleteParams
         {
             DocId = Guid.NewGuid().ToString(), Text = marked.Remove(at, 1), Offset = at, Dialect = Dialect.Oracle, ProfileId = "ora", Database = "FREEPDB1", Schema = schema,
-        }, new OneCatalog(Catalog));
+        }, new OneCatalog(Catalog), CancellationToken.None);
     }
 
     static string[] Labels(string marked, string? schema = "APP") => Complete(marked, schema).Select(c => c.Label).Order(StringComparer.Ordinal).ToArray();
@@ -84,7 +84,7 @@ public partial class OracleIntelligenceTests
         return L.Signature(new SignatureParams
         {
             DocId = Guid.NewGuid().ToString(), Text = marked.Remove(at, 1), Offset = at, Dialect = Dialect.Oracle, ProfileId = "ora", Database = "FREEPDB1", Schema = "APP",
-        }, new OneCatalog(Catalog));
+        }, new OneCatalog(Catalog), CancellationToken.None);
     }
 
     [Theory]
@@ -254,16 +254,16 @@ public partial class OracleIntelligenceTests
     [Fact]
     public void Without_a_snapshot_tier_2_offers_nothing_and_never_throws()
     {
-        Assert.Empty(L.Complete(new CompleteParams { DocId = "d", Text = "SELECT e. FROM emp e", Offset = 9, Dialect = Dialect.Oracle }, new OneCatalog(null)));
-        Assert.Empty(L.Signature(new SignatureParams { DocId = "d", Text = "BEGIN p(", Offset = 8, Dialect = Dialect.Oracle }, new OneCatalog(null)).Signatures);
-        Assert.Empty(L.Complete(new CompleteParams { DocId = "d", Text = "", Offset = 5, Dialect = Dialect.Oracle }, new OneCatalog(Catalog)));
+        Assert.Empty(L.Complete(new CompleteParams { DocId = "d", Text = "SELECT e. FROM emp e", Offset = 9, Dialect = Dialect.Oracle }, new OneCatalog(null), CancellationToken.None));
+        Assert.Empty(L.Signature(new SignatureParams { DocId = "d", Text = "BEGIN p(", Offset = 8, Dialect = Dialect.Oracle }, new OneCatalog(null), CancellationToken.None).Signatures);
+        Assert.Empty(L.Complete(new CompleteParams { DocId = "d", Text = "", Offset = 5, Dialect = Dialect.Oracle }, new OneCatalog(Catalog), CancellationToken.None));
     }
 
     [Fact]
     public void Forget_drops_the_documents_tier_2_cached()
     {
         var at = "SELECT e. FROM emp e".IndexOf('.') + 1;
-        L.Complete(new CompleteParams { DocId = "ora-forget", Text = "SELECT e. FROM emp e", Offset = at, Dialect = Dialect.Oracle, Schema = "APP" }, new OneCatalog(Catalog));
+        L.Complete(new CompleteParams { DocId = "ora-forget", Text = "SELECT e. FROM emp e", Offset = at, Dialect = Dialect.Oracle, Schema = "APP" }, new OneCatalog(Catalog), CancellationToken.None);
         Assert.True(DocumentCaches.Holds("ora-forget"));
         L.Forget("ora-forget");
         Assert.False(DocumentCaches.Holds("ora-forget"));

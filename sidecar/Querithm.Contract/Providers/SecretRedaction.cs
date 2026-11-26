@@ -281,6 +281,19 @@ public static class SecretRedaction
     /// <summary>A literal's text between its quotes, as typed and with doubled quotes undone (servers echo either in errors).</summary>
     static IEnumerable<string> Inner(string literal)
     {
+        // A T-SQL name standing for a value ([Tr0ub4dor&3], a bare Summer2026): its text, so an error quoting it is masked too.
+        if (literal.Length >= 2 && literal[0] == '[' && literal[^1] == ']')
+        {
+            var name = literal[1..^1];
+            yield return name;
+            if (name.Contains("]]", StringComparison.Ordinal)) yield return name.Replace("]]", "]", StringComparison.Ordinal);
+            yield break;
+        }
+        if (literal.Length > 0 && (char.IsLetterOrDigit(literal[0]) || literal[0] == '_') && literal.IndexOfAny(['\'', '"', '$']) < 0)
+        {
+            yield return literal;
+            yield break;
+        }
         var open = literal.IndexOfAny(['\'', '"']);
         if (open < 0 || literal.Length - open < 2) yield break;
         var q = literal[open];

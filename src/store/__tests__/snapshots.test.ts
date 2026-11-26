@@ -227,7 +227,7 @@ describe("snapshots: meta.updated", () => {
     expect(s().get("p1", "Sales")?.snapshot?.objects).toHaveLength(3);
   });
   it("patches only changed and removed objects, re-sorted and re-indexed", async () => {
-    rpc.mockResolvedValueOnce([obj(1, "dbo", "Orders2"), obj(4, "dbo", "Brand")]);
+    rpc.mockResolvedValueOnce([obj(1, "dbo", "Orders2"), obj(4, "dbo", "Brand")]).mockResolvedValueOnce([]); // meta.objects, meta.foreignKeys
     await emit(event({ changed: 2, changedIds: [1, 4], removedIds: [2] }));
     expect(rpc).toHaveBeenCalledWith("meta.objects", { profileId: "p1", database: "Sales", ids: [1, 4] });
     const e = s().get("p1", "Sales")!;
@@ -252,7 +252,7 @@ describe("snapshots: meta.updated", () => {
     await emit(event({ changed: 0, changedIds: [], notes: ["Triggers are not listed: this login cannot read ALL_TRIGGERS (ORA-00942)."] }));
     expect(s().get("p1", "Sales")?.snapshot?.notes).toEqual(["Triggers are not listed: this login cannot read ALL_TRIGGERS (ORA-00942)."]);
     expect(s().get("p1", "Sales")?.snapshot?.objects).toHaveLength(3); // the objects it could read stay
-    rpc.mockResolvedValueOnce([obj(1, "dbo", "Orders")]);
+    rpc.mockResolvedValueOnce([obj(1, "dbo", "Orders")]).mockResolvedValueOnce([]);
     await emit(event({ changed: 1, changedIds: [1] }));
     expect(s().get("p1", "Sales")?.snapshot?.notes).toBeNull();
   });

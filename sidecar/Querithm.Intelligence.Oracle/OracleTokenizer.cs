@@ -33,8 +33,10 @@ public static class OracleTokenizer
     {
         var prevSignificant = OracleTokenKind.Whitespace;
         var prevEnd = -1;
+        var lexed = 0;
         while (i < s.Length)
         {
+            Querithm.Intelligence.PgSql.Tier2Cancellation.Check(lexed++);
             var start = i;
             var startLine = line;
             var c = s[i];

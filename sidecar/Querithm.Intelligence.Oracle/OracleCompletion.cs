@@ -39,21 +39,62 @@ public static class OracleCompletion
         _ => PgTokenKind.Whitespace,
     }, t.Offset, t.Length, t.Line, t.Text);
 
-    /// <summary>The split of the last text (Tokenize and Statements read the same document one after the other).</summary>
-    [ThreadStatic] static (string Text, List<OracleStatement> Split)? _last;
+    /// <summary>
+    /// The tokens and split of the last text: the schema switches, Tokenize and Statements read the same document one after
+    /// the other. Code audit 2026-11-25 (M13): the switches split the text on their own and Tokenize lexed it again, so a
+    /// cold request lexed the document three times; now once. Cleared when the outermost <see cref="Use"/> scope ends, so
+    /// a pool thread does not hold the last document (up to 16 MB) after its request.
+    /// </summary>
+    [ThreadStatic] static (string Text, List<OracleToken> Tokens, List<OracleStatement> Split)? _last;
 
-    static List<OracleStatement> Split(string text)
+    static (List<OracleToken> Tokens, List<OracleStatement> Split) Lexed(string text)
     {
-        if (_last is { } l && ReferenceEquals(l.Text, text)) return l.Split;
-        var split = OracleSplitter.Split(text);
-        _last = (text, split);
-        return split;
+        if (_last is { } l && ReferenceEquals(l.Text, text)) return (l.Tokens, l.Split);
+        if (text.Length >= LargeText && _shared is { } s && string.Equals(s.Text, text, StringComparison.Ordinal))
+        {
+            _last = (text, s.Tokens, s.Split); // the next calls on this thread compare by reference, not 16 MB again (M16)
+            return (s.Tokens, s.Split);
+        }
+        var tokens = OracleTokenizer.Tokenize(text);
+        var split = OracleSplitter.Split(text, tokens);
+        if (text.Length >= LargeText)
+        {
+            Interlocked.Increment(ref _largeLexes);
+            _shared = new Lex(text, tokens, split);
+        }
+        _last = (text, tokens, split);
+        return (tokens, split);
     }
+
+    /// <summary>The length from which completion reads a document in the background (PgSql's BackgroundBuild.MinChars).</summary>
+    const int LargeText = 2_000_000;
+
+    sealed record Lex(string Text, List<OracleToken> Tokens, List<OracleStatement> Split);
+
+    /// <summary>
+    /// The last long text lexed, until completion's document build takes it (code audit 2026-11-25, second round): the
+    /// schema-switch scan and the document are read in the background on two pool threads, and each lexed a 16 MB text
+    /// of its own. Compared by value (each request brings its own copy of the text); one document at most, process-wide.
+    /// </summary>
+    static volatile Lex? _shared;
+
+    static int _largeLexes;
+
+    /// <summary>Lets go of the shared lex (lang.forget: the document may be the one it holds).</summary>
+    internal static void ClearShared() => _shared = null;
+
+    /// <summary>Long texts lexed so far (tests).</summary>
+    internal static int LargeLexes => Volatile.Read(ref _largeLexes);
+
+    static List<OracleStatement> Split(string text) => Lexed(text).Split;
+
+    /// <summary>Whether this thread still holds a document (tests).</summary>
+    internal static bool HoldsDocument => _last != null;
 
     /// <summary>The document's tokens; a SQL*Plus command line reads as a comment (nothing to complete there).</summary>
     static List<PgToken> Tokenize(string text)
     {
-        var tokens = OracleTokenizer.Tokenize(text).Select(ToPg).ToList();
+        var tokens = Tier2Cancellation.Map(Lexed(text).Tokens, ToPg);
         foreach (var st in Split(text))
         {
             if (st.Kind != OracleStatementKind.ClientCommand || st.Tokens.Count == 0) continue;
@@ -89,11 +130,24 @@ public static class OracleCompletion
     /// </summary>
     static List<List<PgToken>> Statements(string text, List<PgToken> tokens)
     {
+        // The document build reads the tokens (Tokenize), then the split (here): after this nothing needs the shared lex.
+        if (text.Length >= LargeText)
+        {
+            var split = Split(text);
+            // Only the entry of this text: another thread's newer one stays (fourth round, M16).
+            if (_shared is { } mine && ReferenceEquals(mine.Split, split)) Interlocked.CompareExchange(ref _shared, null, mine);
+            return StatementsOf(split, tokens);
+        }
+        return StatementsOf(Split(text), tokens);
+    }
+
+    static List<List<PgToken>> StatementsOf(List<OracleStatement> split, List<PgToken> tokens)
+    {
         var result = new List<List<PgToken>>();
-        foreach (var st in Split(text))
+        foreach (var st in split)
         {
             if (st.Kind == OracleStatementKind.ClientCommand) continue;
-            var own = st.Tokens.Select(ToPg).ToList();
+            var own = Tier2Cancellation.Map(st.Tokens, ToPg);
             if (st.Kind == OracleStatementKind.PlSql)
             {
                 BodyStatements(own, result);
@@ -190,15 +244,39 @@ public static class OracleCompletion
         return true;
     }
 
-    static readonly ConcurrentDictionary<string, PgCompletionRules> Cache = new(StringComparer.Ordinal);
+    /// <summary>MINUS joins two queries as UNION does, each operand a query level of its own.</summary>
+    static readonly IReadOnlySet<string> SetOperators = new HashSet<string>([.. PgCompletionRules.StandardSetOperators, "MINUS"], StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Keywords that start a clause after a FROM item only before these tokens; elsewhere they are names (FROM t sample).</summary>
+    static readonly Dictionary<string, string[]> ClauseBefore = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["PARTITION"] = ["(", "FOR"], ["SUBPARTITION"] = ["(", "FOR"], ["SAMPLE"] = ["(", "BLOCK"], ["PIVOT"] = ["(", "XML"],
+        ["UNPIVOT"] = ["(", "INCLUDE", "EXCLUDE"], ["VERSIONS"] = ["BETWEEN", "PERIOD"], ["MATCH_RECOGNIZE"] = ["("],
+    };
+
+    /// <summary>
+    /// A word after a FROM item that starts a clause instead of naming the alias (audit H10): a SQL reserved word, which no
+    /// bare alias can be (START WITH, CONNECT BY, MINUS, AS OF), or a clause keyword before what it takes (PARTITION (p),
+    /// SAMPLE (n), PIVOT (…), VERSIONS BETWEEN, MATCH_RECOGNIZE (…)).
+    /// </summary>
+    static bool EndsFromItem(string word, string? next) =>
+        OracleKeywords.IsSqlReserved(word)
+        || (next != null && ClauseBefore.TryGetValue(word, out var before) && before.Contains(next, StringComparer.OrdinalIgnoreCase));
+
+    /// <summary>One instance per current schema, bounded (audit M13): the login schema is untrusted and a typed one grows a letter at a time.</summary>
+    static readonly RulesCache<string> Cache = new(Create, StringComparer.Ordinal);
+
+    internal static int CachedRules => Cache.Count;
 
     /// <summary>Rules with <paramref name="schema"/> as the current schema (one instance each: it caches its snapshot index).</summary>
-    public static PgCompletionRules RulesFor(string schema) => Cache.GetOrAdd(schema, s => new PgCompletionRules
+    public static PgCompletionRules RulesFor(string schema) => Cache.Get(schema);
+
+    static PgCompletionRules Create(string s) => new()
     {
-        Id = $"oracle:{s}", Names = StringComparer.Ordinal, FoldsUnquoted = true, Fold = w => w.ToUpperInvariant(), DefaultSchema = s,
+        Id = $"oracle:{s}", DocumentKey = "oracle", ReleaseThread = static () => _last = null, Names = StringComparer.Ordinal, FoldsUnquoted = true, Fold = w => w.ToUpperInvariant(), DefaultSchema = s,
         SearchPath = [Public], IsReserved = OracleKeywords.IsReserved, IsPlain = OracleIdentifiers.CanBeBare, DollarBodiesAreCode = false,
         Tokenize = Tokenize, Statements = Statements, Unquote = Unquote, Delimit = d => "\"" + d + "\"", NamedArguments = true,
-        StringOpen = Unterminated, MemberRoutines = Members, RoutineLabel = Label,
+        StringOpen = Unterminated, MemberRoutines = Members, RoutineLabel = Label, EndsFromItem = EndsFromItem, SetOperators = SetOperators,
         // The types CAST(x AS …) takes.
         BuiltinTypes =
         [
@@ -206,7 +284,7 @@ public static class OracleCompletion
             "RAW", "DATE", "TIMESTAMP", "TIMESTAMP WITH TIME ZONE", "TIMESTAMP WITH LOCAL TIME ZONE", "INTERVAL YEAR TO MONTH",
             "INTERVAL DAY TO SECOND", "ROWID", "UROWID", "JSON", "XMLTYPE", "BOOLEAN", "VECTOR",
         ],
-    });
+    };
 
     /// <summary>
     /// The schema completion resolves unqualified names in at <paramref name="offset"/>: the last <c>ALTER SESSION SET
@@ -215,7 +293,7 @@ public static class OracleCompletion
     public static string SchemaAt(string? docId, string text, int offset, string? login)
     {
         string? schema = null;
-        foreach (var (start, s) in DocumentScan<List<(int Start, string Schema)>>.Get($"oracle|{docId}", text, Switches))
+        foreach (var (start, s) in DocumentScan<List<(int Start, string Schema)>>.Get($"oracle|{docId}", text, Switches, static () => _last = null))
         {
             if (start >= offset) break;
             schema = s;
@@ -226,7 +304,7 @@ public static class OracleCompletion
     static List<(int Start, string Schema)> Switches(string text)
     {
         var list = new List<(int, string)>();
-        foreach (var st in OracleSplitter.Split(text))
+        foreach (var st in Split(text)) // lexed once with the tokens completion reads next (M13)
         {
             if (st.Kind != OracleStatementKind.Sql) continue;
             var c = st.Code.Take(6).ToList();
@@ -316,6 +394,7 @@ public static class OracleCompletion
         {
             rules.Dispose();
             _schema = previous;
+            if (previous == null) _last = null; // the request is over: do not hold its document on this pool thread (M13)
         }
     }
 

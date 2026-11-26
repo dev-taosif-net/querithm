@@ -116,10 +116,12 @@ describe("rank: sortText", () => {
     expect(sortText(key({ order: 3.9 }))).toBe(sortText(key({ order: 3 })));
     expect(sortText(key({ order: -4 }))).toBe(sortText(key({ order: 0 })));
   });
-  it("values wider than their segment keep only the low digits (documents current behaviour)", () => {
-    // pad() truncates to the last `w` digits: order 10000 encodes as "0000" and sorts before order 1.
-    expect(sortText(key({ order: 10000 }))).toBe(sortText(key({ order: 0 })));
-    expect(sortText(key({ group: 103 }))).toBe(sortText(key({ group: 3 })));
+  it("values wider than their segment are capped at its widest value, so they still sort after smaller ones", () => {
+    // Before, pad() kept the last `w` digits: order 10000 encoded as "0000" and sorted before order 1.
+    expect(sortText(key({ order: 10000 }))).toBe(sortText(key({ order: 9999 })));
+    expect(sortText(key({ order: 10000 })) > sortText(key({ order: 1 }))).toBe(true);
+    expect(sortText(key({ group: 103 }))).toBe(sortText(key({ group: 99 })));
+    expect(sortText(key({ rest: 1234 }))).toBe(sortText(key({ rest: 999 })));
   });
   it("negative usage ranks like zero usage (clamp usage at 0 before encoding)", () => {
     expect(sortText(key({ usage: -5 }))).toBe(sortText(key({ usage: 0 })));

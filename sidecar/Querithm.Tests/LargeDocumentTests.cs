@@ -81,7 +81,7 @@ public class LargeDocumentTests
             var doc = edited ?? text;
             var at = -1;
             for (var i = 0; i <= nth; i++) at = doc.IndexOf(marker, at + 1, StringComparison.Ordinal);
-            return pg.Complete(new CompleteParams { DocId = "big-pg", Text = doc, Offset = at + marker.Length, Dialect = Dialect.Pg, ProfileId = "p1", Database = "postgres" }, BenchPg);
+            return pg.Complete(new CompleteParams { DocId = "big-pg", Text = doc, Offset = at + marker.Length, Dialect = Dialect.Pg, ProfileId = "p1", Database = "postgres" }, BenchPg, CancellationToken.None);
         }
         // Record fields from the nearest FOR … IN query, the temp table, CTE and variables deep in the body.
         Assert.Contains(At("COALESCE(rec.", 1100), i => i.Label == "c3");

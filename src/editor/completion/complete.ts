@@ -1,17 +1,17 @@
 // Tier-1 completion (§9 context table). Synchronous, from the cached SchemaIndex; never throws.
-import type { CompletionKind, Dialect, ObjectKind, SnapColumn, SnapObject } from "../../ipc/contract";
+import type { CompletionKind, Dialect, ObjectKind, SnapColumn, SnapFk, SnapObject } from "../../ipc/contract";
 import type { CompletionRequest, CompletionResult, CursorContext, RowInfo, SchemaIndex, TableInScope, Tier1Item } from "./types";
-import { scan } from "./scanner";
-import { findObject, fkReference, isDefaultSchema, resolveTable, synonymTarget } from "./schemaIndex";
+import { lastStartingBefore, neverAlias, scan } from "./scanner";
+import { findObject, fkLookup, fkReference, isDefaultSchema, resolveTable, synonymTarget } from "./schemaIndex";
 import { columnLines, columnsTable, mdCode, mdText, objectHeader } from "../hoverMarkdown";
-import { bestMatch, MATCH_NONE, sortText } from "./rank";
+import { bestMatch, MATCH_NONE, MATCH_PREFIX, matchRankLower, sortText } from "./rank";
 import { suggestAlias } from "./alias";
-import { getStream, type Token } from "./lexer";
+import { firstEndingAfter, getStream, type Token } from "./lexer";
 import {
   afterReferenceKeywords, argValueKeywords, builtinFunctions, clauseKeywords, dataTypes, declareKeywords,
-  execArgsKeywords, reservedWords, statementStartKeywords, tableContextKeywords, valuesKeywords,
+  execArgsKeywords, niladicFunctions, reservedWords, statementStartKeywords, tableContextKeywords, valuesKeywords,
 } from "./keywords";
-import { DIALECTS, knownDialect } from "../../engines";
+import { DIALECTS, foldIdentifier, knownDialect } from "../../engines";
 
 const MAX_ITEMS = 500;
 
@@ -59,9 +59,54 @@ interface Cand {
   usageKeys?: string[];
   /** Alias appended to insertText (auto-alias). */
   alias?: string;
+  /**
+   * The name an auto-alias is generated from, once the item is kept (finalize): generating one for each of 5,000
+   * FROM candidates cost about 3 ms a keystroke (2026-11-25 profile), for the 500 the list keeps.
+   */
+  aliasFor?: string;
+  /**
+   * The snapshot object an object item stands for (objectCand). Ranked on its label and names alone; its detail,
+   * insert text and documentation are made in finalize for the items the list keeps (fillObject). Each object gives one
+   * candidate per list, so it is never de-duplicated.
+   */
+  obj?: SnapObject;
+  /** `obj` is named without its schema (a schema was typed before it). */
+  bare?: boolean;
+  /** The match rank, when the loop that made the candidate computed it already. */
+  m?: number;
 }
 
-interface ColInfo { name: string; col?: SnapColumn }
+/** A ranked candidate: the sortText fields as numbers (k1, k2) and the lower-case label that breaks their ties. */
+interface Scored { c: Cand; k1: number; k2: number; low: string; tier: number; m: number; u: number; rest: number }
+
+/**
+ * Lower-case forms of an object's name and `schema.name`, kept per snapshot object (an indexed snapshot never changes:
+ * a refresh builds new objects). Ranking and usage look them up for every object on every keystroke.
+ */
+const OBJ_KEYS = new WeakMap<SnapObject, { name: string; qualified: string }>();
+function objKeys(o: SnapObject): { name: string; qualified: string } {
+  let k = OBJ_KEYS.get(o);
+  if (!k) {
+    k = { name: o.name.toLowerCase(), qualified: `${o.schema}.${o.name}`.toLowerCase() };
+    OBJ_KEYS.set(o, k);
+  }
+  return k;
+}
+
+/**
+ * Items whose documentation finalize builds: the visible rows and a margin. The rest carry it as a thunk that the
+ * provider's resolveCompletionItem runs when Monaco shows that item's details (completion audit 2026-11-25, H9).
+ */
+const EAGER_DOCS = 50;
+
+/**
+ * Whether a name needs delimiters, per dialect: depends on the name and the dialect only, and is asked for every
+ * candidate on every keystroke (about 1.3 ms of a `FROM |` on 5,000 tables, 2026-11-25 profile). Bounded: cleared at 50,000.
+ */
+const QUOTE_MEMO: Partial<Record<Dialect, Map<string, boolean>>> = {};
+
+/** A column; `fromSource`: named in the statement text (a CTE or derived table), `quoted` there (TableInScope.quotedColumns). */
+interface ColInfo { name: string; col?: SnapColumn; fromSource?: boolean; quoted?: boolean }
 
 const KIND_SETS = {
   from: new Set<ObjectKind>(["table", "view", "tvf", "synonym"]),
@@ -146,10 +191,15 @@ export function complete(req: CompletionRequest): CompletionResult {
   } catch {
     ctx = emptyResultContext(offset);
   }
-  if (ctx.inStringOrComment) return { context: ctx, items: [] };
+  // Inside or right after a number (`> 1.|`) no list opens (audit H8), so none is built.
+  if (ctx.inStringOrComment || ctx.inNumber) return { context: ctx, items: [] };
   let items: Tier1Item[] = [];
   try {
-    items = new Builder(ctx, req.schema ?? null, dialect, text, req.usage, req.autoAlias !== false ? offset : -1, req.rowCounts).build();
+    // Inside a PostgreSQL AS / DO $$ body the scanner read the body's own tokens (scanBody); so does the builder, whose
+    // checks (an opened quote, a free alias slot, a statement starting at the prefix) found the body as one string token
+    // of the outer text (code audit 2026-11-26, M15).
+    const region = ctx.body ? { text: ctx.body.text, offset: offset - ctx.body.base, base: ctx.body.base } : { text, offset, base: 0 };
+    items = new Builder(ctx, req.schema ?? null, dialect, region, req.usage, req.autoAlias !== false, req.rowCounts).build();
   } catch {
     items = [];
   }
@@ -160,10 +210,25 @@ export function complete(req: CompletionRequest): CompletionResult {
 const OPEN_QUOTES: Record<Dialect, string> = { tsql: '["', sqlite: '["`', mySql: "`", pg: '"', duckDb: '"', oracle: '"' };
 const CLOSE_QUOTE: Record<string, string> = { "[": "]", '"': '"', "`": "`" };
 
-/** The opening quote just before the prefix (`[Ord|`, `"Ord|`, a backtick), or "" when the prefix is not quoted. */
+/**
+ * The opening quote just before the prefix (`[Ord|`, `"Ord|`, a backtick), or "" when the prefix is not quoted. The
+ * character alone does not tell: right after `"orders"|` the quote before the cursor closes a name (a `"` or backtick
+ * opens and closes alike), so the delimited name's token must start there.
+ */
 export function openQuoteAt(text: string, prefixStart: number, dialect: Dialect): string {
+  return openQuoteToken(text, prefixStart, dialect) ? text[prefixStart - 1] : "";
+}
+
+/**
+ * The delimited name opened just before the prefix (openQuoteAt), as the lexer reads it: `[Ord|]]x]` is one name up to
+ * its last `]`, a doubled closing quote inside it included. Undefined when the prefix is not quoted.
+ */
+export function openQuoteToken(text: string, prefixStart: number, dialect: Dialect): Token | undefined {
   const c = prefixStart > 0 ? text[prefixStart - 1] : "";
-  return c && OPEN_QUOTES[dialect].includes(c) ? c : "";
+  if (!c || !OPEN_QUOTES[dialect].includes(c)) return undefined;
+  const T = getStream(text, dialect).code;
+  const t = T[lastStartingBefore(T, prefixStart)];
+  return t !== undefined && t.kind === "qident" && t.start === prefixStart - 1 ? t : undefined;
 }
 
 /**
@@ -249,11 +314,11 @@ export function columnDetail(c: SnapColumn, references?: string): string {
   return d;
 }
 
-/** `schema.table.column` → `table` (the referenced table's name, short enough for the list). */
+/** `schema.table.column` (or `schema.table`, no referenced column known) → `table`, short enough for the list. */
 function refName(fk: string | undefined): string | undefined {
   if (!fk) return undefined;
   const parts = fk.split(".");
-  return parts.length >= 2 ? parts[parts.length - 2] : fk;
+  return parts.length >= 3 ? parts[parts.length - 2] : parts.length === 2 ? parts[1] : fk;
 }
 
 /** Columns of the engine's built-in row sources (table functions the snapshot does not list). */
@@ -274,10 +339,21 @@ const BUILTIN_ROW_SOURCES: Partial<Record<Dialect, Record<string, string[] | "al
 };
 
 function builtinRowSource(dialect: Dialect, t: TableInScope): string[] | undefined {
-  const spec = BUILTIN_ROW_SOURCES[dialect]?.[t.name.toLowerCase()];
+  // An own property only: a table named `constructor` or `__proto__` found Object.prototype's, and completion threw (H11).
+  const map = BUILTIN_ROW_SOURCES[dialect], key = t.name.toLowerCase();
+  const spec = map && Object.hasOwn(map, key) ? map[key] : undefined;
   if (spec === undefined) return undefined;
   if (spec === "alias") return [t.alias ?? t.name];
   return spec;
+}
+
+/**
+ * A foreign key a JOIN condition can be written from: every column pair known on both sides. SQLite's
+ * `REFERENCES customers` without a column list may arrive without the referenced column, which wrote
+ * `o.customer_id = c.""` (completion audit 2026-11-25, M26).
+ */
+function usableFk(fk: SnapFk): boolean {
+  return !!fk.columns?.length && fk.columns.every((p) => !!p.parent && !!p.referenced);
 }
 
 /** The one key column of a table with a single-column primary key. */
@@ -364,6 +440,8 @@ class Builder {
   private readonly openQuote: string;
   private readonly typedOpenQuote: boolean;
   private readonly reserved: Set<string>;
+  /** The typed word in lower case, for matching thousands of names without lower-casing it again (objectMatch). */
+  private readonly prefixLower: string;
   /** Aliases to avoid for an auto-aliased FROM/JOIN reference; null when no alias is appended here. */
   private readonly aliasTaken: string[] | null;
   /** The statement may end before the prefix, so the prefix may start the next one (`FROM t emp\nsele`). */
@@ -373,33 +451,40 @@ class Builder {
     private readonly ctx: CursorContext,
     private readonly idx: SchemaIndex | null,
     private readonly dialect: Dialect,
-    text: string,
+    /** The text the cursor's code is in (a PostgreSQL body's own, at `base` in the document) and the cursor in it. */
+    region: { text: string; offset: number; base: number },
     private readonly usage?: Map<string, number>,
-    aliasOffset = -1,
+    autoAlias = false,
     private readonly rowCounts?: Map<number, RowInfo>,
   ) {
-    this.openQuote = openQuoteAt(text, ctx.prefixStart, dialect);
+    const { text, base } = region;
+    this.openQuote = openQuoteAt(text, ctx.prefixStart - base, dialect);
     this.typedOpenQuote = this.openQuote !== "";
     this.reserved = reservedWords(dialect);
-    this.aliasTaken = aliasOffset >= 0 && this.aliasSlotFree(text, aliasOffset)
+    this.prefixLower = ctx.prefix.toLowerCase();
+    this.aliasTaken = autoAlias && this.aliasSlotFree(text, region.offset)
       ? ctx.tablesInScope.flatMap((t) => (t.alias ? [t.alias, t.name] : [t.name]))
       : null;
-    this.nextStatement = this.mayStartStatement(text);
+    this.nextStatement = this.mayStartStatement(text, base);
   }
 
   /**
    * True when a new statement can begin at the prefix without ';' (both dialects split there, §9): paren depth 0 in
    * the current statement, the previous token can end a statement, and the user typed a prefix or started a new line.
    */
-  private mayStartStatement(text: string): boolean {
-    const { clause, slot, prefix, prefixStart, statementStart } = this.ctx;
+  private mayStartStatement(text: string, base: number): boolean {
+    const { clause, slot, prefix } = this.ctx;
+    const prefixStart = this.ctx.prefixStart - base, statementStart = this.ctx.statementStart - base;
     if (slot !== undefined && slot !== "afterReference") return false;
     if (clause === "update" || clause === "insertInto" || clause === "insertColumns") return false;
     if (/^[@:$]/.test(prefix)) return false;
     const T = getStream(text, this.dialect).code;
     let depth = 0;
     let prev: Token | undefined;
-    for (const t of T) {
+    // The statement's tokens only (found by binary search): a walk from the script's first token cost a 12,000-line
+    // script's every token per keystroke (completion audit M16).
+    for (let i = lastStartingBefore(T, statementStart) + 1; i < T.length; i++) {
+      const t = T[i];
       if (t.start >= prefixStart) break;
       if (t.start < statementStart) continue;
       if (t.kind === "punct" && t.value === "(") depth++;
@@ -422,20 +507,19 @@ class Builder {
     const { clause, slot } = this.ctx;
     if ((clause !== "from" && clause !== "join") || slot !== undefined || this.typedOpenQuote) return false;
     if (this.ctx.prefix.startsWith("@")) return false;
-    const next = getStream(text, this.dialect).code.find((t) => t.end > offset);
+    const code = getStream(text, this.dialect).code;
+    const next = code[firstEndingAfter(code, offset)];
     if (!next) return true;
     if (next.start < offset) return false; // cursor inside a word
-    if (next.kind === "ident" || next.kind === "qident") return false;
+    // A clause word the dialect does not reserve (Oracle's JOIN, LEFT, …) is lexed as a name, and is no alias (L10).
+    if ((next.kind === "ident" && !neverAlias(next, this.dialect)) || next.kind === "qident") return false;
     if (next.kind === "keyword" && next.upper === "AS") return false;
     return !(next.kind === "punct" || next.kind === "operator") || (next.value !== "." && next.value !== "(");
   }
 
-  /** Append a generated alias to a FROM/JOIN reference's insert text. */
+  /** Append a generated alias to a FROM/JOIN reference's insert text (generated in finalize, for the kept items only). */
   private withAlias(c: Cand, name: string): Cand {
-    if (!this.aliasTaken) return c;
-    const alias = suggestAlias(name, this.aliasTaken);
-    c.insertText = `${c.insertText ?? c.label} ${alias}`;
-    c.alias = alias;
+    if (this.aliasTaken) c.aliasFor = name;
     return c;
   }
 
@@ -482,9 +566,16 @@ class Builder {
 
   private needsQuote(name: string): boolean {
     if (!name) return false;
-    // SQLite's own schema names: TEMP is a keyword, but `temp.t` is how a temporary table is named.
-    if (this.dialect === "sqlite" && (name === "temp" || name === "main")) return false;
-    return !RULES[this.dialect].plainName.test(name) || this.reserved.has(name.toUpperCase());
+    const memo = (QUOTE_MEMO[this.dialect] ??= new Map());
+    let v = memo.get(name);
+    if (v === undefined) {
+      // SQLite's own schema names: TEMP is a keyword, but `temp.t` is how a temporary table is named.
+      v = this.dialect === "sqlite" && (name === "temp" || name === "main") ? false
+        : !RULES[this.dialect].plainName.test(name) || this.reserved.has(name.toUpperCase());
+      if (memo.size >= 50_000) memo.clear();
+      memo.set(name, v);
+    }
+    return v;
   }
 
   /** A catalog name as inserted: delimited when the dialect needs it, or in the quote style the user opened. */
@@ -495,13 +586,30 @@ class Builder {
   }
 
   /**
+   * A column as inserted. One the statement itself names (a CTE's or derived table's) is written as it is there on
+   * engines that fold unquoted names: by catalog rules Oracle's unquoted `id` became `"id"` and PostgreSQL's
+   * `CustomerId` became `"CustomerId"`, names that do not exist (completion audit 2026-11-25, H7). A catalog column, or
+   * any column on an engine that does not fold, follows the catalog rules (`q`).
+   */
+  private colText(c: ColInfo): string {
+    const fold = DIALECTS[this.dialect].identifierFold;
+    if (!c.fromSource || (fold !== "lower" && fold !== "upper")) return this.q(c.name);
+    return this.src(c.name, c.quoted);
+  }
+
+  /**
    * A name taken from the source text (alias, CTE, table written in the statement): as the user wrote it, delimited
    * only when they delimited it. Re-quoting it by catalog rules would change it on engines that fold unquoted names
    * (Oracle `o` -> `"o"`, PostgreSQL `O` -> `"O"`).
    */
   private src(name: string, quoted?: boolean): string {
-    if (this.typedOpenQuote) return quoteWith(this.openQuote, name);
-    return quoted || !SOURCE_NAME.test(name) ? DIALECTS[this.dialect].quote(name) : name;
+    // A name written bare is stored folded (Oracle `type` is TYPE, PostgreSQL `Order` is order): delimited, it is that
+    // form that must be written, else the delimited name names nothing (code audit 2026-11-26, R1: `"type"`, `"Order"`).
+    const stored = quoted || !SOURCE_NAME.test(name) ? name : foldIdentifier(name, false, this.dialect);
+    if (this.typedOpenQuote) return quoteWith(this.openQuote, stored);
+    // A reserved word written bare is a select-list label PostgreSQL allows (`SELECT 1 AS order`): referred to quoted.
+    if (quoted || !SOURCE_NAME.test(name)) return DIALECTS[this.dialect].quote(name);
+    return this.reserved.has(name.toUpperCase()) ? DIALECTS[this.dialect].quote(stored) : name;
   }
 
   /** How a table in scope is referred to: its alias, else its name, as written. */
@@ -563,24 +671,43 @@ class Builder {
     }
   }
 
-  private objectCand(o: SnapObject, unqualified: boolean, group: number): Cand {
+  /**
+   * An object's candidate: its label, kind and group now, the rest when the list keeps it (fillObject). `unqualified`:
+   * named bare because its schema was typed (`sales.|`). `m`: the match rank, when the caller filtered on it already.
+   */
+  private objectCand(o: SnapObject, unqualified: boolean, group: number, m?: number): Cand {
     const label = unqualified ? o.name : this.labelFor(o);
+    // Every object candidate gets the same fields, set or undefined: one object shape for the engine.
+    return {
+      label, display: label !== o.name ? o.name : undefined, kind: this.objectKind(o), group, schemaObject: true,
+      obj: o, bare: unqualified, m, detail: undefined, insertText: undefined, isSnippet: undefined, aliasFor: undefined,
+    };
+  }
+
+  /** How the typed word matches an object's candidate (its label, or its bare name), without building a list for it. */
+  private objectMatch(o: SnapObject, unqualified: boolean): number {
+    const prefix = this.ctx.prefix;
+    if (!prefix) return MATCH_PREFIX;
+    const k = objKeys(o);
+    const byName = matchRankLower(this.prefixLower, prefix, o.name, k.name);
+    if (byName === MATCH_PREFIX || unqualified || this.unqualified(o)) return byName;
+    const byLabel = matchRankLower(this.prefixLower, prefix, `${o.schema}.${o.name}`, k.qualified);
+    return byName === MATCH_NONE ? byLabel : byLabel === MATCH_NONE ? byName : Math.min(byName, byLabel);
+  }
+
+  /** The detail, insert text and documentation of a kept object item (objectCand left them out). */
+  private fillObject(c: Cand): void {
+    const o = c.obj!;
+    const unqualified = !!c.bare;
     let insertText = unqualified ? this.q(o.name) : this.insertFor(o);
-    let isSnippet = false;
     if (o.kind === "tvf") {
       insertText = `${escSnippet(insertText)}(${this.paramsSnippet(o)})`;
-      isSnippet = true;
+      c.isSnippet = true;
     }
+    if (insertText !== c.label) c.insertText = insertText;
+    c.detail = this.objectDetail(o, !unqualified);
     const cols = o.columns;
-    // Every object candidate gets the same fields (display, doc), set or undefined: one object shape for the engine.
-    const c: Cand = {
-      label, display: label !== o.name ? o.name : undefined, kind: this.objectKind(o), detail: this.objectDetail(o, !unqualified), group,
-      match: [label, o.name], usageKeys: [label.toLowerCase(), `${o.schema}.${o.name}`.toLowerCase(), o.name.toLowerCase()],
-      schemaObject: true, doc: cols?.length ? () => [objectHeader(o), ...columnsTable(cols, 15)].join("\n\n") : undefined,
-    };
-    if (insertText !== label) c.insertText = insertText;
-    if (isSnippet) c.isSnippet = true;
-    return c;
+    if (cols?.length) c.doc = () => [objectHeader(o), ...columnsTable(cols, 15)].join("\n\n");
   }
 
   /** Tables, views, TVFs, CTEs, synonyms (+ schemas) for FROM/JOIN/UPDATE/INSERT INTO/DELETE. */
@@ -593,12 +720,13 @@ class Builder {
     }
     const idx = this.idx;
     if (!idx) return;
-    const prefix = this.ctx.prefix;
+    const bare = schema !== undefined;
     for (const o of idx.objects) {
       if (!kinds.has(o.kind)) continue;
-      if (schema !== undefined && !eq(o.schema, schema)) continue;
-      if (prefix && bestMatch(prefix, [o.name, `${o.schema}.${o.name}`]) === MATCH_NONE) continue;
-      this.cands.push(this.withAlias(this.objectCand(o, schema !== undefined, o.kind === "table" || o.kind === "view" ? 2 : 3), o.name));
+      if (bare && !eq(o.schema, schema)) continue;
+      const m = this.objectMatch(o, bare);
+      if (m === MATCH_NONE) continue;
+      this.cands.push(this.withAlias(this.objectCand(o, bare, o.kind === "table" || o.kind === "view" ? 2 : 3, m), o.name));
     }
     if (schema === undefined) {
       for (const s of idx.schemas) this.cands.push({ label: s, kind: "schema", detail: "schema", group: 5, insertText: this.q(s) });
@@ -613,14 +741,15 @@ class Builder {
   private procs(schema?: string): void {
     const idx = this.idx;
     if (!idx) return;
-    const prefix = this.ctx.prefix;
     for (const o of idx.objects) {
       if (o.kind !== "proc") continue;
       if (schema !== undefined && !eq(o.schema, schema)) continue;
-      if (prefix && bestMatch(prefix, [o.name, `${o.schema}.${o.name}`]) === MATCH_NONE) continue;
-      const c = this.objectCand(o, schema !== undefined, 1);
+      const m = this.objectMatch(o, schema !== undefined);
+      if (m === MATCH_NONE) continue;
+      const c = this.objectCand(o, schema !== undefined, 1, m);
       const ps = (o.params ?? []).filter((p) => p.name).sort((a, b) => a.ordinal - b.ordinal);
-      if (ps.length) c.documentation = ps.map((p) => `${p.name} ${p.type}${p.output ? " OUTPUT" : ""}`).join(", ");
+      // Inline code: the names and types come from the server, and the details pane renders markdown (M17).
+      if (ps.length) c.documentation = mdCode(ps.map((p) => `${p.name} ${p.type}${p.output ? " OUTPUT" : ""}`).join(", "));
       this.cands.push(c);
     }
     if (schema === undefined) for (const s of idx.schemas) this.cands.push({ label: s, kind: "schema", detail: "schema", group: 5 });
@@ -640,18 +769,29 @@ class Builder {
         }
         return { cols, display: t.name };
       }
-      return { cols: (t.columns ?? []).map((name) => ({ name })), display: t.name };
+      const quoted = new Set(t.quotedColumns ?? []);
+      return { cols: (t.columns ?? []).map((name) => ({ name, fromSource: true, quoted: quoted.has(name) })), display: t.name };
     }
     const ref = resolveTable(this.idx, t);
     // A synonym has its target's columns (SQL Server, Oracle).
     const o = ref && synonymTarget(this.idx, ref);
     if (!o) {
-      const builtin = t.columns?.length ? undefined : builtinRowSource(this.dialect, t);
-      return { cols: (t.columns ?? builtin ?? []).map((name) => ({ name })), display: t.schema ? `${t.schema}.${t.name}` : t.name };
+      // A column list the statement writes (`generate_series(1, 3) AS g(Num)`) is named as written there, like a CTE's
+      // (M21: by catalog rules PostgreSQL's bare `Num` became `"Num"`, a name that does not exist); a built-in row
+      // source's columns are the engine's own.
+      if (t.columns?.length) return { cols: this.writtenColumns(t), display: t.schema ? `${t.schema}.${t.name}` : t.name };
+      const builtin = builtinRowSource(this.dialect, t);
+      return { cols: (builtin ?? []).map((name) => ({ name })), display: t.schema ? `${t.schema}.${t.name}` : t.name };
     }
     const cols: ColInfo[] = (o.columns ?? []).map((col) => ({ name: col.name, col }));
-    if (t.columns && t.columns.length && cols.length === 0) return { cols: t.columns.map((name) => ({ name })), display: `${o.schema}.${o.name}`, obj: o };
+    if (t.columns && t.columns.length && cols.length === 0) return { cols: this.writtenColumns(t), display: `${o.schema}.${o.name}`, obj: o };
     return { cols, display: `${o.schema}.${o.name}`, obj: o };
+  }
+
+  /** A table's columns as the statement's text lists them, each quoted or not as written there. */
+  private writtenColumns(t: TableInScope): ColInfo[] {
+    const quoted = new Set(t.quotedColumns ?? []);
+    return (t.columns ?? []).map((name) => ({ name, fromSource: true, quoted: quoted.has(name) }));
   }
 
   private nearestTable(): TableInScope | undefined {
@@ -675,7 +815,7 @@ class Builder {
       const name = c.name;
       const fk = obj && c.col ? fkReference(this.idx, obj.id, name) : undefined;
       const label = prefixWith ? `${prefixWith}.${name}` : name;
-      const ins = prefixWith ? `${prefixText}.${this.q(name)}` : this.q(name);
+      const ins = prefixWith ? `${prefixText}.${this.colText(c)}` : this.colText(c);
       const cand: Cand = {
         label, kind: "column", group, match: prefixWith ? [name, label] : [name],
         detail: c.col ? columnDetail(c.col, refName(fk)) : `${kindNote}column`,
@@ -713,7 +853,8 @@ class Builder {
     }
     if (schema === undefined) {
       for (const f of builtinFunctions(this.dialect)) {
-        this.cands.push({ label: f, kind: "func", detail: "built-in function", group: group + 1, insertText: `${f}($0)`, isSnippet: true });
+        const bare = niladicFunctions(this.dialect).has(f);
+        this.cands.push({ label: f, kind: "func", detail: "built-in function", group: group + 1, insertText: bare ? f : `${f}($0)`, isSnippet: !bare });
       }
     }
   }
@@ -727,14 +868,16 @@ class Builder {
     if (!nObj) return;
     const nq = this.refText(nearest);
     const seen = new Set<string>();
+    const fks = fkLookup(idx);
+    const touching = [...(fks.byParent.get(nObj.id) ?? []), ...(fks.byReferenced.get(nObj.id) ?? [])];
     for (const t of this.ctx.tablesInScope) {
       if (t === nearest) continue;
       const tObj = resolveTable(idx, t);
       if (!tObj) continue;
       const tq = this.refText(t);
       if (tq.toLowerCase() === nq.toLowerCase()) continue;
-      for (const fk of idx.fks) {
-        if (!fk.columns?.length) continue;
+      for (const fk of touching) {
+        if (!usableFk(fk)) continue;
         let cond = "";
         if (fk.parent === nObj.id && fk.referenced === tObj.id) {
           cond = fk.columns.map((p) => `${nq}.${this.q(p.parent)} = ${tq}.${this.q(p.referenced)}`).join(" AND ");
@@ -784,19 +927,20 @@ class Builder {
       });
     };
 
+    const fks = fkLookup(idx);
     for (const t of this.ctx.tablesInScope) {
       const tObj = resolveTable(idx, t);
       if (!tObj) continue;
       const tq = this.refText(t);
-      for (const fk of idx.fks) {
-        if (!fk.columns?.length) continue;
-        if (fk.parent === tObj.id) {
-          const other = idx.byId.get(fk.referenced);
-          if (other) push(tq, other, fk.columns.map((p) => ({ mine: p.parent, theirs: p.referenced })), `FK ${fk.name}`, 0);
-        } else if (fk.referenced === tObj.id) {
-          const other = idx.byId.get(fk.parent);
-          if (other) push(tq, other, fk.columns.map((p) => ({ mine: p.referenced, theirs: p.parent })), `FK ${fk.name}`, 0);
-        }
+      for (const fk of fks.byParent.get(tObj.id) ?? []) {
+        if (!usableFk(fk)) continue;
+        const other = idx.byId.get(fk.referenced);
+        if (other) push(tq, other, fk.columns.map((p) => ({ mine: p.parent, theirs: p.referenced })), `FK ${fk.name}`, 0);
+      }
+      for (const fk of fks.byReferenced.get(tObj.id) ?? []) {
+        if (!usableFk(fk) || fk.parent === tObj.id) continue; // a self-reference: listed once, from its holder above
+        const other = idx.byId.get(fk.parent);
+        if (other) push(tq, other, fk.columns.map((p) => ({ mine: p.referenced, theirs: p.parent })), `FK ${fk.name}`, 0);
       }
     }
     // By column name, where no FK covers the pair.
@@ -806,7 +950,10 @@ class Builder {
       const tObj = resolveTable(idx, t);
       if (!tObj?.columns) continue;
       const tq = this.refText(t);
-      const fkTargets = new Set(idx.fks.flatMap((fk) => (fk.parent === tObj.id ? [fk.referenced] : fk.referenced === tObj.id ? [fk.parent] : [])));
+      // A key whose columns are not known (no snippet from it) leaves the pair to the name match.
+      const fkTargets = new Set<number>();
+      for (const fk of fks.byParent.get(tObj.id) ?? []) if (usableFk(fk)) fkTargets.add(fk.referenced);
+      for (const fk of fks.byReferenced.get(tObj.id) ?? []) if (usableFk(fk) && fk.parent !== tObj.id) fkTargets.add(fk.parent);
       // This table's column names another table's key: t.customer_id → customers.customer_id, t.CustomerId → Customers.Id.
       for (const c of tObj.columns) {
         if (c.pk) continue;
@@ -851,6 +998,13 @@ class Builder {
 
   private expression(clause: string): void {
     const tables = this.ctx.tablesInScope;
+    // A SET target (the scanner kept only the written table): its columns, bare (audit M9). T-SQL may assign a
+    // variable there too (`UPDATE t SET @x = col`).
+    if (clause === "set" && this.ctx.setTarget) {
+      for (const t of tables) this.columnCands(t, 1, false);
+      if (this.dialect === "tsql") this.variables(4);
+      return;
+    }
     const multi = tables.length > 1;
     // A table the user gave an alias is referred to through it (`FROM emp e WHERE |` → `e.id`), also when it is the only
     // one. Not in SET: an UPDATE / ON CONFLICT / ON DUPLICATE KEY target column cannot be qualified on PostgreSQL,
@@ -858,6 +1012,9 @@ class Builder {
     const qualify = (t: TableInScope) => multi || (t.alias !== undefined && clause !== "set");
     const nearest = this.nearestTable();
     if (clause === "on") this.fkSnippets();
+    // GROUP BY: the select list's non-aggregated columns first. Each is one item — the column itself, ranked first —
+    // not a second copy beside it (a column the tables in scope do not list still gets an item of its own).
+    let grouped: Map<string, string> | undefined;
     if (clause === "groupBy" && this.ctx.nonAggregatedColumns?.length) {
       const nonAgg = this.ctx.nonAggregatedColumns;
       this.cands.push({
@@ -869,21 +1026,36 @@ class Builder {
         order: 0,
         match: ["(all non-aggregated columns)", nonAgg[0]],
       });
-      for (const col of nonAgg) {
-        this.cands.push({
-          label: col,
-          kind: "column",
-          detail: "non-aggregated column",
-          insertText: col,
-          group: 0,
-          order: 1,
-        });
-      }
+      grouped = new Map(nonAgg.map((c) => [c.toLowerCase(), c]));
     }
     for (const a of this.ctx.selectAliases ?? []) {
-      this.cands.push({ label: a, kind: "column", detail: "select-list alias", group: 0, order: 2, insertText: this.src(a) });
+      this.cands.push({ label: a.name, kind: "column", detail: "select-list alias", group: 0, order: 2, insertText: this.src(a.name, a.quoted) });
     }
+    const first = this.cands.length;
     for (const t of tables) this.columnCands(t, t === nearest ? 1 : 2, qualify(t));
+    if (grouped) {
+      const promote = (c: Cand) => { c.group = 0; c.order = 1; };
+      // A bare select-list column one table in scope has (`SELECT status … FROM orders o GROUP BY |`) is that table's
+      // column item (`o.status`), not a second item beside it (M22).
+      const byBare = new Map<string, Cand[]>();
+      for (let i = first; i < this.cands.length; i++) {
+        const c = this.cands[i];
+        if (c.kind !== "column") continue;
+        const key = c.label.toLowerCase();
+        if (grouped.has(key)) { grouped.delete(key); promote(c); continue; }
+        const bare = key.slice(key.lastIndexOf(".") + 1);
+        let list = byBare.get(bare);
+        if (!list) byBare.set(bare, (list = []));
+        list.push(c);
+      }
+      for (const key of [...grouped.keys()]) {
+        const only = !key.includes(".") ? byBare.get(key) : undefined;
+        if (only?.length === 1) { grouped.delete(key); promote(only[0]); }
+      }
+      for (const col of grouped.values()) {
+        this.cands.push({ label: col, kind: "column", detail: "non-aggregated column", insertText: col, group: 0, order: 1 });
+      }
+    }
     if (clause === "select") for (const t of tables) this.allColumnsCand(t, qualify(t));
     for (const t of tables) {
       if (t.alias) {
@@ -906,7 +1078,7 @@ class Builder {
     const { cols } = this.columnsOf(t);
     if (cols.length < 2) return;
     const ref = this.refText(t);
-    const names = cols.map((c) => this.q(c.name));
+    const names = cols.map((c) => this.colText(c));
     const text = afterQualifier ? [names[0], ...names.slice(1).map((n) => `${ref}.${n}`)].join(", ")
       : qualify ? names.map((n) => `${ref}.${n}`).join(", ") : names.join(", ");
     const who = t.alias ?? t.name;
@@ -924,6 +1096,11 @@ class Builder {
   }
 
   private execArgs(): void {
+    // Positional arguments only (MySQL `CALL p(|`): a value goes here, as in a function call (audit M19).
+    if (RULES[this.dialect].namedArguments === null) {
+      this.argValue();
+      return;
+    }
     const idx = this.idx;
     const target = this.ctx.execTarget ?? "";
     const parts = target.split(".");
@@ -1076,7 +1253,14 @@ class Builder {
       }
       // 2. CTE
       const cte = this.ctx.ctes.find((c) => c.name.toLowerCase() === lowerQ);
-      if (cte) { this.columnCands({ name: cte.name, isCte: true, isDerived: false, columns: cte.columns }, 1); return; }
+      if (cte) {
+        // Its quoted columns too: they are inserted as written (H7; this path, before FROM is typed, dropped them).
+        this.columnCands({
+          name: cte.name, isCte: true, isDerived: false, columns: cte.columns,
+          ...(cte.quotedColumns ? { quotedColumns: cte.quotedColumns } : {}), ...(cte.quoted ? { quoted: true } : {}),
+        }, 1);
+        return;
+      }
     }
     if (!idx) return;
     // 3. schema / 4. database / database.schema
@@ -1090,11 +1274,11 @@ class Builder {
       else if (clause === "declare") this.types(schema);
       else {
         this.scalarFunctions(1, schema);
-        const prefix = this.ctx.prefix;
         for (const o of idx.objects) {
           if (!KIND_SETS.from.has(o.kind) || !eq(o.schema, schema)) continue;
-          if (prefix && bestMatch(prefix, [o.name]) === MATCH_NONE) continue;
-          this.cands.push(this.objectCand(o, true, 2));
+          const m = this.objectMatch(o, true);
+          if (m === MATCH_NONE) continue;
+          this.cands.push(this.objectCand(o, true, 2, m));
         }
       }
       return;
@@ -1117,46 +1301,85 @@ class Builder {
 
   // ---- ranking ----
 
+  /**
+   * Ranks every candidate and builds the MAX_ITEMS kept. Ranking reads numbers only — the sortText fields (rank.ts) as two
+   * numbers, then the lower-case label —, and an object candidate's detail, insert text, alias and documentation are made
+   * for the kept items alone: on a 5,000-table `FROM |`, building all of them and comparing their sort strings was most
+   * of the keystroke (2026-11-25 profile: finalize 28 %, garbage collection 20 %, objectCand 12 %; completion audit H9).
+   */
   private finalize(objectContext: boolean): Tier1Item[] {
     const prefix = this.ctx.prefix;
-    const usage = this.usage;
-    const scored: { item: Tier1Item; key: string; doc?: () => string }[] = [];
+    const usage = this.usage && this.usage.size ? this.usage : undefined;
+    const scored: Scored[] = [];
     const seen = new Set<string>();
     for (const c of this.cands) {
-      // Inside an opened quote only a name can follow: no keyword, template or call.
-      if (this.typedOpenQuote && (c.kind === "keyword" || c.kind === "snippet" || c.isSnippet)) continue;
-      const m = bestMatch(prefix, c.match ?? [c.label]);
-      if (m === MATCH_NONE) continue;
-      const dedupe = `${c.kind}|${c.label.toLowerCase()}|${c.detail ?? ""}`;
-      if (seen.has(dedupe)) continue;
-      seen.add(dedupe);
+      const o = c.obj;
+      // Inside an opened quote only a name can follow: no keyword, template or call (a table function is one).
+      if (this.typedOpenQuote && (c.kind === "keyword" || c.kind === "snippet" || c.isSnippet || o?.kind === "tvf")) continue;
+      let m: number;
+      let low: string;
       let u = 0;
-      if (usage && usage.size) {
-        for (const key of c.usageKeys ?? [c.label.toLowerCase()]) u = Math.max(u, usage.get(key) ?? 0);
+      let shortest: number;
+      if (o) {
+        m = c.m ?? this.objectMatch(o, !!c.bare);
+        if (m === MATCH_NONE) continue;
+        // The label is the object's name or `schema.name` (objectCand); it was matched on both.
+        const k = objKeys(o);
+        low = c.label === o.name ? k.name : k.qualified;
+        if (usage) u = Math.max(usage.get(low) ?? 0, usage.get(k.qualified) ?? 0, usage.get(k.name) ?? 0);
+        shortest = o.name.length;
+      } else {
+        const match = c.match ?? [c.label];
+        m = c.m ?? bestMatch(prefix, match);
+        if (m === MATCH_NONE) continue;
+        low = c.label.toLowerCase();
+        const dedupe = `${c.kind}|${low}|${c.detail ?? ""}`;
+        if (seen.has(dedupe)) continue;
+        seen.add(dedupe);
+        if (usage) for (const key of c.usageKeys ?? [low]) u = Math.max(u, usage.get(key) ?? 0);
+        shortest = Infinity;
+        for (const x of match) if (x.length < shortest) shortest = x.length;
       }
       const tier = c.kind === "keyword" && objectContext ? 1 : 0;
-      const rest = prefix ? Math.max(0, Math.min(...(c.match ?? [c.label]).map((x) => x.length)) - prefix.length) : 0;
-      const st = sortText({ tier, match: m, group: c.group, usage: u, order: c.order ?? 0, rest, label: c.label });
-      const item: Tier1Item = { label: c.label, kind: c.kind, sortText: st };
-      if (c.display !== undefined && c.display !== c.label) item.display = c.display;
-      if (c.schemaObject) item.schemaObject = true;
-      if (c.detail !== undefined) item.detail = c.detail;
-      if (c.insertText !== undefined) item.insertText = c.insertText;
-      if (c.isSnippet) item.isSnippet = true;
-      if (c.alias !== undefined) item.alias = c.alias;
-      const uk = c.usageKeys?.[0];
-      if (uk !== undefined && uk !== c.label.toLowerCase()) item.usageKey = uk;
-      if (c.filterText !== undefined) item.filterText = c.filterText;
-      if (c.documentation !== undefined) item.documentation = c.documentation;
-      scored.push(c.documentation === undefined && c.doc ? { item, key: st, doc: c.doc } : { item, key: st });
+      const rest = prefix ? Math.max(0, shortest - prefix.length) : 0;
+      // sortText's fields in its order, widths and caps: tier, match, group, usage (most first), order, rest.
+      const uc = Math.max(0, Math.min(999999, Math.floor(u)));
+      const k1 = ((tier * 10 + m) * 100 + Math.min(c.group, 99)) * 1e6 + (999999 - uc);
+      const k2 = Math.min(c.order ?? 0, 9999) * 1000 + Math.min(rest, 999);
+      scored.push({ c, k1, k2, low, tier, m, u, rest });
     }
-    scored.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    scored.sort((a, b) => a.k1 - b.k1 || a.k2 - b.k2 || (a.low < b.low ? -1 : a.low > b.low ? 1 : 0));
     const out: Tier1Item[] = new Array(Math.min(MAX_ITEMS, scored.length));
     for (let i = 0; i < out.length; i++) {
       const s = scored[i];
-      if (s.doc) s.item.documentation = s.doc();
-      out[i] = s.item;
+      const c = s.c;
+      if (c.obj) this.fillObject(c);
+      const key = sortText({ tier: s.tier, match: s.m, group: c.group, usage: s.u, order: c.order ?? 0, rest: s.rest, label: c.label });
+      out[i] = this.item(c, key, i < EAGER_DOCS);
     }
     return out;
+  }
+
+  private item(c: Cand, sortKey: string, eagerDoc: boolean): Tier1Item {
+    const item: Tier1Item = { label: c.label, kind: c.kind, sortText: sortKey };
+    if (c.display !== undefined && c.display !== c.label) item.display = c.display;
+    if (c.schemaObject) item.schemaObject = true;
+    if (c.detail !== undefined) item.detail = c.detail;
+    if (c.insertText !== undefined) item.insertText = c.insertText;
+    if (c.isSnippet) item.isSnippet = true;
+    if (c.aliasFor !== undefined && this.aliasTaken) {
+      const alias = suggestAlias(c.aliasFor, this.aliasTaken);
+      item.insertText = `${c.insertText ?? c.label} ${alias}`;
+      item.alias = alias;
+    } else if (c.alias !== undefined) item.alias = c.alias;
+    const uk = c.usageKeys?.[0];
+    if (uk !== undefined && uk !== c.label.toLowerCase()) item.usageKey = uk;
+    if (c.filterText !== undefined) item.filterText = c.filterText;
+    if (c.documentation !== undefined) item.documentation = c.documentation;
+    else if (c.doc) {
+      if (eagerDoc) item.documentation = c.doc();
+      else item.resolveDocumentation = c.doc;
+    }
+    return item;
   }
 }

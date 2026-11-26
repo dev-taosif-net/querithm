@@ -7,31 +7,32 @@ import { buildSchemaIndex } from "../schemaIndex";
 import { complete } from "../complete";
 import type { SchemaIndex, Tier1Item } from "../types";
 
-const ENGINES = ["tsql", "pg", "mySql", "sqlite", "duckDb"] as const satisfies readonly Dialect[];
+const ENGINES = ["tsql", "pg", "mySql", "sqlite", "duckDb", "oracle"] as const satisfies readonly Dialect[];
 type Engine = (typeof ENGINES)[number];
-const DEFAULT_SCHEMA: Record<Engine, string> = { tsql: "dbo", pg: "public", mySql: "shop", sqlite: "main", duckDb: "main" };
-
-const col = (name: string, ordinal: number, pk = false): SnapColumn => ({
-  name, type: "int", nullable: !pk, identity: false, computed: false, pk, ordinal,
-});
+const DEFAULT_SCHEMA: Record<Engine, string> = { tsql: "dbo", pg: "public", mySql: "shop", sqlite: "main", duckDb: "main", oracle: "APP" };
+/** A catalog name as the engine stores an unquoted one: Oracle upper case (the SQL below is written in lower case). */
+const N = (d: Engine, name: string) => (d === "oracle" ? name.toUpperCase() : name);
 
 function indexFor(d: Engine): SchemaIndex {
   const s = DEFAULT_SCHEMA[d];
+  const col = (name: string, ordinal: number, pk = false): SnapColumn => ({
+    name: N(d, name), type: "int", nullable: !pk, identity: false, computed: false, pk, ordinal,
+  });
   const objects: SnapObject[] = [
-    { id: 1, schema: s, name: "orders", kind: "table", columns: [col("order_id", 1, true), col("customer_id", 2), col("total", 3), col("status", 4)] },
-    { id: 2, schema: s, name: "customers", kind: "table", columns: [col("customer_id", 1, true), col("full_name", 2), col("email", 3)] },
-    { id: 3, schema: s, name: "order_items", kind: "table", columns: [col("order_id", 1), col("product_id", 2), col("qty", 3)] },
-    { id: 4, schema: s, name: "v_sales", kind: "view", columns: [col("day", 1), col("amount", 2)] },
-    { id: 5, schema: "sales", name: "products", kind: "table", columns: [col("product_id", 1, true), col("name", 2), col("price", 3)] },
+    { id: 1, schema: s, name: N(d, "orders"), kind: "table", columns: [col("order_id", 1, true), col("customer_id", 2), col("total", 3), col("status", 4)] },
+    { id: 2, schema: s, name: N(d, "customers"), kind: "table", columns: [col("customer_id", 1, true), col("full_name", 2), col("email", 3)] },
+    { id: 3, schema: s, name: N(d, "order_items"), kind: "table", columns: [col("order_id", 1), col("product_id", 2), col("qty", 3)] },
+    { id: 4, schema: s, name: N(d, "v_sales"), kind: "view", columns: [col("day", 1), col("amount", 2)] },
+    { id: 5, schema: N(d, "sales"), name: N(d, "products"), kind: "table", columns: [col("product_id", 1, true), col("name", 2), col("price", 3)] },
   ];
   const snap: SchemaSnapshot = {
     profileId: "p", database: d === "mySql" ? "shop" : "app", status: "fresh", objects,
     fks: [
-      { name: "fk_orders_customers", parent: 1, referenced: 2, columns: [{ parent: "customer_id", referenced: "customer_id" }] },
-      { name: "fk_items_orders", parent: 3, referenced: 1, columns: [{ parent: "order_id", referenced: "order_id" }] },
+      { name: "fk_orders_customers", parent: 1, referenced: 2, columns: [{ parent: N(d, "customer_id"), referenced: N(d, "customer_id") }] },
+      { name: "fk_items_orders", parent: 3, referenced: 1, columns: [{ parent: N(d, "order_id"), referenced: N(d, "order_id") }] },
     ],
   };
-  return buildSchemaIndex(snap, d, d === "mySql" ? ["shop", "sales"] : ["app"]);
+  return buildSchemaIndex(snap, d, d === "mySql" ? ["shop", "sales"] : ["app"], d === "oracle" ? "APP" : null);
 }
 const IDX: Record<Engine, SchemaIndex> = Object.fromEntries(ENGINES.map((d) => [d, indexFor(d)])) as Record<Engine, SchemaIndex>;
 
@@ -40,7 +41,8 @@ function run(sql: string, d: Engine, schema: SchemaIndex | null = IDX[d]): Tier1
   if (i < 0) throw new Error(`no cursor in ${sql}`);
   return complete({ text: sql.slice(0, i) + sql.slice(i + 1), offset: i, dialect: d, schema }).items;
 }
-const ofKind = (items: Tier1Item[], ...k: string[]) => items.filter((i) => k.includes(i.kind)).map((i) => i.label);
+// Labels in lower case: Oracle's catalog names are upper case, the expectations below are written in lower case.
+const ofKind = (items: Tier1Item[], ...k: string[]) => items.filter((i) => k.includes(i.kind)).map((i) => i.label.toLowerCase());
 const tablesOf = (items: Tier1Item[]) => ofKind(items, "table", "view");
 const columnsOf = (items: Tier1Item[]) => ofKind(items, "column");
 
@@ -233,7 +235,7 @@ describe.each(ENGINES)("completion matrix: %s", (d) => {
   it("a schema qualifier offers that schema's tables, unqualified", () => {
     expect(tablesOf(run("SELECT * FROM sales.|", d))).toEqual(["products"]);
     expect(tablesOf(run("SELECT * FROM sales.pro|", d))).toEqual(["products"]);
-    expect(tablesOf(run(`SELECT * FROM ${DEFAULT_SCHEMA[d]}.|`, d))).toEqual(expect.arrayContaining(["orders", "customers"]));
+    expect(tablesOf(run(`SELECT * FROM ${DEFAULT_SCHEMA[d].toLowerCase()}.|`, d))).toEqual(expect.arrayContaining(["orders", "customers"]));
   });
   it("an unknown alias qualifier offers no columns of another table", () => {
     expect(columnsOf(run("SELECT zz.| FROM orders o", d))).toEqual([]);
@@ -288,16 +290,16 @@ describe.each(ENGINES)("completion matrix: %s", (d) => {
 // user opened (the editor's replace range starts at that quote, so it is never doubled).
 // ---------------------------------------------------------------------------------------------------------------
 describe("completion matrix: quoted identifiers", () => {
-  const OPEN: Record<Engine, string[]> = { tsql: ["["], pg: ['"'], mySql: ["`"], sqlite: ['"', "[", "`"], duckDb: ['"'] };
+  const OPEN: Record<Engine, string[]> = { tsql: ["["], pg: ['"'], mySql: ["`"], sqlite: ['"', "[", "`"], duckDb: ['"'], oracle: ['"'] };
   for (const d of ENGINES) {
     for (const q of OPEN[d]) {
       it(`${d}: FROM ${q}| and FROM ${q}cus| offer tables`, () => {
         expect(tablesOf(run(`SELECT * FROM ${q}|`, d))).toContain("orders");
         const items = run(`SELECT * FROM ${q}cus|`, d);
         expect(tablesOf(items)).toContain("customers");
-        const c = items.find((i) => i.label === "customers")!;
+        const c = items.find((i) => i.label === N(d, "customers"))!;
         const close = q === "[" ? "]" : q;
-        expect(c.insertText).toBe(`${q}customers${close}`);
+        expect(c.insertText).toBe(`${q}${N(d, "customers")}${close}`);
         expect(items.some((i) => i.kind === "keyword")).toBe(false);
       });
       it(`${d}: JOIN ${q}| offers tables in a large script`, () => {
@@ -394,6 +396,19 @@ const SPECIFIC: Record<Engine, Array<[string, Want]>> = {
     ["INSERT OR REPLACE INTO |", "tables"],
     ["SELECT * FROM orders QUALIFY row_number() OVER () = 1;\nSELECT * FROM |", "tables"],
     ["SELECT CASE WHEN o.total > 1 THEN 'a' ELSE 'b' END AS k, o.| FROM orders o", "columns"],
+  ],
+  oracle: [
+    ["SELECT * FROM dual;\nSELECT * FROM |", "tables"],
+    ["SELECT * FROM orders WHERE ROWNUM <= 10;\nSELECT * FROM |", "tables"],
+    ["SELECT * FROM orders FETCH FIRST 10 ROWS ONLY;\nSELECT * FROM |", "tables"],
+    ["SELECT * FROM orders o CROSS APPLY |", "tables"],
+    ["MERGE INTO orders t USING | s ON (t.order_id = s.order_id)", "tables"],
+    ["MERGE INTO orders t USING customers s ON (t.customer_id = s.customer_id) WHEN MATCHED THEN UPDATE SET |", "noTables"],
+    ["BEGIN\n  SELECT COUNT(*) INTO v FROM |;\nEND;", "tables"],
+    ["DECLARE\n  v NUMBER;\nBEGIN\n  UPDATE | SET status = 'x';\nEND;", "tables"],
+    ["UPDATE | SET status = 'x'", "tables"],
+    ["SELECT CASE WHEN o.total > 1 THEN 'a' ELSE 'b' END AS k, o.| FROM orders o", "columns"],
+    ["SELECT * FROM orders o WHERE o.total > (SELECT AVG(total) FROM |)", "tables"],
   ],
 };
 

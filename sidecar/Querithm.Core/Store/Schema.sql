@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS param (
 CREATE TABLE IF NOT EXISTS fk (
   profile_id TEXT, database TEXT, name TEXT, parent_object_id INTEGER, referenced_object_id INTEGER,
   columns_json TEXT,                                                      -- [{parent:'x', referenced:'y'}]
-  PRIMARY KEY (profile_id, database, name)
+  PRIMARY KEY (profile_id, database, parent_object_id, name)              -- v13: a name is unique per table, not per database
 );
 
 CREATE TABLE IF NOT EXISTS idx (

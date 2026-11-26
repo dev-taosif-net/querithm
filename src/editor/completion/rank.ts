@@ -71,6 +71,19 @@ export function matchRank(prefix: string, cand: string): number {
   return MATCH_NONE;
 }
 
+/**
+ * matchRank with both lower-case forms given (`prefixLower`, `candLower`): the same answer, without lower-casing them
+ * again for each of thousands of candidates per keystroke.
+ */
+export function matchRankLower(prefixLower: string, prefix: string, cand: string, candLower: string): number {
+  if (!prefix) return MATCH_PREFIX;
+  if (!cand) return MATCH_NONE;
+  if (candLower.startsWith(prefixLower)) return MATCH_PREFIX;
+  if (humpMatch(prefix, cand)) return MATCH_HUMP;
+  if (candLower.includes(prefixLower)) return MATCH_SUBSTRING;
+  return MATCH_NONE;
+}
+
 /** Best (lowest) match rank over several candidate strings (label, bare name, filterText...). */
 export function bestMatch(prefix: string, cands: readonly string[]): number {
   let best = MATCH_NONE;
@@ -101,8 +114,8 @@ export interface RankKey {
   label: string;
 }
 
-/** Lexicographic sort key; zero-padded so string order equals numeric order. */
+/** Lexicographic sort key; zero-padded so string order equals numeric order (each field capped at its width). */
 export function sortText(k: RankKey): string {
   const usage = Math.max(0, Math.min(999999, Math.floor(k.usage)));
-  return `${k.tier}${k.match}${pad(k.group, 2)}${pad(999999 - usage, 6)}${pad(k.order, 4)}${pad(k.rest ?? 0, 3)}${k.label.toLowerCase()}`;
+  return `${k.tier}${k.match}${pad(Math.min(k.group, 99), 2)}${pad(999999 - usage, 6)}${pad(Math.min(k.order, 9999), 4)}${pad(Math.min(k.rest ?? 0, 999), 3)}${k.label.toLowerCase()}`;
 }

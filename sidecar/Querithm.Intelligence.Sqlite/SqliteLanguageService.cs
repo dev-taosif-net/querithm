@@ -217,16 +217,18 @@ public sealed class SqliteLanguageService : IDialectService
         return s.Length > 200 ? s[..200] + "…" : s;
     }
 
-    public CompletionItem[] Complete(CompleteParams p, ISchemaSource schema)
+    public CompletionItem[] Complete(CompleteParams p, ISchemaSource schema, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         using var _ = PgCompletionRules.Use(SqliteCompletion.Rules);
-        return PgTier2Completion.Complete(p, schema);
+        return PgTier2Completion.Complete(p, schema, ct);
     }
 
-    public SignatureHelp Signature(SignatureParams p, ISchemaSource schema)
+    public SignatureHelp Signature(SignatureParams p, ISchemaSource schema, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         using var _ = PgCompletionRules.Use(SqliteCompletion.Rules);
-        return PgTier2Completion.Signature(p, schema);
+        return PgTier2Completion.Signature(p, schema, ct);
     }
 
     public Diagnostic[] Diagnostics(DiagnosticsParams p) => [];

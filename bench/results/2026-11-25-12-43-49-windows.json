@@ -1,0 +1,116 @@
+{
+  "date": "2026-11-25T12:43:49.254Z",
+  "os": "Windows_NT 10.0.26300",
+  "cpu": "13th Gen Intel(R) Core(TM) i5-1335U",
+  "cores": 12,
+  "memGb": 24,
+  "results": {
+    "11cold.duckdb": {
+      "metric": "DuckDB: execute → first batch on a new tab's own connection (new file, open + policy + SELECT 1, median)",
+      "unit": "ms",
+      "target": 300,
+      "value": 94.1,
+      "pass": true,
+      "samples": [
+        380.1,
+        92,
+        90.6,
+        94.1,
+        101.5,
+        104.5,
+        78.8,
+        92.7,
+        96.9,
+        91.2,
+        97,
+        94.7,
+        83.4,
+        98.1,
+        81.3
+      ]
+    },
+    "9.duckdb": {
+      "metric": "DuckDB: metadata snapshot load from SQLite (600 tables, 150 views)",
+      "unit": "ms",
+      "target": 80,
+      "value": 8.74,
+      "pass": true,
+      "objects": 750,
+      "samples": [
+        42.973699999998644,
+        10.616799999999785,
+        8.743500000000495,
+        8.720300000000861,
+        8.468899999999849
+      ]
+    },
+    "10.duckdb": {
+      "metric": "DuckDB: incremental refresh with 10 changed objects",
+      "unit": "ms",
+      "target": 2000,
+      "value": 36.38,
+      "pass": true,
+      "samples": [
+        36.37549999999828,
+        44.52720000000045,
+        36.064000000002125,
+        33.72309999999925,
+        37.73670000000129
+      ]
+    },
+    "15.duckdb": {
+      "metric": "DuckDB: cancel latency (duckdb_interrupt)",
+      "unit": "ms",
+      "target": 500,
+      "value": 1.7,
+      "pass": true,
+      "samples": [
+        10.00539999999819,
+        1.885600000001432,
+        1.5131000000001222,
+        1.4962999999988824,
+        1.6975000000020373
+      ]
+    },
+    "23.duckdb": {
+      "metric": "DuckDB: import 100k × 10 CSV into a new table (appender, median of 3)",
+      "unit": "ms",
+      "target": 2000,
+      "value": 774.74,
+      "pass": true,
+      "rows": 100000,
+      "samples": [
+        974,
+        775,
+        696
+      ]
+    },
+    "5.duckdb": {
+      "metric": "DuckDB: tier-2 completion latency, 10k-line script on the 600-table fixture (p95)",
+      "unit": "ms",
+      "target": 150,
+      "value": 14.08,
+      "pass": true,
+      "p95": 14.076999999997497,
+      "lines": 10000,
+      "itemsPerCall": 15,
+      "samples": 60
+    },
+    "20.duckdb": {
+      "metric": "DuckDB: grid edits, DML preview for 100 staged cells",
+      "unit": "ms",
+      "target": 15,
+      "value": 2.95,
+      "pass": true,
+      "samples": [
+        23.016199999998207,
+        5.593800000002375,
+        4.997100000000501,
+        2.9547999999995227,
+        1.9367000000020198,
+        2.8721000000005006,
+        3.1921000000002095
+      ]
+    }
+  }
+}

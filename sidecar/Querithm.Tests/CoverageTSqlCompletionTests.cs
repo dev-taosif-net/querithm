@@ -14,7 +14,7 @@ public class TSqlCompletionInferenceTests(ITestOutputHelper output)
     {
         var i = sql.IndexOf('|');
         var text = sql.Remove(i, 1);
-        return TSqlCompletion.Complete(new CompleteParams { DocId = "cov-" + Guid.NewGuid(), Text = text, Offset = i, Dialect = Dialect.Tsql, ProfileId = "p1", Database = "SalesDB" }, Sales);
+        return TSqlCompletion.Complete(new CompleteParams { DocId = "cov-" + Guid.NewGuid(), Text = text, Offset = i, Dialect = Dialect.Tsql, ProfileId = "p1", Database = "SalesDB" }, Sales, CancellationToken.None);
     }
 
     static Dictionary<string, string?> Types(string sql) => Complete(sql).Where(i => i.Kind == CompletionKind.Column).GroupBy(i => i.Label).ToDictionary(g => g.Key, g => g.First().Detail);

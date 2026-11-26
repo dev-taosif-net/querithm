@@ -104,34 +104,63 @@ static class StatementAnalysis
 
     static readonly HashSet<string> CutKw = ["WHERE", "GROUP", "HAVING", "ORDER", "OPTION", "UNION", "EXCEPT", "INTERSECT", "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "OUTER", "WHEN", "OUTPUT"];
 
-    /// <summary>Parses the statement around the cursor, trying progressively more aggressive repairs of the partial text.</summary>
-    public static StmtAst? Parse(DocModel doc, CursorInfo cur)
+    /// <summary>
+    /// The longest statement text before the cursor the repair ladder parses. Past it the token fallback (TokenScopes)
+    /// answers without parsing: a 290,000-character statement took 278 ms through the ladder against 185 ms for one
+    /// parse (2026-11-25), every keystroke.
+    /// </summary>
+    public const int MaxAstText = 200_000;
+
+    /// <summary>
+    /// Characters of repaired text the ladder parses after its first attempt; a repair that would pass it is skipped and
+    /// the token fallback answers. About §14 #5's 150 ms: one 290,000-character parse took 185 ms (2026-11-25), about
+    /// 0.64 µs a character. Counted in characters, not wall-clock time: on a busy machine (GC, first JIT, parallel test
+    /// runs) a timer skipped the one repair that parses, and the same text completed differently (review 2026-11-26).
+    /// A statement of a few KB still tries every repair (the ladder makes up to 13).
+    /// </summary>
+    public const int LadderChars = 240_000;
+
+    /// <summary>
+    /// Parses the statement around the cursor, trying progressively more aggressive repairs of the partial text.
+    /// <paramref name="ct"/> (a newer request, the deadline) is checked before every attempt. Attempts are not cached:
+    /// their text (a placeholder at the cursor, one repair) never comes back.
+    /// </summary>
+    public static StmtAst? Parse(DocModel doc, CursorInfo cur, CancellationToken ct)
     {
         var seg = cur.Seg;
         if (seg == null || seg.Kind != SegKind.Statement) return null;
         var s = doc.Text;
         var stmtEnd = Math.Max(seg.EndOffset, cur.PrefixEnd);
         if (cur.PrefixStart < seg.StartOffset) return null;
+        if (cur.PrefixStart - seg.StartOffset > MaxAstText) return null;
         var head = s[seg.StartOffset..cur.PrefixStart];
-        var tail = s[cur.PrefixEnd..stmtEnd];
         var ph = cur.Prefix.StartsWith('@') ? "@" + Placeholder : cur.Prefix.StartsWith('#') ? "#" + Placeholder : Placeholder;
         // MERGE must be terminated by ';' — every variant ends with one.
         var extra = (seg.Kw is "IF" or "WHILE" ? "\nRETURN" : "") + ";";
+        // The whole statement is tried only below the limit: measured before the text after the cursor is copied (a
+        // cursor at the start of a long statement copied it twice to throw it away, review 2026-11-25).
+        var wholeFits = head.Length + ph.Length + (stmtEnd - cur.PrefixEnd) + extra.Length < MaxAstText;
         var closers = Closers(doc, seg.First, cur.Prev);
         var tried = new HashSet<string>();
+        StatementParser.Parsed? fullParse = null;
+        long repaired = 0;
         StmtAst? Try(string text)
         {
+            ct.ThrowIfCancellationRequested();
+            if (tried.Count > 0 && repaired + text.Length > LadderChars) return null;
             if (!tried.Add(text)) return null;
-            var parsed = StatementParser.Parse(text);
+            if (tried.Count > 1) repaired += text.Length;
+            var parsed = StatementParser.Parse(text, cache: false);
+            fullParse ??= parsed; // the first attempt is the unrepaired statement
             if (!parsed.Ok || parsed.First is not { } stmt) return null;
             var chain = Chain(stmt, head.Length, ph.Length);
             return chain.Count == 0 ? null : new StmtAst { Stmt = stmt, PhRel = head.Length, PhLen = ph.Length, Chain = chain };
         }
 
-        var full = head + ph + tail + extra;
-        if (full.Length < 200_000)
+        if (wholeFits)
         {
-            if (Try(full) is { } a) return a;
+            var tail = s[cur.PrefixEnd..stmtEnd];
+            if (Try(head + ph + tail + extra) is { } a) return a;
             if (Try(head + ph + " = 1" + tail + extra) is { } b) return b;
             // Parentheses left open at the end of the statement: close them after the tail.
             var allClosers = Closers(doc, seg.First, seg.Last);
@@ -140,9 +169,18 @@ static class StatementAnalysis
                 if (Try(head + ph + tail + allClosers + extra) is { } e) return e;
                 if (Try(head + ph + " = 1" + tail + allClosers + extra) is { } f) return f;
             }
+            // A CASE or '(' still open at the cursor while the statement goes on: close it at the cursor, so the FROM
+            // after it still names the sources (`SELECT CASE WHEN o.| FROM dbo.Orders o`).
+            if (closers.Length > 0)
+            {
+                if (Try(head + ph + " = 1" + closers + tail + extra) is { } g) return g;
+                if (Try(head + ph + closers + tail + extra) is { } h) return h;
+                // … and the rest cut at its next clause (an unfinished WHERE after the FROM).
+                if (NextClause(doc, seg, cur) is var next and > 0
+                    && Try(head + ph + " = 1" + closers + s[cur.PrefixEnd..doc.Toks[next].Start] + extra) is { } k) return k;
+            }
             // Cut the statement at the clause before the first parse error that follows the cursor.
-            var first = StatementParser.Parse(full);
-            var errRel = first.FirstErrorOffset;
+            var errRel = fullParse?.FirstErrorOffset ?? -1;
             var phEnd = head.Length + ph.Length;
             if (errRel >= phEnd)
             {
@@ -154,6 +192,7 @@ static class StatementAnalysis
                     var cl = Closers(doc, seg.First, cut - 1);
                     if (Try(head + ph + mid + cl + extra) is { } c) return c;
                     if (Try(head + ph + " = 1" + mid + cl + extra) is { } d) return d;
+                    if (closers.Length > 0 && Try(head + ph + " = 1" + closers + mid + extra) is { } i) return i;
                 }
             }
         }
@@ -184,6 +223,24 @@ static class StatementAnalysis
         for (var i = stack.Count - 1; i >= 0; i--)
             sb.Append(stack[i].Kind == '(' ? ")" : stack[i].WhenOpen ? " THEN 1 END" : " END");
         return sb.ToString();
+    }
+
+    /// <summary>The first clause keyword (<see cref="CutKw"/>) after the cursor at its parenthesis level, or -1.</summary>
+    static int NextClause(DocModel doc, Segment seg, CursorInfo cur)
+    {
+        var depth = 0;
+        for (var i = Math.Max(cur.Prev + 1, seg.First); i <= seg.Last; i++)
+        {
+            if (doc.Toks[i].Start < cur.PrefixEnd) continue;
+            if (doc.IsP(i, '(')) { depth++; continue; }
+            if (doc.IsP(i, ')')) { if (--depth < 0) return -1; continue; }
+            // CROSS / OUTER APPLY stay in the statement; CROSS JOIN is cut at CROSS (cutting at its JOIN left `… a CROSS`).
+            if (depth != 0 || doc.Kw(i) is not { } kw || !CutKw.Contains(kw) || kw is "WHEN" or "OUTER" || (kw == "CROSS" && doc.Kw(i + 1) != "JOIN")) continue;
+            // LEFT( / RIGHT( are the string functions, not a join (as in CutPoint).
+            if (kw is "LEFT" or "RIGHT" && doc.IsP(i + 1, '(')) continue;
+            return i;
+        }
+        return -1;
     }
 
     static int CutPoint(DocModel doc, Segment seg, CursorInfo cur, int errDoc)

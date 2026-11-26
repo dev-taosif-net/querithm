@@ -93,13 +93,13 @@ public class Tier2CompletionTests(ITestOutputHelper output)
     static CompletionItem[] Complete(string sql, ISchemaSource? schema = null, string? profile = "p1")
     {
         var (text, offset) = Mark(sql);
-        return TSqlCompletion.Complete(new CompleteParams { DocId = "t2-" + Guid.NewGuid(), Text = text, Offset = offset, Dialect = Dialect.Tsql, ProfileId = profile, Database = "SalesDB" }, schema ?? Sales);
+        return TSqlCompletion.Complete(new CompleteParams { DocId = "t2-" + Guid.NewGuid(), Text = text, Offset = offset, Dialect = Dialect.Tsql, ProfileId = profile, Database = "SalesDB" }, schema ?? Sales, CancellationToken.None);
     }
 
     static SignatureHelp Sig(string sql)
     {
         var (text, offset) = Mark(sql);
-        return TSqlSignature.Help(new SignatureParams { DocId = "t2s-" + Guid.NewGuid(), Text = text, Offset = offset, Dialect = Dialect.Tsql, ProfileId = "p1", Database = "SalesDB" }, Sales);
+        return TSqlSignature.Help(new SignatureParams { DocId = "t2s-" + Guid.NewGuid(), Text = text, Offset = offset, Dialect = Dialect.Tsql, ProfileId = "p1", Database = "SalesDB" }, Sales, CancellationToken.None);
     }
 
     static CompletionItem Item(CompletionItem[] items, string label)
@@ -608,15 +608,15 @@ public class Tier2CompletionTests(ITestOutputHelper output)
             for (var off = 0; off <= input.Length; off++)
             {
                 var cp = new CompleteParams { DocId = "fuzz", Text = input, Offset = off, ProfileId = "p1", Database = "SalesDB" };
-                var ex = Record.Exception(() => TSqlCompletion.Complete(cp, Sales));
+                var ex = Record.Exception(() => TSqlCompletion.Complete(cp, Sales, CancellationToken.None));
                 Assert.Null(ex);
                 var sp = new SignatureParams { DocId = "fuzz", Text = input, Offset = off, ProfileId = "p1", Database = "SalesDB" };
-                Assert.Null(Record.Exception(() => TSqlSignature.Help(sp, Sales)));
+                Assert.Null(Record.Exception(() => TSqlSignature.Help(sp, Sales, CancellationToken.None)));
             }
         }
         // Out-of-range offsets are clamped.
-        Assert.NotNull(TSqlCompletion.Complete(new CompleteParams { DocId = "x", Text = "SELECT 1", Offset = 999 }, Sales));
-        Assert.NotNull(TSqlCompletion.Complete(new CompleteParams { DocId = "x", Text = "SELECT 1", Offset = -5 }, Sales));
+        Assert.NotNull(TSqlCompletion.Complete(new CompleteParams { DocId = "x", Text = "SELECT 1", Offset = 999 }, Sales, CancellationToken.None));
+        Assert.NotNull(TSqlCompletion.Complete(new CompleteParams { DocId = "x", Text = "SELECT 1", Offset = -5 }, Sales, CancellationToken.None));
     }
 
     [Fact]
@@ -716,7 +716,7 @@ public class Tier2CompletionTests(ITestOutputHelper output)
 
         // Warm-up.
         for (var i = 0; i < 5; i++)
-            TSqlCompletion.Complete(new CompleteParams { DocId = "big-warm", Text = text, Offset = marker, ProfileId = "p1", Database = "SalesDB" }, Sales);
+            TSqlCompletion.Complete(new CompleteParams { DocId = "big-warm", Text = text, Offset = marker, ProfileId = "p1", Database = "SalesDB" }, Sales, CancellationToken.None);
 
         // Typing at the end of the proc: every keystroke is a new text version (document re-lexed, statement re-parsed).
         const string typed = "Amount";
@@ -729,7 +729,7 @@ public class Tier2CompletionTests(ITestOutputHelper output)
                 var t = text.Insert(marker, typed[..k] + new string(' ', round));
                 var p = new CompleteParams { DocId = "big", Text = t, Offset = marker + k, ProfileId = "p1", Database = "SalesDB" };
                 var sw = Stopwatch.StartNew();
-                last = TSqlCompletion.Complete(p, Sales);
+                last = TSqlCompletion.Complete(p, Sales, CancellationToken.None);
                 times.Add(sw.Elapsed.TotalMilliseconds);
             }
         }
@@ -743,7 +743,7 @@ public class Tier2CompletionTests(ITestOutputHelper output)
         {
             var off = rnd.Next(text.Length / 10, text.Length - 10);
             var sw = Stopwatch.StartNew();
-            TSqlCompletion.Complete(new CompleteParams { DocId = "big-jump", Text = text, Offset = off, ProfileId = "p1", Database = "SalesDB" }, Sales);
+            TSqlCompletion.Complete(new CompleteParams { DocId = "big-jump", Text = text, Offset = off, ProfileId = "p1", Database = "SalesDB" }, Sales, CancellationToken.None);
             jumps.Add(sw.Elapsed.TotalMilliseconds);
         }
         output.WriteLine($"tier-2 completion at random offsets: p50 {P(jumps, 0.5):F1} ms, p95 {P(jumps, 0.95):F1} ms");
@@ -753,7 +753,7 @@ public class Tier2CompletionTests(ITestOutputHelper output)
         {
             var t = text.Insert(marker, "Amount > 0; EXEC dbo.usp_GetCustomerOrders 1, " + new string(' ', i));
             var sw = Stopwatch.StartNew();
-            var h = TSqlSignature.Help(new SignatureParams { DocId = "big-sig", Text = t, Offset = marker + 46 + i, ProfileId = "p1", Database = "SalesDB" }, Sales);
+            var h = TSqlSignature.Help(new SignatureParams { DocId = "big-sig", Text = t, Offset = marker + 46 + i, ProfileId = "p1", Database = "SalesDB" }, Sales, CancellationToken.None);
             sigTimes.Add(sw.Elapsed.TotalMilliseconds);
             Assert.Equal(1, h.ActiveParameter);
         }
@@ -774,11 +774,11 @@ public class Tier2CompletionTests(ITestOutputHelper output)
     public void Twelve_thousand_line_proc_scope_is_resolved()
     {
         var text = BigProc(out var marker);
-        var items = TSqlCompletion.Complete(new CompleteParams { DocId = "big-scope", Text = text, Offset = marker, ProfileId = "p1", Database = "SalesDB" }, Sales);
+        var items = TSqlCompletion.Complete(new CompleteParams { DocId = "big-scope", Text = text, Offset = marker, ProfileId = "p1", Database = "SalesDB" }, Sales, CancellationToken.None);
         HasColumn(items, "Amount", "decimal(18,2)");
         // Unqualified context at the same place: params, variables, both sources.
         var t2 = text.Remove(marker - 2, 2);
-        var items2 = TSqlCompletion.Complete(new CompleteParams { DocId = "big-scope2", Text = t2, Offset = marker - 2, ProfileId = "p1", Database = "SalesDB" }, Sales);
+        var items2 = TSqlCompletion.Complete(new CompleteParams { DocId = "big-scope2", Text = t2, Offset = marker - 2, ProfileId = "p1", Database = "SalesDB" }, Sales, CancellationToken.None);
         Assert.Equal(CompletionKind.Parameter, Item(items2, "@MinTotal").Kind);
         Item(items2, "@total");
         HasColumn(items2, "w.Note", "nvarchar(100)");

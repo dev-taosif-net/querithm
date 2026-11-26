@@ -254,7 +254,8 @@ sealed class DocModel
                 case "SELECT":
                     if (prev is "UNION" or "ALL" or "EXCEPT" or "INTERSECT") return true;
                     if (ck == "WITH" && !seenMain) { seenMain = true; mainKw = kw; return true; }
-                    if (ck == "INSERT" && !seenSource) { seenSource = true; return true; }
+                    // INSERT … SELECT, also after a WITH (WITH c AS (…) INSERT INTO t SELECT … FROM c): one statement.
+                    if ((ck == "INSERT" || mainKw == "INSERT") && !seenSource) { seenSource = true; return true; }
                     if (ck == "DECLARE" && isCursorDecl) return true;
                     if (prev == "FOR") return true;
                     return false;
@@ -262,11 +263,13 @@ sealed class DocModel
                     if (!IsCteStart(i)) return true;
                     return false;
                 case "INSERT" or "DELETE" or "MERGE":
-                    if (prev is "THEN" or "ON" or "FOR" or "AFTER" or "OF") return true;
+                    if (prev is "THEN" or "FOR" or "AFTER" or "OF") return true;
+                    if (prev == "ON" && FkAction(i, kw)) return true;
                     if (ck == "WITH" && !seenMain) { seenMain = true; mainKw = kw; return true; }
                     return false;
                 case "UPDATE":
-                    if (prev is "THEN" or "ON" or "FOR" or "OF") return true;
+                    if (prev is "THEN" or "FOR" or "OF") return true;
+                    if (prev == "ON" && FkAction(i, kw)) return true;
                     if (i + 1 < b.EndTok && T[i + 1].IsPunct(m.Text, '(')) return true; // UPDATE(col) in a trigger
                     if (ck == "WITH" && !seenMain) { seenMain = true; mainKw = kw; return true; }
                     return false;
@@ -276,7 +279,7 @@ sealed class DocModel
                     if (ck == "ALTER") return true;
                     return false;
                 case "EXEC" or "EXECUTE":
-                    if (ck == "INSERT" && !seenSource) { seenSource = true; return true; }
+                    if ((ck == "INSERT" || mainKw == "INSERT") && !seenSource) { seenSource = true; return true; }
                     if (prev == "WITH" || PrevP(i, ',')) return true; // WITH EXECUTE AS
                     return false;
                 case "IF":
@@ -298,6 +301,21 @@ sealed class DocModel
                 default:
                     return false;
             }
+        }
+
+        /// <summary>
+        /// <c>ON DELETE CASCADE</c> / <c>ON UPDATE SET NULL</c> / <c>NO ACTION</c>: a foreign key's action inside CREATE or ALTER
+        /// TABLE. Any other DML word after ON starts a statement: <c>SET NOCOUNT ON</c> (or XACT_ABORT, IDENTITY_INSERT …)
+        /// followed by UPDATE without a ';' — the usual procedure preamble — used to merge into the SET (audit 2026-11-25 H4).
+        /// </summary>
+        // CASCADE, NO and RESTRICT are no keywords of the lexer (their Kw is null): compared by text (Gemini review
+        // 2026-11-26: ALTER TABLE … ON DELETE CASCADE split into three statements).
+        bool FkAction(int i, string kw)
+        {
+            if (kw is not ("DELETE" or "UPDATE") || i + 1 >= b.EndTok || T[i + 1].Kind != TK.Word) return false;
+            var next = m.Text.AsSpan(T[i + 1].Start, T[i + 1].Length);
+            return next.Equals("CASCADE", StringComparison.OrdinalIgnoreCase) || next.Equals("SET", StringComparison.OrdinalIgnoreCase)
+                || next.Equals("NO", StringComparison.OrdinalIgnoreCase) || next.Equals("RESTRICT", StringComparison.OrdinalIgnoreCase);
         }
 
         bool IsCteStart(int i)

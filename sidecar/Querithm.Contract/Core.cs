@@ -3,7 +3,7 @@ namespace Querithm.Contract;
 /// <summary>Contract version; system.ping returns it and the webview refuses to run on a mismatch (§5).</summary>
 public static class ContractInfo
 {
-    public const string Version = "1.20.0";
+    public const string Version = "1.21.0";
 }
 
 /// <summary>Members are appended as providers land (Phase D); existing spellings never change ("mssql", "pg").</summary>

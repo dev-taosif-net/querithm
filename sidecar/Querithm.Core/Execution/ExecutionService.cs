@@ -222,8 +222,12 @@ public sealed class ExecutionService : IAsyncDisposable
 
     internal static readonly TimeSpan DefaultCancelGrace = TimeSpan.FromSeconds(5);
 
-    /// <summary>Raised after an execution containing DDL completes (§8 step 5).</summary>
-    public event Action<Session>? DdlExecuted;
+    /// <summary>
+    /// Raised after an execution containing DDL completes (§8 step 5), with the database the run started in (a USE in the
+    /// run may have left it after DDL there, completion audit 2026-11-25, M22) and the one it ended in, read before the
+    /// run let go of the tab: a queued run may move the session elsewhere before the handler runs (G#5).
+    /// </summary>
+    public event Action<Session, string?, string?>? DdlExecuted;
 
     /// <summary>Decides whether the grid may edit a result set (set by the composition root; null = never editable).</summary>
     public Func<Session, ResultColumn[], Contract.Providers.TracedOrigins, SchemaSnapshot?, ResultEditInfo?>? Editability { get; set; }
@@ -457,6 +461,7 @@ public sealed class ExecutionService : IAsyncDisposable
         PhysicalConnection? conn = null;
         var borrowed = false;
         var lockTaken = false;
+        string? startDatabase = null;
         var txWasOpen = false;
         // M10: the run is Cancelled only when the cancel stopped work still to do — requested while a statement was still
         // running (even one the driver then returns normally) or before a later one. Once the last statement completed (or
@@ -480,6 +485,9 @@ public sealed class ExecutionService : IAsyncDisposable
 
             (conn, borrowed) = await _sessions.AcquireAsync(session, () =>
                 _notifier.Notify("query.queued", new QueryQueuedEvent { ExecutionId = exec.IdText, SessionId = session.Id }), ct).ConfigureAwait(false);
+            // After the connection: the first one learns the database (none configured) or the server's spelling of it, and
+            // a refresh of the name before that missed it or kept a second snapshot under the other case (review 2026-11-26).
+            startDatabase = session.Database;
             exec.Hold(conn);
             txWasOpen = session.TxState == TxState.Open;
             session.Spid = await session.Provider.GetSpidAsync(conn.Db, ct).ConfigureAwait(false);
@@ -704,6 +712,7 @@ public sealed class ExecutionService : IAsyncDisposable
                 Statistics = stats.Length > 0 ? stats : null, Database = session.Database, HadDdl = classification.HasDdl,
             });
             _notifier.Notify("session.stateChanged", session.State());
+            var endDatabase = session.Database; // before the lock goes: the next queued run may USE another database
             if (lockTaken) session.ExecLock.Release();
             _log.LogInformation("Execution {Id} ended {State} after {Ms:0} ms", exec.IdText, exec.State, sw.Elapsed.TotalMilliseconds);
 
@@ -720,7 +729,9 @@ public sealed class ExecutionService : IAsyncDisposable
             // schema is read again then too; only a run that never ran (still queued when cancelled) changed nothing.
             // First, so the edit recheck below finds that read begun after the run and waits for it instead of queuing
             // a second catalog read of the same database.
-            if (classification.HasDdl && lockTaken) DdlExecuted?.Invoke(session);
+            // Only a run that got a connection ran anything (review 2026-11-26: a run refused at AcquireAsync — a lost
+            // in-memory database, a cancel while queued — asked for a refresh that could only fail).
+            if (classification.HasDdl && lockTaken && conn != null) DdlExecuted?.Invoke(session, startDatabase, endDatabase);
             if (exec.Rechecks is { Count: > 0 } || exec.StaleDatabase != null)
             {
                 var pending = exec.Rechecks ?? [];

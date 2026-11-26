@@ -59,11 +59,7 @@ public sealed class Services : IAsyncDisposable
         executions.Editability = dataEditor.Decide;
         // A read-only verdict that out-of-date metadata may explain is decided again once the metadata was read again.
         executions.RefreshMetadata = metadata.RefreshedAsync;
-        executions.DdlExecuted += s =>
-        {
-            // Phase D0d: a session-owned session reads its catalog on its own connection (after the execution releases it).
-            if (s.Database != null) metadata.Refresh(new RefreshParams { ProfileId = s.Profile.Id, Database = s.Database, SessionId = s.SessionOwned ? s.Id : null });
-        };
+        executions.DdlExecuted += metadata.OnDdlExecuted;
         sessions.SessionOpened += s => { if (s.SessionOwned) cache.AddScope(s.Id, s.Profile.Id, s.InMemory); };
         sessions.SessionClosed += metadata.ForgetSession;
         sessions.TransactionEnded += metadata.OnTransactionEnded;
@@ -73,14 +69,22 @@ public sealed class Services : IAsyncDisposable
             foreach (var provider in providers.All)
             {
                 var sql = "WITH c AS (SELECT a.x FROM dbo.t a WHERE a.y = 1) SELECT c.x FROM c JOIN dbo.u u ON u.x = c.x;";
+                // A deadline per provider (A#8): one shared by all, a slow first one (ScriptDom's JIT) left the others an
+                // expired token, and their warm-up did nothing.
+                using var warmup = new CancellationTokenSource(LanguageService.Tier2Deadline);
                 try
                 {
                     provider.Language.Classify(sql);
-                    provider.Language.Complete(new CompleteParams { DocId = "__warmup", Text = sql, Offset = 40 }, cache);
+                    provider.Language.Complete(new CompleteParams { DocId = "__warmup", Text = sql, Offset = 40 }, cache, warmup.Token);
                 }
                 catch { /* warm-up only */ }
             }
         });
+        // The PostgreSQL family's tier 2 answers nothing when its own analysis fails (tier 1 fills in): logged, never its
+        // message, which may quote the document (review 2026-11-25, C#7: it was swallowed without a trace).
+        var tier2Log = logs.CreateLogger("tier2");
+        Querithm.Intelligence.PgSql.Completion.PgTier2Completion.OnError = e =>
+            tier2Log.LogDebug("Tier-2 completion answered nothing ({Type}) {Stack}", e.GetType().Name, e.StackTrace);
         var monitors = new Core.Monitoring.MonitorService(sessions, notifier, logs.CreateLogger("monitor"), dir, cache);
         var banner = new Core.Monitoring.BlockingBannerService(sessions, notifier, logs.CreateLogger("banner"), monitors.AnswersBannerFor);
         monitors.MonitorStarted += m => m.Snapshot += banner.OnSnapshot;
@@ -679,6 +683,7 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
     public Task<DatabaseInfo[]> MetaDatabases(SessionRef p) => Interactive("Listing the databases", ct => s.Objects.DatabasesAsync(p, ct));
     public Task<SchemaSnapshot> MetaSnapshot(SnapshotParams p) => Task.Run(() => s.Metadata.Snapshot(p));
     public Task<SnapObject[]> MetaObjects(ObjectsParams p) => Task.Run(() => s.Metadata.Objects(p));
+    public Task<SnapFk[]> MetaForeignKeys(ForeignKeysParams p) => Task.Run(() => s.Metadata.ForeignKeys(p));
     public Task<JobRef> MetaRefresh(RefreshParams p) => Task.FromResult(s.Metadata.Refresh(p));
     public Task<ObjectDetails> MetaObjectDetails(ObjectDetailsParams p) => Task.Run(() => s.Metadata.Details(p));
     public Task<DefinitionResult> MetaDefinition(DefinitionParams p) => Interactive("Reading the definition", ct => s.Objects.EditableDefinitionAsync(p, ct));
@@ -688,12 +693,15 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
     public Task<RowCount[]> MetaRowCounts(RowCountsParams p) => Interactive("Loading row counts", ct => s.Objects.RowCountsAsync(p, ct));
 
     // ---- language ----
-    public Task<CompletionItem[]> LangComplete(CompleteParams p) => s.Language.CompleteAsync(p);
-    public Task<Diagnostic[]> LangDiagnostics(DiagnosticsParams p) => s.Language.DiagnosticsAsync(p);
-    public Task<FormatResult> LangFormat(FormatParams p) => s.Language.FormatAsync(p);
-    public Task<SignatureHelp> LangSignature(SignatureParams p) => s.Language.SignatureAsync(p);
-    public Task<FoldingRange[]> LangFolding(FoldingParams p) => s.Language.FoldingAsync(p);
-    public Task<Classification> LangClassify(ClassifyParams p) => s.Language.ClassifyAsync(p);
+    public Task<CompletionItem[]> LangComplete(CompleteParams p) => s.Language.CompleteAsync(Required(p, "lang.complete"));
+    public Task<Diagnostic[]> LangDiagnostics(DiagnosticsParams p) => s.Language.DiagnosticsAsync(Required(p, "lang.diagnostics"));
+    public Task<FormatResult> LangFormat(FormatParams p) => s.Language.FormatAsync(Required(p, "lang.format"));
+    public Task<SignatureHelp> LangSignature(SignatureParams p) => s.Language.SignatureAsync(Required(p, "lang.signature"));
+    public Task<FoldingRange[]> LangFolding(FoldingParams p) => s.Language.FoldingAsync(Required(p, "lang.folding"));
+    public Task<Classification> LangClassify(ClassifyParams p) => s.Language.ClassifyAsync(Required(p, "lang.classify"));
+
+    /// <summary>A null params arrives as null: an invalid request (code invalid), not an internal error (Gemini review 2026-11-26).</summary>
+    static T Required<T>(T? p, string method) where T : class => p ?? throw QuerithmException.Invalid($"{method} needs its params.");
     /// <summary>RPC boundary (§13): a known profile, bounded names; the names are user data and never logged.</summary>
     public Task LangUsageRecord(UsageRecordParams p)
     {
@@ -717,7 +725,7 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
 
     public Task LangForget(LangForgetParams p)
     {
-        s.Language.Forget(p.DocId);
+        s.Language.Forget(Required(p, "lang.forget").DocId);
         return Task.CompletedTask;
     }
 

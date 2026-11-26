@@ -96,7 +96,7 @@ export function makeFakeMonaco() {
   const monaco = {
     Uri: { parse: (s: string) => ({ toString: () => s }) },
     Range: FakeRange,
-    KeyCode: { Enter: 3, Escape: 9 },
+    KeyCode: { Enter: 3, Escape: 9, PageUp: 11, PageDown: 12, UpArrow: 16, DownArrow: 18 },
     MarkerSeverity: { Error: 8, Warning: 4, Info: 2 },
     editor: {
       createModel: vi.fn((text: string, lang: string, uri: { toString(): string }) => { const m = new FakeModel(text, lang, uri); models.push(m); return m; }),

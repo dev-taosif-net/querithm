@@ -40,8 +40,12 @@ public static class ChunkedDiagnostics
             results[i] = Cache.GetOrAdd(parseTexts[i], t =>
             {
                 Interlocked.Increment(ref misses);
-                TSqlParsing.NewParser().Parse(new StringReader(t), out var errors);
-                return errors.ToArray();
+                // Lex and parse on one deep-stack thread (a chunk with many comments lexed on a second one before).
+                return DeepStack.Run(() =>
+                {
+                    TSqlParsing.ParseText(TSqlParsing.NewParser(), t, out var errors);
+                    return errors.ToArray();
+                });
             });
         });
         parsed = misses;

@@ -8,16 +8,16 @@ import { buildSchemaIndex } from "../schemaIndex";
 import { complete, monacoFilterText } from "../complete";
 import type { Tier1Item } from "../types";
 
-const ENGINES = ["tsql", "pg", "mySql", "sqlite", "duckDb"] as const satisfies readonly Dialect[];
+const ENGINES = ["tsql", "pg", "mySql", "sqlite", "duckDb", "oracle"] as const satisfies readonly Dialect[];
 type Engine = (typeof ENGINES)[number];
-const DEFAULT_SCHEMA: Record<Engine, string> = { tsql: "dbo", pg: "public", mySql: "shop", sqlite: "main", duckDb: "main" };
+const DEFAULT_SCHEMA: Record<Engine, string> = { tsql: "dbo", pg: "public", mySql: "shop", sqlite: "main", duckDb: "main", oracle: "APP" };
 const NAMES = ["orders", "customers", "order_items", "OrderHistory", "tbl_CustomerAddress", "v_sales"];
 
 function index(d: Engine) {
   const objects: SnapObject[] = NAMES.map((name, i) => ({ id: i + 1, schema: DEFAULT_SCHEMA[d], name, kind: name.startsWith("v_") ? "view" : "table", columns: [] }));
   objects.push({ id: 99, schema: "sales", name: "products", kind: "table", columns: [] });
   const snap: SchemaSnapshot = { profileId: "p", database: d === "mySql" ? "shop" : "app", status: "fresh", objects, fks: [] };
-  return buildSchemaIndex(snap, d, []);
+  return buildSchemaIndex(snap, d, [], d === "oracle" ? "APP" : null);
 }
 
 /** What the Monaco popup would show: tier 1's items that Monaco's own filter keeps for the typed word. */

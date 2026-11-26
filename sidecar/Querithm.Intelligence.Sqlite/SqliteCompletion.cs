@@ -58,7 +58,7 @@ public static class SqliteCompletion
     {
         var result = new List<List<PgToken>>();
         var at = 0;
-        foreach (var st in SqliteSplitter.Split(tokens.Select(FromPg).ToList()))
+        foreach (var st in SqliteSplitter.Split(Tier2Cancellation.Map(tokens, FromPg)))
         {
             result.Add(tokens.GetRange(at, st.Count));
             at += st.Count;
@@ -197,8 +197,12 @@ public static class SqliteCompletion
     {
         Id = "sqlite", Names = StringComparer.OrdinalIgnoreCase, FoldsUnquoted = false, DefaultSchema = "main",
         IsReserved = Keywords.Contains, IsPlain = Plain, DollarBodiesAreCode = false,
-        Tokenize = s => SqliteTokenizer.Tokenize(s).Select(ToPg).ToList(), Statements = (_, tokens) => Statements(tokens),
+        Tokenize = s => Tier2Cancellation.Map(SqliteTokenizer.Tokenize(s), ToPg), Statements = (_, tokens) => Statements(tokens),
         Unquote = Unquote, Delimit = SqliteTokenizer.Quote, NamedArguments = false, BuiltinRoutines = Builtins,
+        // INSERT OR REPLACE INTO t / UPDATE OR IGNORE t: the conflict clause stands before the target.
+        OrConflictClause = true,
+        // FROM t INDEXED BY ix: INDEXED is no fallback name in SQLite's grammar, so never the alias (audit H10).
+        EndsFromItem = static (word, _) => word.Equals("INDEXED", StringComparison.OrdinalIgnoreCase),
         BuiltinTypes = ["INTEGER", "REAL", "TEXT", "BLOB", "NUMERIC", "ANY"],
     };
 }

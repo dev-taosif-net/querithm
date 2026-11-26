@@ -23,12 +23,23 @@ public sealed class PostgresMetadata : IMetadataProvider
     public async Task<IReadOnlyList<ObjectStamp>> GetStampsAsync(DbConnection c, CancellationToken ct)
     {
         await using var cmd = c.CreateCommand();
-        // Marker = (pg_class.xmin << 32) | max(pg_attribute.xmin): column changes do not always touch pg_class.
+        // A relation's marker hashes what its snapshot row is read from: its pg_class row, its columns (max pg_attribute
+        // xmin: column changes do not always touch pg_class), and the oid and xmin of each of its indexes, constraints and
+        // column defaults. CREATE INDEX updates pg_class in place (the xmin stays), and a new or dropped index, primary or
+        // foreign key changes neither of the first two: the old marker saw none of them (completion audit 2026-11-25, H13).
+        // Each list is read through its catalog's index on the relation (pg_index_indrelid_index,
+        // pg_constraint_conrelid_contypid_conname_index, pg_attrdef_adrelid_adnum_index). An index's own pg_class row is
+        // in its entry too: ALTER INDEX … RENAME changes only that row (G#12). Each part is COALESCEd, so a relation with
+        // no indexes cannot read like one whose list moved over a place (concat_ws skips NULLs).
+        // The hash is hashtextextended, not md5(): md5() fails on a server in FIPS mode (PostgreSQL 14+ built with
+        // OpenSSL), which would end every refresh in error. It exists from PostgreSQL 11, as pg_proc.prokind (below) does.
+        // Measured 2026-11-25 on the §14 fixture (PostgreSQL 16, 762 relations), the relations part, median of 20: 3.58 ms
+        // before the audit, 8.55 ms with md5, 8.58 ms now.
         // Triggers (user-defined, not the internal FK ones): (pg_trigger.xmin << 32) | the trigger function's xmin, so
         // CREATE OR REPLACE TRIGGER and a replaced function both count as a change. The function itself stays a Func.
         cmd.CommandText = $"""
             SELECT c.oid::bigint, n.nspname, c.relname, c.relkind::text,
-                   (c.xmin::text::bigint << 32) | COALESCE((SELECT max(a.xmin::text::bigint) FROM pg_attribute a WHERE a.attrelid = c.oid), 0),
+                   hashtextextended({RelationMarker}, 0),
                    NULL::text, NULL::bigint
             FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
             WHERE c.relkind IN ('r','p','v','m','f','S') AND {SystemSchemas}
@@ -59,6 +70,16 @@ public sealed class PostgresMetadata : IMetadataProvider
         }
         return list;
     }
+
+    /// <summary>What a relation's marker hashes (see <see cref="GetStampsAsync"/>); expects pg_class as c.</summary>
+    const string RelationMarker = """
+        concat_ws('|', COALESCE(c.xmin::text, ''),
+            COALESCE((SELECT max(a.xmin::text::bigint)::text FROM pg_attribute a WHERE a.attrelid = c.oid), ''),
+            COALESCE((SELECT string_agg(i.indexrelid::text || ':' || i.xmin::text || ':' || ic.xmin::text, ',' ORDER BY i.indexrelid)
+                      FROM pg_index i JOIN pg_class ic ON ic.oid = i.indexrelid WHERE i.indrelid = c.oid), ''),
+            COALESCE((SELECT string_agg(k.oid::text || ':' || k.xmin::text, ',' ORDER BY k.oid) FROM pg_constraint k WHERE k.conrelid = c.oid), ''),
+            COALESCE((SELECT string_agg(d.oid::text || ':' || d.xmin::text, ',' ORDER BY d.oid) FROM pg_attrdef d WHERE d.adrelid = c.oid), ''))
+        """;
 
     public async Task<MetadataBundle> GetDetailsAsync(DbConnection c, IReadOnlyList<long> objectIds, CancellationToken ct)
     {

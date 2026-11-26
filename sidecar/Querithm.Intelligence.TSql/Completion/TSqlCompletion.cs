@@ -15,23 +15,29 @@ enum Ctx { None, Expression, Qualified, Object, ObjectQualified, ExecTarget, Exe
 /// </summary>
 public static class TSqlCompletion
 {
-    public static CompletionItem[] Complete(CompleteParams p, ISchemaSource schema)
+    /// <summary>
+    /// An empty answer leaves tier 1 alone. A cancelled request (<paramref name="ct"/>: a newer one for the document, or
+    /// its deadline) throws instead, so the webview never caches an empty answer for a word it still shows.
+    /// </summary>
+    public static CompletionItem[] Complete(CompleteParams p, ISchemaSource schema, CancellationToken ct)
     {
-        try { return Run(p, schema); }
-        catch { return []; }
+        try { return Run(p, schema, ct); }
+        catch (Exception e) when (e is not OperationCanceledException) { return []; }
     }
 
-    static CompletionItem[] Run(CompleteParams p, ISchemaSource schemaSource)
+    static CompletionItem[] Run(CompleteParams p, ISchemaSource schemaSource, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(p.Text)) return [];
+        ct.ThrowIfCancellationRequested();
         var doc = DocModel.Get(p.Text, p.DocId);
         var offset = Math.Clamp(p.Offset, 0, p.Text.Length);
         if (doc.InOpaque(offset)) return [];
         var cur = CursorInfo.Compute(doc, offset);
         var scope = new SchemaScope(schemaSource, p.ProfileId, p.Database);
-        var env = Declarations.Build(doc, cur.Batch, cur.StmtStart, scope);
+        var env = Declarations.Build(doc, cur.Batch, cur.StmtStart, scope, ct);
         var resolver = new Resolver(env);
-        var ast = StatementAnalysis.Parse(doc, cur);
+        var ast = StatementAnalysis.Parse(doc, cur, ct);
+        ct.ThrowIfCancellationRequested();
         var ctx = Classify(doc, cur, out var extra);
         var b = new ItemBuilder(doc, cur, env, resolver, ast, extra);
         return b.Build(ctx);
@@ -173,7 +179,9 @@ public static class TSqlCompletion
             case "INTO":
                 if (before is "INSERT" or "MERGE") return true;
                 return ClauseAt(doc, seg.First, prev - 1) == "OUTPUT";
-            case "UPDATE" or "DELETE" or "INSERT": return before != "THEN" && before != "ON";
+            // The statement's own first word is always an object slot: the word before it ends the previous statement
+            // (SET NOCOUNT ON, then UPDATE | on the next line). Inside a statement: not after MERGE's THEN or a FK's ON.
+            case "UPDATE" or "DELETE" or "INSERT": return prev == seg.First || (before != "THEN" && before != "ON");
         }
         if (doc.IsP(prev, ',')) return ClauseAt(doc, seg.First, prev) == "FROM";
         return false;
@@ -249,14 +257,20 @@ sealed class ItemBuilder(DocModel doc, CursorInfo cur, Env env, Resolver resolve
     readonly HashSet<string> labels = new(StringComparer.OrdinalIgnoreCase);
     SchemaScope Schema => env.Schema;
 
-    void Add(string label, CompletionKind kind, string? detail, string sortGroup, string? insert = null, bool snippet = false, string? doc = null, string? sortKey = null)
+    /// <param name="lazyDoc">
+    /// Documentation built only if the item is kept (<see cref="DeferredDocs"/>): an object's column preview or a function's
+    /// signature, which a 10,000-table schema built for every object on every request (audit M4).
+    /// </param>
+    void Add(string label, CompletionKind kind, string? detail, string sortGroup, string? insert = null, bool snippet = false, string? doc = null, string? sortKey = null,
+        Func<string?>? lazyDoc = null)
     {
         if (!labels.Add(label)) return;
-        items.Add(new CompletionItem
+        var item = new CompletionItem
         {
             Label = label, Kind = kind, Detail = detail, InsertText = insert, IsSnippet = snippet, Documentation = doc,
             SortText = sortGroup + (sortKey ?? label.ToLowerInvariant()),
-        });
+        };
+        items.Add(lazyDoc == null ? item : DeferredDocs.Defer(item, lazyDoc));
     }
 
     public CompletionItem[] Build(Ctx ctx)
@@ -290,6 +304,8 @@ sealed class ItemBuilder(DocModel doc, CursorInfo cur, Env env, Resolver resolve
         public CteScope Ctes = CteScope.Empty;
         public bool InOutput;
         public bool IsMerge;
+        /// <summary>The table the innermost UPDATE (or MERGE … UPDATE SET) changes: the only columns a SET target can name.</summary>
+        public Source? UpdateTarget;
         public QuerySpecification? Spec;
         public bool InOrderBy;
     }
@@ -317,6 +333,13 @@ sealed class ItemBuilder(DocModel doc, CursorInfo cur, Env env, Resolver resolve
         }
         var inOutput = false;
         var first = true;
+        // A derived table sees no other source of the FROM it sits in, unless it is APPLY's right side (lateral, like a
+        // correlated subquery): `JOIN (SELECT | FROM dbo.Orders) d` offered the outer c.* and d's own placeholder column.
+        // Only that level is hidden: query levels further out stay visible, as SQL Server resolves them — a derived table
+        // inside EXISTS (…) may name the outer query (`… WHERE o.CustomerId = c.|`); before, every outer level went too.
+        var skipLevel = false;
+        // No derived table is visible inside its own definition, however many levels out it is.
+        var enclosingDerived = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         for (var i = chain.Count - 1; i >= 0; i--)
         {
             var node = chain[i];
@@ -326,8 +349,15 @@ sealed class ItemBuilder(DocModel doc, CursorInfo cur, Env env, Resolver resolve
                 case OutputClause or OutputIntoClause:
                     inOutput = true;
                     break;
-                case OrderByClause when first:
+                // The query's own ORDER BY sees select-list aliases; OVER (ORDER BY …) and WITHIN GROUP (ORDER BY …) do not.
+                case OrderByClause ob when first && i > 0 && chain[i - 1] is QueryExpression { OrderByClause: var own } && ReferenceEquals(own, ob):
                     sc.InOrderBy = true;
+                    break;
+                case QueryDerivedTable qdt when !first:
+                    if (qdt.Alias?.Value is { } alias) enclosingDerived.Add(alias);
+                    if (!(i > 0 && chain[i - 1] is UnqualifiedJoin { UnqualifiedJoinType: UnqualifiedJoinType.CrossApply or UnqualifiedJoinType.OuterApply } apply
+                          && ReferenceEquals(apply.SecondTableReference, qdt)))
+                        skipLevel = true;
                     break;
                 case QuerySpecification qs:
                     found = resolver.Flatten(qs.FromClause, sc.Ctes);
@@ -338,6 +368,7 @@ sealed class ItemBuilder(DocModel doc, CursorInfo cur, Env env, Resolver resolve
                     found = resolver.Flatten(ud.FromClause, sc.Ctes);
                     var target = Target(ud.Target, found);
                     if (target != null && !found.Contains(target)) found.Insert(0, target);
+                    if (first && ud is UpdateSpecification) sc.UpdateTarget = target;
                     if (inOutput && target != null)
                     {
                         if (ud is UpdateSpecification) found.Add(Pseudo("inserted", target));
@@ -357,6 +388,7 @@ sealed class ItemBuilder(DocModel doc, CursorInfo cur, Env env, Resolver resolve
                     found = [];
                     var target = Target(ms.Target, [], ms.TableAlias?.Value);
                     if (target != null) found.Add(target);
+                    if (first) sc.UpdateTarget = target;
                     found.AddRange(resolver.Flatten(ms.TableReference, sc.Ctes));
                     if (inOutput && target != null)
                     {
@@ -370,7 +402,10 @@ sealed class ItemBuilder(DocModel doc, CursorInfo cur, Env env, Resolver resolve
             if (found != null)
             {
                 if (first) { sc.Inner = found; sc.InOutput = inOutput; first = false; }
-                else sc.Outer.AddRange(found.Where(f => Resolver.FindSource(sc.Inner, f.Exposed) == null && Resolver.FindSource(sc.Outer, f.Exposed) == null));
+                else if (skipLevel) skipLevel = false; // the FROM holding the derived table: its siblings stay hidden
+                else
+                    sc.Outer.AddRange(found.Where(f => Resolver.FindSource(sc.Inner, f.Exposed) == null && Resolver.FindSource(sc.Outer, f.Exposed) == null
+                        && !enclosingDerived.Contains(f.Exposed)));
             }
             if (node is CommonTableExpression && !first) break;
         }
@@ -422,7 +457,11 @@ sealed class ItemBuilder(DocModel doc, CursorInfo cur, Env env, Resolver resolve
                 var schema = parts.Count >= 2 ? parts[^2] : null;
                 var db = parts.Count >= 3 ? parts[^3] : null;
                 var src = resolver.Named(db, schema, name, alias, CteScope.Empty);
-                if (Resolver.FindSource(sc.Inner, src.Exposed) == null) sc.Inner.Add(src);
+                var existing = Resolver.FindSource(sc.Inner, src.Exposed);
+                if (existing == null) sc.Inner.Add(src);
+                // `UPDATE o SET … FROM dbo.Orders o`: the UPDATE names the alias before the FROM defines it, so the first
+                // source found is an unknown table "o" — the FROM item it stands for replaces it (review 2026-11-26).
+                else if (existing.Kind == SourceKind.Unknown && src.Kind != SourceKind.Unknown) sc.Inner[sc.Inner.IndexOf(existing)] = src;
             }
         }
     }
@@ -436,6 +475,15 @@ sealed class ItemBuilder(DocModel doc, CursorInfo cur, Env env, Resolver resolve
         // A source the user aliased is referred to through its alias, also when it is the only one (tier 1 does the
         // same, complete.ts expression); not in an UPDATE's SET list, where tier 1 keeps target columns bare.
         var inSet = cur.Seg is { } seg && TSqlCompletion.ClauseAt(doc, seg.First, cur.Prev) == "SET";
+        // A SET target (UPDATE … SET |, … SET a = 1, |, MERGE … UPDATE SET |): only the target's columns (audit M9); other
+        // sources' columns cannot be set. Bare, which T-SQL accepts as it accepts the target's alias. The value side sees all.
+        // SetTargetSlot itself walks back to the SET at this level (over a closed CASE … END, whose THEN ClauseAt stops at).
+        if (sc.UpdateTarget is { } target && SetTargetSlot())
+        {
+            var n = 0;
+            foreach (var c in target.Columns) Add(Quote(c.Name), CompletionKind.Column, c.Type, "1", doc: ColDoc(c, target), sortKey: (n++).ToString("D5"));
+            return;
+        }
         var order = 0;
         foreach (var s in sc.Inner)
             foreach (var c in s.Columns)
@@ -457,10 +505,45 @@ sealed class ItemBuilder(DocModel doc, CursorInfo cur, Env env, Resolver resolve
             foreach (var o in idx.Snapshot.Objects)
                 if (o.Kind == ObjectKind.Func)
                     Add($"{Quote(o.Schema)}.{Quote(o.Name)}", CompletionKind.Func, o.ReturnType is { } rt ? "returns " + rt : "scalar function", "5",
-                        insert: $"{Quote(o.Schema)}.{Quote(o.Name)}(${{1}})", snippet: true, doc: FuncSignature(o));
+                        insert: $"{Quote(o.Schema)}.{Quote(o.Name)}(${{1}})", snippet: true, lazyDoc: () => FuncSignature(o));
         foreach (var f in Builtins.Functions.Values)
             Add(f.Name, CompletionKind.Func, f.Label, "6", insert: f.Params.Length == 0 ? f.Name + "()" : f.Name + "(${1})", snippet: f.Params.Length > 0, doc: f.Doc);
         foreach (var (n, ty) in Builtins.GlobalVariables) Add(n, CompletionKind.Variable, ty, "7");
+    }
+
+    /// <summary>
+    /// The cursor starts an assignment of a SET list: walking back at its nesting level, SET or a comma of the list comes
+    /// before any '=' (the value side). A closed CASE … END (an earlier value) is stepped over whole: its WHEN / THEN
+    /// stopped the walk, so `SET a = CASE … END, |` offered every source's columns (review 2026-11-25). On tokens.
+    /// </summary>
+    bool SetTargetSlot()
+    {
+        if (cur.Seg is not { } seg) return false;
+        var depth = 0;
+        var cases = 0;
+        var pastComma = false;
+        for (var i = cur.Prev; i >= seg.First; i--)
+        {
+            if (doc.IsP(i, ')')) { depth++; continue; }
+            if (doc.IsP(i, '(')) { if (depth-- == 0) return false; continue; }
+            if (depth > 0) continue;
+            if (doc.Kw(i) == "END") { cases++; continue; }
+            if (doc.Kw(i) == "CASE") { if (cases-- == 0) return false; continue; } // an open CASE: the cursor is in a value
+            if (cases > 0) continue;
+            if (doc.IsP(i, ',')) pastComma = true;
+            else if (IsAssignment(i) && !pastComma) return false;
+            else if (doc.Kw(i) == "SET") return true;
+            else if (doc.Kw(i) is "FROM" or "WHERE" or "OUTPUT" or "WHEN" or "THEN" or "SELECT" or "UPDATE") return false;
+        }
+        return false;
+    }
+
+    /// <summary>'=' or a compound assignment (<c>+=</c>, <c>-=</c>, <c>*=</c>, <c>/=</c>, <c>%=</c>, <c>&amp;=</c>, <c>|=</c>, <c>^=</c>: one token).</summary>
+    bool IsAssignment(int i)
+    {
+        if (doc.IsP(i, '=')) return true;
+        var t = doc.Toks[i];
+        return t.Kind == TK.Punct && t.Length == 2 && doc.Text[t.Start + 1] == '=' && "+-*/%&|^".Contains(doc.Text[t.Start]);
     }
 
     static string ColDoc(Col c, Source s) => (c.Note != null ? c.Note + " — " : "") + (s.Exposed != s.Display ? $"{s.Exposed}: {s.Display}" : s.Display);
@@ -509,7 +592,7 @@ sealed class ItemBuilder(DocModel doc, CursorInfo cur, Env env, Resolver resolve
         {
             foreach (var o in idx.Snapshot.Objects)
                 if (o.Kind == ObjectKind.Func && string.Equals(o.Schema, schemaName, StringComparison.OrdinalIgnoreCase))
-                    Add(Quote(o.Name), CompletionKind.Func, o.ReturnType is { } rt ? "returns " + rt : "scalar function", "1", insert: Quote(o.Name) + "(${1})", snippet: true, doc: FuncSignature(o));
+                    Add(Quote(o.Name), CompletionKind.Func, o.ReturnType is { } rt ? "returns " + rt : "scalar function", "1", insert: Quote(o.Name) + "(${1})", snippet: true, lazyDoc: () => FuncSignature(o));
             return;
         }
         if (q.Count == 1 && Schema.IsDatabase(q[0]) && Schema.ForDatabase(q[0]) is { } other)
@@ -560,8 +643,8 @@ sealed class ItemBuilder(DocModel doc, CursorInfo cur, Env env, Resolver resolve
         // the column count. Never the name again: the label already shows it.
         var detail = word.Length == 0 ? o.Schema : $"{o.Schema} · {word}";
         if (o.Kind != ObjectKind.Tvf && o.Columns is { Length: > 0 } cols) detail += cols.Length == 1 ? " · 1 col" : $" · {cols.Length} cols";
-        if (o.Kind == ObjectKind.Tvf) Add(label, kind, detail, group, insert: label + "(${1})", snippet: true, doc: FuncSignature(o));
-        else Add(label, kind, detail, group, doc: o.Columns is { Length: > 0 } c ? Preview(Resolver.SnapCols(o)) : null);
+        if (o.Kind == ObjectKind.Tvf) Add(label, kind, detail, group, insert: label + "(${1})", snippet: true, lazyDoc: () => FuncSignature(o));
+        else Add(label, kind, detail, group, lazyDoc: o.Columns is { Length: > 0 } ? () => Preview(Resolver.SnapCols(o)) : null);
     }
 
     void ObjectsQualified()
@@ -768,8 +851,8 @@ sealed class ItemBuilder(DocModel doc, CursorInfo cur, Env env, Resolver resolve
     {
         if (name[0] is '#' or '@') return false;
         if (ReservedCache.TryGetValue(name, out var r)) return r;
-        var tokens = QuoteParsers.Value!.GetTokenStream(new StringReader(name), out var errors);
-        r = !(errors.Count == 0 && tokens.Count(t => t.TokenType != TSqlTokenType.EndOfFile) == 1 && tokens[0].TokenType == TSqlTokenType.Identifier);
+        var tokens = TSqlParsing.Lex(QuoteParsers.Value!, name, out var errors);
+        r = !(tokens != null && errors.Count == 0 && tokens.Count(t => t.TokenType != TSqlTokenType.EndOfFile) == 1 && tokens[0].TokenType == TSqlTokenType.Identifier);
         if (ReservedCache.Count > 100_000) ReservedCache.Clear(); // bounded: names come from snapshots
         ReservedCache[name] = r;
         return r;

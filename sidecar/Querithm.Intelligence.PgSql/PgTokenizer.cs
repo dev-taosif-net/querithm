@@ -56,7 +56,13 @@ public static class SqlChars
 /// <summary>Tolerant PostgreSQL tokenizer: never throws; unterminated constructs run to end of text.</summary>
 public static class PgTokenizer
 {
-    public static List<PgToken> Tokenize(string s)
+    public static List<PgToken> Tokenize(string s) => Tokenize(s, standardStrings: true);
+
+    /// <summary>
+    /// <paramref name="standardStrings"/> false reads '…' as a server with <c>standard_conforming_strings = off</c> does:
+    /// a backslash escapes there too, not only in E'…' (the classifier's second reading, completion audit 2026-11-25 S1).
+    /// </summary>
+    public static List<PgToken> Tokenize(string s, bool standardStrings)
     {
         // About one token per 5 characters (whitespace included): sized once, so a 10k-line body does not regrow the list (profiled).
         var list = new List<PgToken>(Math.Max(16, s.Length / 5));
@@ -68,6 +74,7 @@ public static class PgTokenizer
             var startLine = line;
             var c = s[i];
             PgTokenKind kind;
+            Tier2Cancellation.Check(list.Count); // a superseded completion stops here (no-op outside one)
             if (SqlChars.IsSpace(c))
             {
                 while (i < s.Length && SqlChars.IsSpace(s[i])) { if (s[i] == '\n') line++; i++; }
@@ -93,8 +100,8 @@ public static class PgTokenizer
             }
             else if (c == '\'' || ((c is 'E' or 'e') && At(s, i + 1) == '\''))
             {
-                var escapes = c != '\'';
-                if (escapes) i++;
+                var escapes = c != '\'' || !standardStrings;
+                if (c != '\'') i++;
                 i++;
                 while (i < s.Length)
                 {

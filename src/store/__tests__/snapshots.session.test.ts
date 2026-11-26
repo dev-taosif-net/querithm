@@ -120,9 +120,10 @@ describe("meta.updated", () => {
   it("an event for a session patches only that session's entry, fetching its objects with the session", async () => {
     seed(snapKey("mem", "main", "s1"), { sessionId: "s1", objects: [obj(1, "a")] });
     seed(snapKey("mem", "main", "s2"), { sessionId: "s2", objects: [obj(1, "a")] });
-    rpc.mockResolvedValueOnce([obj(5, "b")]);
+    rpc.mockImplementation(async (m: string) => (m === "meta.objects" ? [obj(5, "b")] : []));
     await send(event({ sessionId: "s1", changed: 1, changedIds: [5] }));
     expect(rpc).toHaveBeenCalledWith("meta.objects", { profileId: "mem", database: "main", ids: [5], sessionId: "s1" });
+    expect(rpc).toHaveBeenCalledWith("meta.foreignKeys", { profileId: "mem", database: "main", ids: [5], sessionId: "s1" });
     expect(s().get("mem", "main", "s1")?.snapshot?.objects.map((o) => o.name)).toEqual(["a", "b"]);
     expect(s().get("mem", "main", "s2")?.snapshot?.objects.map((o) => o.name)).toEqual(["a"]);
   });
@@ -140,7 +141,7 @@ describe("meta.updated", () => {
   it("a shared change of a file database reaches the shared entry and every session view of that file", async () => {
     seed(snapKey("file", "main"), { profileId: "file", objects: [obj(1, "a")] });
     seed(snapKey("file", "main", "s1"), { profileId: "file", sessionId: "s1", objects: [obj(1, "a"), obj(100, "tmp", "temp")] });
-    rpc.mockImplementation(async (_m: string, a: { sessionId?: string }) => [obj(2, a.sessionId ? "b(s1)" : "b")]);
+    rpc.mockImplementation(async (m: string, a: { sessionId?: string }) => (m === "meta.objects" ? [obj(2, a.sessionId ? "b(s1)" : "b")] : []));
     await send(event({ profileId: "file", changed: 1, changedIds: [2] }));
     expect(rpc).toHaveBeenCalledWith("meta.objects", { profileId: "file", database: "main", ids: [2] });
     expect(rpc).toHaveBeenCalledWith("meta.objects", { profileId: "file", database: "main", ids: [2], sessionId: "s1" });

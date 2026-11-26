@@ -51,13 +51,13 @@ public class PgTier2CompletionTests
     internal static CompletionItem[] Complete(string sql, ISchemaSource? schema = null)
     {
         var (text, offset) = Mark(sql);
-        return new PgLanguageService().Complete(new CompleteParams { DocId = "pg2-" + Guid.NewGuid(), Text = text, Offset = offset, Dialect = Dialect.Pg, ProfileId = "p1", Database = "shop" }, schema ?? Schema);
+        return new PgLanguageService().Complete(new CompleteParams { DocId = "pg2-" + Guid.NewGuid(), Text = text, Offset = offset, Dialect = Dialect.Pg, ProfileId = "p1", Database = "shop" }, schema ?? Schema, CancellationToken.None);
     }
 
     static SignatureHelp Sig(string sql)
     {
         var (text, offset) = Mark(sql);
-        return new PgLanguageService().Signature(new SignatureParams { DocId = "pg2s-" + Guid.NewGuid(), Text = text, Offset = offset, Dialect = Dialect.Pg, ProfileId = "p1", Database = "shop" }, Schema);
+        return new PgLanguageService().Signature(new SignatureParams { DocId = "pg2s-" + Guid.NewGuid(), Text = text, Offset = offset, Dialect = Dialect.Pg, ProfileId = "p1", Database = "shop" }, Schema, CancellationToken.None);
     }
 
     static string Labels(CompletionItem[] items) => string.Join(", ", items.Select(i => i.Label));

@@ -1,0 +1,116 @@
+{
+  "date": "2026-11-25T11:59:10.901Z",
+  "os": "Windows_NT 10.0.26300",
+  "cpu": "13th Gen Intel(R) Core(TM) i5-1335U",
+  "cores": 12,
+  "memGb": 24,
+  "results": {
+    "11cold.sqlite": {
+      "metric": "SQLite: execute → first batch on a new tab's own connection (open + hardening + SELECT 1, median)",
+      "unit": "ms",
+      "target": 300,
+      "value": 3.74,
+      "pass": true,
+      "samples": [
+        264.8,
+        5.6,
+        3.6,
+        4.3,
+        2.9,
+        27.1,
+        9.4,
+        2,
+        3.5,
+        3.6,
+        3.7,
+        3.5,
+        3.7,
+        4,
+        5
+      ]
+    },
+    "9.sqlite": {
+      "metric": "SQLite: metadata snapshot load from SQLite (600 tables, 150 views, 200 triggers)",
+      "unit": "ms",
+      "target": 80,
+      "value": 12.22,
+      "pass": true,
+      "objects": 950,
+      "samples": [
+        55.04279999999926,
+        12.22309999999925,
+        10.880500000000211,
+        10.032399999999143,
+        12.651699999999437
+      ]
+    },
+    "10.sqlite": {
+      "metric": "SQLite: incremental refresh with 10 changed objects",
+      "unit": "ms",
+      "target": 2000,
+      "value": 9.13,
+      "pass": true,
+      "samples": [
+        8.346199999999953,
+        18.76209999999992,
+        9.126999999998588,
+        9.9971000000005,
+        6.726999999998952
+      ]
+    },
+    "15.sqlite": {
+      "metric": "SQLite: cancel latency (sqlite3_interrupt)",
+      "unit": "ms",
+      "target": 500,
+      "value": 0.94,
+      "pass": true,
+      "samples": [
+        9.45339999999851,
+        1.365300000001298,
+        0.8662999999996828,
+        0.9436000000005151,
+        0.8409000000010565
+      ]
+    },
+    "5.sqlite": {
+      "metric": "SQLite: tier-2 completion latency, 10k-line script on the 600-table fixture (p95)",
+      "unit": "ms",
+      "target": 150,
+      "value": 15.26,
+      "pass": true,
+      "p95": 15.262800000000425,
+      "lines": 10000,
+      "itemsPerCall": 15,
+      "samples": 60
+    },
+    "20.sqlite": {
+      "metric": "SQLite: grid edits, DML preview for 100 staged cells",
+      "unit": "ms",
+      "target": 15,
+      "value": 1.65,
+      "pass": true,
+      "samples": [
+        16.755200000001423,
+        4.100800000000163,
+        17.220500000001266,
+        1.5836999999992258,
+        1.649600000000646,
+        1.4725000000016735,
+        2.524699999999939
+      ]
+    },
+    "23.sqlite": {
+      "metric": "SQLite: import 100k × 10 CSV into a new table (median of 3)",
+      "unit": "ms",
+      "target": 2000,
+      "value": 548.25,
+      "pass": true,
+      "rows": 100000,
+      "samples": [
+        548,
+        606,
+        448
+      ]
+    }
+  }
+}

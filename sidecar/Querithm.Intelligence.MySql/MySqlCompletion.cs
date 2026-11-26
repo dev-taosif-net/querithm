@@ -41,7 +41,7 @@ public static class MySqlCompletion
         var result = new List<List<PgToken>>();
         foreach (var st in MySqlSplitter.Split(text, mode))
         {
-            var list = st.Tokens.Select(ToPg).ToList();
+            var list = Tier2Cancellation.Map(st.Tokens, ToPg);
             var end = st.Tokens.Count > 0 ? st.Tokens[^1].Offset + st.Tokens[^1].Length : st.End;
             if (end < text.Length) list.Add(new PgToken(PgTokenKind.Punct, end, 1, 0, ";"));
             result.Add(list);
@@ -49,19 +49,31 @@ public static class MySqlCompletion
         return result;
     }
 
-    static readonly System.Collections.Concurrent.ConcurrentDictionary<(MySqlLexMode, string), PgCompletionRules> Cache = new();
+    /// <summary>INSERT / UPDATE / REPLACE modifiers before the target or INTO (reserved words in MySQL and MariaDB).</summary>
+    static readonly HashSet<string> Modifiers = new(["IGNORE", "LOW_PRIORITY", "DELAYED", "HIGH_PRIORITY"], StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>One instance per lexer mode and database, bounded (audit M13): a USE typed in the script grows a letter at a time.</summary>
+    static readonly RulesCache<(MySqlLexMode, string)> Cache = new(Create);
+
+    internal static int CachedRules => Cache.Count;
 
     /// <summary>Rules with <paramref name="database"/> as the default schema (one instance each: it caches its snapshot index).</summary>
-    public static PgCompletionRules RulesFor(MySqlLexMode mode, string database) => Cache.GetOrAdd((mode, database), k => new PgCompletionRules
+    public static PgCompletionRules RulesFor(MySqlLexMode mode, string database) => Cache.Get((mode, database));
+
+    static PgCompletionRules Create((MySqlLexMode, string) k) => new()
     {
         Id = $"mysql:{(k.Item1.AnsiQuotes ? "ansi" : "std")}{(k.Item1.NoBackslashEscapes ? ":nbe" : "")}:{k.Item2}",
+        DocumentKey = $"mysql:{(k.Item1.AnsiQuotes ? "ansi" : "std")}{(k.Item1.NoBackslashEscapes ? ":nbe" : "")}",
         Names = StringComparer.OrdinalIgnoreCase, FoldsUnquoted = false, DefaultSchema = k.Item2,
         IsReserved = MySqlKeywords.IsReserved, IsPlain = Plain, DollarBodiesAreCode = false,
-        Tokenize = s => MySqlTokenizer.Tokenize(s, k.Item1).Select(ToPg).ToList(), Statements = (text, _) => Statements(text, k.Item1),
-        Unquote = Unquote, Delimit = MySqlTokenizer.Quote, NamedArguments = false,
+        Tokenize = s => Tier2Cancellation.Map(MySqlTokenizer.Tokenize(s, k.Item1), ToPg), Statements = (text, _) => Statements(text, k.Item1),
+        Unquote = Unquote, Delimit = MySqlTokenizer.Quote, NamedArguments = false, MultiTableUpdate = true, DmlModifiers = Modifiers,
+        // A reserved word after a FROM item starts a clause, never the alias: USE / FORCE / IGNORE INDEX, PARTITION (p0),
+        // LOCK IN SHARE MODE (audit H10).
+        EndsFromItem = static (word, _) => MySqlKeywords.IsReserved(word),
         // The types CAST(x AS …) and CONVERT(x, …) take.
         BuiltinTypes = ["BINARY", "CHAR", "DATE", "DATETIME", "DECIMAL", "DOUBLE", "FLOAT", "JSON", "NCHAR", "REAL", "SIGNED", "TIME", "UNSIGNED", "YEAR"],
-    });
+    };
 
     /// <summary>
     /// The database the last <c>USE db</c> that ends before <paramref name="offset"/> chose, or null; the document's USE

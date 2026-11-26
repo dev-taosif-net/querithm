@@ -5,7 +5,8 @@ import type { Dialect } from "../../ipc/contract";
 import type { Clause, CursorContext, SchemaIndex, TableInScope } from "./types";
 import { getStream, tokenize, type Token } from "./lexer";
 import {
-  ANCHOR_KEYWORDS, CONTINUATION_PREV, OBJECT_KIND_WORDS, PROJECTION_END, TABLE_HINTS, statementKeywords,
+  ANCHOR_KEYWORDS, BLOCK_PREV, CONTINUATION_PREV, NEWLINE_VERBS, OBJECT_KIND_WORDS, OPERAND_PREV, PROJECTION_END, ROUTINE_PREV, TABLE_HINTS,
+  functionVerbs, reservedWords, statementKeywords,
 } from "./keywords";
 import { DIALECTS, foldIdentifier, knownDialect } from "../../engines";
 
@@ -50,15 +51,48 @@ export function lastStartingBefore(arr: Token[], pos: number): number {
 }
 
 /**
- * Words that continue a FROM clause and are never an alias written without AS. Most are reserved in every dialect, but
- * not all: Oracle's reserved list (V$RESERVED_WORDS) has no JOIN, LEFT, USING, … so the lexer reads them as names.
+ * Words that continue a FROM clause and are never an alias written without AS, in every dialect. Most are reserved in
+ * every dialect, but not all: Oracle's reserved list (V$RESERVED_WORDS) has no JOIN, LEFT, USING, … so the lexer reads
+ * them as names.
  */
 const NEVER_ALIAS = new Set([
-  "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "OUTER", "CROSS", "NATURAL", "POSITIONAL", "ASOF", "ANTI", "SEMI", "USING", "ON",
-  "WHERE", "GROUP", "ORDER", "HAVING", "WINDOW", "QUALIFY", "UNION", "EXCEPT", "MINUS", "INTERSECT", "LIMIT", "OFFSET",
-  "FETCH", "RETURNING", "LATERAL", "APPLY", "CONNECT", "START", "PIVOT", "UNPIVOT", "TABLESAMPLE",
-  "SET", "VALUES", "WHEN", "FOR", "OUTPUT", "OPTION", "INTO", "PARTITION",
+  "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "OUTER", "CROSS", "NATURAL", "USING", "ON",
+  "WHERE", "GROUP", "ORDER", "HAVING", "WINDOW", "UNION", "EXCEPT", "INTERSECT", "LIMIT", "OFFSET",
+  "FETCH", "RETURNING", "LATERAL", "TABLESAMPLE", "SET", "VALUES", "WHEN", "FOR", "INTO",
 ]);
+
+/**
+ * Clause words of one dialect that are plain names in another (completion audit 2026-11-25, H10): Oracle's START WITH
+ * starts a hierarchical query, while `FROM orders start` names the alias start in PostgreSQL. With one list for every
+ * dialect, PostgreSQL lost such aliases.
+ */
+const DIALECT_NEVER_ALIAS: Record<Dialect, ReadonlySet<string>> = {
+  tsql: new Set(["APPLY", "PIVOT", "UNPIVOT", "OUTPUT", "OPTION"]),
+  oracle: new Set(["CONNECT", "START", "MINUS", "APPLY", "PIVOT", "UNPIVOT", "PARTITION"]),
+  duckDb: new Set(["POSITIONAL", "ASOF", "ANTI", "SEMI", "QUALIFY", "PIVOT", "UNPIVOT"]),
+  mySql: new Set(["PARTITION"]),
+  pg: new Set(),
+  sqlite: new Set(),
+};
+
+/**
+ * Words that start a clause after a FROM item, after AS or not, only before one of these tokens ("(" a parenthesis),
+ * and are names elsewhere (H10): Oracle's flashback `AS OF TIMESTAMP …` and `SAMPLE (10)`.
+ */
+const CLAUSE_BEFORE: Partial<Record<Dialect, Readonly<Record<string, readonly string[]>>>> = {
+  oracle: { OF: ["TIMESTAMP", "SCN", "PERIOD"], SAMPLE: ["(", "BLOCK"], SUBPARTITION: ["(", "FOR"], VERSIONS: ["BETWEEN", "PERIOD"] },
+};
+
+/** `t` is a clause word after a FROM item in `dialect`, never an alias written without AS. */
+export function neverAlias(t: Token, dialect: Dialect): boolean {
+  return t.kind === "ident" && (NEVER_ALIAS.has(t.upper) || DIALECT_NEVER_ALIAS[dialect].has(t.upper));
+}
+
+/** The token at `x` starts one of `dialect`'s CLAUSE_BEFORE clauses. */
+function clauseBefore(T: Token[], x: number, dialect: Dialect): boolean {
+  const before = CLAUSE_BEFORE[dialect]?.[W(T[x])];
+  return before !== undefined && before.some((w) => (w === "(" ? isPunct(T[x + 1], "(") : W(T[x + 1]) === w));
+}
 
 /** Words between INSERT and INTO (MySQL), or after INSERT OR (SQLite conflict resolution). */
 const INSERT_MODIFIERS = new Set(["IGNORE", "LOW_PRIORITY", "DELAYED", "HIGH_PRIORITY", "ABORT", "FAIL", "ROLLBACK"]);
@@ -102,9 +136,19 @@ export class Splitter {
   private merge = false;
   private forceAfter = -1;
 
-  constructor(private readonly T: Token[], dialect: Dialect) {
+  private readonly fnVerbs: Set<string>;
+  /** MySQL `INSERT [INTO] t SET a = 1`: that SET is the insert's, not a statement (completion audit M19). */
+  private readonly insertSet: boolean;
+  /** The dialect's reserved words: a verb outside them may be a column's name (verbOnNewLine). */
+  private readonly reserved: Set<string>;
+
+  /** `text`: what the tokens index, to tell a verb that starts a new line (NEWLINE_VERBS); without it none does. */
+  constructor(private readonly T: Token[], dialect: Dialect, private readonly text = "") {
     this.tsql = !PG_RULES[dialect];
     this.stmt = statementKeywords(dialect);
+    this.fnVerbs = functionVerbs(dialect);
+    this.insertSet = dialect === "mySql";
+    this.reserved = reservedWords(dialect);
   }
 
   private reset(): void {
@@ -126,7 +170,8 @@ export class Splitter {
     const u = W(T[i]);
     this.kind = u;
     switch (u) {
-      case "INSERT": this.insertPending = true; break;
+      // MySQL / SQLite `REPLACE INTO t …` is an insert: its SELECT or SET continues it.
+      case "INSERT": case "REPLACE": this.insertPending = true; break;
       case "UPDATE": this.updateSetPending = true; break;
       case "WITH": this.withPending = true; break;
       case "EXPLAIN": this.explainPending = true; break;
@@ -213,6 +258,9 @@ export class Splitter {
     }
     if (u === "UPDATE" && W(T[i + 1]) === "SET") this.updateSetPending = true;
     else if (u === "SET" && this.updateSetPending) this.updateSetPending = false;
+    // MySQL `INSERT … SET a = 1` takes no query after its SET: a SELECT on the next line is a statement of its own (code
+    // audit 2026-11-26, M16; before, the insert still waited for its SELECT and swallowed it).
+    else if (u === "SET" && this.insertSet && this.insertPending && (this.kind === "INSERT" || this.kind === "REPLACE")) this.insertPending = false;
     return CONT;
   }
 
@@ -221,7 +269,22 @@ export class Splitter {
     const T = this.T;
     const prev = T[i - 1];
     const pu = W(prev);
-    if (isPunct(prev, ",") || CONTINUATION_PREV.has(pu)) return false;
+    if (isPunct(prev, ",")) return false;
+    // `… OR ⏎UPDATE t`, `… IN ⏎DELETE …`: an operand slot left open, as after WHERE (H12) — not CREATE OR ALTER /
+    // REPLACE (T-SQL, PostgreSQL) or FOR … IN SELECT / EXECUTE (PL/pgSQL), which go on.
+    if (CONTINUATION_PREV.has(pu) && !this.slotVerbAfter(i, u, pu)) return false;
+    // MySQL's DESC is ORDER BY's direction mid-statement; first on its line before a table name, it is DESCRIBE (L4),
+    // also after an operand slot left open at the line's end (M21).
+    if (u === "DESC") return this.describeOnNewLine(i);
+    // A name, not a verb (completion audit 2026-11-25, H6): a qualified part (`p.comment`, `e.open`), an operand
+    // (`SELECT comment`, `… AND open`, `= close`), a routine (`CALL refresh(`), a verb-named function (MySQL `IF(`,
+    // `REPLACE(`, `TRUNCATE(`), or MySQL's `DESC`, which mid-statement is ORDER BY's direction.
+    // An operand slot left open at the end of a line (`… WHERE ⏎UPDATE t`, T-SQL `retry: ⏎UPDATE`) does not hold a
+    // NEWLINE_VERBS verb: that line is the next statement (second audit review: the slot swallowed it, so the
+    // completion list and Run current statement took in the next statement's tables).
+    if (ROUTINE_PREV.has(pu) || (isOperandAt(T, i) && !this.verbOnNewLine(i, u))) return false;
+    // A CASE's THEN / ELSE opens no block: `CASE WHEN … THEN TRUNCATE(x, 0)` is the function (M16).
+    if (isPunct(T[i + 1], "(") && this.fnVerbs.has(u) && !(BLOCK_PREV.has(pu) && this.caseDepth === 0)) return false;
     const nu = W(T[i + 1]);
     switch (u) {
       case "SELECT": return !this.insertPending && !this.withPending && !this.explainPending && !this.fromFirst;
@@ -236,7 +299,9 @@ export class Splitter {
         if (pu === "ON" && FK_ACTION.has(nu)) return false;
         if (u === "UPDATE" && pu === "KEY") return false; // MySQL INSERT … ON DUPLICATE KEY UPDATE
         return pu !== "COMMIT";
-      case "SET": return !this.updateSetPending && !this.ddl && pu !== "DELETE" && pu !== "UPDATE";
+      case "SET":
+        if (this.insertSet && this.insertPending && (this.kind === "INSERT" || this.kind === "REPLACE")) return false;
+        return !this.updateSetPending && !this.ddl && pu !== "DELETE" && pu !== "UPDATE";
       case "ALTER": return !(this.ddl && nu === "COLUMN");
       case "DROP": return !(this.ddl && DROP_CONT.has(nu)) && pu !== "COMMIT";
       case "IF": return !OBJECT_KIND_WORDS.has(pu);
@@ -247,6 +312,47 @@ export class Splitter {
       case "COMMIT": case "ROLLBACK": return pu !== "ON";
       default: return true;
     }
+  }
+
+  /**
+   * Token i is a NEWLINE_VERBS verb first on its line, not `UNION DISTINCT`'s query. A verb the dialect does not reserve
+   * (Oracle lexes MERGE, TRUNCATE, CALL, EXEC / EXECUTE as names; PostgreSQL and MySQL reserve some of them only) counts
+   * only when the words after it are that statement's (unreservedVerbAt): it may be a column's name (M16).
+   */
+  private verbOnNewLine(i: number, u: string): boolean {
+    const T = this.T, prev = T[i - 1];
+    if (!this.text || !prev || !NEWLINE_VERBS.has(u)) return false;
+    if (!this.reserved.has(u) && !unreservedVerbAt(T, i)) return false;
+    if (W(prev) === "DISTINCT" && CONTINUATION_PREV.has(W(T[i - 2]))) return false;
+    return this.lineBreakBefore(i);
+  }
+
+  /** After OR / IN (`pu`), token i is a NEWLINE_VERBS verb on the next line, not the statement going on (H12). */
+  private slotVerbAfter(i: number, u: string, pu: string): boolean {
+    const before = W(this.T[i - 2]);
+    if (pu === "OR") return before !== "CREATE" && before !== "INSERT" && this.verbOnNewLine(i, u);
+    if (pu === "IN") return u !== "SELECT" && u !== "WITH" && u !== "EXECUTE" && u !== "VALUES" && this.verbOnNewLine(i, u);
+    return false;
+  }
+
+  /** A line break between token i and the one before it. */
+  private lineBreakBefore(i: number): boolean {
+    const T = this.T, prev = T[i - 1];
+    if (!this.text || !prev) return false;
+    for (let p = prev.end; p < T[i].start; p++) {
+      const ch = this.text.charCodeAt(p);
+      if (ch === 10 || ch === 13) return true;
+    }
+    return false;
+  }
+
+  /**
+   * MySQL `DESC t` first on its line: a name follows (ORDER BY's direction is followed by `,`, LIMIT, the end, …). A
+   * column named NULLS stays a direction's (`DESC NULLS LAST` elsewhere).
+   */
+  private describeOnNewLine(i: number): boolean {
+    const next = this.T[i + 1];
+    return isNameTok(next) && next.upper !== "NULLS" && !NEVER_ALIAS.has(next.upper) && this.lineBreakBefore(i);
   }
 }
 
@@ -259,11 +365,50 @@ function isCtePattern(T: Token[], i: number): boolean {
   return W(n2) === "AS" || isPunct(n2, "(");
 }
 
+/**
+ * Token `i` sits where an operand goes: right after a `.` (`p.comment`; `a.` then EXEC on the next line is an unfinished
+ * name and a new statement), after an operator, or after a word such as SELECT / WHERE / AND (OPERAND_PREV).
+ */
+function isOperandAt(T: Token[], i: number): boolean {
+  const prev = T[i - 1];
+  if (prev?.kind === "operator") {
+    // `SELECT *` / `, *` / `t.*` is a select list's star, which a statement may follow; any other operator wants an operand.
+    if (prev.value !== "*") return true;
+    const before = T[i - 2];
+    return !(W(before) === "SELECT" || W(before) === "DISTINCT" || isPunct(before, ",") || isPunct(before, "."));
+  }
+  return (isPunct(prev, ".") && prev.end === T[i].start) || OPERAND_PREV.has(W(prev));
+}
+
+/**
+ * An unreserved verb (lexed as a name) at token i is followed by its statement's words: MERGE INTO, TRUNCATE [TABLE |
+ * ONLY | CLUSTER] name, CALL name( / name., EXEC / EXECUTE IMMEDIATE or a routine name. A column of that name is followed
+ * by an operator, `,`, IS, AND, FROM, …
+ */
+function unreservedVerbAt(T: Token[], i: number): boolean {
+  const next = T[i + 1], after = T[i + 2];
+  const nu = W(next);
+  const call = isNameTok(next) && (after === undefined || isPunct(after, "(") || isPunct(after, ".") || isPunct(after, ";"));
+  switch (T[i].upper) {
+    case "MERGE": return nu === "INTO";
+    case "TRUNCATE": return nu === "TABLE" || nu === "ONLY" || nu === "CLUSTER" || (isNameTok(next) && (after === undefined || isPunct(after, ";")));
+    case "CALL": return isNameTok(next) && (isPunct(after, "(") || isPunct(after, "."));
+    case "EXEC": case "EXECUTE": return nu === "IMMEDIATE" || call;
+    default: return false;
+  }
+}
+
 function isAnchorAt(T: Token[], j: number): boolean {
   const prev = T[j - 1];
   const pu = W(prev);
   if (isPunct(prev, ",") || CONTINUATION_PREV.has(pu)) return false;
+  // MySQL `SELECT IF(…)`, `= TRUNCATE(x, 2)`, `t.create`: a function or a name, not a statement to restart at.
+  if (isOperandAt(T, j)) return false;
   const u = T[j].upper;
+  // `TRUNCATE (` is MySQL's function (no TRUNCATE statement has a parenthesis next), and `THEN IF (` / `ELSE IF (` may
+  // be MySQL's IF() in a CASE: the restart point moves back further, which is always safe (M16: the split began at the
+  // function, and the statement lost its FROM).
+  if (isPunct(T[j + 1], "(") && (u === "TRUNCATE" || (u === "IF" && (pu === "THEN" || pu === "ELSE")))) return false;
   if (u === "IF") return !OBJECT_KIND_WORDS.has(pu);
   return true;
 }
@@ -303,9 +448,9 @@ export interface StmtLoc {
  * treated as a neutral word). Searches backward for a safe restart point (';', GO, or an anchor keyword at the
  * outermost relative paren depth), then splits forward to the end of the enclosing statement.
  */
-export function locateStatement(T: Token[], k: number, skip: number, dialect: Dialect): StmtLoc {
+export function locateStatement(T: Token[], k: number, skip: number, dialect: Dialect, text = ""): StmtLoc {
   const s0 = restartPoint(T, k);
-  const sp = new Splitter(T, dialect);
+  const sp = new Splitter(T, dialect, text);
   let start = -1, end = -1, kind = "";
   let afterCursor = false;
   const n = T.length;
@@ -561,6 +706,9 @@ interface Ref extends TableInScope {
   scopeBranch?: number;
   /** A derived table whose select list is `*`: the "(" of its query, whose own tables give its columns. */
   starOpen?: number;
+  /** A derived table: the token indexes of its "(" and ")" (inside them it is not a source of itself). */
+  derivedOpen?: number;
+  derivedClose?: number;
   /** A named reference: the token index of each written part of its name (`db..t` has two), for semantic colours. */
   partAt?: number[];
   /** The name is called: `dbo.f(1)`, `o.x.nodes(…)` (a column's method on T-SQL APPLY), Oracle `pkg.f(…)`. */
@@ -583,13 +731,20 @@ interface InsertInfo {
   source: number;
 }
 
-type FrameFn = "" | "cast" | "convert" | "call" | "values" | "colDefs" | "insertCols" | "execCall" | "sub";
-/** `cases`: CASE expressions open in this frame; their WHEN / THEN / ELSE / END never change the clause. */
-interface WFrame { clause: Clause; fn: FrameFn; open: number; execKw: number; cases?: number }
+/**
+ * `convert`: T-SQL `CONVERT(type, expr)`, a type first. `convertExpr`: MySQL `CONVERT(expr, type)` and
+ * `CONVERT(expr USING charset)`, an expression first (completion audit M19).
+ */
+type FrameFn = "" | "cast" | "convert" | "convertExpr" | "call" | "values" | "colDefs" | "insertCols" | "execCall" | "sub";
+/**
+ * `cases`: CASE expressions open in this frame; their WHEN / THEN / ELSE / END never change the clause. `charset`: after
+ * `CONVERT(expr USING`, where a character set name comes (no table, column or keyword).
+ */
+interface WFrame { clause: Clause; fn: FrameFn; open: number; execKw: number; cases?: number; charset?: boolean }
 
 class Analyzer {
   readonly pm: Int32Array;
-  readonly ctes: { name: string; columns?: string[]; quoted?: boolean }[] = [];
+  readonly ctes: { name: string; columns?: string[]; quotedColumns?: string[]; quoted?: boolean }[] = [];
   /** The token index of each CTE's name in its definition, in `ctes` order. */
   readonly cteAt: number[] = [];
   /** CTE name (lower case) → the "(" of its body, for a body whose select list is `*`. */
@@ -602,6 +757,12 @@ class Analyzer {
   private skipUntil = -1;
   /** While collectRefs walks: each enclosing level's "(" and its set-operation branch (root first). */
   private scopes: { open: number; branch: number }[] = [];
+  /**
+   * The "(" of each query level that sees nothing outside it: a derived table of a FROM list that is not LATERAL (nor a
+   * T-SQL / Oracle APPLY), and a CTE body. `JOIN (SELECT | FROM customers) d` offered the outer query's `o.*`, which
+   * no engine accepts there (completion audit 2026-11-25, M1, found in tier 1 on every engine).
+   */
+  private readonly sealed = new Set<number>();
   readonly pg: boolean;
 
   constructor(
@@ -648,8 +809,11 @@ class Analyzer {
 
   // ---- projections ----
 
-  /** Column names projected by the SELECT at `s` up to (exclusive) `e`; undefined if unknown (`*`). */
-  projection(s: number, e: number): string[] | undefined {
+  /**
+   * Column names projected by the SELECT at `s` up to (exclusive) `e`; undefined if unknown (`*`). The ones written
+   * quoted are added to `quoted` (TableInScope.quotedColumns).
+   */
+  projection(s: number, e: number, quoted?: string[]): string[] | undefined {
     const T = this.T;
     let i = s + 1;
     const w0 = W(T[i]);
@@ -665,29 +829,37 @@ class Analyzer {
     for (; i < e; i++) {
       const t = T[i];
       if (isPunct(t, "(")) { const m = this.match(i); if (m < 0) { i = e; break; } i = m; continue; }
-      if (t.kind === "keyword" && PROJECTION_END.has(t.upper)) break;
+      // A clause word ends the list, except as a label right after AS (`SELECT 1 AS order FROM …`).
+      if (t.kind === "keyword" && PROJECTION_END.has(t.upper) && W(T[i - 1]) !== "AS") break;
       if (isPunct(t, ",")) { items.push([itemStart, i]); itemStart = i + 1; }
     }
     items.push([itemStart, i]);
     const cols: string[] = [];
     for (const [x, y] of items) {
       if (this.skip >= x && this.skip < y) continue;
+      this.itemQuoted = false;
       const nm = this.itemName(x, y);
       if (nm === "*") return undefined;
-      if (nm) cols.push(nm);
+      if (nm) { cols.push(nm); if (this.itemQuoted) quoted?.push(nm); }
     }
     return cols;
   }
+
+  /** Set by itemName: the name it returned was a quoted identifier token. */
+  private itemQuoted = false;
 
   private itemName(x: number, y: number): string | null {
     const T = this.T;
     if (y <= x) return null;
     const last = T[y - 1];
+    this.itemQuoted = last.kind === "qident";
     if (isOp(last, "*") && (y - 1 === x || isPunct(T[y - 2], "."))) return "*";
-    if (y - x >= 2 && W(T[y - 2]) === "AS" && (isNameTok(last) || last.kind === "string")) {
-      return last.kind === "string" ? this.text.slice(last.start + 1, last.end - 1) : last.value;
+    // After AS any word is a label (PostgreSQL: `SELECT 1 AS order`); a string is MySQL's and SQLite's `AS 'x'`.
+    if (y - x >= 2 && W(T[y - 2]) === "AS" && (isNameTok(last) || last.kind === "string" || last.kind === "keyword")) {
+      if (last.kind === "string") return this.text.slice(last.start + 1, last.end - 1);
+      return last.kind === "keyword" ? this.text.slice(last.start, last.end) : last.value;
     }
-    if (!this.pg && y - x >= 3 && isNameTok(T[x]) && isOp(T[x + 1], "=")) return T[x].value;
+    if (!this.pg && y - x >= 3 && isNameTok(T[x]) && isOp(T[x + 1], "=")) { this.itemQuoted = T[x].kind === "qident"; return T[x].value; }
     let chain = true;
     for (let z = x; z < y; z++) {
       const even = (z - x) % 2 === 0;
@@ -705,7 +877,7 @@ class Analyzer {
    * Aliases the select list of the cursor's query block defines (`expr AS a`, `expr a`): ORDER BY may name them, and
    * GROUP BY too on PostgreSQL, MySQL, SQLite and DuckDB.
    */
-  selectAliases(open: number, cursor: number): string[] {
+  selectAliases(open: number, cursor: number): { name: string; quoted: boolean }[] {
     const T = this.T;
     let s = -1;
     for (let i = Math.max(this.a, open + 1); i <= cursor; i++) {
@@ -713,23 +885,31 @@ class Analyzer {
       if (W(T[i]) === "SELECT") s = i;
     }
     if (s < 0) return [];
-    const out: string[] = [];
+    // Whether each was delimited, kept with it: `AS "Total"` is Total exactly, `AS Total` folds (code audit R3-1).
+    const out: { name: string; quoted: boolean }[] = [];
     let itemStart = s + 1;
     const flush = (y: number) => {
       const x = itemStart;
       if (y - x < 2) return;
       const last = T[y - 1];
       const p = T[y - 2];
+      // After AS a keyword is a label too (PostgreSQL `SELECT total AS order`): written as it is (M21).
+      if (W(p) === "AS" && last.kind === "keyword") {
+        const label = this.text.slice(last.start, last.end);
+        if (label && !out.some((a) => a.name === label)) out.push({ name: label, quoted: false });
+        return;
+      }
       if (!isNameTok(last)) return;
       // `expr AS a` or `expr a` (a name right after an expression, not after a dot or an operator).
       if (W(p) === "AS" || (!isPunct(p, ".") && p.kind !== "operator" && !isPunct(p, ",") && y - x >= 2 && !(y - x === 2 && W(T[x]) === "DISTINCT"))) {
-        if (!out.includes(last.value)) out.push(last.value);
+        if (!out.some((a) => a.name === last.value)) out.push({ name: last.value, quoted: last.kind === "qident" });
       }
     };
     for (let i = s + 1; i <= this.b && i < T.length; i++) {
       const t = T[i];
       if (isPunct(t, "(")) { const m = this.match(i); if (m < 0) break; i = m; continue; }
-      if (t.kind === "keyword" && PROJECTION_END.has(t.upper)) { flush(i); return out; }
+      // A clause word right after AS is a label, not the select list's end (`SELECT 1 AS order, b`, M21).
+      if (t.kind === "keyword" && PROJECTION_END.has(t.upper) && W(T[i - 1]) !== "AS") { flush(i); return out; }
       if (isPunct(t, ",")) { flush(i); itemStart = i + 1; }
     }
     flush(Math.min(this.b + 1, T.length));
@@ -758,7 +938,7 @@ class Analyzer {
     for (; i <= this.b; i++) {
       const t = T[i];
       if (isPunct(t, "(")) { const m = this.match(i); if (m < 0) break; i = m; continue; }
-      if (t.kind === "keyword" && PROJECTION_END.has(t.upper)) break;
+      if (t.kind === "keyword" && PROJECTION_END.has(t.upper) && W(T[i - 1]) !== "AS") break;
       if (isPunct(t, ",")) { items.push([itemStart, i]); itemStart = i + 1; }
     }
     if (itemStart < i) items.push([itemStart, i]);
@@ -771,7 +951,7 @@ class Analyzer {
       let end = x + 1;
       while (end + 1 < y && isPunct(T[end], ".") && isNameTok(T[end + 1])) end += 2;
       const alias = end === y || (end + 1 === y && isNameTok(T[end])) ||
-        (end + 2 === y && W(T[end]) === "AS" && isNameTok(T[end + 1]));
+        (end + 2 === y && W(T[end]) === "AS" && (isNameTok(T[end + 1]) || T[end + 1].kind === "keyword"));
       if (!alias) continue;
       const raw = this.text.slice(T[x].start, T[end - 1].end);
       if (!cols.includes(raw)) cols.push(raw);
@@ -795,31 +975,34 @@ class Analyzer {
       this.cteAt.push(i); // every path below records this CTE in `ctes`
       i++;
       let cols: string[] | undefined;
+      const qcols: string[] = [];
       if (isPunct(T[i], "(")) {
         const m = this.match(i);
         cols = [];
         const e = m < 0 ? this.b + 1 : m;
-        for (let x = i + 1; x < e; x++) if (isNameTok(T[x]) && x !== this.skip) cols.push(T[x].value);
+        for (let x = i + 1; x < e; x++) if (isNameTok(T[x]) && x !== this.skip) { cols.push(T[x].value); if (T[x].kind === "qident") qcols.push(T[x].value); }
         i = e + 1;
       }
-      if (W(T[i]) !== "AS") { this.ctes.push({ name, columns: cols, ...(quoted ? { quoted } : {}) }); return; }
+      const push = () => this.ctes.push({ name, columns: cols, ...(qcols.length ? { quotedColumns: qcols } : {}), ...(quoted ? { quoted } : {}) });
+      if (W(T[i]) !== "AS") { push(); return; }
       i++;
       if (W(T[i]) === "NOT") i++;
       if (W(T[i]) === "MATERIALIZED") i++;
-      if (!isPunct(T[i], "(")) { this.ctes.push({ name, columns: cols, ...(quoted ? { quoted } : {}) }); return; }
+      if (!isPunct(T[i], "(")) { push(); return; }
+      this.sealed.add(i); // a CTE body never sees the statement it belongs to
       const m = this.match(i);
       const e = m < 0 ? this.b + 1 : m;
       if (!cols) {
         for (let x = i + 1; x < e; x++) {
           if (isPunct(T[x], "(")) { const mm = this.match(x); if (mm < 0) break; x = mm; continue; }
           if (W(T[x]) === "SELECT") {
-            cols = this.projection(x, e);
+            cols = this.projection(x, e, qcols);
             if (!cols) this.cteStar.set(name.toLowerCase(), i);
             break;
           }
         }
       }
-      this.ctes.push({ name, columns: cols, ...(quoted ? { quoted } : {}) });
+      push();
       if (m < 0) return;
       i = m + 1;
       if (!isPunct(T[i], ",")) return;
@@ -853,26 +1036,31 @@ class Analyzer {
     this.setInsert(i, ref ? { name: ref.name, schema: ref.schema } : undefined, targetEnd, colsOpen);
   }
 
-  private parseAlias(n: number): { alias?: string; aliasQuoted?: boolean; cols?: string[]; next: number } {
+  private parseAlias(n: number): { alias?: string; aliasQuoted?: boolean; cols?: string[]; qcols?: string[]; next: number } {
     const T = this.T;
     let x = n;
     let viaAs = false;
     if (W(this.tok(x)) === "AS") { x++; viaAs = true; }
     const t = this.tok(x);
     if (!t || x > this.b || !(isNameTok(t) || (viaAs && t.kind === "keyword"))) return { next: n };
-    if (!viaAs && t.kind === "ident" && NEVER_ALIAS.has(t.upper)) return { next: n };
+    if ((!viaAs && neverAlias(t, this.dialect)) || clauseBefore(T, x, this.dialect)) return { next: n };
     const alias = t.value;
     const aliasQuoted = t.kind === "qident";
     x++;
     let cols: string[] | undefined;
+    let qcols: string[] | undefined;
     if (isPunct(T[x], "(") && x <= this.b) {
       const m = this.match(x);
       const e = m < 0 ? this.b + 1 : m;
       cols = [];
-      for (let y = x + 1; y < e; y++) if (isNameTok(T[y]) && y !== this.skip) cols.push(T[y].value);
+      for (let y = x + 1; y < e; y++) {
+        if (!isNameTok(T[y]) || y === this.skip) continue;
+        cols.push(T[y].value);
+        if (T[y].kind === "qident") (qcols ??= []).push(T[y].value);
+      }
       x = e + 1;
     }
-    return { alias, ...(aliasQuoted ? { aliasQuoted } : {}), cols, next: x };
+    return { alias, ...(aliasQuoted ? { aliasQuoted } : {}), cols, ...(qcols ? { qcols } : {}), next: x };
   }
 
   /** One value of a temporal clause (`'2024-01-01'`, `@d`, `SYSUTCDATETIME()`): the index after it. */
@@ -968,15 +1156,20 @@ class Analyzer {
     if (j > this.b || j === this.skip) return undefined;
     const first = T[j];
     if (isPunct(first, "(")) {
+      const inner = W(T[j + 1]);
+      // A derived table's query sees only its own sources unless LATERAL (or APPLY) lets it see the items before it;
+      // sealed also while its ")" or alias is not typed yet. DuckDB makes LATERAL optional (it detects the reference).
+      const lateral = this.dialect === "duckDb" || W(T[j - 1]) === "LATERAL" || W(T[j - 1]) === "APPLY";
+      if (!lateral && (inner === "SELECT" || inner === "WITH" || inner === "VALUES")) this.sealed.add(j);
       const m = this.match(j);
       if (m < 0) return undefined;
-      const inner = W(T[j + 1]);
       let cols: string[] | undefined;
-      if (inner === "SELECT") cols = this.projection(j + 1, m);
+      const qcols: string[] = [];
+      if (inner === "SELECT") cols = this.projection(j + 1, m, qcols);
       else if (inner === "WITH") {
         for (let x = j + 2; x < m; x++) {
           if (isPunct(T[x], "(")) { const mm = this.match(x); if (mm < 0) break; x = mm; continue; }
-          if (W(T[x]) === "SELECT") { cols = this.projection(x, m); break; }
+          if (W(T[x]) === "SELECT") { cols = this.projection(x, m, qcols); break; }
         }
       } else if (inner !== "VALUES") {
         if (isNameTok(T[j + 1])) this.parseRef(j + 1);
@@ -988,8 +1181,12 @@ class Analyzer {
         name: al.alias, alias: al.alias, isCte: false, isDerived: true, columns: al.cols ?? cols,
         offset: first.start, endIdx: al.next - 1, role,
       };
+      const quotedCols = al.cols ? al.qcols : qcols;
+      if (quotedCols?.length) ref.quotedColumns = quotedCols;
       if (al.aliasQuoted) { ref.aliasQuoted = true; ref.quoted = true; }
       if (inner === "SELECT" && !cols && !al.cols) ref.starOpen = j;
+      ref.derivedOpen = j;
+      ref.derivedClose = m;
       this.tagScope(ref);
       this.refs.push(ref);
       return ref;
@@ -1024,7 +1221,7 @@ class Analyzer {
     }
     if (!this.pg && W(T[n]) === "WITH" && isPunct(T[n + 1], "(")) { const m = this.match(n + 1); n = m < 0 ? n + 2 : m + 1; }
     if (!this.pg && W(T[n]) === "FOR" && W(T[n + 1]) === "SYSTEM_TIME") n = this.skipSystemTime(n + 2);
-    const al = noCall && role === "insert" ? { next: n } as { alias?: string; aliasQuoted?: boolean; cols?: string[]; next: number } : this.parseAlias(n);
+    const al = noCall && role === "insert" ? { next: n } as { alias?: string; aliasQuoted?: boolean; cols?: string[]; qcols?: string[]; next: number } : this.parseAlias(n);
     let end = al.next - 1;
     if (!this.pg && W(T[al.next]) === "WITH" && isPunct(T[al.next + 1], "(")) {
       const m = this.match(al.next + 1);
@@ -1042,7 +1239,7 @@ class Analyzer {
       endIdx: Math.max(last, end),
       role,
     };
-    if (al.cols) ref.columns = al.cols;
+    if (al.cols) { ref.columns = al.cols; if (al.qcols) ref.quotedColumns = al.qcols; }
     if (al.aliasQuoted) ref.aliasQuoted = true;
     if (quoted[parts.length - 1]) ref.quoted = true;
     if (parts.length >= 2 && quoted[parts.length - 2]) ref.schemaQuoted = true;
@@ -1147,6 +1344,7 @@ class Analyzer {
           if (W(T[i + 1]) === "INTO" && !CONTINUATION_PREV.has(W(T[i - 1])) && W(T[i - 1]) !== "OR") this.collectInsert(i);
           break;
         case "INSERT": {
+          if (this.dialect === "mySql" && isPunct(T[i + 1], "(") && !this.mergeTarget) break; // INSERT(str, …): the string function
           if (this.mergeTarget) {
             const colsOpen = isPunct(T[i + 1], "(") ? i + 1 : -1;
             this.setInsert(i, { name: this.mergeTarget.name, schema: this.mergeTarget.schema }, i, colsOpen);
@@ -1180,7 +1378,7 @@ class Analyzer {
       for (const r of this.refs) {
         if (r.isDerived || r.schema !== undefined) continue;
         const c = this.ctes.find((x) => x.name.toLowerCase() === r.name.toLowerCase());
-        if (c) { r.isCte = true; if (!r.columns) r.columns = c.columns; }
+        if (c) { r.isCte = true; if (!r.columns) { r.columns = c.columns; if (c.quotedColumns) r.quotedColumns = c.quotedColumns; } }
       }
     }
   }
@@ -1204,11 +1402,14 @@ class Analyzer {
   }
 
   /**
-   * The query levels the cursor (after token `k`) can see: its own and every enclosing one, each in the set-operation
-   * branch the cursor is in. A subquery sees the outer query's tables (correlation); the outer query never sees a
+   * The query levels the cursor (after token `k`) can see, outermost first: its own and every enclosing one, each in the
+   * set-operation branch the cursor is in. A subquery in an expression sees the outer query's tables (correlation); a
+   * sealed level (a derived table that is not LATERAL, a CTE body) does not see the query whose FROM (or WITH) holds it
+   * — nor a parenthesized join around it — but still the queries around that one: `EXISTS (SELECT 1 FROM (SELECT … c.|)
+   * d)` names the outer `c` (second audit review: every level outside was dropped). The outer query never sees a
    * subquery's, a CTE body's or another UNION branch's.
    */
-  private visibleScopes(k: number): Map<number, number> {
+  private visibleScopes(k: number): { open: number; branch: number }[] {
     const T = this.T;
     const stack: { open: number; branch: number }[] = [{ open: this.a - 1, branch: 0 }];
     for (let i = this.a; i <= Math.min(k, this.b); i++) {
@@ -1218,7 +1419,16 @@ class Analyzer {
       else if (isPunct(t, ")")) { if (stack.length > 1) stack.pop(); }
       else if (SET_OPERATORS.has(W(t))) stack[stack.length - 1].branch++;
     }
-    return new Map(stack.map((s) => [s.open, s.branch]));
+    const out: { open: number; branch: number }[] = [];
+    let hide = false;
+    for (let s = stack.length - 1; s >= 0; s--) {
+      const level = stack[s];
+      if (!hide || s === stack.length - 1) out.push(level);
+      // Hidden up to and including the next query level out (its FROM items are the sealed level's siblings).
+      else if (s === 0 || this.opensQuery(level.open)) hide = false;
+      if (this.sealed.has(level.open)) hide = true;
+    }
+    return out.reverse();
   }
 
   /**
@@ -1226,10 +1436,13 @@ class Analyzer {
    * SELECT INTO target is not a source (`INSERT INTO t (…) SELECT | FROM s` reads s).
    */
   tables(k = this.b, exprClause = false): TableInScope[] {
-    const visible = this.visibleScopes(k);
-    const depth = new Map([...visible.keys()].map((open, i) => [open, i]));
+    const levels = this.visibleScopes(k);
+    const visible = new Map(levels.map((s) => [s.open, s.branch]));
+    const depth = new Map(levels.map((s, i) => [s.open, i]));
     const refs = this.refs.filter((r) => {
       if (r.scopeOpen !== undefined && visible.get(r.scopeOpen) !== r.scopeBranch) return false;
+      // A lateral derived table (LATERAL, APPLY, any on DuckDB) sees what is before it, never itself.
+      if (r.derivedOpen !== undefined && r.derivedClose !== undefined && k >= r.derivedOpen && k < r.derivedClose) return false;
       if (exprClause && (r.role === "into" || (r.role === "insert" && this.insert && this.insert.source >= 0 && k >= this.insert.source))) return false;
       return true;
     });
@@ -1247,7 +1460,7 @@ class Analyzer {
       if (r.schema !== undefined) t.schema = r.schema;
       if (r.database !== undefined) t.database = r.database;
       if (r.alias !== undefined) t.alias = r.alias;
-      if (r.columns !== undefined) t.columns = r.columns;
+      if (r.columns !== undefined) { t.columns = r.columns; if (r.quotedColumns) t.quotedColumns = r.quotedColumns; }
       if (r.quoted) t.quoted = true;
       if (r.schemaQuoted) t.schemaQuoted = true;
       if (r.aliasQuoted) t.aliasQuoted = true;
@@ -1258,7 +1471,7 @@ class Analyzer {
           const s: TableInScope = { name: x.name, isCte: x.isCte, isDerived: x.isDerived };
           if (x.schema !== undefined) s.schema = x.schema;
           if (x.database !== undefined) s.database = x.database;
-          if (x.columns) s.columns = x.columns;
+          if (x.columns) { s.columns = x.columns; if (x.quotedColumns) s.quotedColumns = x.quotedColumns; }
           if (x.quoted) s.quoted = true;
           if (x.schemaQuoted) s.schemaQuoted = true;
           return s;
@@ -1268,6 +1481,44 @@ class Analyzer {
       out.push(t);
     }
     return out;
+  }
+
+  /**
+   * The table a SET list before `at` writes, among `tables` (tables()): the nearest MERGE or UPDATE target, else the
+   * INSERT's (`ON CONFLICT … DO UPDATE SET`, MySQL `ON DUPLICATE KEY UPDATE`, `INSERT … SET`). An UPDATE that names a
+   * FROM alias (T-SQL `UPDATE o SET … FROM orders o`) writes that table. Undefined for a MySQL multi-table UPDATE, which
+   * may set a column of any of its tables.
+   */
+  setTarget(tables: TableInScope[], at: number, k = this.b): TableInScope | undefined {
+    // A ref the cursor's level cannot see (a sealed CTE body's `UPDATE staging`) is no target, not even through an
+    // outer alias of the same name (`FROM customers staging`, M22): the alias fallback is for T-SQL's `UPDATE o … FROM
+    // orders o` at the same level.
+    const visible = new Map(this.visibleScopes(k).map((s) => [s.open, s.branch]));
+    const sees = (ref: Ref) => ref.scopeOpen === undefined || visible.get(ref.scopeOpen) === ref.scopeBranch;
+    const resolve = (ref: Ref) => tables.find((t) => t.offset === ref.offset && t.name === ref.name)
+      ?? (ref.alias === undefined && ref.schema === undefined && sees(ref) ? tables.find((t) => t.alias?.toLowerCase() === ref.name.toLowerCase()) : undefined);
+    // Only an UPDATE / MERGE the cursor's level sees: one inside a CTE body (`WITH u AS (UPDATE …) INSERT … DO UPDATE
+    // SET |`) writes another table (second audit review).
+    let r: Ref | undefined;
+    let target: TableInScope | undefined;
+    for (const x of this.refs) {
+      if ((x.role === "update" || x.role === "merge") && x.offset < at && (!r || x.offset > r.offset)) {
+        const t = resolve(x);
+        if (t) { r = x; target = t; }
+      }
+    }
+    if (r && r.role === "update" && this.dialect === "mySql") return undefined;
+    if (r) return target;
+    if (!this.insert?.target) return undefined;
+    // The INSERT the cursor's level sees: one in a CTE body before it (`WITH s AS (INSERT …) INSERT … DO UPDATE SET |`)
+    // is not in `tables`, and the first insert ref found was that one (M16).
+    for (let i = this.refs.length - 1; i >= 0; i--) {
+      const x = this.refs[i];
+      if (x.role !== "insert") continue;
+      const t = resolve(x);
+      if (t) return t;
+    }
+    return undefined;
   }
 
   // ---- clause at the cursor ----
@@ -1292,10 +1543,13 @@ class Analyzer {
           const pu = W(prev);
           const f: WFrame = { clause: top.clause, fn: "sub", open: i, execKw: -1 };
           if (pu === "CAST" || pu === "TRY_CAST") { f.fn = "cast"; if (TABLE_CLAUSES.has(top.clause)) f.clause = "select"; }
-          else if (pu === "CONVERT" || pu === "TRY_CONVERT") { f.fn = "convert"; f.clause = "declare"; }
+          else if ((pu === "CONVERT" || pu === "TRY_CONVERT") && this.dialect === "tsql") { f.fn = "convert"; f.clause = "declare"; }
+          else if (pu === "CONVERT" && this.dialect === "mySql") { f.fn = "convertExpr"; f.clause = "select"; }
           else if (this.insert && i === this.insert.colsOpen) { f.fn = "insertCols"; f.clause = "insertColumns"; }
           else if (top.clause === "values" && top.fn !== "values" && (pu === "VALUES" || isPunct(prev, ","))) { f.fn = "values"; f.clause = "values"; }
-          else if (top.clause === "exec" && top.execKw >= 0 && this.pg) { f.fn = "execCall"; f.clause = "execArgs"; f.execKw = top.execKw; }
+          // `CALL p(…)` (PostgreSQL, MySQL, Oracle, DuckDB) and Oracle's `EXEC p(…)`: the routine's arguments, never
+          // routine names (completion audit M19). T-SQL's EXEC takes no parentheses.
+          else if (top.clause === "exec" && top.execKw >= 0 && (this.pg || this.dialect !== "tsql")) { f.fn = "execCall"; f.clause = "execArgs"; f.execKw = top.execKw; }
           else if (pu === "TABLE" || (createTable && st.length === 1 && !rootParenSeen)) { f.fn = "colDefs"; f.clause = "unknown"; }
           // ON CONFLICT (…): the insert target's columns (it is in scope, like ON DUPLICATE KEY UPDATE).
           else if (pu === "CONFLICT") { f.fn = "sub"; f.clause = "set"; }
@@ -1312,6 +1566,7 @@ class Analyzer {
           }
         } else if (t.value === ",") {
           if (top.fn === "convert") top.clause = "select";
+          else if (top.fn === "convertExpr") top.clause = "declare";
           // `JOIN t ON a = b, |`: the comma ends the join condition and lists the next table.
           else if (top.clause === "on" && !merge && (top.fn === "" || top.fn === "sub") && st.length === 1) top.clause = "from";
           else if (st.length === 1 && stmtKind === "DECLARE") top.clause = "declare";
@@ -1342,7 +1597,10 @@ class Analyzer {
         case "ON":
           if (TABLE_CLAUSES.has(top.clause) || top.clause === "on" || merge) top.clause = W(next) === "CONFLICT" ? "unknown" : "on";
           break;
-        case "USING": top.clause = isPunct(next, "(") && W(T[i + 2]) !== "SELECT" ? "on" : "from"; break;
+        case "USING":
+          if (top.fn === "convertExpr") { top.clause = "unknown"; top.charset = true; break; }
+          top.clause = isPunct(next, "(") && W(T[i + 2]) !== "SELECT" ? "on" : "from";
+          break;
         case "WHERE": top.clause = "where"; break;
         case "GROUP": top.clause = "groupBy"; break;
         case "ORDER": top.clause = "orderBy"; break;
@@ -1353,7 +1611,10 @@ class Analyzer {
           else if (this.updateOk(i)) top.clause = "update";
           break;
         case "SET": top.clause = "set"; break;
-        case "INSERT": top.clause = "insertInto"; break;
+        case "INSERT":
+          // MySQL's INSERT(str, pos, len, new) is a string function; MERGE's INSERT (cols) stays an insert.
+          if (!(this.dialect === "mySql" && isPunct(next, "(") && !merge)) top.clause = "insertInto";
+          break;
         case "REPLACE": if (W(next) === "INTO" && W(T[i - 1]) !== "OR") top.clause = "insertInto"; break;
         case "INTO": top.clause = W(T[i - 1]) === "MERGE" ? "from" : "insertInto"; break;
         case "VALUES": top.clause = "values"; break;
@@ -1407,10 +1668,19 @@ export function scan(text: string, offset: number, dialect: Dialect): CursorCont
   const src = typeof text === "string" ? text : "";
   const off = Math.max(0, Math.min(Number.isFinite(offset) ? offset : 0, src.length));
   try {
-    return scanImpl(src, off, knownDialect(dialect), 0);
+    const ctx = scanImpl(src, off, knownDialect(dialect), 0);
+    if (inNumberAt(src, off, knownDialect(dialect))) ctx.inNumber = true;
+    return ctx;
   } catch {
     return emptyContext(off);
   }
+}
+
+/** The cursor is inside or right after a number token (`> 1.|`, `1.5|`), from the cached token stream. */
+function inNumberAt(text: string, offset: number, dialect: Dialect): boolean {
+  const T = getStream(text, dialect).code;
+  const cur = T[lastStartingBefore(T, offset)];
+  return cur !== undefined && cur.kind === "number" && offset > cur.start && offset <= cur.end;
 }
 
 function stmtBounds(T: Token[], loc: StmtLoc, fallback: number): { start: number; end: number } {
@@ -1432,12 +1702,12 @@ function scanImpl(text: string, offset: number, dialect: Dialect, depth: number)
       const be = cur.open ? cur.end : cur.end - cur.tag;
       if ((pu === "AS" || pu === "DO") && offset >= bs && offset <= be) return scanBody(text, T, idx, bs, be, offset, depth, dialect);
     }
-    return inStringContext(T, idx, offset, dialect);
+    return inStringContext(text, T, idx, offset, dialect);
   }
   const ci = lastStartingBefore(stream.comments, offset);
   if (ci >= 0) {
     const c = stream.comments[ci];
-    if (offset < c.end || (offset === c.end && (c.line || c.open))) return inStringContext(T, idx, offset, dialect);
+    if (offset < c.end || (offset === c.end && (c.line || c.open))) return inStringContext(text, T, idx, offset, dialect);
   }
 
   // The word being typed
@@ -1482,7 +1752,7 @@ function scanImpl(text: string, offset: number, dialect: Dialect, depth: number)
     }
   }
 
-  const loc = locateStatement(T, k, pi, dialect);
+  const loc = locateStatement(T, k, pi, dialect, text);
   const ctx: CursorContext = {
     clause: "unknown",
     statementStart: loc.start < 0 || loc.afterCursor ? prefixStart : T[loc.start].start,
@@ -1572,7 +1842,7 @@ function scanImpl(text: string, offset: number, dialect: Dialect, depth: number)
         if (x === pi) continue;
         const t = T[x];
         if (!an.pg && t.kind === "variable" && isOp(T[x + 1], "=")) used.push(t.value);
-        else if (an.pg && isNameTok(t) && isOp(T[x + 1], "=>")) used.push(t.value);
+        else if (isNameTok(t) && isOp(T[x + 1], "=>")) used.push(t.value);
       }
       ctx.execArgsUsed = used;
       if (isOp(prev, "=") || isOp(prev, "=>")) slot = "argValue";
@@ -1594,15 +1864,28 @@ function scanImpl(text: string, offset: number, dialect: Dialect, depth: number)
     if (pu === "AS") slot = "alias";
     // A clause word the lexer reads as a name (Oracle: JOIN, LEFT, USING are not reserved there) starts the next
     // reference; it never completes one.
-    else if ((isNameTok(prev) && !(prev.kind === "ident" && NEVER_ALIAS.has(prev.upper))) || prev.kind === "variable" || isPunct(prev, ")")) slot = "afterReference";
+    else if ((isNameTok(prev) && !neverAlias(prev, dialect)) || prev.kind === "variable" || isPunct(prev, ")")) slot = "afterReference";
   } else if (qualifier === undefined && slot === undefined && pu === "AS" && frame.fn !== "cast" &&
     (clause === "select" || clause === "where" || clause === "on" || clause === "groupBy" || clause === "orderBy" || clause === "having")) {
     slot = "alias";
   }
 
+  // MySQL `CONVERT(expr USING |)`: a character set's name comes, nothing from the schema.
+  if (frame.charset && qualifier === undefined) slot = "name";
+
   ctx.clause = clause;
   // In an expression an INSERT / SELECT INTO target is not a source of rows.
   if (EXPRESSION_CLAUSES.has(clause)) ctx.tablesInScope = an.tables(k, true);
+  // A SET list's target (`SET |`, `SET a = 1, |`, MySQL `ON DUPLICATE KEY UPDATE |`) is a column of the written table,
+  // named bare: PostgreSQL, SQLite and DuckDB reject `SET o.status`, and no engine sets another source's column (an
+  // UPDATE … FROM's, a MERGE's USING, an INSERT … SELECT's) — completion audit M9. The value after `=` keeps every source.
+  if (clause === "set" && qualifier === undefined && slot === undefined && frame.fn === "" && setTargetSlot(T, k)) {
+    const target = an.setTarget(ctx.tablesInScope, T[k].start, k);
+    if (target) {
+      ctx.tablesInScope = [target];
+      ctx.setTarget = true;
+    }
+  }
   if (clause === "groupBy") {
     ctx.nonAggregatedColumns = an.nonAggregatedProjections(frame.open, k);
   }
@@ -1613,6 +1896,17 @@ function scanImpl(text: string, offset: number, dialect: Dialect, depth: number)
   if (slot) ctx.slot = slot;
   if (dialect === "tsql") attachTempColumns(ctx.tablesInScope, text, T, k, dialect, stream.marks);
   return ctx;
+}
+
+/**
+ * Token `k` (the one before the word being typed) opens a SET list's target: SET itself, a `,` between assignments, or
+ * MySQL's `ON DUPLICATE KEY UPDATE`. Anything else (`=`, an operator, a name) puts the cursor in a value.
+ */
+function setTargetSlot(T: Token[], k: number): boolean {
+  const t = T[k];
+  if (isPunct(t, ",")) return true;
+  const u = W(t);
+  return u === "SET" || (u === "UPDATE" && W(T[k - 1]) === "KEY");
 }
 
 /** Words that start a table constraint or index in a column list, not a column. */
@@ -1707,11 +2001,11 @@ function inPgDeclareSection(T: Token[], s: number): boolean {
   return false;
 }
 
-function inStringContext(T: Token[], idx: number, offset: number, dialect: Dialect): CursorContext {
+function inStringContext(text: string, T: Token[], idx: number, offset: number, dialect: Dialect): CursorContext {
   const ctx = emptyContext(offset);
   ctx.inStringOrComment = true;
   try {
-    const loc = locateStatement(T, idx, -1, dialect);
+    const loc = locateStatement(T, idx, -1, dialect, text);
     const b = stmtBounds(T, loc, offset);
     ctx.statementStart = b.start;
     ctx.statementEnd = Math.max(b.end, offset);
@@ -1723,12 +2017,16 @@ function inStringContext(T: Token[], idx: number, offset: number, dialect: Diale
 function scanBody(text: string, T: Token[], idx: number, bs: number, be: number, offset: number, depth: number, dialect: Dialect): CursorContext {
   const body = text.slice(bs, be);
   const inner = scanImpl(body, offset - bs, dialect, depth + 1);
+  // The number test reads the body's tokens: the outer text holds the body as one string (code audit 2026-11-26, M15).
+  if (inNumberAt(body, offset - bs, dialect)) inner.inNumber = true;
+  if (inner.body) inner.body.base += bs; // a body inside this one: the innermost is the cursor's
+  else inner.body = { text: body, base: bs };
   inner.statementStart += bs;
   inner.statementEnd += bs;
   inner.prefixStart += bs;
   for (const t of inner.tablesInScope) if (t.offset !== undefined) t.offset += bs;
   if (!inner.inStringOrComment) {
-    const loc = locateStatement(T, idx - 1, -1, dialect);
+    const loc = locateStatement(T, idx - 1, -1, dialect, text);
     if (loc.start >= 0 && (W(T[loc.start]) === "CREATE" || W(T[loc.start]) === "ALTER")) {
       const params: VarDecl[] = [];
       parsePgHeader(text, T, loc.start, idx, params);
@@ -1824,7 +2122,7 @@ function scriptSpans(c: SpanCtx, T: Token[], depth: number): void {
   const n = T.length;
   if (!n) return;
   const lo = c.from - c.base, hi = c.to - c.base;
-  const sp = new Splitter(T, c.dialect);
+  const sp = new Splitter(T, c.dialect, c.text);
   let start = -1;
   for (let i = restartPoint(T, Math.max(0, lastStartingBefore(T, lo))); i <= n; i++) {
     const r = i < n ? sp.step(i) : GO;

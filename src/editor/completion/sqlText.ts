@@ -39,7 +39,7 @@ export function statementBoundsAt(text: string, offset: number, dialect: Dialect
       if (!next || next.kind === "go") return { start: off, end: off };
     }
     // When the cursor token itself starts a statement, locate from it (k points at it, so it is "before" the cursor).
-    const loc = locateStatement(T, k, -1, norm(dialect));
+    const loc = locateStatement(T, k, -1, norm(dialect), src);
     if (loc.start < 0) return { start: off, end: off };
     return { start: T[loc.start].start, end: T[loc.end].end };
   } catch {

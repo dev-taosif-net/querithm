@@ -39,7 +39,7 @@ public sealed class SqlServerDataCompare : IDataCompareDialect
 
     public string? QueryRefusal(string sql)
     {
-        var script = TSqlParsing.NewParser().Parse(new StringReader(sql), out var errors) as TSqlScript;
+        var script = TSqlParsing.ParseText(TSqlParsing.NewParser(), sql, out var errors) as TSqlScript;
         if (errors.Count > 0) return $"The query does not parse: {errors[0].Message} (line {errors[0].Line}).";
         var statements = script?.Batches.SelectMany(b => b.Statements).ToList() ?? [];
         if (statements.Count != 1 || statements[0] is not SelectStatement select)
@@ -52,7 +52,7 @@ public sealed class SqlServerDataCompare : IDataCompareDialect
 
     public (string Prefix, string Body) DerivedQuery(string sql)
     {
-        var script = TSqlParsing.NewParser().Parse(new StringReader(sql), out var errors) as TSqlScript;
+        var script = TSqlParsing.ParseText(TSqlParsing.NewParser(), sql, out var errors) as TSqlScript;
         if (errors.Count > 0 || script?.Batches.SelectMany(b => b.Statements).SingleOrDefault() is not SelectStatement select) return ("", sql);
         string Text(TSqlFragment f) => sql.Substring(f.StartOffset, f.FragmentLength);
         var qe = select.QueryExpression;

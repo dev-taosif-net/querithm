@@ -108,7 +108,7 @@ public class SqliteIntelligenceTests
     {
         var at = marked.IndexOf('|');
         return L.Complete(new CompleteParams { DocId = Guid.NewGuid().ToString(), Text = marked.Remove(at, 1), Offset = at, Dialect = Dialect.Sqlite, ProfileId = "p", Database = "main" },
-            new FakeSchema(Sales, "main"));
+            new FakeSchema(Sales, "main"), CancellationToken.None);
     }
 
     static string[] Labels(string marked) => Complete(marked).Select(c => c.Label).Order(StringComparer.Ordinal).ToArray();
@@ -164,14 +164,14 @@ public class SqliteIntelligenceTests
         foreach (var profile in new[] { "p", null })
         {
             const string text = "SELECT substr(name, ";
-            var help = L.Signature(new SignatureParams { DocId = "s", Text = text, Offset = text.Length, Dialect = Dialect.Sqlite, ProfileId = profile, Database = "main" }, new FakeSchema(Sales, "main"));
+            var help = L.Signature(new SignatureParams { DocId = "s", Text = text, Offset = text.Length, Dialect = Dialect.Sqlite, ProfileId = profile, Database = "main" }, new FakeSchema(Sales, "main"), CancellationToken.None);
             var sig = Assert.Single(help.Signatures);
             Assert.Equal("substr(X, Y, [Z])", sig.Label);
             Assert.Equal(1, help.ActiveParameter);
             Assert.False(string.IsNullOrEmpty(sig.Documentation));
         }
         const string nested = "SELECT strftime('%Y', date(";
-        Assert.StartsWith("date(", Assert.Single(L.Signature(new SignatureParams { DocId = "s", Text = nested, Offset = nested.Length, Dialect = Dialect.Sqlite }, new FakeSchema(null)).Signatures).Label);
+        Assert.StartsWith("date(", Assert.Single(L.Signature(new SignatureParams { DocId = "s", Text = nested, Offset = nested.Length, Dialect = Dialect.Sqlite }, new FakeSchema(null), CancellationToken.None).Signatures).Label);
         // SQLite calls take no named arguments: none are offered.
         Assert.DoesNotContain(Complete("SELECT substr(|"), c => c.Label.EndsWith("=>", StringComparison.Ordinal));
     }

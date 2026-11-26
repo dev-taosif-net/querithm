@@ -46,7 +46,10 @@ sealed class PgDocument
     /// The outer statements, split once per document: re-splitting a 10,000-statement script on every completion call cost
     /// 162 ms of a 182 ms median (Stopwatch profile, bench #5.sqlite, 2026-10-31).
     /// </summary>
-    public List<List<PgToken>> Statements => _statements ??= Rules.Statements(Text, Raw);
+    // Published with a barrier (fourth round, M7): completion and signature share a document across threads.
+    public List<List<PgToken>> Statements => Volatile.Read(ref _statements) ?? Publish(ref _statements, Rules.Statements(Text, Raw));
+
+    static T Publish<T>(ref T? field, T value) where T : class => Interlocked.CompareExchange(ref field, value, null) ?? value;
 
     PgDocument(string text, PgCompletionRules rules)
     {
@@ -58,12 +61,25 @@ sealed class PgDocument
     public static PgDocument Get(string text, string docId)
     {
         var rules = PgCompletionRules.Current;
-        var key = rules.Id + "|" + docId;
+        var key = (rules.DocumentKey ?? rules.Id) + "|" + docId;
         if (Cache.TryGetValue(key, out var d) && string.Equals(d.Text, text, StringComparison.Ordinal)) return d;
+        if (text.Length >= BackgroundBuild.MinChars)
+            return BackgroundBuild.Run("doc:" + key, text, () =>
+            {
+                using var scope = PgCompletionRules.Use(rules);
+                var doc = new PgDocument(text, rules);
+                _ = doc.Statements; // split here too, not on the next request
+                return doc;
+            }, doc => Store(key, doc), doc => Cache.TryRemove(new KeyValuePair<string, PgDocument>(key, doc)), rules.ReleaseThread);
         d = new PgDocument(text, rules);
+        Store(key, d);
+        return d;
+    }
+
+    static void Store(string key, PgDocument d)
+    {
         if (Cache.Count > 64) Cache.Clear();
         Cache[key] = d;
-        return d;
     }
 
     /// <summary>M12: drops the document under every dialect's key (rules.Id|docId).</summary>
@@ -75,6 +91,9 @@ sealed class PgDocument
     }
 
     internal static bool IsCached(string docId) => Cache.Keys.Any(k => k.EndsWith("|" + docId, StringComparison.Ordinal));
+
+    /// <summary>How many cached documents hold this docId (one per tokenization).</summary>
+    internal static int CachedCopies(string docId) => Cache.Keys.Count(k => k.EndsWith("|" + docId, StringComparison.Ordinal));
 
     /// <summary>Length of the opening $tag$ of a dollar-quoted token.</summary>
     public static int TagLength(PgToken t) => t.Text.IndexOf('$', 1) + 1;
@@ -121,12 +140,14 @@ sealed class PgDocument
         raw.Where(t => !t.IsTrivia).Select(t => new Tok(t.Kind, t.Offset, t.Length, t.Text)).ToList();
 
     /// <summary>CREATE TEMP TABLE statements anywhere in the script (outer text and routine bodies), in text order.</summary>
-    public List<TempTable> TempTables => _temps ??= ScanTemps();
+    public List<TempTable> TempTables => Volatile.Read(ref _temps) ?? Publish(ref _temps, ScanTemps());
 
     List<TempTable> ScanTemps()
     {
         var list = new List<TempTable>();
-        void Scan(List<PgToken> raw)
+        // Fourth round (H5): bodies inside bodies are read at most 8 deep (DO $a0$ DO $a1$ … 5,000 deep recursed once per
+        // level and re-tokenized each inner text); a temp table created deeper is not offered.
+        void Scan(List<PgToken> raw, int level)
         {
             var code = CodeOf(raw);
             for (var i = 0; i + 3 < code.Count; i++)
@@ -151,9 +172,9 @@ sealed class PgDocument
                 i = end;
             }
             for (var i = 0; i < raw.Count; i++)
-                if (raw[i].Kind == PgTokenKind.DollarString && IsBody(raw, i)) Scan(Body(raw[i]));
+                if (level < 8 && raw[i].Kind == PgTokenKind.DollarString && IsBody(raw, i)) Scan(Body(raw[i]), level + 1);
         }
-        Scan(Raw);
+        Scan(Raw, 0);
         return list;
     }
 }

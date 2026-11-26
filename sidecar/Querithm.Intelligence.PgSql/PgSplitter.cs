@@ -73,6 +73,7 @@ sealed class PgSplitter
         var s = new PgSplitter(tokens);
         for (var i = 0; i < tokens.Count; i++)
         {
+            Tier2Cancellation.Check(i);
             var t = tokens[i];
             if (t.Kind == PgTokenKind.Punct && t.Text == "(") depth++;
             else if (t.Kind == PgTokenKind.Punct && t.Text == ")") depth = Math.Max(0, depth - 1);

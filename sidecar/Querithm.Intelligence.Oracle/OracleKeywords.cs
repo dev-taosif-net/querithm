@@ -34,6 +34,9 @@ public static class OracleKeywords
 
     public static bool IsReserved(string word) => Reserved.Contains(word) || PlSql.Contains(word);
 
+    /// <summary>A SQL reserved word (V$RESERVED_WORDS): never an unquoted name in SQL. PL/SQL's words are names in plain SQL.</summary>
+    public static bool IsSqlReserved(string word) => Reserved.Contains(word);
+
     /// <summary>The reserved words, for highlighting and completion.</summary>
     public static IReadOnlyCollection<string> PlSqlReserved => PlSql;
     public static IReadOnlyCollection<string> SqlReserved => Reserved;

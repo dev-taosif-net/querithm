@@ -31,13 +31,20 @@ public sealed class SqlServerPlans : IPlanProvider
     public string? Refusal(string sql, PlanMode mode)
     {
         if (mode == PlanMode.Actual) return ActualRefusal;
-        var parsed = TSqlParsing.Parse(sql);
-        var v = new PlanOptionVisitor();
-        parsed.Script?.Accept(v);
-        if (v.Found) return PlanOptionRefusal;
-        if (parsed.Errors.Count > 0 && parsed.Tokens.Any(t => t.TokenType == TSqlTokenType.Set))
-            return "The text has syntax errors and SET statements, so Querithm cannot check that none of them turns SHOWPLAN off (which would run the statements after it). Fix the syntax errors first.";
-        return null;
+        // The walk recurses as deep as the tree: on a deep stack, like the parse (DeepStack).
+        return DeepStack.Run(() =>
+        {
+            var parsed = TSqlParsing.Parse(sql);
+            var v = new PlanOptionVisitor();
+            parsed.Script?.Accept(v);
+            if (v.Found) return PlanOptionRefusal;
+            // Text too deep to lex has no tokens to look for SET in: refused, not passed (Gemini review 2026-11-26).
+            if (parsed.Errors.Count > 0 && parsed.Tokens.Count == 0)
+                return $"Querithm could not read this text ({parsed.Errors[0].Message}), so it cannot check that none of it turns SHOWPLAN off (which would run the statements after it).";
+            if (parsed.Errors.Count > 0 && parsed.Tokens.Any(t => t.TokenType == TSqlTokenType.Set))
+                return "The text has syntax errors and SET statements, so Querithm cannot check that none of them turns SHOWPLAN off (which would run the statements after it). Fix the syntax errors first.";
+            return null;
+        });
     }
 
     /// <summary>SET SHOWPLAN_XML / _ALL / _TEXT and SET STATISTICS XML / PROFILE (IO and TIME only add messages).</summary>
@@ -56,9 +63,12 @@ public sealed class SqlServerPlans : IPlanProvider
         if (Refusal(sql, mode) is { } refusal) throw new NotSupportedException(refusal);
         var batches = TSqlParsing.Parse(sql).Batches;
         var plans = new List<string>();
-        await Exec(c, "SET SHOWPLAN_XML ON", ct).ConfigureAwait(false);
+        var failed = false;
+        ct.ThrowIfCancellationRequested();
         try
         {
+            // Inside the try: a cancel that lands after the server applied ON must still turn it off (review 2026-11-26).
+            await Exec(c, "SET SHOWPLAN_XML ON", ct).ConfigureAwait(false);
             foreach (var b in batches)
             {
                 await using var cmd = c.CreateCommand();
@@ -73,16 +83,22 @@ public sealed class SqlServerPlans : IPlanProvider
                 } while (await r.NextResultAsync(ct).ConfigureAwait(false));
             }
         }
+        catch
+        {
+            failed = true;
+            throw;
+        }
         finally
         {
             // A connection left with SHOWPLAN on would plan, not run, its next borrower's statements: it is closed (and the
-            // pool discards it) when OFF does not go through.
+            // pool discards it) when OFF does not go through. That failure is reported only when the plan itself worked —
+            // otherwise the plan's own error (a cancel, a syntax error) is the one the user sees.
             using var limit = Cleanup.Start();
             try { await Exec(c, "SET SHOWPLAN_XML OFF", limit.Token).ConfigureAwait(false); }
             catch
             {
                 try { c.Close(); } catch { /* discarded either way */ }
-                throw;
+                if (!failed) throw;
             }
         }
         var statements = plans.SelectMany(p => Parse(p).Statements).ToArray();

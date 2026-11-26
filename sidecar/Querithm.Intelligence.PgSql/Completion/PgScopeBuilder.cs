@@ -23,6 +23,10 @@ sealed class Source
     /// <summary>AS x(a int, b text): a set-returning function's column definition list.</summary>
     public List<Col>? ColumnDefs { get; set; }
     public bool InsertTarget { get; init; }
+    /// <summary>LATERAL (…): a derived table or function that sees the FROM items before it.</summary>
+    public bool Lateral { get; init; }
+    /// <summary>A derived table's closing parenthesis (int.MaxValue while it is still open).</summary>
+    public int QueryEnd { get; init; } = int.MaxValue;
     public string Label => Alias ?? Name;
 }
 
@@ -34,9 +38,30 @@ sealed class Scope
     public required List<Source> Sources { get; init; }
     public required List<Cte> Ctes { get; init; }
 
-    /// <summary>The sources visible at <paramref name="offset"/>, innermost level first.</summary>
-    public List<Source> VisibleAt(int offset) =>
-        Sources.Where(s => s.ScopeStart <= offset && offset <= s.ScopeEnd).OrderBy(s => (long)s.ScopeEnd - s.ScopeStart).ToList();
+    /// <summary>
+    /// The sources visible at <paramref name="offset"/>, innermost level first. A derived table of a FROM list that is not
+    /// LATERAL does not see its siblings — the items of the FROM level it sits in: `JOIN (SELECT | FROM customers) d`
+    /// offered the outer query's `o.*`, which PostgreSQL, MySQL, Oracle and SQLite reject there (completion audit
+    /// 2026-11-25, M1). It still sees the query levels around that one, as a correlated subquery does: in `… WHERE EXISTS
+    /// (SELECT 1 FROM (SELECT … WHERE o.cid = c.|) d)` every engine accepts `c` (checked on each), and the first M1 fix had
+    /// hidden it too. DuckDB derived tables see their siblings as well (<see cref="PgCompletionRules.ImplicitLateral"/>).
+    /// </summary>
+    public List<Source> VisibleAt(int offset)
+    {
+        var visible = Sources.Where(s => s.ScopeStart <= offset && offset <= s.ScopeEnd).OrderBy(s => (long)s.ScopeEnd - s.ScopeStart).ToList();
+        // A derived table never sees itself (its alias inside its own query, lateral or not); without LATERAL it does not
+        // see its FROM level either — a level's items share its span.
+        HashSet<Source>? around = null;
+        HashSet<(int, int)>? sealedLevels = null;
+        var implicitLateral = PgCompletionRules.Current.ImplicitLateral;
+        foreach (var s in Sources)
+            if (s.Kind == SourceKind.Derived && s.Offset < offset && offset <= s.QueryEnd)
+            {
+                (around ??= []).Add(s);
+                if (!s.Lateral && !implicitLateral) (sealedLevels ??= []).Add((s.ScopeStart, s.ScopeEnd));
+            }
+        return around == null ? visible : visible.Where(s => !around.Contains(s) && !(sealedLevels?.Contains((s.ScopeStart, s.ScopeEnd)) ?? false)).ToList();
+    }
 
     public Cte? CteAt(string name, int offset) =>
         Ctes.Where(c => PgCompletionRules.Current.Names.Equals(c.Name, name) && c.ScopeStart <= offset && offset <= c.ScopeEnd).OrderBy(c => (long)c.ScopeEnd - c.ScopeStart).FirstOrDefault();
@@ -55,8 +80,57 @@ static class PgScopeBuilder
     internal static readonly HashSet<string> NotAlias = Set("""
         where join inner left right full cross on using group order having limit offset union except intersect set values returning
         window for natural lateral and or select from as with do into default overriding fetch then else end when loop is not null
-        like ilike in between outer tablesample when matched on conflict
+        like ilike in between outer tablesample when matched on conflict straight_join
         """);
+
+    /// <summary>The word at <paramref name="k"/> ends a FROM item instead of naming it, in every dialect or in this one (<see cref="PgCompletionRules.EndsFromItem"/>).</summary>
+    static bool EndsItem(List<Tok> s, int k) =>
+        s[k].Kind == PgTokenKind.Word
+        && (NotAlias.Contains(s[k].Text) || PgCompletionRules.Current.EndsFromItem(s[k].Text, k + 1 < s.Count ? s[k + 1].Text : null));
+
+    static readonly HashSet<string> ConflictWords = Set("rollback abort replace fail ignore");
+
+    /// <summary>
+    /// The index of the verb (INSERT, REPLACE, MERGE, UPDATE …) whose modifiers end at <paramref name="k"/>: MySQL's
+    /// IGNORE / LOW_PRIORITY / DELAYED / HIGH_PRIORITY and SQLite's <c>OR conflict</c> are skipped where the dialect has
+    /// them (<see cref="PgCompletionRules.DmlModifiers"/>); otherwise <paramref name="k"/> itself.
+    /// </summary>
+    internal static int VerbBefore(List<Tok> s, int k)
+    {
+        var rules = PgCompletionRules.Current;
+        if (rules.OrConflictClause && k >= 1 && s[k].Kind == PgTokenKind.Word && ConflictWords.Contains(s[k].Text) && s[k - 1].Is("OR")) k -= 2;
+        while (k >= 0 && s[k].Kind == PgTokenKind.Word && rules.DmlModifiers.Contains(s[k].Text)) k--;
+        return k;
+    }
+
+    /// <summary>The first token after the modifiers of UPDATE at <paramref name="update"/> (<c>UPDATE IGNORE t</c>, <c>UPDATE OR REPLACE t</c>).</summary>
+    internal static int AfterUpdateModifiers(List<Tok> s, int update)
+    {
+        var rules = PgCompletionRules.Current;
+        var j = update + 1;
+        if (rules.OrConflictClause && j + 1 < s.Count && s[j].Is("OR") && s[j + 1].Kind == PgTokenKind.Word && ConflictWords.Contains(s[j + 1].Text)) j += 2;
+        while (j < s.Count && s[j].Kind == PgTokenKind.Word && rules.DmlModifiers.Contains(s[j].Text)) j++;
+        return j;
+    }
+
+    /// <summary>
+    /// FROM at <paramref name="k"/> belongs to <c>IS [NOT] DISTINCT FROM</c>, a comparison, not a FROM clause: it made
+    /// <c>UPDATE t SET a = b IS DISTINCT FROM c, |</c> leave the SET list and named <c>c</c> a source (code audit
+    /// 2026-11-25, L8).
+    /// </summary>
+    internal static bool IsDistinctFrom(List<Tok> s, int k) =>
+        s[k].Is("FROM") && k >= 2 && s[k - 1].Is("DISTINCT") && (s[k - 2].Is("IS") || (s[k - 2].Is("NOT") && k >= 3 && s[k - 3].Is("IS")));
+
+    /// <summary>INTO at <paramref name="into"/> names the target of INSERT / REPLACE (true for <paramref name="insert"/>) or MERGE.</summary>
+    internal static bool IsTargetInto(List<Tok> s, int into, out bool insert)
+    {
+        insert = false;
+        if (into < 1) return false;
+        var v = VerbBefore(s, into - 1);
+        if (v < 0) return false;
+        insert = s[v].Is("INSERT") || s[v].Is("REPLACE");
+        return insert || s[v].Is("MERGE");
+    }
 
     /// <summary>Index of the matching ')' for every '(' (the statement end when a parenthesis is still open).</summary>
     internal static int[] Matches(List<Tok> s)
@@ -89,16 +163,17 @@ static class PgScopeBuilder
         var stack = new Stack<int>();
         (int, int) Span() => stack.Count == 0 ? (int.MinValue, int.MaxValue)
             : (s[stack.Peek()].Offset, match[stack.Peek()] < s.Count ? s[match[stack.Peek()]].Offset : int.MaxValue);
-        // UNION / INTERSECT / EXCEPT operands are separate query levels: a FROM item is visible in its own operand only
-        // (CTEs keep the whole level). setOps[level] holds the operators directly at that level (-1: the statement).
+        // UNION / INTERSECT / EXCEPT (Oracle: MINUS) operands are separate query levels: a FROM item is visible in its own
+        // operand only (CTEs keep the whole level). setOps[level] holds the operators directly at that level (-1: the statement).
         var setOps = new Dictionary<int, List<int>>();
+        var setOperators = PgCompletionRules.Current.SetOperators;
         {
             var lv = new Stack<int>();
             for (var i = 0; i < s.Count; i++)
             {
                 if (s[i].IsP("(")) lv.Push(i);
                 else if (s[i].IsP(")")) { if (lv.Count > 0) lv.Pop(); }
-                else if (s[i].Is("UNION") || s[i].Is("INTERSECT") || s[i].Is("EXCEPT"))
+                else if (s[i].Kind == PgTokenKind.Word && setOperators.Contains(s[i].Text))
                 {
                     var key = lv.Count == 0 ? -1 : lv.Peek();
                     if (!setOps.TryGetValue(key, out var ops)) setOps[key] = ops = [];
@@ -110,32 +185,45 @@ static class PgScopeBuilder
         {
             var (start, end) = Span();
             if (!setOps.TryGetValue(stack.Count == 0 ? -1 : stack.Peek(), out var ops)) return (start, end);
-            foreach (var op in ops)
-            {
-                if (op < i) start = s[op].Offset;
-                else { end = s[op].Offset; break; }
-            }
+            // Fourth round (M8): the operators are in text order — a binary search, not a scan per source (O(U²) with
+            // thousands of UNION ALL branches).
+            var at = ops.BinarySearch(i);
+            if (at < 0) at = ~at;
+            if (at > 0) start = s[ops[at - 1]].Offset;
+            if (at < ops.Count) end = s[ops[at]].Offset;
             return (start, end);
         }
 
+        // The parentheses that only group FROM items (`JOIN (b JOIN (SELECT …) d ON …)`) are no query level: before, the
+        // items inside got the group's span, so a derived table there was sealed from its group but saw the items outside
+        // it (code audit 2026-11-25, L5).
+        var grouping = new HashSet<int>();
         for (var i = 0; i < s.Count; i++)
         {
             var t = s[i];
-            if (t.IsP("(")) { stack.Push(i); continue; }
-            if (t.IsP(")")) { if (stack.Count > 0) stack.Pop(); continue; }
+            if (t.IsP("(")) { if (!grouping.Contains(i)) stack.Push(i); continue; }
+            if (t.IsP(")")) { if (stack.Count > 0 && match[stack.Peek()] == i) stack.Pop(); continue; }
             if (t.Is("WITH")) { Ctes(s, i, match, Span(), ctes); continue; }
             var prev = i > 0 ? s[i - 1] : default;
-            var intro = t.Is("FROM") || t.Is("JOIN")
-                        || (t.Is("UPDATE") && !(i > 0 && (prev.Is("FOR") || prev.Is("KEY") || prev.Is("DO") || prev.Is("BEFORE") || prev.Is("AFTER") || prev.Is("OR") || prev.Is("THEN") || prev.Is("INSTEAD"))))
-                        || (t.Is("INTO") && i > 0 && (prev.Is("INSERT") || prev.Is("MERGE")))
-                        || (t.Is("USING") && !(i + 1 < s.Count && s[i + 1].IsP("(")))
-                        || (t.Is("TABLE") && i == 0);
+            var insert = false;
+            var update = t.Is("UPDATE") && !(i > 0 && (prev.Is("FOR") || prev.Is("KEY") || prev.Is("DO") || prev.Is("BEFORE") || prev.Is("AFTER") || prev.Is("OR") || prev.Is("THEN") || prev.Is("INSTEAD")));
+            // Oracle's CROSS / OUTER APPLY (…) d: a derived table (or function) that sees the items before it, like LATERAL
+            // (code audit 2026-11-25, L9). No other engine of the family has APPLY.
+            var apply = t.Is("APPLY") && (prev.Is("CROSS") || prev.Is("OUTER"));
+            // STRAIGHT_JOIN: MySQL's JOIN that keeps the table order (a reserved word there, never a name in practice elsewhere).
+            var intro = (t.Is("FROM") && !IsDistinctFrom(s, i)) || t.Is("JOIN") || t.Is("STRAIGHT_JOIN") || update
+                        || (t.Is("INTO") && IsTargetInto(s, i, out insert))
+                        // USING (cols) is a join condition, and DuckDB's USING SAMPLE a sample clause; else USING names a source.
+                        || (t.Is("USING") && !(i + 1 < s.Count && (s[i + 1].IsP("(") || EndsItem(s, i + 1))))
+                        || (t.Is("TABLE") && i == 0)
+                        || apply;
             if (!intro) continue;
             var span = OperandSpan(i);
-            var j = Item(s, i + 1, match, span, sources, insert: t.Is("INTO") && prev.Is("INSERT"));
-            // FROM a, b, LATERAL (…) c: more items at the same level.
-            if (t.Is("FROM") || t.Is("USING"))
-                while (j < s.Count && s[j].IsP(",")) j = Item(s, j + 1, match, span, sources, insert: false);
+            var j = Item(s, update ? AfterUpdateModifiers(s, i) : i + 1, match, span, sources, insert, grouping, lateral: apply);
+            // FROM a, b, LATERAL (…) c: more items at the same level; also MySQL's multi-table UPDATE a, b SET (code audit
+            // 2026-11-25, M8).
+            if (t.Is("FROM") || t.Is("USING") || (update && PgCompletionRules.Current.MultiTableUpdate))
+                while (j < s.Count && s[j].IsP(",")) j = Item(s, j + 1, match, span, sources, insert: false, grouping);
         }
         return new Scope { Sources = sources, Ctes = ctes };
     }
@@ -186,29 +274,47 @@ static class PgScopeBuilder
     }
 
     /// <summary>One FROM item at <paramref name="j"/>; returns the index after it.</summary>
-    static int Item(List<Tok> s, int j, int[] match, (int Start, int End) span, List<Source> sources, bool insert)
+    static int Item(List<Tok> s, int j, int[] match, (int Start, int End) span, List<Source> sources, bool insert, HashSet<int> grouping, bool lateral = false)
     {
-        while (j < s.Count && (s[j].Is("ONLY") || s[j].Is("LATERAL"))) j++;
-        if (j >= s.Count) return j;
+        // (a JOIN b …) groups items: the first item inside is read here, later ones are introduced by their JOIN at the same
+        // level, and the item ends after the outermost group's ')'. A loop, not one call per '(' (third round: `FROM ((((…`
+        // nested 100,000 deep overflowed the stack and ended the process).
+        var group = -1;
+        while (true)
+        {
+            while (j < s.Count && (s[j].Is("ONLY") || s[j].Is("LATERAL"))) { lateral |= s[j].Is("LATERAL"); j++; }
+            if (j >= s.Count) return group >= 0 ? Math.Min(match[group] + 1, s.Count) : j;
+            if (!s[j].IsP("(")) break;
+            var inner = j + 1 < s.Count ? s[j + 1] : default;
+            if (inner.Is("SELECT") || inner.Is("WITH") || inner.Is("VALUES") || inner.Is("TABLE")) break;
+            grouping.Add(j);
+            if (group < 0) group = j;
+            insert = false;
+            j++;
+        }
+        var end = ItemAt(s, j, match, span, sources, insert, lateral);
+        return group >= 0 ? Math.Min(match[group] + 1, s.Count) : end;
+    }
+
+    /// <summary>One FROM item at <paramref name="j"/> that is no group: a derived table, a function or a relation.</summary>
+    static int ItemAt(List<Tok> s, int j, int[] match, (int Start, int End) span, List<Source> sources, bool insert, bool lateral)
+    {
         Source? src;
         int after;
         if (s[j].IsP("("))
         {
             var close = match[j];
-            var first = j + 1 < s.Count ? s[j + 1] : default;
-            if (first.Is("SELECT") || first.Is("WITH") || first.Is("VALUES") || first.Is("TABLE"))
             {
-                src = new Source { Kind = SourceKind.Derived, Name = "", Offset = s[j].Offset, ScopeStart = span.Start, ScopeEnd = span.End, Query = s.GetRange(j + 1, Math.Min(close, s.Count) - j - 1) };
+                src = new Source
+                {
+                    Kind = SourceKind.Derived, Name = "", Offset = s[j].Offset, ScopeStart = span.Start, ScopeEnd = span.End, Query = s.GetRange(j + 1, Math.Min(close, s.Count) - j - 1),
+                    Lateral = lateral, QueryEnd = close < s.Count ? s[close].Offset : int.MaxValue,
+                };
                 after = close + 1;
             }
-            else
-            {
-                // (a JOIN b …): the first item inside; later ones are introduced by their JOIN.
-                Item(s, j + 1, match, span, sources, false);
-                return Math.Min(close + 1, s.Count);
-            }
         }
-        else if (s[j].IsIdent && !(s[j].Kind == PgTokenKind.Word && NotAlias.Contains(s[j].Text)))
+        // Fourth round (L7): a word that ends a FROM item in this dialect (DuckDB QUALIFY, Oracle START …) names no item.
+        else if (s[j].IsIdent && !EndsItem(s, j))
         {
             var chain = Chain(s, j);
             var last = chain[^1];
@@ -225,7 +331,7 @@ static class PgScopeBuilder
         else return j;
 
         if (after < s.Count && s[after].Is("AS")) after++;
-        if (after < s.Count && s[after].IsIdent && !(s[after].Kind == PgTokenKind.Word && NotAlias.Contains(s[after].Text)))
+        if (after < s.Count && s[after].IsIdent && !EndsItem(s, after))
         {
             src.Alias = s[after].Name;
             after++;

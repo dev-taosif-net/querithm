@@ -155,6 +155,39 @@ UNION ALL INTERSECT EXCEPT MINUS AS FOR AFTER BEFORE OF OR INSTEAD DO GRANT REVO
 EXPLAIN ANALYZE ANALYSE VERBOSE VACUUM
 `);
 
+/**
+ * Words after which the next word is an operand — a column, a value — never a statement verb (completion audit
+ * 2026-11-25, H6): `SELECT comment, | FROM posts`, `WHERE p.open AND |`, `UPDATE posts SET comment = |`. An operator
+ * before it counts the same (the scanner checks the token kind). Not ON: `SET NOCOUNT ON` ends a statement.
+ */
+export const OPERAND_PREV = set(`SELECT WHERE AND OR NOT BY WHEN HAVING DISTINCT IN LIKE ILIKE IS BETWEEN CASE RETURNING SET`);
+
+/**
+ * Verbs that begin the next statement even in an operand slot when they start a new line (`… WHERE ⏎UPDATE t`): no
+ * engine takes one of them as an unquoted column there, unlike COMMENT, OPEN, START or BEGIN, which stay names.
+ */
+export const NEWLINE_VERBS = set(`SELECT INSERT UPDATE DELETE MERGE WITH CREATE ALTER DROP TRUNCATE DECLARE EXEC EXECUTE CALL SET`);
+
+/** Words after which the next word names a routine (`CALL refresh(`, `EXEC open_orders`), never a statement verb. */
+export const ROUTINE_PREV = set(`CALL EXEC EXECUTE PERFORM`);
+
+/**
+ * Statement verbs that are also functions of the dialect: followed by `(` they are a call (MySQL `IF(c, a, b)`,
+ * `REPLACE(s, a, b)`, `INSERT(s, p, n, t)`, `REPEAT(s, n)`, `TRUNCATE(x, d)`; SQLite `replace(…)`), except where a block
+ * starts a statement (MySQL's `THEN IF (…) THEN` inside a stored program, see BLOCK_PREV).
+ */
+const FUNCTION_VERBS: Record<Dialect, Set<string>> = {
+  tsql: new Set(), pg: new Set(), duckDb: new Set(), oracle: new Set(),
+  sqlite: set(`REPLACE`), mySql: set(`IF REPLACE INSERT REPEAT TRUNCATE`),
+};
+
+export function functionVerbs(dialect: Dialect): Set<string> {
+  return FUNCTION_VERBS[dialect];
+}
+
+/** Words that open a block of statements: a verb right after one starts a statement even when a `(` follows. */
+export const BLOCK_PREV = set(`BEGIN THEN ELSE DO LOOP REPEAT`);
+
 /** Object-kind words; `IF` after one of these is `IF [NOT] EXISTS`, not a statement. */
 export const OBJECT_KIND_WORDS = set(`
 TABLE VIEW PROCEDURE PROC FUNCTION INDEX SCHEMA DATABASE TRIGGER SEQUENCE TYPE COLUMN CONSTRAINT EXTENSION
@@ -285,6 +318,19 @@ const FUNCS: Record<Dialect, string[]> = {
 };
 export function builtinFunctions(dialect: Dialect): string[] {
   return FUNCS[dialect];
+}
+
+/**
+ * Built-ins written without parentheses (the SQL standard's niladic functions): Oracle rejects `SYSDATE()` and
+ * PostgreSQL `current_date()` (completion audit 2026-11-25, M18). MySQL's `SYSDATE()` and `USER()` take them.
+ */
+const NILADIC: Record<Dialect, Set<string>> = {
+  tsql: new Set(), sqlite: new Set(), mySql: new Set(),
+  pg: set(`current_date current_timestamp`), duckDb: set(`current_date current_timestamp`),
+  oracle: set(`SYSDATE SYSTIMESTAMP CURRENT_DATE CURRENT_TIMESTAMP USER`),
+};
+export function niladicFunctions(dialect: Dialect): Set<string> {
+  return NILADIC[dialect];
 }
 
 const kw = (s: string): string[] => s.trim().split(/\s*\|\s*/);
