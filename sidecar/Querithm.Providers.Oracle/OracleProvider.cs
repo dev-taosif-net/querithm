@@ -362,6 +362,31 @@ public sealed class OracleProvider : IDbProvider
         await OracleOutput.SetAsync(connection, on, ct).ConfigureAwait(false);
     }
 
+    public TlsCertError? ClassifyTlsCertificateError(Exception ex, Profile profile)
+    {
+        if (profile.TlsMode == TlsMode.Disable) return null;
+        var m = TlsCertificateClassifier.TryClassify(ex);
+        var isOracleCertError = ex is OracleException oe
+            && (oe.Number is 29024 or 29003 or 29002 or 29106 || oe.Message.Contains("certificate", StringComparison.OrdinalIgnoreCase));
+        if (m == null && !isOracleCertError) return null;
+        var oracleTls = ex is OracleException o ? OracleErrors.TlsFailure(o) : null;
+        var reason = m?.Reason ?? TlsCertReason.Other;
+        var endpoint = TlsCertificateClassifier.FormatEndpoint(profile.Host, profile.Port, 2484);
+        var message = oracleTls ?? $"The TLS (TCPS) connection to Oracle at {endpoint} was refused because the server's certificate could not be verified ({TlsCertificateClassifier.ReasonPhrase(reason)}). Give the CA file of the server's certificate under Encryption, or check the host name.";
+        return new TlsCertError
+        {
+            Engine = Engine.Oracle,
+            Host = endpoint,
+            Reason = reason,
+            CanTrustCert = false,
+            StrictMode = false,
+            CanSwitchToRequire = false,
+            SupportsCaPath = true,
+            Message = message,
+            Detail = m?.Detail ?? TlsCertificateClassifier.CleanDetail(ex is OracleException oex ? OracleErrors.Clean(oex.Message) : ex.Message),
+        };
+    }
+
     public IReadOnlyList<ProviderMessage> TranslateException(Exception ex, string? commandText = null) =>
         ex is OracleException o ? OracleErrors.Translate(o, commandText) : [new ProviderMessage(Severity.Error, ex.Message)];
 

@@ -75,6 +75,8 @@ export type SnapshotStatus = "empty" | "fresh" | "stale" | "refreshing" | "error
 export const SnapshotStatusValues = ["empty", "fresh", "stale", "refreshing", "error"] as const;
 export type SshAuthKind = "password" | "privateKey" | "agent";
 export const SshAuthKindValues = ["password", "privateKey", "agent"] as const;
+export type TlsCertReason = "untrustedRoot" | "nameMismatch" | "expired" | "other";
+export const TlsCertReasonValues = ["untrustedRoot", "nameMismatch", "expired", "other"] as const;
 export type TlsMode = "default" | "strict" | "mandatory" | "optional" | "require" | "verifyCa" | "verifyFull" | "prefer" | "disable";
 export const TlsModeValues = ["default", "strict", "mandatory", "optional", "require", "verifyCa", "verifyFull", "prefer", "disable"] as const;
 export type TxState = "none" | "open" | "unknown";
@@ -1296,6 +1298,7 @@ export interface ProfileTestResult {
   elapsedMs: number;
   notes: string[];
   untrustedHostKey?: SshHostKey | null;
+  untrustedCertificate?: TlsCertError | null;
 }
 export interface QueryDoneEvent {
   executionId: string;
@@ -1752,6 +1755,17 @@ export interface TextEdit {
 export interface TextSpan {
   offset: number;
   length: number;
+}
+export interface TlsCertError {
+  engine: Engine;
+  host: string;
+  reason: TlsCertReason;
+  canTrustCert: boolean;
+  strictMode: boolean;
+  canSwitchToRequire: boolean;
+  supportsCaPath: boolean;
+  message: string;
+  detail?: string | null;
 }
 export interface TopQueryRow {
   queryHash: string;

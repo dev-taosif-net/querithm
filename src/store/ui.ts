@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { GridConflictRow, GuardBlock, SshHostKey, Dialect, Engine, RefactorTarget, Snippet, TextSpan } from "../ipc/contract";
+import type { GridConflictRow, GuardBlock, SshHostKey, TlsCertError, Dialect, Engine, RefactorTarget, Snippet, TextSpan } from "../ipc/contract";
 import type { GridStaging } from "../results/staging";
 import type { PageId as SettingsPage } from "../settings/registry";
 import { announce } from "./announce";
@@ -37,9 +37,10 @@ export type Dialog =
   /** `focus`: the profile the list opens on (one just saved in the editor). */
   | { kind: "connect"; focus?: string }
   /** `fromConnect`: opened from the Connect dialog, which comes back after a save with the saved profile active. */
-  | { kind: "profile"; profileId?: string; preset?: Engine; copyOf?: string; fromConnect?: boolean }
+  | { kind: "profile"; profileId?: string; preset?: Engine; copyOf?: string; fromConnect?: boolean; openEncryption?: boolean }
   | { kind: "password"; profileId: string; resolve: (secret: string | null) => void; error?: string; ssh?: boolean }
   | { kind: "hostKey"; hostKey: SshHostKey; resolve: (trust: boolean) => void }
+  | { kind: "tlsCert"; profileId: string; cert: TlsCertError; resolve: (choice: "trust" | "switchMandatoryTrust" | "switchRequire" | "edit" | "cancel") => void }
   | { kind: "guard"; block: GuardBlock; resolve: (ok: boolean) => void }
   /** `quit`: asked while the app closes (H4), not for one tab. */
   | { kind: "txClose"; tabId: string; quit?: boolean; resolve: (choice: "commit" | "rollback" | "cancel") => void }

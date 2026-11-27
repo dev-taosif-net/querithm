@@ -465,18 +465,68 @@ public sealed partial class SqlServerProvider : IDbProvider
         public void Dispose() => a();
     }
 
+    public TlsCertError? ClassifyTlsCertificateError(Exception ex, Profile profile)
+    {
+        if (profile.TrustCert && profile.TlsMode != TlsMode.Strict) return null;
+        if (TlsCertificateClassifier.TryClassify(ex) is not { } m) return null;
+        var strict = profile.TlsMode == TlsMode.Strict;
+        var endpoint = TlsCertificateClassifier.FormatEndpoint(profile.Host, profile.Port, 1433);
+        var message = strict
+            ? $"Connected to SQL Server at {endpoint}, but Strict encryption rejected its TLS certificate ({TlsCertificateClassifier.ReasonPhrase(m.Reason)}). Strict mode always checks the certificate and ignores Trust server certificate — switch to Mandatory to trust it, or install a trusted certificate on the server."
+            : m.Reason switch
+            {
+                TlsCertReason.UntrustedRoot => $"Connected to SQL Server at {endpoint}, but its TLS certificate is not trusted (SQL Server installs use a self-signed certificate by default). Turn on Trust server certificate to connect without verifying the certificate, or install a trusted certificate on the server.",
+                TlsCertReason.NameMismatch => $"Connected to SQL Server at {endpoint}, but its TLS certificate does not match the server address. Turn on Trust server certificate to skip the name check, or connect with the host name on the certificate.",
+                TlsCertReason.Expired => $"Connected to SQL Server at {endpoint}, but its TLS certificate has expired. Renew the certificate on the server, or turn on Trust server certificate for a development server.",
+                _ => $"Connected to SQL Server at {endpoint}, but its TLS certificate could not be verified ({TlsCertificateClassifier.ReasonPhrase(m.Reason)}). Turn on Trust server certificate to connect without verifying the certificate, or install a trusted certificate on the server.",
+            };
+        return new TlsCertError
+        {
+            Engine = Engine.Mssql,
+            Host = endpoint,
+            Reason = m.Reason,
+            CanTrustCert = !strict && !profile.TrustCert,
+            StrictMode = strict,
+            CanSwitchToRequire = false,
+            SupportsCaPath = false,
+            Message = message,
+            Detail = m.Detail,
+        };
+    }
+
     public IReadOnlyList<ProviderMessage> TranslateException(Exception ex, string? commandText = null)
     {
         // An open that reached nothing (OpenAsync): say which endpoint, not SqlClient's generic network paragraph.
         if (ex is SqlException { Data: var data } notReached && data[EndpointKey] is string reason)
             return [new ProviderMessage(Severity.Error, reason, null, null, notReached.Number, notReached.State, notReached.Class)];
         if (ex is SqlException sql)
+        {
+            // Only rewrite connect-time / client SNI certificate errors (Number <= 0 or TLS inner exception) —
+            // never server-raised SQL errors (including severity 20+ RAISERROR) even when commandText is null.
+            if (IsClientTlsSqlError(sql.Number, sql.InnerException, commandText) && TlsCertificateClassifier.TryClassify(sql) is { } cert)
+                return [new ProviderMessage(Severity.Error,
+                    $"Connected to SQL Server, but its TLS certificate could not be verified ({TlsCertificateClassifier.ReasonPhrase(cert.Reason)}). Turn on Trust server certificate under Encryption, or install a trusted certificate on the server.",
+                    null, null, sql.Number, sql.State, sql.Class)];
+            var innerDetail = TlsCertificateClassifier.DeepestInnerMessage(sql);
             return sql.Errors.Cast<SqlError>()
-                .Select(e => new ProviderMessage(Severity.Error, e.Message, e.LineNumber > 0 ? e.LineNumber : null,
-                    string.IsNullOrEmpty(e.Procedure) ? null : e.Procedure, e.Number, e.State, e.Class))
+                .Select(e =>
+                {
+                    var text = e.Message;
+                    // Managed SNI on Linux/macOS wraps pre-login TLS/socket exceptions as generic "error: 35 - An internal exception was caught".
+                    if (innerDetail != null
+                        && (text.Contains("error: 35", StringComparison.OrdinalIgnoreCase) || text.Contains("internal exception was caught", StringComparison.OrdinalIgnoreCase))
+                        && !text.Contains(innerDetail, StringComparison.OrdinalIgnoreCase))
+                        text = $"{text} ({innerDetail})";
+                    return new ProviderMessage(Severity.Error, text, e.LineNumber > 0 ? e.LineNumber : null,
+                        string.IsNullOrEmpty(e.Procedure) ? null : e.Procedure, e.Number, e.State, e.Class);
+                })
                 .ToList();
+        }
         return [new ProviderMessage(Severity.Error, ex.Message)];
     }
+
+    internal static bool IsClientTlsSqlError(int number, Exception? inner, string? commandText) =>
+        commandText == null && (number <= 0 || inner is System.Security.Authentication.AuthenticationException or System.ComponentModel.Win32Exception);
 
     public (string? Before, string? After) SessionOptionsSql(ExecuteOptions o)
     {

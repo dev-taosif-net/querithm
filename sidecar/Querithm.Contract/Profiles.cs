@@ -167,6 +167,36 @@ public sealed record AuthPromptEvent
     public string? UserCode { get; init; }
 }
 
+/// <summary>Why a server's TLS certificate was rejected during connect.</summary>
+public enum TlsCertReason
+{
+    UntrustedRoot,
+    NameMismatch,
+    Expired,
+    Other,
+}
+
+/// <summary>Structured detail for a rejected TLS certificate, shown to the user with explicit recovery choices.</summary>
+public sealed record TlsCertError
+{
+    public required Engine Engine { get; init; }
+    /// <summary>The server host (or host:port) whose certificate failed validation.</summary>
+    public required string Host { get; init; }
+    public required TlsCertReason Reason { get; init; }
+    /// <summary>True when enabling TrustServerCertificate on this profile allows connecting (SQL Server Default/Mandatory).</summary>
+    public bool CanTrustCert { get; init; }
+    /// <summary>True when SQL Server Encrypt=Strict rejected the cert (Strict ignores TrustServerCertificate; must switch to Mandatory).</summary>
+    public bool StrictMode { get; init; }
+    /// <summary>True when switching the profile to Require (MySQL) skips certificate verification while keeping TLS.</summary>
+    public bool CanSwitchToRequire { get; init; }
+    /// <summary>True when the engine accepts a CA certificate file (PostgreSQL, MySQL, Oracle).</summary>
+    public bool SupportsCaPath { get; init; }
+    /// <summary>User-facing plain-English explanation.</summary>
+    public required string Message { get; init; }
+    /// <summary>Short scrubbed technical cause from the driver/TLS stack, if available.</summary>
+    public string? Detail { get; init; }
+}
+
 public sealed record ProfileTestResult
 {
     public bool Ok { get; init; }
@@ -177,6 +207,8 @@ public sealed record ProfileTestResult
     public string[] Notes { get; init; } = [];
     /// <summary>The bastion's host key is not trusted yet (or changed): trust it with ssh.trustHostKey, then test again.</summary>
     public SshHostKey? UntrustedHostKey { get; init; }
+    /// <summary>The server's TLS certificate could not be verified (self-signed, unknown CA, host mismatch or expired).</summary>
+    public TlsCertError? UntrustedCertificate { get; init; }
 }
 
 public sealed record ParseConnectionStringParams

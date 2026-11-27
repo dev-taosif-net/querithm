@@ -12,7 +12,7 @@ import { BusyButtonContent } from "../app/LoadingStatus";
 import { NumberField } from "../app/controls";
 import { SecretInput } from "../app/SecretInput";
 import { escapeForDisplay } from "../monitor/format";
-import type { AuthKind, Engine, EngineInfo, EnvironmentKind, LocationKind, Profile, SshAuthKind, SshSettings, TlsMode } from "../ipc/contract";
+import type { AuthKind, Engine, EngineInfo, EnvironmentKind, LocationKind, Profile, SshAuthKind, SshSettings, TlsCertError, TlsMode } from "../ipc/contract";
 import { rpc, shell } from "../ipc/client";
 import { Modal } from "../app/Modal";
 import { readableOnTint, useThemeKey } from "../app/tabStyle";
@@ -276,6 +276,26 @@ export function looksLikeProduction(...names: (string | null | undefined)[]): st
   return null;
 }
 
+/**
+ * SQL Server hosts that almost always serve SQL Server's built-in self-signed certificate (IP addresses, localhost,
+ * named instances, single-label intranet hostnames): offered a clear Trust server certificate hint before Save.
+ */
+export function looksLikeSelfSignedMssqlHost(host: string | null | undefined, opts?: { includeSingleLabel?: boolean }): boolean {
+  let h = (host ?? "").trim();
+  if (!h) return false;
+  h = h.replace(/^(tcp|np|lpc):/i, "").trim();
+  if (!h) return false;
+  if (h.includes("\\")) return true; // host\instance, .\SQLEXPRESS, (localdb)\...
+  const comma = h.lastIndexOf(",");
+  if (comma > 0 && /^\d+$/.test(h.slice(comma + 1).trim())) h = h.slice(0, comma).trim();
+  const low = h.toLowerCase();
+  if (!low) return false;
+  if (low === "localhost" || low === "." || low === "(local)") return true;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(low)) return true; // IPv4
+  if (/^\[?[0-9a-f:]+\]?$/i.test(low) && (low.match(/:/g)?.length ?? 0) >= 2) return true; // IPv6 (not host:port)
+  return (opts?.includeSingleLabel ?? true) && !low.includes("."); // single-label internal hostname (public CAs cannot sign these)
+}
+
 /** Text pasted into Host that is really a connection string or a URI: offered to the parser instead. */
 export function looksLikeConnectionString(text: string): boolean {
   const t = text.trim();
@@ -324,12 +344,14 @@ function profileText(p: Profile): string {
 /** What Test and Save act on: the fields, or the fields after merging the connection string. */
 type Draft = { p: Profile; secret: string; touched: boolean };
 /** Problems found on Save that live outside profileFieldErrors (UI-only choices). */
-type Focusable = FieldKey | "environment" | "ack" | "sshHost" | "sshUser";
+type Focusable = FieldKey | "environment" | "ack" | "ca" | "sshHost" | "sshUser";
 
-export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
-  profileId?: string; preset?: Engine; copyOf?: string; onClose: () => void;
+export function ProfileEditor({ profileId, preset, copyOf, openEncryption, onClose, onSaved, onConnect }: {
+  profileId?: string; preset?: Engine; copyOf?: string; openEncryption?: boolean; onClose: () => void;
   /** After a successful save, once the editor has closed (the Connect dialog comes back with the profile active). */
   onSaved?: (saved: Profile) => void;
+  /** After Save & Connect succeeds, once the editor has closed (connects the saved profile immediately). */
+  onConnect?: (saved: Profile) => void;
 }) {
   const existing = useProfiles((s) => s.profiles.find((p) => p.id === profileId));
   const groups = useProfiles((s) => s.groups);
@@ -388,8 +410,28 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
   const [sshSecretTouched, setSshSecretTouched] = useState(false);
   const [sshForget, setSshForget] = useState(false);
   const [test, setTest] = useState<{ ok: boolean; text: string; key: string } | null>(null);
-  const [busyAction, setBusyAction] = useState<"parse" | "test" | "save" | null>(null);
+  const [busyAction, setBusyAction] = useState<"parse" | "test" | "save" | "saveConnect" | null>(null);
+  const busyRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   const busy = busyAction != null;
+  const beginBusy = (action: "parse" | "test" | "save" | "saveConnect") => {
+    if (busyRef.current) return false;
+    busyRef.current = true;
+    setBusyAction(action);
+    return true;
+  };
+  const endBusy = () => {
+    busyRef.current = false;
+    setBusyAction(null);
+  };
+  const [certOffer, setCertOffer] = useState<{ cert: TlsCertError; key: string; fromSaveConnect: boolean } | null>(null);
+  const [saveConnectFailedKey, setSaveConnectFailedKey] = useState<string | null>(null);
+  const [selfSignedDismissed, setSelfSignedDismissed] = useState<string | null>(null);
+  const [hostBlurred, setHostBlurred] = useState(start.known);
   const [showSecret, setShowSecret] = useState(false);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pastedIntoHost, setPastedIntoHost] = useState(false);
@@ -400,7 +442,9 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
   const [portOffer, setPortOffer] = useState<Engine | null>(null);
   const [prodDismissed, setProdDismissed] = useState<string | null>(null);
   const [lowerProd, setLowerProd] = useState<EnvironmentKind | null>(null);
-  const [ack, setAck] = useState(false);
+  // Keyed by engine|env|tlsMode|trustCert so any transport/env change resets it automatically, and an explicit TLS
+  // recovery action ("Trust on Production & connect") satisfies it in one step without stopping the user a second time.
+  const [ackFor, setAckFor] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const keepRef = useRef<HTMLButtonElement>(null);
   // The question takes focus, so Enter keeps editing and nothing behind it reacts.
@@ -418,12 +462,14 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
   const refs = {
     name: useRef<HTMLInputElement>(null), host: useRef<HTMLInputElement>(null), port: useRef<HTMLInputElement>(null), file: useRef<HTMLButtonElement>(null),
     service: useRef<HTMLInputElement>(null), groupName: useRef<HTMLInputElement>(null),
-    engine: useRef<HTMLButtonElement>(null), environment: useRef<HTMLButtonElement>(null), ack: useRef<HTMLInputElement>(null),
+    engine: useRef<HTMLButtonElement>(null), environment: useRef<HTMLButtonElement>(null), ack: useRef<HTMLInputElement>(null), ca: useRef<HTMLInputElement>(null),
     sshHost: useRef<HTMLInputElement>(null), sshUser: useRef<HTMLInputElement>(null),
   };
   const set = (patch: Partial<Profile>) => {
     setP((x) => ({ ...x, ...patch }));
     setRefused(null);
+    setCertOffer(null);
+    setSaveConnectFailedKey(null);
   };
   const needsSecret = needsSecretFor(p.auth);
   // A saved password is not a token (or the reverse): after switching between them the saved secret is not reused.
@@ -461,14 +507,15 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
   };
 
   const transport = transportSummary(p);
-  // On Production a weak transport needs an explicit tick where it is chosen; a profile that was already saved so is
+  const transportAckKey = (draft: Profile) => `${draft.engine}|${draft.environment}|${draft.tlsMode}|${!!draft.trustCert}`;
+  // On Production a weak transport needs an explicit confirmation once; a profile that was already saved so is
   // not asked again until its environment or transport changes.
   const needsTransportAck = (draft: Profile) => envChosen && draft.environment === "prod" && !!transportSummary(draft).risk
     && (!existing || existing.environment !== "prod" || existing.engine !== draft.engine || existing.tlsMode !== draft.tlsMode || existing.trustCert !== draft.trustCert);
-  const ackNeeded = needsTransportAck(p);
-  useEffect(() => setAck(false), [p.engine, p.environment, p.tlsMode, p.trustCert]);
+  const ack = ackFor === transportAckKey(p);
+  const ackNeeded = needsTransportAck(p) && !ack;
   const [open, setOpen] = useState(() => ({
-    enc: !local && (transport.tone === "warn" || p.tlsMode !== "default" || p.trustCert || !!p.caPath),
+    enc: !local && (!!openEncryption || transport.tone === "warn" || p.tlsMode !== "default" || p.trustCert || !!p.caPath),
     ssh: !!p.ssh,
     time: (p.timeoutS ?? 15) !== 15 || (p.commandTimeoutS ?? 0) !== 0,
     avail: p.options?.multiSubnetFailover === "true" || p.options?.applicationIntent === "readOnly",
@@ -493,7 +540,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
   };
 
   /** Every problem Save would stop at, in reading order. */
-  const problems = (d: Profile): { key: Focusable; text: string }[] => {
+  const problems = (d: Profile, ackOverride: string | null = ackFor): { key: Focusable; text: string }[] => {
     const list: { key: Focusable; text: string }[] = [];
     const errs = profileFieldErrors(d);
     for (const f of ["host", "port", "service", "file"] as FieldKey[]) if (errs[f]) list.push({ key: f, text: errs[f]! });
@@ -503,9 +550,8 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
     if (errs.groupName) list.push({ key: "groupName", text: errs.groupName });
     list.push(...sshProblems(d));
     // A pending connection string may have changed the transport since this render. An earlier acknowledgement
-    // belongs only to the transport the checkbox displayed, never to newly parsed settings.
-    const sameTransport = d.engine === p.engine && d.environment === p.environment && d.tlsMode === p.tlsMode && d.trustCert === p.trustCert;
-    if (needsTransportAck(d) && !(ack && sameTransport)) list.push({ key: "ack", text: `Confirm that this Production connection is ${transportSummary(d).risk === "plain" ? "not encrypted" : "not checking the certificate"}.` });
+    // belongs only to the transport key it confirmed, never to newly parsed settings.
+    if (needsTransportAck(d) && ackOverride !== transportAckKey(d)) list.push({ key: "ack", text: `Confirm that this Production connection is ${transportSummary(d).risk === "plain" ? "not encrypted" : "not checking the certificate"}.` });
     return list;
   };
   const summary = showSummary ? problems(withName(p)) : [];
@@ -562,112 +608,232 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
   };
 
   const fillFromString = async (text = connStr) => {
-    setBusyAction("parse");
+    if (!beginBusy("parse")) return;
     setTest(null);
     try {
       await parse(text);
+      setHostBlurred(true);
     } finally {
-      setBusyAction(null);
+      endBusy();
     }
   };
 
-  const runTest = async () => {
-    if (busy) return;
-    setBusyAction("test");
+  const probe = async (d: Draft): Promise<{ ok: boolean; text: string; key: string; cert?: TlsCertError }> => {
+    const endpointChanged = !!existing && endpointKey(existing) !== endpointKey(d.p);
+    const kindChanged = !!existing && needsSecretFor(existing.auth) && needsSecretFor(d.p.auth) && secretKind(existing.auth) !== secretKind(d.p.auth);
+    const sshKindChanged = !!existing?.ssh && !!d.p.ssh && existing.ssh.auth !== d.p.ssh.auth;
+    // A saved secret is used unless one was typed, the saved one is of another kind, or it is marked Forget (Save
+    // deletes it, so Test runs without it, as a new profile with nothing typed does).
+    const typed = (d.touched && !!d.secret) || !existing || kindChanged || endpointChanged || forget;
+    const sshTyped = (sshSecretTouched && !!sshSecret) || !existing || sshKindChanged || endpointChanged || sshForget;
+    const key = testKey(d.p, d.secret, sshSecret, [forget, sshForget]);
+    for (let round = 0; round < 2; round++) {
+      const r = await rpc("profile.test", {
+        profileId: typed && sshTyped ? null : existing!.id, profile: d.p, secret: typed ? d.secret : null, sshSecret: sshTyped ? (sshSecret || (sshForget || sshKindChanged || endpointChanged ? "" : null)) : null,
+      });
+      // An untrusted bastion key is shown to the user, never accepted automatically.
+      if (!r.ok && r.untrustedHostKey && round === 0) {
+        const hostKey = r.untrustedHostKey;
+        if (await ask<boolean>((resolve) => ({ kind: "hostKey", hostKey, resolve }))) {
+          await rpc("ssh.trustHostKey", hostKey);
+          continue;
+        }
+      }
+      const notes = r.notes.length ? ` — ${r.notes.join(" ")}` : "";
+      if (r.ok) {
+        return { ok: true, text: `Connected: ${shownVersion(r.serverVersion)} (${Math.round(r.elapsedMs)} ms)${d.p.ssh ? " through the SSH tunnel" : ""}${notes}`, key };
+      }
+      return { ok: false, text: r.error || "Failed", key, cert: r.untrustedCertificate ?? undefined };
+    }
+    return { ok: false, text: "Failed", key };
+  };
+
+  const runTest = async (override?: Draft) => {
+    if (!beginBusy("test")) return;
+    setShowSummary(false);
     setTest(null);
+    setCertOffer(null);
+    setSaveConnectFailedKey(null);
+    let activeKey = connKey;
     try {
-      const d = await draft();
+      const d = override ? { ...override, p: withDefaultHost(withName(override.p)) } : await draft();
       if (!d) return;
+      activeKey = testKey(d.p, d.secret, sshSecret, [forget, sshForget]);
       const errs = profileFieldErrors(d.p);
       const bad = CONNECT_FIELDS.filter((f) => errs[f]);
       if (bad.length) {
         reveal(CONNECT_FIELDS, bad);
-        return setTest({ ok: false, text: errs[bad[0]]!, key: connKey });
+        return setTest({ ok: false, text: errs[bad[0]]!, key: activeKey });
       }
       const tunnel = sshProblems(d.p);
       if (tunnel.length) {
         reveal([], tunnel.map((x) => x.key));
-        return setTest({ ok: false, text: tunnel[0].text, key: connKey });
+        return setTest({ ok: false, text: tunnel[0].text, key: activeKey });
       }
-      const endpointChanged = !!existing && endpointKey(existing) !== endpointKey(d.p);
-      const kindChanged = !!existing && needsSecretFor(existing.auth) && needsSecretFor(d.p.auth) && secretKind(existing.auth) !== secretKind(d.p.auth);
-      const sshKindChanged = !!existing?.ssh && !!d.p.ssh && existing.ssh.auth !== d.p.ssh.auth;
-      // A saved secret is used unless one was typed, the saved one is of another kind, or it is marked Forget (Save
-      // deletes it, so Test runs without it, as a new profile with nothing typed does).
-      const typed = (d.touched && !!d.secret) || !existing || kindChanged || endpointChanged || forget;
-      const sshTyped = (sshSecretTouched && !!sshSecret) || !existing || sshKindChanged || endpointChanged || sshForget;
-      const key = testKey(d.p, d.secret, sshSecret, [forget, sshForget]);
-      for (let round = 0; round < 2; round++) {
-        const r = await rpc("profile.test", {
-          profileId: typed && sshTyped ? null : existing!.id, profile: d.p, secret: typed ? d.secret : null, sshSecret: sshTyped ? (sshSecret || (sshForget || sshKindChanged || endpointChanged ? "" : null)) : null,
-        });
-        // An untrusted bastion key is shown to the user, never accepted automatically.
-        if (!r.ok && r.untrustedHostKey && round === 0) {
-          const hostKey = r.untrustedHostKey;
-          if (await ask<boolean>((resolve) => ({ kind: "hostKey", hostKey, resolve }))) {
-            await rpc("ssh.trustHostKey", hostKey);
-            continue;
-          }
-        }
-        const notes = r.notes.length ? ` — ${r.notes.join(" ")}` : "";
-        setTest(r.ok ? { ok: true, text: `Connected: ${shownVersion(r.serverVersion)} (${Math.round(r.elapsedMs)} ms)${d.p.ssh ? " through the SSH tunnel" : ""}${notes}`, key } : { ok: false, text: r.error || "Failed", key });
-        break;
+      const res = await probe(d);
+      if (!mountedRef.current) return;
+      if (!res.ok && res.cert) {
+        setOpen((o) => ({ ...o, enc: true }));
+        setCertOffer({ cert: res.cert, key: res.key, fromSaveConnect: false });
       }
+      setTest({ ok: res.ok, text: res.text, key: res.key });
     } catch (e) {
-      setTest({ ok: false, text: (e as Error).message || "Failed", key: connKey });
+      if (mountedRef.current) setTest({ ok: false, text: (e as Error).message || "Failed", key: activeKey });
     } finally {
-      setBusyAction(null);
+      endBusy();
     }
   };
 
+  /** Validates a draft for Save / Save & Connect and returns the settled profile, or null after surfacing any issue. */
+  const prepareForSave = (d: Draft, ackOverride: string | null): Profile | null => {
+    // G1: a Group field the user never touched takes the profile's group as it is now (a rename while the editor was
+    // open must not write the old name back and split the group).
+    const next = groupTouched || !existing ? d.p : { ...d.p, groupName: useProfiles.getState().byId(existing.id)?.groupName ?? null };
+    const list = problems(next, ackOverride);
+    if (list.length) {
+      setShowSummary(true);
+      reveal(FIELD_ORDER, list.map((x) => x.key));
+      return null;
+    }
+    if (next.passwordRetention === "duration" && (!Number.isInteger(next.passwordRetentionMinutes) || next.passwordRetentionMinutes! < 1 || next.passwordRetentionMinutes! > 525600)) {
+      toast("warn", "Choose a duration from 1 minute to 365 days.");
+      return null;
+    }
+    return next;
+  };
+
+  const commitSave = async (next: Profile, d: Draft, connectAfter: boolean) => {
+    if (next.environment === "prod" && transportSummary(next).risk === "plain") toast("warn", "Production profile without encryption.");
+    const needs = needsSecretFor(next.auth);
+    const sshNeeds = !!next.ssh && next.ssh.auth !== "agent";
+    const endpointChanged = !!existing && endpointKey(existing) !== endpointKey(next);
+    const kindChanged = !!existing && needsSecretFor(existing.auth) && needs && secretKind(existing.auth) !== secretKind(next.auth);
+    const sshKindChanged = !!existing?.ssh && !!next.ssh && existing.ssh.auth !== next.ssh.auth;
+    // Typed text replaces the secret; an emptied box keeps it ("Leave it empty to keep the saved one") unless Forget
+    // was chosen or the saved one is of another kind (a password is not a token).
+    const secretArg = needs ? (d.touched && d.secret ? d.secret : forget || kindChanged || endpointChanged ? "" : null) : existing ? "" : null;
+    const sshArg = sshNeeds ? (sshSecretTouched && sshSecret ? sshSecret : sshForget || sshKindChanged || endpointChanged ? "" : null) : "";
+    const saved = await useProfiles.getState().save(next, secretArg, sshArg);
+    onClose();
+    if (connectAfter && onConnect) onConnect(saved);
+    else onSaved?.(saved);
+    // A new name or group changes nothing about the connection: no reconnect is needed for it.
+    if (existing && useConnections.getState().servers[existing.id] && !identityOnlyChange(existing, next)) toast("info", "Saved. Reconnect to apply connection changes.");
+    return true;
+  };
+
+  const handleSaveError = (e: unknown) => {
+    // A refusal about one field (the sidecar's invalidProfile with data.field) is shown at that field.
+    const created = (e as { savedProfile?: Profile }).savedProfile;
+    if (created && !p.id) setP((x) => ({ ...x, id: created.id, createdAt: created.createdAt, updatedAt: created.updatedAt }));
+    const field = (e as { data?: { field?: unknown } }).data?.field;
+    const message = (e as Error).message;
+    if (typeof field === "string" && (FIELD_ORDER as string[]).includes(field)) {
+      setRefused({ field: field as FieldKey, message });
+      reveal([], [field as FieldKey]);
+    } else toast("error", message);
+  };
+
   const save = async () => {
-    if (busy) return;
-    setBusyAction("save");
+    if (!beginBusy("save")) return;
     try {
       const d = await draft();
       if (!d) return;
-      // G1: a Group field the user never touched takes the profile's group as it is now (a rename while the editor was
-      // open must not write the old name back and split the group).
-      const p = groupTouched || !existing ? d.p : { ...d.p, groupName: useProfiles.getState().byId(existing.id)?.groupName ?? null };
-      const list = problems(p);
-      if (list.length) {
-        setShowSummary(true);
-        return reveal(FIELD_ORDER, list.map((x) => x.key));
-      }
-      if (p.passwordRetention === "duration" && (!Number.isInteger(p.passwordRetentionMinutes) || p.passwordRetentionMinutes! < 1 || p.passwordRetentionMinutes! > 525600)) return toast("warn", "Choose a duration from 1 minute to 365 days.");
-      if (p.environment === "prod" && transportSummary(p).risk === "plain") toast("warn", "Production profile without encryption.");
-      const needs = needsSecretFor(p.auth);
-      const sshNeeds = !!p.ssh && p.ssh.auth !== "agent";
-      const endpointChanged = !!existing && endpointKey(existing) !== endpointKey(p);
-      const kindChanged = !!existing && needsSecretFor(existing.auth) && needs && secretKind(existing.auth) !== secretKind(p.auth);
-      const sshKindChanged = !!existing?.ssh && !!p.ssh && existing.ssh.auth !== p.ssh.auth;
-      // Typed text replaces the secret; an emptied box keeps it ("Leave it empty to keep the saved one") unless Forget
-      // was chosen or the saved one is of another kind (a password is not a token).
-      const secretArg = needs ? (d.touched && d.secret ? d.secret : forget || kindChanged || endpointChanged ? "" : null) : existing ? "" : null;
-      const sshArg = sshNeeds ? (sshSecretTouched && sshSecret ? sshSecret : sshForget || sshKindChanged || endpointChanged ? "" : null) : "";
-      const saved = await useProfiles.getState().save(p, secretArg, sshArg);
-      onClose();
-      onSaved?.(saved);
-      // A new name or group changes nothing about the connection: no reconnect is needed for it.
-      if (existing && useConnections.getState().servers[existing.id] && !identityOnlyChange(existing, p)) toast("info", "Saved. Reconnect to apply connection changes.");
+      const next = prepareForSave(d, ackFor);
+      if (!next) return;
+      await commitSave(next, d, false);
     } catch (e) {
-      // A refusal about one field (the sidecar's invalidProfile with data.field) is shown at that field.
-      const created = (e as { savedProfile?: Profile }).savedProfile;
-      if (created && !p.id) setP((x) => ({ ...x, id: created.id, createdAt: created.createdAt, updatedAt: created.updatedAt }));
-      const field = (e as { data?: { field?: unknown } }).data?.field;
-      const message = (e as Error).message;
-      if (typeof field === "string" && (FIELD_ORDER as string[]).includes(field)) {
-        setRefused({ field: field as FieldKey, message });
-        reveal([], [field as FieldKey]);
-      } else toast("error", message);
+      handleSaveError(e);
     } finally {
-      setBusyAction(null);
+      endBusy();
     }
+  };
+
+  /** Verifies a new profile before saving while the typed password is still in memory; offers 1-click TLS recovery. */
+  const saveAndConnect = async (override?: Draft, ackOverride: string | null = ackFor) => {
+    if (!beginBusy("saveConnect")) return;
+    setShowSummary(false);
+    setTest(null);
+    setCertOffer(null);
+    setSaveConnectFailedKey(null);
+    try {
+      const d = override ? { ...override, p: withDefaultHost(withName(override.p)) } : await draft();
+      if (!d) return;
+      const candidate = prepareForSave(d, ackOverride);
+      if (!candidate) return;
+      if (!isLocal(candidate)) {
+        const activeKey = testKey(candidate, d.secret, sshSecret, [forget, sshForget]);
+        let res: { ok: boolean; text: string; key: string; cert?: TlsCertError };
+        try {
+          res = await probe({ ...d, p: candidate });
+        } catch (probeErr) {
+          if (mountedRef.current) {
+            setSaveConnectFailedKey(activeKey);
+            setTest({ ok: false, text: (probeErr as Error).message || "Failed", key: activeKey });
+          }
+          return;
+        }
+        if (!mountedRef.current) return;
+        if (!res.ok) {
+          if (res.cert) {
+            setOpen((o) => ({ ...o, enc: true }));
+            setCertOffer({ cert: res.cert, key: res.key, fromSaveConnect: true });
+          } else {
+            setSaveConnectFailedKey(res.key);
+          }
+          setTest({ ok: false, text: res.text, key: res.key });
+          return;
+        }
+      }
+      if (!mountedRef.current) return;
+      await commitSave(candidate, d, true);
+    } catch (e) {
+      handleSaveError(e);
+    } finally {
+      endBusy();
+    }
+  };
+
+  const applyCertRecovery = (action: "trust" | "switchMandatoryTrust" | "switchRequire" | "focusCa") => {
+    if (busyRef.current) return;
+    if (action === "focusCa") {
+      setOpen((o) => ({ ...o, enc: true }));
+      setCertOffer(null);
+      setTest(null);
+      setSaveConnectFailedKey(null);
+      setFocusField("ca");
+      return;
+    }
+    const fromSaveConnect = !!certOffer?.fromSaveConnect;
+    const patch: Partial<Profile> = action === "trust"
+      ? { trustCert: true }
+      : action === "switchMandatoryTrust"
+        ? { tlsMode: "mandatory", trustCert: true }
+        : { tlsMode: knownEngine(p.engine) === "pg" ? "default" : "require" };
+    const nextP: Profile = { ...p, ...patch };
+    // The user just explicitly confirmed trusting this certificate (including on Production): record that
+    // acknowledgement for this exact transport so Save / Save & Connect doesn't stop them a second time.
+    const confirmedKey = transportAckKey(nextP);
+    setP(nextP);
+    setAckFor(confirmedKey);
+    setOpen((o) => ({ ...o, enc: true }));
+    setCertOffer(null);
+    setSaveConnectFailedKey(null);
+    const nextDraft: Draft = { p: nextP, secret, touched: secretTouched };
+    // Existing profile with a keyring-only DB or SSH secret: changing TLS moves endpointKey (PT3-1), so ask to re-enter rather than hitting EndpointRefusal.
+    const dbBlocked = needsSecretFor(nextP.auth) && !(secretTouched && !!secret) && !forget && savedSecret !== false;
+    const sshBlocked = !!nextP.ssh && nextP.ssh.auth !== "agent" && !(sshSecretTouched && !!sshSecret) && !sshForget && sshSaved !== false;
+    if (existing && (dbBlocked || sshBlocked)) {
+      setTest({ ok: false, text: "Encryption updated. Re-enter the password to test, or click Save.", key: testKey(nextP, secret, sshSecret, [forget, sshForget]) });
+      return;
+    }
+    if (fromSaveConnect) void saveAndConnect(nextDraft, confirmedKey);
+    else void runTest(nextDraft);
   };
 
   // Esc, Cancel, ✕ and a click outside all ask before typed changes are dropped.
   const tryClose = () => {
-    if (busy) return;
+    if (busyRef.current) return;
     if (dirty) setConfirmDiscard(true);
     else onClose();
   };
@@ -819,6 +985,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
     setPastedIntoHost(true);
   };
   const onHostBlur = () => {
+    setHostBlurred(true);
     const split = p.host ? splitHostPort(p.host, p.engine) : null;
     if (!split) return;
     set({ host: split.host, port: split.port });
@@ -877,35 +1044,135 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
     </div>
   );
 
-  // The footer's one line: what Save is waiting for (after a Save), else the last test, else what to do next.
-  const footerStatus = summary.length > 0 ? (
-    <div role="alert" className="flex items-start gap-1.5 text-err text-[12px] leading-snug">
-      <span className="mt-0.5 shrink-0"><Icon d={ICON.circleAlert} size={14} /></span>
-      <span className="min-w-0">
-        <span className="font-semibold">{summary.length === 1 ? "1 thing needs" : `${summary.length} things need`} attention: </span>
-        {summary.map((x, i) => (
-          <span key={x.key}>
-            {i > 0 && " · "}
-            <button type="button" className="underline hover:no-underline text-left" onClick={() => reveal([], [x.key])}>{x.text}</button>
-          </span>
-        ))}
-      </span>
+  const certOfferActive = !!certOffer && certOffer.key === connKey;
+  const certIsProd = envChosen && p.environment === "prod";
+  const selfSignedHost = !local && engineChosen && knownEngine(p.engine) === "mssql" && !p.trustCert && p.tlsMode !== "strict"
+    && looksLikeSelfSignedMssqlHost(p.host, { includeSingleLabel: hostBlurred }) ? (p.host ?? "").trim() : null;
+  const hasFeedbackDock = summary.length > 0 || certOfferActive || !!test;
+
+  const dismissFeedback = () => {
+    setTest(null);
+    setCertOffer(null);
+    setSaveConnectFailedKey(null);
+  };
+
+  // Full-width docked feedback strip above the footer: validation alerts, TLS certificate recovery, and test results.
+  // Keeping rich/multi-line feedback out of the button row prevents cramped wrapping and mini-scrollbars.
+  const feedbackDock = summary.length > 0 ? (
+    <div
+      role="status"
+      aria-live="polite"
+      data-testid="profile-feedback-dock"
+      className="q-profile-reveal shrink-0 border-t px-5 py-2.5 text-[12px] leading-snug"
+      style={{ borderColor: "color-mix(in srgb, var(--q-err) 35%, var(--q-line))", background: "color-mix(in srgb, var(--q-err) 7%, transparent)" }}
+    >
+      <div role="alert" className="flex items-start gap-2 text-err">
+        <span className="mt-0.5 shrink-0"><Icon d={ICON.circleAlert} size={15} /></span>
+        <span className="min-w-0 flex-1">
+          <span className="font-semibold">{summary.length === 1 ? "1 thing needs" : `${summary.length} things need`} attention: </span>
+          {summary.map((x, i) => (
+            <span key={x.key}>
+              {i > 0 && " · "}
+              <button type="button" className="underline hover:no-underline text-left" onClick={() => reveal([], [x.key])}>{x.text}</button>
+            </span>
+          ))}
+        </span>
+      </div>
+    </div>
+  ) : certOfferActive && certOffer ? (
+    <div
+      role="status"
+      aria-live="polite"
+      data-testid="tls-cert-offer"
+      className="q-profile-reveal shrink-0 border-t px-5 py-3 text-[12px] leading-snug"
+      style={{
+        borderColor: certIsProd ? "color-mix(in srgb, var(--q-env-prod) 45%, var(--q-line))" : "color-mix(in srgb, var(--q-warn) 45%, var(--q-line))",
+        background: certIsProd ? "color-mix(in srgb, var(--q-env-prod) 7%, transparent)" : "color-mix(in srgb, var(--q-warn) 8%, transparent)",
+      }}
+    >
+      <div className="flex items-start gap-2.5">
+        <span className="mt-0.5 shrink-0" style={{ color: certIsProd ? "var(--q-env-prod)" : "var(--q-warn)" }}><Icon d={ICON.triangleAlert} size={15} /></span>
+        <div className="flex-1 min-w-0 space-y-1.5">
+          <div className="font-semibold text-fg">
+            {certIsProd ? "Production server certificate is not trusted" : "Server certificate is not trusted"}{" "}
+            <span className="font-normal q-mono text-[11px] text-muted">({escapeForDisplay(certOffer.cert.host)})</span>
+          </div>
+          <p className="text-fg">{escapeForDisplay(certOffer.cert.message)}</p>
+          {certIsProd && (
+            <p className="text-[11px]" style={{ color: "var(--q-env-prod)" }}>
+              Continuing skips certificate verification on this Production connection (traffic remains TLS-encrypted).
+            </p>
+          )}
+          <div className="flex flex-wrap items-center gap-2 pt-0.5">
+            {certOffer.cert.canTrustCert && (
+              <button type="button" className={`${BTN} ${certIsProd ? "q-btn-danger" : "q-btn-primary"} h-7`} disabled={busy} onClick={() => applyCertRecovery("trust")}>
+                {certIsProd
+                  ? (certOffer.fromSaveConnect ? "Trust on Production & connect" : "Trust on Production & test again")
+                  : (certOffer.fromSaveConnect ? "Trust certificate & connect" : "Trust server certificate & test again")}
+              </button>
+            )}
+            {certOffer.cert.strictMode && (
+              <button type="button" className={`${BTN} ${certIsProd ? "q-btn-danger" : "q-btn-primary"} h-7`} disabled={busy} onClick={() => applyCertRecovery("switchMandatoryTrust")}>
+                {certIsProd
+                  ? (certOffer.fromSaveConnect ? "Switch to Mandatory on Production & connect" : "Switch to Mandatory on Production & test again")
+                  : (certOffer.fromSaveConnect ? "Switch to Mandatory & connect" : "Switch to Mandatory + trust")}
+              </button>
+            )}
+            {certOffer.cert.supportsCaPath && (
+              <button type="button" className={`${BTN} h-7`} disabled={busy} onClick={() => applyCertRecovery("focusCa")}>
+                Set CA certificate
+              </button>
+            )}
+            {certOffer.cert.canSwitchToRequire && (
+              <button type="button" className={`${BTN} ${certIsProd ? "q-btn-danger" : ""} h-7`} disabled={busy} onClick={() => applyCertRecovery("switchRequire")}>
+                {certIsProd
+                  ? (certOffer.fromSaveConnect ? "Switch to Require on Production & connect" : "Switch to Require on Production & test again")
+                  : (certOffer.fromSaveConnect ? "Switch to Require & connect" : "Switch to Require & test again")}
+              </button>
+            )}
+            {certOffer.fromSaveConnect && (
+              <button type="button" className="q-link min-h-6 text-[12px]" disabled={busy} onClick={() => void save()}>
+                Save without connecting
+              </button>
+            )}
+          </div>
+        </div>
+        <button type="button" className="q-icon-btn shrink-0" aria-label="Dismiss" title="Dismiss" onClick={dismissFeedback}>
+          <Icon d={ICON.x} size={13} />
+        </button>
+      </div>
     </div>
   ) : test ? (
-    // No negative margins in here: anything past the line box would overflow the status line and give it a scrollbar.
-    <div className={`flex items-center gap-1.5 min-h-6 text-[12px] leading-snug ${testStale ? "text-muted" : test.ok ? "text-ok" : "text-err"}`}>
-      <span className="shrink-0 self-start mt-[5px]"><Icon d={test.ok ? ICON.circleCheck : ICON.circleAlert} size={14} /></span>
-      <span className="min-w-0 select-text py-[3px]">
-        {test.text}
-        {testStale && <span className="block text-[11px]">Settings changed since this test. Test again.</span>}
-      </span>
-      <button type="button" className="q-icon-btn shrink-0 self-start" aria-label="Dismiss" title="Dismiss" onClick={() => setTest(null)}>
-        <Icon d={ICON.x} size={13} />
-      </button>
+    <div
+      role="status"
+      aria-live="polite"
+      data-testid="profile-feedback-dock"
+      className="q-profile-reveal shrink-0 border-t px-5 py-2.5 text-[12px] leading-snug"
+      style={
+        testStale
+          ? { borderColor: "var(--q-line)", background: "var(--q-panel-2)" }
+          : test.ok
+            ? { borderColor: "color-mix(in srgb, var(--q-ok) 35%, var(--q-line))", background: "color-mix(in srgb, var(--q-ok) 8%, transparent)" }
+            : { borderColor: "color-mix(in srgb, var(--q-err) 35%, var(--q-line))", background: "color-mix(in srgb, var(--q-err) 7%, transparent)" }
+      }
+    >
+      <div className={`flex items-start gap-2 ${testStale ? "text-muted" : test.ok ? "text-ok" : "text-err"}`}>
+        <span className="shrink-0 mt-0.5"><Icon d={test.ok ? ICON.circleCheck : ICON.circleAlert} size={15} /></span>
+        <div className="min-w-0 flex-1 select-text space-y-1">
+          <div>{escapeForDisplay(test.text)}</div>
+          {saveConnectFailedKey === connKey && !test.ok && (
+            <div>
+              <button type="button" className={`${BTN} h-6 text-fg`} disabled={busy} onClick={() => void save()}>Save without connecting</button>
+            </div>
+          )}
+          {testStale && <div className="text-[11px]">Settings changed since this test. Test again.</div>}
+        </div>
+        <button type="button" className="q-icon-btn shrink-0" aria-label="Dismiss" title="Dismiss" onClick={dismissFeedback}>
+          <Icon d={ICON.x} size={13} />
+        </button>
+      </div>
     </div>
-  ) : (
-    <span className="text-[12px] text-muted">{engineChosen ? "Not tested yet. You can save without testing." : "Pick a server type to continue."}</span>
-  );
+  ) : null;
 
   return (
     <Modal
@@ -947,10 +1214,25 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
                 <BusyButtonContent busy={busyAction === "test"} label="Test connection" busyLabel="Testing…" />
               </button>
             )}
-            {/* Kept mounted so a new test result is announced. */}
-            <div role="status" aria-live="polite" className="flex-1 min-w-0 max-h-[48px] overflow-auto px-1">{footerStatus}</div>
+            {hasFeedbackDock ? (
+              <div className="flex-1" />
+            ) : (
+              <div role="status" aria-live="polite" className="flex-1 min-w-0 truncate px-1 text-[12px] text-muted">
+                {engineChosen ? "Not tested yet. You can save without testing." : "Pick a server type to continue."}
+              </div>
+            )}
             <button className={`${BTN} shrink-0`} onClick={tryClose}>Cancel</button>
-            {engineChosen && (
+            {engineChosen && !existing && (
+              <button className={`${reveal3}${BTN} shrink-0`} onClick={() => void save()} disabled={busy} aria-busy={busyAction === "save" || undefined}>
+                <BusyButtonContent busy={busyAction === "save"} label="Save" busyLabel="Saving…" />
+              </button>
+            )}
+            {engineChosen && !existing && (
+              <button className={`${reveal3}${BTN} q-btn-primary shrink-0`} onClick={() => void saveAndConnect()} disabled={busy} aria-busy={busyAction === "saveConnect" || undefined}>
+                <BusyButtonContent busy={busyAction === "saveConnect"} label="Save & Connect" busyLabel="Connecting…" />
+              </button>
+            )}
+            {engineChosen && existing && (
               <button className={`${reveal3}${BTN} q-btn-primary shrink-0`} onClick={() => void save()} disabled={busy} aria-busy={busyAction === "save" || undefined}>
                 <BusyButtonContent busy={busyAction === "save"} label="Save" busyLabel="Saving…" />
               </button>
@@ -1053,7 +1335,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
                 <div className="min-w-0">
                   <div className="grid grid-cols-[minmax(0,1fr)_auto_96px] items-center gap-x-2.5">
                     <input
-                      id={`${fid}-host`} ref={refs.host} className={`${INPUT} q-mono`} value={p.host ?? ""} onChange={(e) => { set({ host: e.target.value }); setNote(null); }} placeholder="localhost"
+                      id={`${fid}-host`} ref={refs.host} className={`${INPUT} q-mono`} value={p.host ?? ""} onChange={(e) => { set({ host: e.target.value }); setNote(null); setHostBlurred(false); }} placeholder="localhost"
                       title="Empty: localhost" autoComplete="off" spellCheck={false} onPaste={onHostPaste} onBlur={onHostBlur}
                       {...invalidProps("host", fields.instanceNames ? `${fid}-host-hint` : undefined)}
                     />
@@ -1085,6 +1367,26 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
                     <span>{p.port} is the usual {ENGINE_TRAITS[portOffer].shortLabel} port.</span>
                     <button type="button" className={`${BTN} h-6`} onClick={() => { const port = p.port; chooseEngine(portOffer); set({ port }); }}>Switch to {ENGINE_TRAITS[portOffer].shortLabel}</button>
                     <button type="button" className="q-link min-h-6" onClick={() => setPortOffer(null)}>Keep {traits.shortLabel}</button>
+                  </Offer>
+                </div>
+              )}
+              {selfSignedHost && selfSignedDismissed !== selfSignedHost && !certOfferActive && (
+                <div className="pl-[148px]">
+                  <Offer warn={certIsProd}>
+                    <span>{certIsProd ? "This Production server likely uses a self-signed certificate." : "This server likely uses a self-signed certificate."}</span>
+                    <button
+                      type="button"
+                      className={`${BTN} ${certIsProd ? "q-btn-danger" : ""} h-6`}
+                      onClick={() => {
+                        const nextP = { ...p, trustCert: true };
+                        set({ trustCert: true });
+                        if (certIsProd) setAckFor(transportAckKey(nextP));
+                        setOpen((o) => ({ ...o, enc: true }));
+                      }}
+                    >
+                      {certIsProd ? "Trust on Production" : "Trust server certificate"}
+                    </button>
+                    <button type="button" className="q-link min-h-6" onClick={() => setSelfSignedDismissed(selfSignedHost)}>Dismiss</button>
                   </Offer>
                 </div>
               )}
@@ -1291,14 +1593,14 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
                       </Row>
                     ) : (p.tlsMode === "verifyCa" || p.tlsMode === "verifyFull" || ((knownEngine(p.engine) === "mySql" || oracle) && p.tlsMode === "default") || !!p.caPath) && (
                       <Row label="CA certificate" htmlFor={`${fid}-ca`} hint="Used by Verify CA / Verify full." hintId={`${fid}-ca-hint`}>
-                        <input id={`${fid}-ca`} className={`${INPUT} q-mono`} value={p.caPath ?? ""} onChange={(e) => set({ caPath: e.target.value || null })} placeholder="/etc/ssl/certs/root.crt" aria-describedby={`${fid}-ca-hint`} />
+                        <input id={`${fid}-ca`} ref={refs.ca} className={`${INPUT} q-mono`} value={p.caPath ?? ""} onChange={(e) => set({ caPath: e.target.value || null })} placeholder="/etc/ssl/certs/root.crt" aria-describedby={`${fid}-ca-hint`} />
                       </Row>
                     )}
                     {transport.risk === "plain" && <p className="q-profile-reveal pl-[148px] text-[11px] text-warn">The password and every result cross the network as plain text.</p>}
-                    {ackNeeded && (
+                    {needsTransportAck(p) && (
                       <div className="q-profile-reveal pl-[148px]">
                         <label className="flex items-center gap-2 px-2.5 py-2 rounded-md border text-[12px] font-semibold cursor-pointer" style={{ color: "var(--q-env-prod)", borderColor: "var(--q-env-prod)", background: "color-mix(in srgb, var(--q-env-prod) 7%, transparent)" }}>
-                          <input ref={refs.ack} type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
+                          <input ref={refs.ack} type="checkbox" checked={ack} onChange={(e) => setAckFor(e.target.checked ? transportAckKey(p) : null)} />
                           I accept that this Production connection {transport.risk === "plain" ? "is not encrypted" : "does not check the server certificate"}
                         </label>
                       </div>
@@ -1360,6 +1662,7 @@ export function ProfileEditor({ profileId, preset, copyOf, onClose, onSaved }: {
           </>
         )}
       </div>
+      {feedbackDock}
     </Modal>
   );
 }

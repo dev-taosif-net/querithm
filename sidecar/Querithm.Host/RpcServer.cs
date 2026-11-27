@@ -389,6 +389,10 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
         {
             return new ProfileTestResult { Ok = false, Error = q.Message, UntrustedHostKey = key, ElapsedMs = sw.Elapsed.TotalMilliseconds };
         }
+        catch (Core.QuerithmException q) when (q.DataPayload is TlsCertError cert)
+        {
+            return new ProfileTestResult { Ok = false, Error = q.Message, UntrustedCertificate = cert, ElapsedMs = sw.Elapsed.TotalMilliseconds, Notes = notes.ToArray() };
+        }
         catch (Exception ex)
         {
             var msg = ex is Core.QuerithmException ? ex.Message : provider.TranslateException(ex).FirstOrDefault()?.Message ?? ex.Message;

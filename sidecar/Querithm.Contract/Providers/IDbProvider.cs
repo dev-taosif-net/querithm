@@ -228,6 +228,12 @@ public interface IDbProvider
     /// <summary>Errors from a failed command, with server line numbers where known (relative to <paramref name="commandText"/>).</summary>
     IReadOnlyList<ProviderMessage> TranslateException(Exception ex, string? commandText = null);
 
+    /// <summary>
+    /// Classifies a connect-time TLS certificate validation failure so the UI can explain it clearly and offer an explicit
+    /// recovery action; null for every other error (unreachable hosts, wrong credentials, TLS protocol mismatches).
+    /// </summary>
+    TlsCertError? ClassifyTlsCertificateError(Exception ex, Profile profile) => null;
+
     /// <summary>Statements to run before/after the user's batches for the given options (SET STATISTICS ...).</summary>
     (string? Before, string? After) SessionOptionsSql(ExecuteOptions options);
 

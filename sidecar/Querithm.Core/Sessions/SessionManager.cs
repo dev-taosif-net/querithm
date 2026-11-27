@@ -266,7 +266,8 @@ public sealed class SessionManager : IAsyncDisposable
     async Task<System.Data.Common.DbConnection> OpenTransportAsync(Profile profile, IDbProvider provider, string? secret, string? sshSecret, string? database,
         CancellationToken ct, Ssh.SshTunnelManager.Tunnel? tunnel)
     {
-        if (profile.Ssh == null) return await provider.OpenAsync(profile, secret, database, null, ct).ConfigureAwait(false);
+        if (profile.Ssh == null)
+            return await OpenProviderWithTlsGuardAsync(profile, profile, provider, secret, database, ct).ConfigureAwait(false);
         var (host, port, refusal) = provider.TunnelTarget(profile);
         if (refusal != null) throw new QuerithmException("sshTarget", refusal);
         if (tunnel == null)
@@ -277,9 +278,28 @@ public sealed class SessionManager : IAsyncDisposable
         var (routed, _) = provider.RouteThrough(profile, tunnel.Local.Address.ToString(), tunnel.Local.Port);
         using (tunnel.Expect(provider.TunnelConnectsPerOpen(routed)))
         {
-            var conn = await provider.OpenAsync(routed, secret, database, null, ct).ConfigureAwait(false);
+            var conn = await OpenProviderWithTlsGuardAsync(profile, routed, provider, secret, database, ct).ConfigureAwait(false);
             _viaTunnel.AddOrUpdate(conn, tunnel);
             return conn;
+        }
+    }
+
+    static async Task<System.Data.Common.DbConnection> OpenProviderWithTlsGuardAsync(Profile originalProfile, Profile targetProfile,
+        IDbProvider provider, string? secret, string? database, CancellationToken ct)
+    {
+        try
+        {
+            return await provider.OpenAsync(targetProfile, secret, database, null, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not QuerithmException && provider.ClassifyTlsCertificateError(ex, originalProfile) is { } cert)
+        {
+            var clean = cert with
+            {
+                Host = LogScrubber.Scrub(cert.Host),
+                Message = LogScrubber.Scrub(cert.Message),
+                Detail = cert.Detail != null ? LogScrubber.Scrub(cert.Detail) : null,
+            };
+            throw new QuerithmException("tlsCertificateUntrusted", clean.Message, clean);
         }
     }
 

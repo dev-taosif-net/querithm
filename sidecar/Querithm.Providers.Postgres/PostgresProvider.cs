@@ -515,6 +515,25 @@ public sealed class PostgresProvider : IDbProvider
         return (proc, line);
     }
 
+    public TlsCertError? ClassifyTlsCertificateError(Exception ex, Profile profile)
+    {
+        if (profile.TlsMode is not (TlsMode.VerifyFull or TlsMode.VerifyCa)) return null;
+        if (TlsCertificateClassifier.TryClassify(ex) is not { } m) return null;
+        var endpoint = TlsCertificateClassifier.FormatEndpoint(profile.Host, profile.Port, 5432);
+        return new TlsCertError
+        {
+            Engine = Engine.Pg,
+            Host = endpoint,
+            Reason = m.Reason,
+            CanTrustCert = false,
+            StrictMode = false,
+            CanSwitchToRequire = true,
+            SupportsCaPath = true,
+            Message = $"Connected to PostgreSQL at {endpoint}, but its TLS certificate could not be verified ({TlsCertificateClassifier.ReasonPhrase(m.Reason)}). Provide the server's CA certificate file under Encryption, check the host name, or switch Encryption to Require.",
+            Detail = m.Detail,
+        };
+    }
+
     public IReadOnlyList<ProviderMessage> TranslateException(Exception ex, string? commandText = null)
     {
         if (ex is PostgresException pg)
@@ -536,6 +555,9 @@ public sealed class PostgresProvider : IDbProvider
             if (!string.IsNullOrEmpty(pg.Where)) text += "\nCONTEXT: " + pg.Where;
             return [new ProviderMessage(Severity.Error, $"{pg.SqlState}: {text}", line ?? procLine, proc)];
         }
+        if (commandText == null && (ex is System.Security.Authentication.AuthenticationException || ex is NpgsqlException) && TlsCertificateClassifier.TryClassify(ex) is { } cert)
+            return [new ProviderMessage(Severity.Error,
+                $"Connected to PostgreSQL, but its TLS certificate could not be verified ({TlsCertificateClassifier.ReasonPhrase(cert.Reason)}). Provide the server's CA certificate file under Encryption, check the host name, or switch Encryption to Require.")];
         if (ex is NpgsqlException { InnerException: { } inner }) return [new ProviderMessage(Severity.Error, $"{ex.Message} {inner.Message}")];
         return [new ProviderMessage(Severity.Error, ex.Message)];
     }

@@ -19,7 +19,9 @@ import { PasswordRetention } from "../connections/PasswordRetention";
 import { ProfileEditor } from "../connections/ProfileEditor";
 import { initMonaco, monaco } from "../editor/monaco";
 import { installTextDrop } from "../editor/textDrop";
-import { newQueryTab, openDefinition, runQuery } from "./actions";
+import { activateTab, changeConnection, newQueryTab, openDefinition, runQuery } from "./actions";
+import { tabForNewConnection } from "./tabActions";
+import { useConnections } from "../store/connections";
 import { GridConflictsDialog, GridPendingDialog, GridPreviewDialog } from "../results/GridDialogs";
 import { UpdateDialog } from "./UpdateDialog";
 import { assertNever, dialectOf, DIALECTS, engineTraits } from "../engines";
@@ -51,14 +53,32 @@ function DialogView({ d }: { d: Dialog }) {
           profileId={d.profileId}
           preset={d.preset}
           copyOf={d.copyOf}
+          openEncryption={d.openEncryption}
           onClose={close}
           onSaved={d.fromConnect ? (saved) => useUi.getState().openDialog({ kind: "connect", focus: saved.id }) : undefined}
+          onConnect={(saved) => {
+            void (async () => {
+              try {
+                const ok = await useConnections.getState().connect(saved.id);
+                if (!ok) return;
+                const reuse = tabForNewConnection();
+                if (reuse) {
+                  await changeConnection(reuse, saved.id);
+                  activateTab(reuse);
+                } else if (!useTabs.getState().activeId) newQueryTab({ profileId: saved.id });
+              } catch (e) {
+                toast("error", e instanceof Error ? e.message : String(e));
+              }
+            })();
+          }}
         />
       );
     case "password":
       return <PasswordDialog d={d} />;
     case "hostKey":
       return <HostKeyDialog d={d} />;
+    case "tlsCert":
+      return <TlsCertDialog d={d} />;
     case "guard":
       return <GuardDialog d={d} />;
     case "txClose":
@@ -230,6 +250,76 @@ function HostKeyDialog({ d }: { d: Extract<Dialog, { kind: "hostKey" }> }) {
           <div><span className="text-muted">{changed ? "New fingerprint:" : "Fingerprint:"}</span> <b className={changed ? "text-err" : "text-fg"}>SHA256:{k.fingerprint}</b></div>
           {changed && <div><span className="text-muted">Trusted before:</span> SHA256:{k.previousFingerprint}</div>}
         </div>
+      </div>
+    </Modal>
+  );
+}
+
+const TLS_REASON_LABEL = {
+  untrustedRoot: "Self-signed or untrusted certificate authority",
+  nameMismatch: "Certificate name does not match the server address",
+  expired: "Certificate expired or not yet valid",
+  other: "Certificate validation failed",
+} as const;
+
+/**
+ * A server's TLS certificate failed verification on connect (common with self-signed SQL Server installs):
+ * never accepted silently; Cancel is focused by default and Production shows danger styling with an explicit
+ * Production action button (§13.2).
+ */
+function TlsCertDialog({ d }: { d: Extract<Dialog, { kind: "tlsCert" }> }) {
+  const c = d.cert;
+  const profile = useProfiles((s) => s.profiles.find((p) => p.id === d.profileId));
+  const isProd = profile?.environment === "prod";
+  const canRecover = c.canTrustCert || c.strictMode || c.canSwitchToRequire;
+  const actionLabel = c.canTrustCert
+    ? (isProd ? "Trust on Production & connect" : "Trust certificate & connect")
+    : c.strictMode
+      ? (isProd ? "Switch to Mandatory on Production" : "Switch to Mandatory & trust")
+      : c.canSwitchToRequire
+        ? (isProd ? "Switch to Require on Production" : "Switch to Require & connect")
+        : null;
+  const actionChoice = c.canTrustCert
+    ? "trust"
+    : c.strictMode
+      ? "switchMandatoryTrust"
+      : "switchRequire";
+  return (
+    <Modal
+      danger={isProd}
+      title={isProd ? "⚠ Production server certificate is not trusted" : "Server certificate is not trusted"}
+      subtitle={escapeForDisplay(c.host)}
+      onClose={() => d.resolve("cancel")}
+      width={560}
+      footer={
+        <>
+          <button className="q-btn" data-modal-cancel onClick={() => d.resolve("cancel")} autoFocus>Cancel</button>
+          <button className="q-btn" onClick={() => d.resolve("edit")}>Edit profile…</button>
+          {actionLabel && (
+            <button
+              className={`q-btn ${isProd ? "q-btn-danger" : "q-btn-primary"}`}
+              onClick={() => d.resolve(actionChoice)}
+            >
+              {actionLabel}
+            </button>
+          )}
+        </>
+      }
+    >
+      <div className="space-y-3 text-fg leading-relaxed">
+        <p>{escapeForDisplay(c.message)}</p>
+        <div className="p-3 bg-bg border border-line rounded-lg q-mono text-[11px] space-y-1 select-text">
+          <div><span className="text-muted">Server:</span> {escapeForDisplay(c.host)}</div>
+          <div><span className="text-muted">Reason:</span> {TLS_REASON_LABEL[c.reason] ?? TLS_REASON_LABEL.other}</div>
+          {c.detail && <div className="break-words"><span className="text-muted">Detail:</span> {escapeForDisplay(c.detail)}</div>}
+        </div>
+        {canRecover && (
+          <p className="text-[11.5px] text-muted" style={isProd ? { color: "var(--q-env-prod)" } : undefined}>
+            {isProd
+              ? "This is a Production connection. Continuing keeps TLS encryption on, but skips certificate verification."
+              : "Traffic stays encrypted with TLS, but the server's identity is not verified against a trusted CA."}
+          </p>
+        )}
       </div>
     </Modal>
   );

@@ -1,7 +1,7 @@
 import { create } from "zustand";
-import type { Capabilities, CapabilityInfo, DatabaseInfo, Profile, SshHostKey } from "../ipc/contract";
+import type { Capabilities, CapabilityInfo, DatabaseInfo, Profile, SshHostKey, TlsCertError } from "../ipc/contract";
 import { rpc, RpcError, shell } from "../ipc/client";
-import { ask } from "./ui";
+import { ask, useUi } from "./ui";
 import { useProfiles } from "./profiles";
 import { touchRecent, useSettings } from "./settings";
 import { locationOf, needsSecretFor } from "../connections/auth";
@@ -102,9 +102,9 @@ export const useConnections = create<ConnStore>((set, get) => {
     if (get().servers[id]?.sessionId === sessionId && !get().disconnected[id]) put(id, patch);
   };
 
-  /** One connect attempt (prompts, retries, SSH host key). */
+  /** One connect attempt (prompts, retries, SSH host key, TLS certificate). */
   const dial = async (profileId: string, opts?: Parameters<ConnStore["connect"]>[1]): Promise<boolean> => {
-    const profile = useProfiles.getState().byId(profileId);
+    let profile = useProfiles.getState().byId(profileId);
     if (!profile) return false;
     // A profile this build cannot read (newer build, unavailable engine) is never dialed; the sidecar refuses it as well.
     if (profile.unsupported) {
@@ -126,6 +126,7 @@ export const useConnections = create<ConnStore>((set, get) => {
     if (quiet && needsSecret(profile) && !(await shell.secretExists(profileId).catch(() => false))) return needsInput("The password is not saved.");
     let error: string | undefined;
     let sshSecret: string | undefined;
+    let tlsRetried = false;
     // A password the server refused is not kept: the prompt saves what was typed before the server answers, so when the
     // user gives up (Cancel, or the attempts run out) after a refusal, the refused one is removed; otherwise every later
     // launch would send it again and count against the server's lockout.
@@ -158,14 +159,56 @@ export const useConnections = create<ConnStore>((set, get) => {
         if (openedId) void rpc("session.close", { sessionId: openedId, force: true }).catch(() => {});
         if (get().disconnected[profileId] || !get().servers[profileId]) return false;
         const msg = e instanceof Error ? e.message : String(e);
-        // SSH tunnel: an untrusted bastion key waits for the user; a missing SSH secret is asked for.
-        if (quiet && e instanceof RpcError && (e.appCode === "sshHostKeyUnknown" || e.appCode === "sshHostKeyChanged" || e.appCode === "sshNeedsSecret")) return needsInput(msg);
+        // SSH tunnel & TLS certificate: an untrusted bastion key or server certificate waits for the user; a missing SSH secret is asked for.
+        if (quiet && e instanceof RpcError && (e.appCode === "sshHostKeyUnknown" || e.appCode === "sshHostKeyChanged" || e.appCode === "sshNeedsSecret" || e.appCode === "tlsCertificateUntrusted")) return needsInput(msg);
         if (quiet && isAuthError(e) && needsSecret(profile)) return needsInput(msg);
         if (e instanceof RpcError && (e.appCode === "sshHostKeyUnknown" || e.appCode === "sshHostKeyChanged")) {
           const hostKey = e.data as SshHostKey;
           if (await ask<boolean>((resolve) => ({ kind: "hostKey", hostKey, resolve }))) {
             await rpc("ssh.trustHostKey", hostKey);
             continue;
+          }
+          put(profileId, { status: "error", error: msg });
+          return false;
+        }
+        if (e instanceof RpcError && e.appCode === "tlsCertificateUntrusted") {
+          const cert = e.data as TlsCertError | undefined;
+          if (cert) {
+            const choice = await ask<"trust" | "switchMandatoryTrust" | "switchRequire" | "edit" | "cancel">((resolve) => ({
+              kind: "tlsCert", profileId, cert, resolve,
+            }));
+            // Re-check after awaiting the dialog: the user may have disconnected or deleted/edited the profile meanwhile.
+            if (get().disconnected[profileId] || !get().servers[profileId]) return false;
+            const latest = useProfiles.getState().byId(profileId);
+            if (!latest) return false;
+            if (choice === "edit") {
+              put(profileId, { status: "error", error: msg });
+              useUi.getState().openDialog({ kind: "profile", profileId, openEncryption: true });
+              return false;
+            }
+            if (choice === "trust" || choice === "switchMandatoryTrust" || choice === "switchRequire") {
+              const patch: Partial<Profile> = choice === "trust"
+                ? { trustCert: true }
+                : choice === "switchMandatoryTrust"
+                  ? { tlsMode: "mandatory", trustCert: true }
+                  : { tlsMode: latest.engine === "pg" ? "default" : "require" };
+              try {
+                // Never pass an opt-out one-time sshSecret/secret to save(): save() would persist it into the OS keyring (§13.1).
+                // Keep sshSecret in memory for the retry below.
+                profile = await useProfiles.getState().save({ ...latest, ...patch }, null, null);
+              } catch (saveErr) {
+                put(profileId, { status: "error", error: saveErr instanceof Error ? saveErr.message : String(saveErr) });
+                return false;
+              }
+              if (get().disconnected[profileId] || !get().servers[profileId]) return false;
+              error = undefined;
+              // One-time TLS recovery does not consume an auth retry slot, so attempt === 3 still retries cleanly.
+              if (!tlsRetried) {
+                tlsRetried = true;
+                attempt--;
+              }
+              continue;
+            }
           }
           put(profileId, { status: "error", error: msg });
           return false;
@@ -192,7 +235,7 @@ export const useConnections = create<ConnStore>((set, get) => {
       }
     }
     await dropRefused();
-    if (!get().disconnected[profileId] && get().servers[profileId]) put(profileId, { status: "error", error });
+    if (!get().disconnected[profileId] && get().servers[profileId]) put(profileId, { status: "error", error: error || "Could not connect after multiple attempts." });
     return false;
   };
 

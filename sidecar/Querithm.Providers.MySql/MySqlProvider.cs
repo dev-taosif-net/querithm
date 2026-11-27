@@ -398,11 +398,38 @@ public sealed class MySqlProvider : IDbProvider
         return new Unsubscribe(() => c.InfoMessage -= Handler);
     }
 
-    public IReadOnlyList<ProviderMessage> TranslateException(Exception ex, string? commandText = null) => ex is MySqlException m
-        ? [new ProviderMessage(Severity.Error, m.Number is 1148 or 3948 or 2068
-            ? "LOAD DATA LOCAL is turned off: it lets the server name any file on this computer to read. Use Import data… instead."
-            : SignInReason(m.Message) ?? m.Message, Number: m.Number)]
-        : [new ProviderMessage(Severity.Error, SignInReason(ex.Message) ?? ex.Message)];
+    public TlsCertError? ClassifyTlsCertificateError(Exception ex, Profile profile)
+    {
+        if (MapSsl(profile.TlsMode) is not (MySqlSslMode.VerifyFull or MySqlSslMode.VerifyCA)) return null;
+        if (TlsCertificateClassifier.TryClassify(ex) is not { } m) return null;
+        var endpoint = TlsCertificateClassifier.FormatEndpoint(profile.Host, profile.Port, 3306);
+        return new TlsCertError
+        {
+            Engine = Engine.MySql,
+            Host = endpoint,
+            Reason = m.Reason,
+            CanTrustCert = false,
+            StrictMode = false,
+            CanSwitchToRequire = true,
+            SupportsCaPath = true,
+            Message = $"Connected to MySQL / MariaDB at {endpoint}, but its TLS certificate could not be verified ({TlsCertificateClassifier.ReasonPhrase(m.Reason)}). Provide the server's CA certificate file under Encryption, or switch Encryption to Require to encrypt without checking the certificate.",
+            Detail = m.Detail,
+        };
+    }
+
+    public IReadOnlyList<ProviderMessage> TranslateException(Exception ex, string? commandText = null)
+    {
+        // Only classify client/connect-time TLS certificate errors — never server SQL errors (Number > 0) or non-TLS exceptions.
+        var isClientTls = commandText == null && (ex is System.Security.Authentication.AuthenticationException || ex is MySqlException { Number: 0 });
+        if (isClientTls && TlsCertificateClassifier.TryClassify(ex) is { } cert)
+            return [new ProviderMessage(Severity.Error,
+                $"Connected to MySQL / MariaDB, but its TLS certificate could not be verified ({TlsCertificateClassifier.ReasonPhrase(cert.Reason)}). Provide the server's CA certificate file under Encryption, or switch Encryption to Require.")];
+        return ex is MySqlException m
+            ? [new ProviderMessage(Severity.Error, m.Number is 1148 or 3948 or 2068
+                ? "LOAD DATA LOCAL is turned off: it lets the server name any file on this computer to read. Use Import data… instead."
+                : SignInReason(m.Message) ?? m.Message, Number: m.Number)]
+            : [new ProviderMessage(Severity.Error, SignInReason(ex.Message) ?? ex.Message)];
+    }
 
     /// <summary>
     /// Sign-in failures the driver words in its own options (ServerRSAPublicKeyFile, AllowPublicKeyRetrieval), said in
