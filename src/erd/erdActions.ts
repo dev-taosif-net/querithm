@@ -58,8 +58,8 @@ export function openErdFromActiveTab() {
   const dialect = profileDialect(t.profileId);
   // The tab's own view on a session-owned engine (its in-memory database, its temporary tables), as the editor reads it.
   const sessionId = tabScope(t)?.sessionId;
-  const ids = model && pos ? queryTableIds(model.getValue(), model.getOffsetAt(pos), dialect, t.profileId, t.database, sessionId) : [];
+  const ids = model && pos ? queryTableIds(model.getValue(), model.getOffsetAt(pos), dialect, target.profileId, target.database, sessionId) : [];
   // Only this tab's own session: another tab's in-memory database is another database.
-  if (ids.length) openTool("erd", "ERD · query", { ...binding(t.profileId, t.database, sessionId), params: asParams({ mode: "query", queryTables: ids }) });
-  else schemaDiagram(t.profileId, t.database, null, sessionId);
+  if (ids.length) openTool("erd", "ERD · query", { ...binding(target.profileId, target.database, sessionId), params: asParams({ mode: "query", queryTables: ids }) });
+  else schemaDiagram(target.profileId, target.database, null, sessionId);
 }
