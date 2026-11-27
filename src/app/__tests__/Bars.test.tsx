@@ -7,7 +7,7 @@ import "./domPolyfills";
 const h = vi.hoisted(() => ({
   a: { cancelQuery: vi.fn(), newQueryTab: vi.fn(), runQuery: vi.fn(), showPlan: vi.fn(), txAction: vi.fn() },
   cmd: {} as Record<string, ReturnType<typeof vi.fn>>,
-  scope: { showRunScope: vi.fn(), clearRunScope: vi.fn() },
+  scope: { showRunScope: vi.fn(), showCommentScope: vi.fn(), clearRunScope: vi.fn() },
 }));
 vi.mock("../actions", () => h.a);
 vi.mock("../commands", () => {
@@ -16,6 +16,9 @@ vi.mock("../commands", () => {
     "query.toggleActualPlan": ["Ctrl+M"], "tab.new": ["Ctrl+N"], "file.open": ["Ctrl+O"], "tab.reopenClosed": ["Ctrl+Shift+T"],
     "palette.connections": ["Ctrl+Shift+U"], "palette.databases": ["Ctrl+U"], "palette.objects": ["Ctrl+T"], "view.history": ["Ctrl+H"],
     "view.settings": ["Ctrl+,"], "nav.back": ["Alt+Left"], "nav.forward": ["Alt+Right"], "editor.toggleComment": ["Ctrl+/"],
+    "editor.blockComment": ["Shift+Alt+A"], "editor.statementComment": ["Ctrl+Alt+/"],
+    "editor.comment": ["Ctrl+K Ctrl+C"], "editor.uncomment": ["Ctrl+K Ctrl+U"],
+    "editor.sectionComment": [], "editor.docHeaderComment": [], "editor.convertComment": [], "editor.stripComments": [],
   };
   return {
     displayKeys: (k: string) => k,
@@ -127,20 +130,48 @@ describe("TopBar: brand and navigation", () => {
     expect(face.parentElement?.className).toMatch(/\bborder\b/);
   });
 
-  it("has a // button left of the search box that triggers Toggle line comment (Ctrl+/)", async () => {
+  it("has a Comment split button with the Commented Lines icon left of the search box, plus dropdown actions and statement preview", async () => {
     const user = userEvent.setup();
     render(<TopBar />);
     const commentBtn = btn("Toggle line comment");
-    expect(commentBtn).toHaveTextContent("//");
+    expect(commentBtn.querySelector("svg")).not.toBeNull();
     expect(commentBtn).toHaveAttribute("title", "Toggle line comment (Ctrl+/)");
-    expect(commentBtn.nextElementSibling).toBe(btn("Go to table, proc, or command"));
+    expect(commentBtn.parentElement?.nextElementSibling).toBe(btn("Go to table, proc, or command"));
     await user.click(commentBtn);
     expect(h.cmd["editor.toggleComment"]).toHaveBeenCalledTimes(1);
+
+    // Open the split-button dropdown and verify statement preview + actions.
+    await user.click(btn("Comment options"));
+    const menu = screen.getByRole("menu", { name: "Comments" });
+    const stmtItem = within(menu).getByRole("menuitem", { name: /Toggle current statement/i });
+    await user.hover(stmtItem);
+    expect(h.scope.showCommentScope).toHaveBeenCalledWith("t1");
+    h.scope.clearRunScope.mockClear();
+    await user.click(stmtItem);
+    expect(h.scope.clearRunScope).toHaveBeenCalled();
+    expect(h.cmd["editor.statementComment"]).toHaveBeenCalledTimes(1);
+
+    // Dismissing the menu with Escape while hovering clears the statement preview.
+    h.scope.clearRunScope.mockClear();
+    await user.click(btn("Comment options"));
+    const menu2 = screen.getByRole("menu", { name: "Comments" });
+    await user.hover(within(menu2).getByRole("menuitem", { name: /Toggle current statement/i }));
+    await user.keyboard("{Escape}");
+    expect(h.scope.clearRunScope).toHaveBeenCalled();
+
     cleanup();
     h.cmd["editor.toggleComment"].mockClear();
+    setTab({ readOnly: true });
+    render(<TopBar />);
+    unavailable(btn("Toggle line comment"));
+    unavailable(btn("Comment options"));
+    expect(btn("Toggle line comment")).toHaveAttribute("title", "This tab is read-only");
+
+    cleanup();
     useTabs.setState({ tabs: {}, order: [], activeId: undefined });
     render(<TopBar />);
     unavailable(btn("Toggle line comment"));
+    unavailable(btn("Comment options"));
     await user.click(btn("Toggle line comment"));
     expect(h.cmd["editor.toggleComment"]).not.toHaveBeenCalled();
   });

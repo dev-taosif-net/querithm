@@ -356,7 +356,8 @@ describe("commands: keyboard dispatch", () => {
     const e = key({ key: "/", code: "Slash", ctrlKey: true, target: monaco });
     handler(e);
     handler(key({ key: "A", code: "KeyA", shiftKey: true, altKey: true, target: monaco }));
-    expect(editorActions.commentLines.mock.calls).toEqual([["t1", "toggle"], ["t1", "block"]]);
+    handler(key({ key: "/", code: "Slash", ctrlKey: true, altKey: true, target: monaco }));
+    expect(editorActions.commentLines.mock.calls).toEqual([["t1", "toggle"], ["t1", "block"], ["t1", "statement"]]);
     expect(e.preventDefault).toHaveBeenCalled();
   });
   it("Ctrl+/ is matched by the physical key on layouts where it produces another character", () => {

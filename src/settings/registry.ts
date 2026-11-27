@@ -128,6 +128,34 @@ export const settingDefs: SettingDef[] = [
     description: "Completing a table after FROM or JOIN adds a short alias, as in Orders ord.",
     control: { kind: "switch" }, keywords: ["intellisense", "autocomplete", "alias", "completion"],
   },
+  {
+    id: "commentInlineBlock", keys: ["commentInlineBlock"], page: "editor", group: "Commenting", label: "Block-comment inline selections",
+    description: "Pressing Ctrl+/ on a partial selection within one line wraps or unwraps it with /* ... */ instead of commenting the whole line.",
+    control: { kind: "switch" }, keywords: ["comment", "block", "inline", "ctrl+/"],
+  },
+  {
+    id: "commentAdvanceCursor", keys: ["commentAdvanceCursor"], page: "editor", group: "Commenting", label: "Advance cursor after line comment",
+    description: "Moves the cursor down to the next line after commenting or uncommenting a single line with no selection.",
+    control: { kind: "switch" }, keywords: ["comment", "cursor", "next line", "ctrl+/"],
+  },
+  {
+    id: "commentPlacement", keys: ["commentPlacement"], page: "editor", group: "Commenting", label: "Line comment placement",
+    description: "Places -- aligned to the selection's common indent, or flush at column 1.",
+    control: { kind: "segmented", options: [{ value: "indent", label: "At indent" }, { value: "column1", label: "Column 1" }] },
+    keywords: ["comment", "indent", "column", "align"],
+  },
+  {
+    id: "commentSkipBlankLines", keys: ["commentSkipBlankLines"], page: "editor", group: "Commenting", label: "Skip blank lines when commenting",
+    description: "Leaves empty lines untouched when commenting a multi-line selection.",
+    control: { kind: "switch" }, keywords: ["comment", "blank", "empty lines"],
+  },
+  {
+    id: "mysqlLineCommentStyle", keys: ["mysqlLineCommentStyle"], page: "editor", group: "Commenting", label: "MySQL line comment prefix",
+    description: "Prefix inserted when line-commenting in MySQL / MariaDB. Uncommenting always recognizes both -- and #.",
+    control: { kind: "segmented", options: [{ value: "-- ", label: "-- " }, { value: "# ", label: "# " }] },
+    keywords: ["comment", "mysql", "mariadb", "hash", "#"],
+    engine: { only: "mySql", other: "The other engines always use -- for line comments." },
+  },
   // Formatting
   {
     id: "keywordCase", keys: ["keywordCase"], page: "formatting", group: "Keywords", label: "Keyword case",

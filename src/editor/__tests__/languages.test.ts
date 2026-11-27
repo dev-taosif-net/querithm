@@ -115,4 +115,10 @@ describe("lexical kinds: what the tokenizer emits", () => {
       "x→identifier", ":=→operator", ":name→variable.bind", "+→operator", ":1→variable.bind", "+→operator", ":\"x\"→variable.bind",
     ]);
   });
+
+  it.each(DIALECT_LIST)("%s: language configuration includes block-comment auto-close and Enter continuation rules", (d) => {
+    const cfg = LANGUAGES[d].configuration;
+    expect(cfg.autoClosingPairs).toContainEqual({ open: "/*", close: " */", notIn: ["string"] });
+    expect(cfg.onEnterRules?.length).toBeGreaterThanOrEqual(4);
+  });
 });

@@ -1014,7 +1014,17 @@ it("returns cached signature help without waiting for or calling the sidecar", a
 it("every editor gets the comment items in its right-click menu", () => {
   const editor = new FakeEditor(null, {});
   hooks.created.forEach((create) => create(editor));
-  expect(editor.actions.map((a) => a.id)).toEqual(["querithm.toggleComment", "querithm.comment", "querithm.uncomment", "querithm.blockComment"]);
+  expect(editor.actions.map((a) => a.id)).toEqual([
+    "querithm.toggleComment",
+    "querithm.comment",
+    "querithm.uncomment",
+    "querithm.blockComment",
+    "querithm.statementComment",
+    "querithm.convertComment",
+    "querithm.sectionComment",
+    "querithm.docHeaderComment",
+    "querithm.stripComments",
+  ]);
 });
 
 it("debounces cursor decorations and cancels pending work when the editor closes", () => {

@@ -22,6 +22,16 @@ export interface Settings {
   syntaxColors: SyntaxChoice;
   /** Comments in the SQL editor are italic; off draws them upright (astigmatism, dyslexia). */
   italicComments: boolean;
+  /** Move cursor down one line after toggling/commenting a single line with no selection. */
+  commentAdvanceCursor: boolean;
+  /** On Ctrl+/, a partial selection within a single line wraps/unwraps with `/* ... *\/` instead of line-commenting. */
+  commentInlineBlock: boolean;
+  /** Where `-- ` is placed when commenting lines: aligned to common indent, or at column 1. */
+  commentPlacement: "indent" | "column1";
+  /** Skip empty/whitespace-only lines when commenting a multi-line selection. */
+  commentSkipBlankLines: boolean;
+  /** Line comment prefix used on MySQL connections (`-- ` or `# `). */
+  mysqlLineCommentStyle: "-- " | "# ";
   editorFontSize: number;
   minimap: boolean;
   wordWrap: boolean;
@@ -126,6 +136,11 @@ export const defaultSettings: Settings = {
   lightTheme: "light",
   syntaxColors: DEFAULT_SYNTAX_CHOICE,
   italicComments: true,
+  commentAdvanceCursor: false,
+  commentInlineBlock: true,
+  commentPlacement: "indent",
+  commentSkipBlankLines: true,
+  mysqlLineCommentStyle: "-- ",
   editorFontSize: 13,
   minimap: true,
   wordWrap: false,
@@ -184,6 +199,8 @@ const choices: Partial<Record<keyof Settings, readonly string[]>> = {
   syntaxColors: SYNTAX_CHOICES,
   keywordCase: ["upper", "lower", "preserve"],
   tabLayout: TAB_LAYOUTS,
+  commentPlacement: ["indent", "column1"],
+  mysqlLineCommentStyle: ["-- ", "# "],
 };
 
 /** One value read from store.db or passed to set(): the cleaned value, or undefined when it is unusable. */

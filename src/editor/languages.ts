@@ -408,6 +408,7 @@ const sharedConfiguration: Monaco.languages.LanguageConfiguration = {
   autoClosingPairs: [
     { open: "[", close: "]" },
     { open: "(", close: ")" },
+    { open: "/*", close: " */", notIn: ["string"] },
     { open: "'", close: "'", notIn: ["string", "comment"] },
     { open: '"', close: '"', notIn: ["string"] },
   ],
@@ -416,6 +417,14 @@ const sharedConfiguration: Monaco.languages.LanguageConfiguration = {
     { open: "(", close: ")" },
     { open: "'", close: "'" },
     { open: '"', close: '"' },
+  ],
+  // Smart block-comment continuation on Enter (`/*| */` expands to `/*\n * |\n */`, continuing `* ` lines cleanly).
+  // Uses Monaco's IndentAction enum values (0 = None, 2 = IndentOutdent) to avoid a runtime monaco-editor import here.
+  onEnterRules: [
+    { beforeText: /^\s*\/\*(?!\/)([^*]|\*(?!\/))*$/, afterText: /^\s*\*\/$/, action: { indentAction: 2, appendText: " * " } },
+    { beforeText: /^\s*\/\*(?!\/)([^*]|\*(?!\/))*$/, action: { indentAction: 0, appendText: " * " } },
+    { beforeText: /^[ \t]* \*(\ ([^*]|\*(?!\/))*)?$/, action: { indentAction: 0, appendText: "* " } },
+    { beforeText: /^[ \t]* \*\/\s*$/, action: { indentAction: 0, removeText: 1 } },
   ],
   wordPattern: /(-?\d*\.\d\w*)|([^`~!%^&*()\-=+[{\]}\\|;:'",.<>/?\s]+)/g,
 };

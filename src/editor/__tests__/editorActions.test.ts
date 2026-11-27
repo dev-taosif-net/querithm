@@ -141,22 +141,46 @@ describe("insertPrintForVariable", () => {
 describe("commentLines", () => {
   it("does nothing without an editor", () => expect(() => commentLines("t", "toggle")).not.toThrow());
 
-  // Both dialects share the `--` / `/* */` language configuration that Monaco's comment actions read.
-  it.each(["tsql", "pgsql"] as const)("%s: refocuses the editor (toolbar buttons take focus) and runs Monaco's comment actions", (lang) => {
-    const { ed } = setup("select 1", 0, lang, null);
+  it.each(["tsql", "pgsql"] as const)("%s: refocuses the editor and applies token-aware comment edits", (lang) => {
+    const { ed, model } = setup("select 1", 0, lang, null);
+    ed.setModel(model);
     const focus = vi.fn();
     Object.assign(ed, { focus });
     commentLines("t", "toggle");
     commentLines("t", "add");
-    commentLines("t", "remove");
     commentLines("t", "block");
+    commentLines("t", "statement");
     expect(focus).toHaveBeenCalledTimes(4);
-    expect(ed.triggered).toEqual([
-      "querithm:editor.action.commentLine",
-      "querithm:editor.action.addCommentLine",
-      "querithm:editor.action.removeCommentLine",
-      "querithm:editor.action.blockComment",
+    expect(ed.edits.map((e) => e.source)).toEqual([
+      "querithm.comment.toggle",
+      "querithm.comment.add",
+      "querithm.comment.block",
+      "querithm.comment.statement",
     ]);
+    expect(ed.edits[0].edits[0].text).toBe("-- ");
+  });
+
+  it("prefers the focused editor over the tab editor so notebook cells comment in place", () => {
+    const { ed: tabEd, model: tabModel } = setup("select 1", 0, "tsql", null);
+    tabEd.setModel(tabModel);
+    const cellEd = new FakeEditor(null, {});
+    cellEd.setModel(new FakeModel("select 2", "tsql", { toString: () => "cell" }));
+    const cellFocus = vi.fn();
+    Object.assign(cellEd, { focus: cellFocus });
+    state.focused = cellEd;
+    commentLines("t", "toggle");
+    expect(cellFocus).toHaveBeenCalledTimes(1);
+    expect(cellEd.edits).toHaveLength(1);
+    expect(tabEd.edits).toHaveLength(0);
+  });
+
+  it("does not edit a read-only editor", () => {
+    const { ed, model } = setup("select 1", 0, "tsql", null);
+    ed.setModel(model);
+    ed.updateOptions({ readOnly: true });
+    Object.assign(ed, { focus: vi.fn() });
+    commentLines("t", "toggle");
+    expect(ed.edits).toHaveLength(0);
   });
 });
 

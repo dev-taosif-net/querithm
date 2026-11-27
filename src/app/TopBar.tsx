@@ -20,7 +20,8 @@ import { fillForWhite, readableOnSurface, useThemeKey } from "./tabStyle";
 import { Icon } from "./icons";
 import { useLastBinding } from "./lastBinding";
 import { DropMenu, type MenuEntry } from "./ToolbarMenu";
-import { clearRunScope, showRunScope, type ScopeMode } from "../editor/runScope";
+import { clearRunScope, showCommentScope, showRunScope, type ScopeMode } from "../editor/runScope";
+import { useSettings } from "../store/settings";
 import { actualPlanWithRun, assertNever, engineTraits, ENGINE_LIST, ENGINES } from "../engines";
 import type { Engine } from "../ipc/contract";
 
@@ -93,12 +94,19 @@ function useRovingToolbar(ref: RefObject<HTMLDivElement | null>) {
 }
 
 /** A face button and its ▾ menu, as two real buttons (each with its own name, focus ring and target). */
-function SplitButton({ face, caretLabel, menuLabel, items, caretClass = "", disabled = false, className = "" }: {
-  face: ReactNode; caretLabel: string; menuLabel: string; items: () => MenuEntry[]; caretClass?: string; disabled?: boolean; className?: string;
+function SplitButton({ face, caretLabel, menuLabel, items, caretClass = "", disabled = false, className = "", onClose }: {
+  face: ReactNode; caretLabel: string; menuLabel: string; items: () => MenuEntry[]; caretClass?: string; disabled?: boolean; className?: string; onClose?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const caret = useRef<HTMLButtonElement>(null);
-  const toggle = () => setOpen((o) => !o);
+  const close = () => {
+    setOpen(false);
+    onClose?.();
+  };
+  const toggle = () => {
+    if (open) close();
+    else setOpen(true);
+  };
   return (
     <div className={`flex items-stretch ${className}`}>
       {face}
@@ -120,7 +128,7 @@ function SplitButton({ face, caretLabel, menuLabel, items, caretClass = "", disa
       >
         <Icon name="chevron" size={12} strokeWidth={2.25} />
       </button>
-      {open && <DropMenu anchor={caret} label={menuLabel} items={items()} onClose={() => setOpen(false)} />}
+      {open && <DropMenu anchor={caret} label={menuLabel} items={items()} onClose={close} />}
     </div>
   );
 }
@@ -308,6 +316,7 @@ function LaunchStrip({ tab }: { tab: TabState | undefined }) {
         caretLabel="More ways to run"
         menuLabel="Run"
         disabled={running || !tab}
+        onClose={clearRunScope}
         items={() => runMenu(tab, profile?.engine, scope)}
         face={
           <button
@@ -534,6 +543,68 @@ function LiveStatus({ tab }: { tab: TabState | undefined }) {
   );
 }
 
+/** Comment ▾: the face toggles line comments (or inline block comments); the menu holds block, statement, strip and quick toggles. */
+function CommentButton({ tab }: { tab: TabState | undefined }) {
+  const engine = useProfiles((s) => s.profiles.find((p) => p.id === tab?.profileId)?.engine);
+  const advanceCursor = useSettings((s) => s.commentAdvanceCursor);
+  const inlineBlock = useSettings((s) => s.commentInlineBlock);
+  const mysqlStyle = useSettings((s) => s.mysqlLineCommentStyle);
+  const off = !tab || !!tab.readOnly;
+  const why = !tab ? "Open a query first" : "This tab is read-only";
+  const previewStatement = (on: boolean) => {
+    if (on && tab && !tab.readOnly) showCommentScope(tab.id);
+    else clearRunScope();
+  };
+  return (
+    <SplitButton
+      className="shrink-0"
+      caretLabel="Comment options"
+      menuLabel="Comments"
+      disabled={off}
+      caretClass="text-muted"
+      onClose={clearRunScope}
+      items={() => {
+        const items: MenuEntry[] = [
+          { label: "Toggle line comment", hint: keyOf("editor.toggleComment"), run: () => runCommand("editor.toggleComment") },
+          { label: "Toggle block comment", hint: keyOf("editor.blockComment"), run: () => runCommand("editor.blockComment") },
+          { label: "Toggle current statement", hint: keyOf("editor.statementComment"), run: () => { clearRunScope(); runCommand("editor.statementComment"); }, onHighlight: previewStatement },
+          "sep",
+          { label: "Comment selected lines", hint: keyOf("editor.comment"), run: () => runCommand("editor.comment") },
+          { label: "Uncomment selected lines", hint: keyOf("editor.uncomment"), run: () => runCommand("editor.uncomment") },
+          { label: "Convert comment style (-- ↔ /* */)", run: () => runCommand("editor.convertComment") },
+          "sep",
+          { label: "Insert section header", run: () => runCommand("editor.sectionComment") },
+          { label: "Insert doc block header", run: () => runCommand("editor.docHeaderComment") },
+          { label: "Remove all comments", detail: "keeps hints & strings", run: () => runCommand("editor.stripComments") },
+          "sep",
+          { label: "Advance cursor after line comment", checked: advanceCursor, run: () => useSettings.getState().set({ commentAdvanceCursor: !advanceCursor }) },
+          { label: "Block-comment inline selections", checked: inlineBlock, run: () => useSettings.getState().set({ commentInlineBlock: !inlineBlock }) },
+        ];
+        if (engine === "mySql") {
+          items.push({
+            label: "Use # for MySQL line comments",
+            checked: mysqlStyle === "# ",
+            run: () => useSettings.getState().set({ mysqlLineCommentStyle: mysqlStyle === "# " ? "-- " : "# " }),
+          });
+        }
+        return items;
+      }}
+      face={
+        <button
+          type="button"
+          className="q-tb w-7 !px-0 rounded-r-none text-muted hover:text-fg"
+          aria-disabled={off || undefined}
+          onClick={guarded(off, () => runCommand("editor.toggleComment"))}
+          title={off ? why : tip("Toggle line comment", "editor.toggleComment")}
+          aria-label="Toggle line comment"
+        >
+          <Icon name="comment" />
+        </button>
+      }
+    />
+  );
+}
+
 export function TopBar() {
   const tab = useActiveTab();
   const query = useRef<HTMLDivElement>(null);
@@ -561,16 +632,7 @@ export function TopBar() {
         </div>
       </div>
       <div ref={app} role="toolbar" aria-label="App" className="flex items-center justify-end gap-1 min-w-0" {...appNav}>
-        <button
-          type="button"
-          className="q-tb w-7 !px-0 q-mono text-[11px] font-semibold border border-line-strong !bg-bg text-muted hover:text-fg hover:border-accent shrink-0"
-          aria-disabled={!tab || undefined}
-          onClick={guarded(!tab, () => runCommand("editor.toggleComment"))}
-          title={!tab ? "Open a query first" : tip("Toggle line comment", "editor.toggleComment")}
-          aria-label="Toggle line comment"
-        >
-          //
-        </button>
+        <CommentButton tab={tab} />
         <button
           type="button"
           className="mr-2 max-[1100px]:mr-0 w-[200px] min-[1440px]:w-80 max-[1100px]:w-auto min-w-0 shrink bg-bg border border-line-strong rounded-md pl-2 pr-1 h-[28px] text-[12px] text-muted flex items-center justify-between gap-2 hover:border-accent"

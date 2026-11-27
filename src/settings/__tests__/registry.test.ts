@@ -27,10 +27,11 @@ describe("settings registry", () => {
     }
   });
 
-  it("settings that act on SQL Server only say so and what the other engines do instead", () => {
+  it("settings that act on a single engine say so and what the other engines do instead", () => {
     const only = settingDefs.filter((d) => d.engine).map((d) => d.id).sort();
-    expect(only).toEqual(["leadingCommas", "newlineBeforeJoin", "statisticsIo", "statisticsTime"]);
+    expect(only).toEqual(["leadingCommas", "mysqlLineCommentStyle", "newlineBeforeJoin", "statisticsIo", "statisticsTime"]);
     expect(defOf("leadingCommas").engine!.other).toMatch(/^On the other engines, Format document keeps commas/);
+    expect(defOf("mysqlLineCommentStyle").engine).toEqual({ only: "mySql", other: "The other engines always use -- for line comments." });
     expect(defOf("newlineBeforeJoin").engine!.other).toMatch(/^On the other engines, Format document decides JOIN/);
     // Every engine with Explain analyze… is named, by the menu item it really has (not "Actual plan").
     const analyze = ENGINE_LIST.filter((e) => ENGINES[e].actualPlan === "explainAnalyze");

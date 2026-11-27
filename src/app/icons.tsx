@@ -111,6 +111,14 @@ const paths = {
   ),
   code: <path d="M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 4.5l-3 15" />,
   format: <path d="M4 6h16M8 10h12M8 14h12M4 18h16" />,
+  /** SSMS-style commented lines: dimmed context lines above/below, two active commented lines with `--` prefixes. */
+  comment: (
+    <>
+      <path d="M4 5h16" opacity="0.4" />
+      <path d="M4 10h3.5M10.5 10h9.5M4 15h3.5M10.5 15h7.5" />
+      <path d="M4 20h13" opacity="0.4" />
+    </>
+  ),
   tabs: <path d="M3 20V6.5A1.5 1.5 0 0 1 4.5 5H10l1.5 3H21v12zM3 8h8.5" />,
   keyboard: <path d="M3 6h18v12H3zM7 10h.01M11 10h.01M15 10h.01M7 14h10" />,
   info: (

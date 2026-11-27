@@ -7,7 +7,8 @@ import { openDefinition } from "../app/actions";
 import { useTabs } from "../store/tabs";
 import { toast } from "../store/ui";
 import { expandWildcardAtOffset } from "./expandWildcard";
-import { COMMENT_ACTIONS } from "./commentMenu";
+import { runCommentInEditor } from "./commentMenu";
+import type { CommentMode } from "./smartComment";
 import type { Dialect } from "../ipc/contract";
 import { dialectForLanguage } from "../engines";
 
@@ -61,12 +62,12 @@ export function insertPrintForVariable(tabId: string) {
   if (tab?.boundObject) toast("info", "Inserted. Apply the procedure to see the value in Messages; remove the line afterwards (search for querithm:trace).");
 }
 
-/** Comment/uncomment the selected lines (or the cursor line). Refocuses the editor: the palette takes focus. */
-export function commentLines(tabId: string, mode: keyof typeof COMMENT_ACTIONS) {
-  const ed = editorForTab(tabId);
+/** Comment/uncomment using the token-aware SQL comment engine. Prefers the focused editor so notebook cells work too. */
+export function commentLines(tabId: string, mode: CommentMode) {
+  const ed = focusedEditor() ?? editorForTab(tabId);
   if (!ed) return;
   ed.focus();
-  ed.trigger("querithm", COMMENT_ACTIONS[mode], null);
+  runCommentInEditor(ed, mode);
 }
 
 /** Duplicates the cursor line (or selected lines) directly below. Uses the focused editor first so notebook cells work too. */

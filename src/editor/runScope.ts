@@ -2,11 +2,12 @@
 // would execute (the selection, else the statement at the cursor or the whole script), in the environment color on a
 // prod connection. One decoration collection and no React state, so hovering never re-renders anything.
 import { monaco } from "./monaco";
-import { editorForTab, getModel } from "./editors";
+import { editorForTab, focusedEditor, getModel } from "./editors";
 import { statementBoundsAt } from "./completion";
+import { statementCommentScope } from "./smartComment";
 import { useTabs } from "../store/tabs";
 import { useProfiles } from "../store/profiles";
-import { dialectOf } from "../engines";
+import { dialectForLanguage, dialectOf } from "../engines";
 import type { Dialect } from "../ipc/contract";
 
 /** `auto`: what F5 runs (selection, else everything); `statement`: what Ctrl+Shift+Enter runs. */
@@ -45,6 +46,24 @@ export function showRunScope(tabId: string, mode: ScopeMode) {
     ? new monaco.Range(a.lineNumber, a.column, b.lineNumber, b.column)
     : new monaco.Range(a.lineNumber, 1, b.column === 1 && b.lineNumber > a.lineNumber ? b.lineNumber - 1 : b.lineNumber, 1);
   shown = editor.createDecorationsCollection([{ range, options: { className, isWholeLine: !selection } }]);
+}
+
+export function showCommentScope(tabId: string) {
+  clearRunScope();
+  const editor = focusedEditor() ?? editorForTab(tabId);
+  const model = editor?.getModel() ?? getModel(tabId);
+  if (!editor || !model || model.isDisposed?.()) return;
+  const pos = editor.getPosition();
+  if (!pos) return;
+  const scope = statementCommentScope(model.getValue(), model.getOffsetAt(pos), dialectForLanguage(model.getLanguageId()));
+  if (!scope) return;
+  const a = model.getPositionAt(scope.start);
+  const b = model.getPositionAt(scope.end);
+  const range =
+    scope.kind === "block"
+      ? new monaco.Range(a.lineNumber, a.column, b.lineNumber, b.column)
+      : new monaco.Range(a.lineNumber, 1, b.lineNumber, 1);
+  shown = editor.createDecorationsCollection([{ range, options: { className: "q-run-scope", isWholeLine: scope.kind !== "block" } }]);
 }
 
 export function clearRunScope() {

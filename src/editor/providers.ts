@@ -12,7 +12,7 @@ import { lastStartingBefore } from "./completion/scanner";
 import { expandWildcardAtOffset } from "./expandWildcard";
 import { findInsertMatchingHighlight, findSyntaxPairHighlight } from "./syntaxPairs";
 import { tier1SignatureHelp } from "./signature";
-import { addCommentMenu } from "./commentMenu";
+import { addCommentMenu, isApplyingCommentEdit } from "./commentMenu";
 import { suggestWidgetVisible } from "./monacoInternals";
 import { installSemanticTokens } from "./semanticTokens";
 import { monaco } from "./monaco";
@@ -302,7 +302,7 @@ function isBoundaryInsert(text: string): boolean {
 /** Keyword case as you type (§9): recase the reserved word just before a typed boundary, as its own undo step. */
 function installKeywordCaseOnType(editor: monaco.editor.ICodeEditor) {
   editor.onDidChangeModelContent((e) => {
-    if (e.isUndoing || e.isRedoing || e.isFlush || e.changes.length !== 1) return;
+    if (isApplyingCommentEdit() || e.isUndoing || e.isRedoing || e.isFlush || e.changes.length !== 1) return;
     const s = useSettings.getState();
     if (!s.keywordCaseOnType || s.keywordCase === "preserve") return;
     const change = e.changes[0];
@@ -973,7 +973,15 @@ export function installProviders() {
       if (model && e.keyCode === monaco.KeyCode.Escape) escapes.set(model, escapesOf(model) + 1);
       if (model && isNavKey(e.keyCode) && suggestWidgetVisible(editor)) navigated.add(model);
     });
-    addCommentMenu(editor);
+    const keyMod = monaco.KeyMod as typeof monaco.KeyMod | undefined;
+    const chords =
+      typeof keyMod?.chord === "function"
+        ? {
+            add: [keyMod.chord(keyMod.CtrlCmd | monaco.KeyCode.KeyK, keyMod.CtrlCmd | monaco.KeyCode.KeyC)],
+            remove: [keyMod.chord(keyMod.CtrlCmd | monaco.KeyCode.KeyK, keyMod.CtrlCmd | monaco.KeyCode.KeyU)],
+          }
+        : undefined;
+    addCommentMenu(editor, chords);
 
     const pairDecos = editor.createDecorationsCollection([]);
     let pairTimer: ReturnType<typeof setTimeout> | undefined;
