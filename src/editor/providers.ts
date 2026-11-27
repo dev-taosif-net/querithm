@@ -990,20 +990,17 @@ export function installProviders() {
 
       const insertMatch = findInsertMatchingHighlight(text, offset, dialect);
       if (insertMatch) {
-        const colStart = model.getPositionAt(insertMatch.col.start);
-        const colEnd = model.getPositionAt(insertMatch.col.end);
-        const valStart = model.getPositionAt(insertMatch.val.start);
-        const valEnd = model.getPositionAt(insertMatch.val.end);
-        pairDecos.set([
-          {
-            range: new monaco.Range(colStart.lineNumber, colStart.column, colEnd.lineNumber, colEnd.column),
-            options: { className: "q-insert-match" },
-          },
-          {
-            range: new monaco.Range(valStart.lineNumber, valStart.column, valEnd.lineNumber, valEnd.column),
-            options: { className: "q-insert-match" },
-          },
-        ]);
+        const spans = [insertMatch.col, ...insertMatch.vals];
+        pairDecos.set(
+          spans.map((s) => {
+            const start = model.getPositionAt(s.start);
+            const end = model.getPositionAt(s.end);
+            return {
+              range: new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column),
+              options: { className: "q-insert-match" },
+            };
+          }),
+        );
         return;
       }
 
