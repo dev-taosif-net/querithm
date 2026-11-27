@@ -26,7 +26,7 @@ export const controlId = (id: SettingDef["id"]) => `setting-${id}`;
 /** Puts focus on a row's control: the input itself, or the checked choice of a radio group. */
 export function focusControl(id: SettingDef["id"]) {
   const el = document.getElementById(controlId(id));
-  const target = el?.matches("input") ? el : el?.querySelector<HTMLElement>("input:checked, input:not([disabled])");
+  const target = el?.matches("input") ? el : (el?.querySelector<HTMLElement>("input:checked") ?? el?.querySelector<HTMLElement>("input:not([disabled])"));
   target?.focus();
 }
 
@@ -93,12 +93,13 @@ export function SettingRow({ def, announce }: { def: SettingDef; announce: (text
       why: def.disabledWhy?.(s) ?? null,
       warning: def.warning?.(s) ?? null,
       note: def.note?.(s) ?? null,
+      checklist: def.checklist?.(s) ?? null,
     })),
   );
   const id = controlId(def.id);
   const labelId = `${id}-label`;
-  const ids = { desc: `${id}-desc`, why: `${id}-why`, warning: `${id}-warn`, note: `${id}-note`, modified: `${id}-mod` };
-  const describedBy = [ids.desc, st.why && ids.why, st.warning && ids.warning, st.note && ids.note, st.modified && ids.modified].filter(Boolean).join(" ");
+  const ids = { desc: `${id}-desc`, why: `${id}-why`, warning: `${id}-warn`, note: `${id}-note`, checklist: `${id}-list`, modified: `${id}-mod` };
+  const describedBy = [ids.desc, st.checklist && ids.checklist, st.why && ids.why, st.warning && ids.warning, st.note && ids.note, st.modified && ids.modified].filter(Boolean).join(" ");
   const key = def.keys[0];
   const c = def.control;
   let control: ReactNode;
@@ -150,7 +151,7 @@ export function SettingRow({ def, announce }: { def: SettingDef; announce: (text
     requestAnimationFrame(() => focusControl(def.id));
   };
   return (
-    <div className={`group grid ${wide ? "grid-cols-[minmax(0,1fr)_auto]" : "grid-cols-[minmax(0,1fr)_auto] items-center"} gap-x-6 py-2.5 min-h-[44px]`} data-setting={def.id}>
+    <div className={`group grid ${wide || def.checklist ? "grid-cols-[minmax(0,1fr)_auto] items-start" : "grid-cols-[minmax(0,1fr)_auto] items-center"} gap-x-6 py-2.5 min-h-[44px]`} data-setting={def.id}>
       <div className="min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           {labelled ? (
@@ -176,6 +177,19 @@ export function SettingRow({ def, announce }: { def: SettingDef; announce: (text
           {def.description}
           {def.engine && <> {def.engine.other}</>}
         </div>
+        {st.checklist && (
+          <ul id={ids.checklist} className="mt-1.5 space-y-0.5 text-[11px] leading-[15px] max-w-[460px]">
+            {st.checklist.map((item) => (
+              <li key={item.text} className={`flex items-start gap-1.5 ${item.checked ? "text-fg" : "text-muted"}`}>
+                <Icon name={item.checked ? "check" : "close"} size={12} className={`mt-px shrink-0 ${item.checked ? "text-ok" : "text-muted"}`} />
+                <span>
+                  <span className="sr-only">{item.checked ? "Confirmed: " : "Not confirmed: "}</span>
+                  {item.text}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
         {st.why && (
           <div id={ids.why} className="text-[11px] leading-[15px] text-muted max-w-[460px] mt-1 italic">
             {st.why}

@@ -319,6 +319,7 @@ public class SqliteIntegrationTests
     public async Task Prod_guards_apply_to_file_profiles()
     {
         await using var h = new SqliteHost();
+        await h.Rpc.SettingsSet(new SettingEntry { Key = Core.Execution.QueryGuard.SettingKey, ValueJson = "\"strict\"" });
         var path = h.NewDatabase();
         var (_, sid) = await h.OpenFileAsync(path, FileAccessMode.ReadWrite, EnvironmentKind.Prod);
         var first = await h.Rpc.QueryExecute(new QueryExecuteParams { SessionId = sid, Sql = "SELECT 1" });

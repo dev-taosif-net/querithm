@@ -75,7 +75,7 @@ public class PlanGuardFileEngineTests
         var path = h.NewDatabase(setup: "CREATE TABLE t AS SELECT range AS x FROM range(3);");
         var (_, sid) = await h.OpenFileAsync(path, FileAccessMode.ReadWrite, EnvironmentKind.Prod);
         var p = new PlanParams { SessionId = sid, Sql = "DELETE FROM t", Mode = PlanMode.Actual, ConfirmedRun = true };
-        Assert.Equal(GuardReason.ProdFirstRun, (await h.Rpc.PlanGet(p)).Blocked?.Reason);
+        Assert.Equal(GuardReason.Destructive, (await h.Rpc.PlanGet(p)).Blocked?.Reason);
         Assert.Equal(GuardReason.Destructive, (await h.Rpc.PlanGet(p with { ConfirmedProd = true })).Blocked?.Reason);
         // A refused function stays refused under EXPLAIN (it would run under EXPLAIN ANALYZE), confirmed or not.
         var refused = await Assert.ThrowsAsync<QuerithmException>(() => h.Rpc.PlanGet(p with
@@ -111,7 +111,7 @@ public class PlanGuardFileEngineTests
         var path = h.NewDatabase(setup: "CREATE TABLE t (id INTEGER PRIMARY KEY, v); INSERT INTO t VALUES (1, 'a'), (2, 'b');");
         var (_, sid) = await h.OpenFileAsync(path, FileAccessMode.ReadWrite, EnvironmentKind.Prod);
         var p = new PlanParams { SessionId = sid, Sql = "DELETE FROM t", Mode = PlanMode.Estimated };
-        Assert.Equal(GuardReason.ProdFirstRun, (await h.Rpc.PlanGet(p)).Blocked?.Reason);
+        Assert.Equal(GuardReason.Destructive, (await h.Rpc.PlanGet(p)).Blocked?.Reason);
         Assert.Equal(GuardReason.Destructive, (await h.Rpc.PlanGet(p with { ConfirmedProd = true })).Blocked?.Reason);
         var plan = await h.Rpc.PlanAsync(h.Notifier, p with { ConfirmedProd = true, ConfirmedDestructive = true });
         Assert.Equal(ExecState.Done, plan.Done.State);

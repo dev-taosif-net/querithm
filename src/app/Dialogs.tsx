@@ -328,43 +328,88 @@ function TlsCertDialog({ d }: { d: Extract<Dialog, { kind: "tlsCert" }> }) {
 /** Mockup screen 4, modal B: production guards enforced by the sidecar (§6, §13 rule 7). */
 function GuardDialog({ d }: { d: Extract<Dialog, { kind: "guard" }> }) {
   const b = d.block;
+  const findings = b.findings ?? [];
   const destructive = b.reason === "destructive";
   const write = b.reason === "prodWrite";
+  const firstRun = !destructive && !write;
+  const hasGridWrite = destructive && findings.some((f) => f.rule === "gridEdit");
+  const openedSettings = useRef(false);
+  const openSafetySettings = () => {
+    if (openedSettings.current) return;
+    openedSettings.current = true;
+    d.resolve(false);
+    if (!useUi.getState().dialogs.some((x) => x.kind === "settings")) {
+      useUi.getState().openDialog({ kind: "settings", page: "execution", focus: "prodConfirmations" });
+    }
+  };
   return (
     <Modal
-      danger
-      title={destructive ? "⚠ DESTRUCTIVE STATEMENT DETECTED ON PRODUCTION" : write ? "⚠ DATA CHANGE ON PRODUCTION" : "⚠ FIRST EXECUTION ON PRODUCTION"}
+      danger={!firstRun}
+      warn={firstRun}
+      title={
+        destructive
+          ? hasGridWrite
+            ? "⚠ Destructive data change on PRODUCTION"
+            : "⚠ Destructive statement on PRODUCTION"
+          : write
+            ? "⚠ Data change on PRODUCTION"
+            : "⚠ First query on PRODUCTION"
+      }
       onClose={() => d.resolve(false)}
       width={560}
       footer={
         <>
-          <button className="q-btn" data-modal-cancel onClick={() => d.resolve(false)} autoFocus>Cancel execution (Esc)</button>
-          <button className="q-btn q-btn-danger" onClick={() => d.resolve(true)}>Confirm & execute on PROD</button>
+          <button type="button" className="q-btn q-btn-ghost mr-auto text-[11px] text-muted hover:text-fg" onClick={openSafetySettings}>
+            Safety settings…
+          </button>
+          <button type="button" className="q-btn" data-modal-cancel onClick={() => d.resolve(false)} autoFocus>Cancel (Esc)</button>
+          <button type="button" className={`q-btn ${firstRun ? "q-btn-primary" : "q-btn-danger"}`} onClick={() => d.resolve(true)}>
+            {destructive ? "Confirm & run on PROD" : write ? "Write to PROD" : "Continue on PROD"}
+          </button>
         </>
       }
     >
       <div className="space-y-3">
         <p className="text-fg leading-relaxed">
           {destructive ? (
-            <>
-              <b>AST analysis</b> blocked this execution because it modifies, drops or alters data on a <b>PRODUCTION</b> connection:
-            </>
+            hasGridWrite ? (
+              <>You are about to delete data on a <b>Production</b> connection. Check the target and changes below.</>
+            ) : (
+              <>
+                <b>AST analysis</b> paused this run because it modifies, alters or removes data on a <b>Production</b> connection:
+              </>
+            )
           ) : write ? (
-            <>Querithm is about to write data on a <b>PRODUCTION</b> connection. Every such write is confirmed, not only the first one.</>
+            <>Querithm is about to write data on a <b>Production</b> connection. Check the target below.</>
           ) : (
-            <>This is the first execution on this <b>PRODUCTION</b> connection since Querithm started. Check the server and database.</>
+            <>This is the first query on this <b>Production</b> database since Querithm started. Check the server and database below.</>
           )}
         </p>
-        <div className="p-3 bg-bg border border-err/40 rounded-lg space-y-1.5 q-mono text-[11px]">
-          <div><span className="text-muted">Connection:</span> <b className="text-err">{escapeForDisplay(b.profileName ?? "")}</b> <span className="text-muted">({escapeForDisplay(b.server ?? "")})</span></div>
-          <div><span className="text-muted">Database:</span> <b className="text-fg">{b.database != null ? escapeForDisplay(b.database) : "(default)"}</b></div>
-          {b.findings.map((f, i) => (
+        <div className={`p-3 bg-bg border ${firstRun ? "border-warn/45" : "border-err/40"} rounded-lg space-y-1.5 q-mono text-[11px]`}>
+          <div>
+            <span className="text-muted">Connection:</span>{" "}
+            <b className={firstRun ? "text-warn" : "text-err"}>{escapeForDisplay(b.profileName ?? "")}</b>{" "}
+            <span className="text-muted">({escapeForDisplay(b.server ?? "")})</span>
+          </div>
+          <div>
+            <span className="text-muted">Database:</span>{" "}
+            <b className="text-fg">{b.database != null ? escapeForDisplay(b.database) : "(default)"}</b>
+          </div>
+          {findings.map((f, i) => (
             <div key={i} className="pt-1 border-t border-line/60">
-              <div><span className="text-muted">Rule:</span> <b className="text-warn">{f.description}</b> <span className="text-muted">(line {f.line})</span></div>
-              {f.statement && <div className="pt-1 text-err break-all">{f.statement}</div>}
+              <div>
+                <span className="text-muted">Rule:</span> <b className="text-warn">{escapeForDisplay(f.description ?? "")}</b>
+                {f.line > 0 && <span className="text-muted"> (line {f.line})</span>}
+              </div>
+              {f.statement && <div className="pt-1 text-err break-all">{escapeForDisplay(f.statement)}</div>}
             </div>
           ))}
         </div>
+        {firstRun && (
+          <p className="text-[11px] text-muted">
+            Shown once per database in Strict safety mode. Switch to <b>Risky only</b> in Safety settings to let SELECT queries run without asking.
+          </p>
+        )}
       </div>
     </Modal>
   );

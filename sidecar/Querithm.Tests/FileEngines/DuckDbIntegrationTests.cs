@@ -434,6 +434,7 @@ public class DuckDbIntegrationTests
     public async Task Prod_guards_apply_to_file_profiles()
     {
         await using var h = new DuckDbHost();
+        await h.Rpc.SettingsSet(new SettingEntry { Key = Core.Execution.QueryGuard.SettingKey, ValueJson = "\"strict\"" });
         var (_, sid) = await h.OpenFileAsync(h.NewDatabase(), FileAccessMode.ReadWrite, EnvironmentKind.Prod);
         var first = await h.Rpc.QueryExecute(new QueryExecuteParams { SessionId = sid, Sql = "SELECT 1" });
         Assert.Equal(GuardReason.ProdFirstRun, first.Blocked?.Reason);

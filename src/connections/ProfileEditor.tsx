@@ -18,6 +18,7 @@ import { Modal } from "../app/Modal";
 import { readableOnTint, useThemeKey } from "../app/tabStyle";
 import { envLabel, sshAccount, useProfiles } from "../store/profiles";
 import { useConnections } from "../store/connections";
+import { useSettings, type ProdConfirmMode } from "../store/settings";
 import { ask, toast } from "../store/ui";
 import { isTauri } from "../ipc/transport";
 import { confirmDeleteProfile } from "./deleteProfile";
@@ -843,7 +844,7 @@ export function ProfileEditor({ profileId, preset, copyOf, openEncryption, onClo
     if (await confirmDeleteProfile(existing)) onClose();
   };
 
-  const env = ENVS.find((e) => e.id === p.environment) ?? ENVS[1];
+  const prodConfirmMode = useSettings((s) => s.prodConfirmations);
   // The pill's text in the environment's hue, fitted to 4.5:1 on its own tint over the dialog's header.
   useThemeKey();
   const tintText = (id: EnvironmentKind) => readableOnTint(`var(--q-env-${id})`, "var(--q-panel)", 0.14) ?? `var(--q-env-${id})`;
@@ -1522,7 +1523,7 @@ export function ProfileEditor({ profileId, preset, copyOf, openEncryption, onClo
                     {envChosen && p.environment === "prod" && (
                       <p className="q-profile-reveal flex items-start gap-2 text-[11.5px] text-fg leading-snug">
                         <span className="mt-px shrink-0" style={{ color: "var(--q-env-prod)" }}><Icon d={ICON.shield} size={14} /></span>
-                        {env.hint}
+                        {prodEnvHint(prodConfirmMode)}
                       </p>
                     )}
                     {prodWord && prodDismissed !== prodKey && (
@@ -1768,13 +1769,19 @@ function EngineMark({ engine, logo, size }: { engine: Engine; logo: string | nul
 }
 
 // Ordered along the usual promotion path; only Prod adds guards (§6).
-const ENVS: { id: EnvironmentKind; label: string; hint: string }[] = [
-  { id: "local", label: "Local", hint: "Your own machine or a container. No extra guards." },
-  { id: "dev", label: "Dev", hint: "Shared development server. No extra guards." },
-  { id: "test", label: "Test", hint: "Test and QA data. No extra guards." },
-  { id: "staging", label: "Staging", hint: "Pre-production mirror. No extra guards." },
-  { id: "prod", label: "Prod", hint: "Production: tabs and the status bar are painted, and Querithm asks before the first run and before destructive statements." },
+const ENVS: { id: EnvironmentKind; label: string }[] = [
+  { id: "local", label: "Local" },
+  { id: "dev", label: "Dev" },
+  { id: "test", label: "Test" },
+  { id: "staging", label: "Staging" },
+  { id: "prod", label: "Prod" },
 ];
+
+function prodEnvHint(mode: ProdConfirmMode): string {
+  if (mode === "strict") return "Production: tabs and the status bar are painted, and Querithm asks before the first query, destructive statements, grid edits and imports.";
+  if (mode === "off") return "Production: tabs and the status bar are painted. Production confirmations are turned off in Settings.";
+  return "Production: tabs and the status bar are painted, and Querithm asks before destructive statements, grid edits and imports (SELECT runs without asking).";
+}
 
 /** The header's environment pill, shown once an environment is chosen. */
 function EnvPill({ env, text }: { env: EnvironmentKind; text?: string }) {

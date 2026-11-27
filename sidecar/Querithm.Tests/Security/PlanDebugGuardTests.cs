@@ -74,7 +74,7 @@ public class PlanDebugGuardTests
         var p = new PlanParams { SessionId = sid, Sql = "DELETE FROM t", Mode = mode, ConfirmedRun = mode == PlanMode.Actual };
 
         var first = await h.Rpc.PlanGet(p);
-        Assert.Equal(GuardReason.ProdFirstRun, first.Blocked?.Reason);
+        Assert.Equal(GuardReason.Destructive, first.Blocked?.Reason);
         Assert.Null(first.ExecutionId);
         var second = await h.Rpc.PlanGet(p with { ConfirmedProd = true });
         Assert.Equal(GuardReason.Destructive, second.Blocked?.Reason);
@@ -252,7 +252,7 @@ public class PlanDebugGuardTests
         var (_, sid) = await Open(h, Engine.Pg);
         var p = new DebugAttachParams { SessionId = sid, FunctionOid = 42, CallSql = "DELETE FROM orders; SELECT public.recalc(1)" };
 
-        Assert.Equal(GuardReason.ProdFirstRun, (await h.Rpc.DebugAttach(p)).Blocked?.Reason);
+        Assert.Equal(GuardReason.Destructive, (await h.Rpc.DebugAttach(p)).Blocked?.Reason);
         var destructive = await h.Rpc.DebugAttach(p with { ConfirmedProd = true });
         Assert.Equal(GuardReason.Destructive, destructive.Blocked?.Reason);
         Assert.Null(destructive.DebugId);
@@ -270,6 +270,7 @@ public class PlanDebugGuardTests
     public async Task The_prod_guard_reads_the_stored_environment_and_a_changed_target_asks_again()
     {
         await using var h = Host(Engine.Mssql);
+        await h.Rpc.SettingsSet(new SettingEntry { Key = Core.Execution.QueryGuard.SettingKey, ValueJson = "\"strict\"" });
         var (profile, sid) = await Open(h, Engine.Mssql, EnvironmentKind.Dev);
         async Task<GuardReason?> Run(bool confirmed = false) =>
             (await h.Rpc.QueryExecute(new QueryExecuteParams { SessionId = sid, Sql = "SELECT 1", Options = new ExecuteOptions { ConfirmedProd = confirmed } })).Blocked?.Reason;
@@ -299,6 +300,7 @@ public class PlanDebugGuardTests
         // first-run confirm was keyed by "no database", so the second run on Prod asked again (and The_prod_guard_… above
         // failed on CI when its Dev run connected only after the confirm).
         await using var h = Host(Engine.Mssql);
+        await h.Rpc.SettingsSet(new SettingEntry { Key = Core.Execution.QueryGuard.SettingKey, ValueJson = "\"strict\"" });
         var (profile, sid) = await Open(h, Engine.Mssql, EnvironmentKind.Prod);
         Assert.Null(profile.DatabaseDefault);
         async Task<QueryExecuteResult> Run(bool confirmed = false) =>
@@ -314,6 +316,7 @@ public class PlanDebugGuardTests
     public async Task The_guard_keeps_the_stored_profile_in_memory_and_reads_it_again_after_a_save_or_delete()
     {
         await using var h = Host(Engine.Mssql);
+        await h.Rpc.SettingsSet(new SettingEntry { Key = Core.Execution.QueryGuard.SettingKey, ValueJson = "\"strict\"" });
         var (profile, sid) = await Open(h, Engine.Mssql, EnvironmentKind.Dev);
         async Task<GuardReason?> Run() => (await h.Rpc.QueryExecute(new QueryExecuteParams { SessionId = sid, Sql = "SELECT 1" })).Blocked?.Reason;
         Assert.Null(await Run());
@@ -340,6 +343,7 @@ public class PlanDebugGuardTests
     public async Task A_tab_opened_as_prod_stays_guarded_after_the_profile_is_marked_dev()
     {
         await using var h = Host(Engine.Mssql);
+        await h.Rpc.SettingsSet(new SettingEntry { Key = Core.Execution.QueryGuard.SettingKey, ValueJson = "\"strict\"" });
         var (profile, sid) = await Open(h, Engine.Mssql, EnvironmentKind.Prod);
         await h.Rpc.ProfileSave(profile with { Environment = EnvironmentKind.Dev });
         var r = await h.Rpc.QueryExecute(new QueryExecuteParams { SessionId = sid, Sql = "SELECT 1" });
@@ -351,6 +355,7 @@ public class PlanDebugGuardTests
     public async Task Another_database_on_a_prod_server_asks_for_the_first_run_again()
     {
         await using var h = Host(Engine.Mssql);
+        await h.Rpc.SettingsSet(new SettingEntry { Key = Core.Execution.QueryGuard.SettingKey, ValueJson = "\"strict\"" });
         var (_, sid) = await Open(h, Engine.Mssql);
         var ok = await h.Rpc.QueryExecute(new QueryExecuteParams { SessionId = sid, Sql = "SELECT 1", Options = new ExecuteOptions { ConfirmedProd = true } });
         Assert.NotNull(ok.ExecutionId);

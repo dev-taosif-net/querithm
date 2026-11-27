@@ -4,6 +4,19 @@ using Querithm.Core.Sessions;
 namespace Querithm.Core.Execution;
 
 /// <summary>
+/// How strictly Querithm confirms work on a Production connection (§13 rule 7, §16 2026-11-27).
+/// </summary>
+public enum ProdGuardMode
+{
+    /// <summary>Asks before the first query on each Prod database, before destructive SQL, and before grid edits or imports.</summary>
+    Strict,
+    /// <summary>Default: runs harmless reads without a prompt; still asks before destructive SQL, grid edits and imports.</summary>
+    Risky,
+    /// <summary>Runs on Prod without confirmations; file and configuration policy refusals still hold.</summary>
+    Off,
+}
+
+/// <summary>
 /// The guards on caller SQL (§13 rule 7), enforced in the sidecar: one function for every RPC that runs text the user
 /// gave — query.execute, plan.get and debug.attach — so none of them can skip the file-policy refusal, the first run on
 /// Prod or the destructive confirm. Querithm-generated writes (grid patches, imports, syncs) go through <see cref="Tool"/>.
@@ -11,39 +24,60 @@ namespace Querithm.Core.Execution;
 public sealed class QueryGuard(SessionManager sessions)
 {
     /// <summary>
-    /// The store.db setting behind Settings › Query execution › "Confirm before running on production" (§16, 2026-11-18).
-    /// Only <c>false</c> turns the confirmations off; anything else, or nothing stored, keeps them on.
+    /// The store.db setting behind Settings › Query execution › "Production confirmations" (§16, 2026-11-18 / 2026-11-27).
+    /// Stored as a JSON string (<c>"strict"</c>, <c>"risky"</c>, <c>"off"</c>); legacy <c>true</c>/<c>false</c> map to
+    /// <see cref="ProdGuardMode.Strict"/> / <see cref="ProdGuardMode.Off"/>. Missing uses the default (<see cref="ProdGuardMode.Risky"/>);
+    /// anything unrecognised fails closed to <see cref="ProdGuardMode.Strict"/>.
     /// </summary>
     public const string SettingKey = "guard.prodConfirmations";
 
-    volatile bool _prodConfirmations = true;
+    volatile ProdGuardMode _prodMode = ProdGuardMode.Risky;
 
     /// <summary>
-    /// On (the default): a Prod target asks for the first run, destructive statements and Querithm-generated writes.
-    /// Off: a Prod target runs like any other. Refusals hold either way. Set by the composition root from store.db at
-    /// start and by settings.set.
+    /// Active confirmation level on Prod targets. Refusals hold under every mode. Set by the composition root from
+    /// store.db at start and by settings.set.
     /// </summary>
-    public bool ProdConfirmations
+    public ProdGuardMode ProdMode
     {
-        get => _prodConfirmations;
-        set => _prodConfirmations = value;
+        get => _prodMode;
+        set => _prodMode = value;
     }
 
-    /// <summary>The stored value as the guard reads it: only the JSON literal <c>false</c> is off.</summary>
-    public static bool ParseSetting(string? valueJson) => valueJson?.Trim() != "false";
+    /// <summary>The stored value as the guard reads it: missing = Risky (default), unknown/corrupt = Strict (fail-closed).</summary>
+    public static ProdGuardMode ParseSetting(string? valueJson)
+    {
+        if (valueJson == null) return ProdGuardMode.Risky;
+        return valueJson.Trim() switch
+        {
+            "\"risky\"" => ProdGuardMode.Risky,
+            "\"strict\"" or "true" => ProdGuardMode.Strict,
+            "\"off\"" or "false" => ProdGuardMode.Off,
+            _ => ProdGuardMode.Strict,
+        };
+    }
 
-    bool Confirms(Session session) => _prodConfirmations && sessions.IsProd(session);
+    /// <summary>Strict parser for <c>settings.set</c>: returns null for any value outside the documented JSON literals.</summary>
+    public static (ProdGuardMode Mode, string CanonicalJson)? TryParseInput(string? valueJson) =>
+        valueJson?.Trim() switch
+        {
+            "\"strict\"" or "true" => (ProdGuardMode.Strict, "\"strict\""),
+            "\"risky\"" => (ProdGuardMode.Risky, "\"risky\""),
+            "\"off\"" or "false" => (ProdGuardMode.Off, "\"off\""),
+            _ => null,
+        };
 
     /// <summary>
-    /// Refusal (Phase D0c: a hard error no confirmation lifts), then on Prod the first-run confirm and the destructive
-    /// confirm — text the classifier could not parse counts as destructive. Null when the text may run; the first-run
-    /// confirm is recorded only then.
+    /// Refusal (Phase D0c: a hard error no confirmation lifts), then on Prod the destructive confirm — text the
+    /// classifier could not parse counts as destructive — and in <see cref="ProdGuardMode.Strict"/> the first-run confirm
+    /// on non-destructive queries. Checking destructive findings first avoids asking two back-to-back modals on a
+    /// destructive first run. Null when the text may run; the first-run confirm is recorded only when a confirmation was
+    /// actually satisfied (never silently on an unprompted read in <see cref="ProdGuardMode.Risky"/>).
     /// </summary>
     public GuardBlock? Check(Session session, Classification classification, bool confirmedProd, bool confirmedDestructive)
     {
         if (classification.Refusal is { } refusal) throw new QuerithmException("refused", refusal);
-        if (!Confirms(session)) return null;
-        if (!sessions.IsProdConfirmed(session) && !confirmedProd) return Block(session, GuardReason.ProdFirstRun, []);
+        var mode = _prodMode;
+        if (mode == ProdGuardMode.Off || !sessions.IsProd(session)) return null;
         var findings = classification.Destructive.ToList();
         if (classification.ParseErrors.Length > 0 && findings.Count == 0)
         {
@@ -56,20 +90,35 @@ public sealed class QueryGuard(SessionManager sessions)
                 Description = $"The script could not be checked for destructive statements. Line {first.Line}: {first.Message}",
             });
         }
-        if (findings.Count > 0 && !confirmedDestructive) return Block(session, GuardReason.Destructive, findings.ToArray());
-        sessions.ConfirmProd(session);
+        if (findings.Count > 0)
+        {
+            if (!confirmedDestructive) return Block(session, GuardReason.Destructive, findings.ToArray());
+            sessions.ConfirmProd(session);
+            return null;
+        }
+        if (mode == ProdGuardMode.Strict)
+        {
+            if (!sessions.IsProdConfirmed(session) && !confirmedProd) return Block(session, GuardReason.ProdFirstRun, []);
+            sessions.ConfirmProd(session);
+        }
         return null;
     }
 
     /// <summary>
-    /// §13 rule 7 for Querithm-generated writes: on a Prod profile every such write needs <paramref name="confirmedProd"/>
-    /// (not only the first run), and destructive ones (deletes, drops) also <paramref name="confirmedDestructive"/>.
+    /// §13 rule 7 for Querithm-generated writes: on a Prod profile every such write needs confirmation (not only the
+    /// first run). When the write also carries destructive changes (deletes, drops), one combined <see cref="GuardReason.Destructive"/>
+    /// block carries both the write summary and the destructive findings so the user confirms once instead of twice.
     /// </summary>
     public GuardBlock? Tool(Session session, bool confirmedProd, bool confirmedDestructive, DestructiveFinding[] findings, DestructiveFinding[] destructive)
     {
-        if (!Confirms(session)) return null;
+        if (_prodMode == ProdGuardMode.Off || !sessions.IsProd(session)) return null;
+        if (destructive.Length > 0)
+        {
+            if (!confirmedDestructive) return Block(session, GuardReason.Destructive, [.. findings, .. destructive]);
+            sessions.ConfirmProd(session);
+            return null;
+        }
         if (!confirmedProd) return Block(session, GuardReason.ProdWrite, findings);
-        if (destructive.Length > 0 && !confirmedDestructive) return Block(session, GuardReason.Destructive, destructive);
         sessions.ConfirmProd(session);
         return null;
     }

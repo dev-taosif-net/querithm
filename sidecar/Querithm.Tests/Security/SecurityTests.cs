@@ -241,9 +241,10 @@ public class SecurityTests
 
     // Rule 7 — production guards are enforced in the sidecar.
     [Fact]
-    public async Task Prod_first_execution_is_blocked_until_confirmed()
+    public async Task Prod_first_execution_is_blocked_until_confirmed_in_strict_mode()
     {
         await using var h = new TestHost();
+        await h.Rpc.SettingsSet(new SettingEntry { Key = Querithm.Core.Execution.QueryGuard.SettingKey, ValueJson = "\"strict\"" });
         var p = await h.Rpc.ProfileSave(new Profile { Id = "", Name = "Billing", Engine = Engine.Mssql, Host = "prod-host", Environment = EnvironmentKind.Prod });
         var s = await h.Rpc.SessionOpen(new SessionOpenParams { ProfileId = p.Id, Secret = "x" });
         var r = await h.Rpc.QueryExecute(new QueryExecuteParams { SessionId = s.SessionId, Sql = "SELECT 1" });
@@ -343,6 +344,7 @@ public class SecurityTests
         DestructiveFinding[] none = [];
         DestructiveFinding[] del = [new DestructiveFinding { Rule = "delete", Statement = "DELETE 1 row(s)", Description = "Deletes 1 row(s)" }];
         Assert.Equal(GuardReason.ProdWrite, h.Services.Executions.ToolGuard(session, false, false, none, none)?.Reason);
+        Assert.Equal(GuardReason.Destructive, h.Services.Executions.ToolGuard(session, false, false, none, del)?.Reason);
         Assert.Equal(GuardReason.Destructive, h.Services.Executions.ToolGuard(session, true, false, none, del)?.Reason);
         Assert.Null(h.Services.Executions.ToolGuard(session, true, true, none, del));
     }

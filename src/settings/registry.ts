@@ -55,7 +55,21 @@ export interface SettingDef {
   warning?: (s: Settings) => string | null;
   /** A neutral note that depends on the value, or null. */
   note?: (s: Settings) => string | null;
+  /** Live checklist summarizing what the chosen mode enables or skips (returns stable array references for useShallow). */
+  checklist?: (s: Settings) => readonly { checked: boolean; text: string }[] | null;
 }
+
+const PROD_CHECKLIST_STRICT = [
+  { checked: true, text: "First query on each Prod database (once per launch)" },
+  { checked: true, text: "Destructive SQL (DROP, TRUNCATE, ALTER, DELETE or UPDATE without WHERE)" },
+  { checked: true, text: "Grid edits and data imports" },
+] as const;
+
+const PROD_CHECKLIST_RISKY = [
+  { checked: true, text: "Destructive SQL (DROP, TRUNCATE, ALTER, DELETE or UPDATE without WHERE)" },
+  { checked: true, text: "Grid edits and data imports" },
+  { checked: false, text: "First query on a Prod database — SELECT runs without asking" },
+] as const;
 
 const ROW_LIMIT_WARN = 1_000_000;
 
@@ -204,13 +218,23 @@ export const settingDefs: SettingDef[] = [
     keywords: ["multiple result sets", "layout", "ssms", "stacked", "side by side", "tabs", "grid"],
   },
   {
-    id: "prodConfirmations", keys: ["prodConfirmations"], page: "execution", group: "Production safety", label: "Confirm before running on production",
-    description: "On a production connection, asks before the first query, before destructive statements (DROP, TRUNCATE, DELETE or UPDATE without WHERE) and before grid edits or imports.",
-    control: { kind: "switch" }, keywords: ["production", "prod", "warning", "confirm", "guard", "destructive", "safety", "drop", "delete"],
+    id: "prodConfirmations", keys: ["prodConfirmations"], page: "execution", group: "Production safety", label: "Production confirmations",
+    description: "Applies only to connections whose environment is set to Prod.",
+    control: {
+      kind: "segmented",
+      options: [
+        { value: "strict", label: "Strict" },
+        { value: "risky", label: "Risky only" },
+        { value: "off", label: "Off" },
+      ],
+    },
+    keywords: ["production", "prod", "warning", "confirm", "guard", "destructive", "safety", "drop", "delete", "strict", "risky", "first run", "select", "popup", "prompt"],
+    checklist: (s) =>
+      s.prodConfirmations === "strict" ? PROD_CHECKLIST_STRICT : s.prodConfirmations === "risky" ? PROD_CHECKLIST_RISKY : null,
     warning: (s) =>
-      s.prodConfirmations
-        ? null
-        : "Queries, destructive statements, grid edits and imports run on production with no confirmation. A mistake there cannot be undone.",
+      s.prodConfirmations === "off"
+        ? "No confirmations on production. Queries, destructive statements, grid edits and imports run immediately — a mistake there cannot be undone."
+        : null,
   },
   {
     id: "statisticsTime", keys: ["statisticsTime"], page: "execution", group: "Server statistics", label: "Server CPU and elapsed time",

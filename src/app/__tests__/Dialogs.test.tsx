@@ -278,15 +278,14 @@ describe("hostKey", () => {
 });
 
 describe("guard", () => {
-  const block = (reason: string) => ({
-    reason, profileName: "Sales", server: "srv", database: null,
-    findings: [{ description: "DELETE without WHERE", line: 3, statement: "DELETE FROM t" }, { description: "second", line: 1 }],
+  const block = (reason: string, findings: any[] = [{ description: "DELETE without WHERE", line: 3, statement: "DELETE FROM t" }, { description: "second", line: 0 }]) => ({
+    reason, profileName: "Sales", server: "srv", database: null, findings,
   });
   it.each([
-    ["destructive", "⚠ DESTRUCTIVE STATEMENT DETECTED ON PRODUCTION", /AST analysis/],
-    ["prodWrite", "⚠ DATA CHANGE ON PRODUCTION", /about to write data/],
-    ["prodFirstRun", "⚠ FIRST EXECUTION ON PRODUCTION", /first execution on this/],
-  ])("%s block", async (reason, title, body) => {
+    ["destructive", "⚠ Destructive statement on PRODUCTION", /AST analysis/, "Confirm & run on PROD"],
+    ["prodWrite", "⚠ Data change on PRODUCTION", /about to write data/, "Write to PROD"],
+    ["prodFirstRun", "⚠ First query on PRODUCTION", /first query on this/, "Continue on PROD"],
+  ])("%s block", async (reason, title, body, confirmLabel) => {
     const resolve = vi.fn();
     render(<Dialogs />);
     show({ kind: "guard", block: block(reason), resolve });
@@ -295,11 +294,41 @@ describe("guard", () => {
     expect(screen.getByText("(default)")).toBeInTheDocument();
     expect(screen.getByText("DELETE FROM t")).toBeInTheDocument();
     expect(screen.getByText("(line 3)")).toBeInTheDocument();
+    expect(screen.queryByText("(line 0)")).toBeNull();
+    if (reason === "prodFirstRun") expect(screen.getByText(/Shown once per database in Strict safety mode/)).toBeInTheDocument();
     const user = userEvent.setup();
-    await user.click(screen.getByText("Confirm & execute on PROD"));
+    await user.click(screen.getByRole("button", { name: confirmLabel }));
     expect(resolve).toHaveBeenCalledWith(true);
-    await user.click(screen.getByText(/Cancel execution/));
+    await user.click(screen.getByRole("button", { name: "Cancel (Esc)" }));
     expect(resolve).toHaveBeenLastCalledWith(false);
+  });
+
+  it("Safety settings link cancels the blocked run and opens Production confirmations once even on rapid clicks", async () => {
+    const resolve = vi.fn();
+    render(<Dialogs />);
+    show({ kind: "guard", block: block("prodFirstRun", undefined as any), resolve });
+    const btn = screen.getByRole("button", { name: "Safety settings…" });
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(resolve).toHaveBeenCalledWith(false);
+    expect(useUi.getState().dialogs.filter((d) => d.kind === "settings")).toEqual([
+      { kind: "settings", page: "execution", focus: "prodConfirmations" },
+    ]);
+  });
+
+  it("combined grid delete block shows the destructive data change heading", () => {
+    render(<Dialogs />);
+    show({
+      kind: "guard",
+      block: block("destructive", [
+        { rule: "gridEdit", description: "Writes the staged grid changes", line: 0, statement: "Grid changes to dbo.t" },
+        { rule: "delete", description: "Deletes 2 row(s) from dbo.t", line: 0, statement: "DELETE 2 row(s) FROM dbo.t" },
+      ]),
+      resolve: vi.fn(),
+    });
+    expect(screen.getByText("⚠ Destructive data change on PRODUCTION")).toBeInTheDocument();
+    expect(screen.getByText(/about to delete data/)).toBeInTheDocument();
   });
 });
 

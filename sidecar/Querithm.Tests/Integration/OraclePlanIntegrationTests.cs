@@ -234,10 +234,10 @@ public sealed class OraclePlanIntegrationTests
         var p = new PlanParams { SessionId = sid, Sql = $"DELETE FROM {Qualified}", Mode = PlanMode.Actual, ConfirmedRun = true };
         // An actual plan without the run confirmation is refused before the guard.
         Assert.Equal("confirmRun", (await Assert.ThrowsAsync<QuerithmException>(() => h.Rpc.PlanGet(p with { ConfirmedRun = false }))).Code);
-        // The sidecar enforces the guard at the RPC (§13 rule 7): on Prod the first run, then the destructive statement, each
-        // need their confirmation, and no execution starts until both are given.
+        // The sidecar enforces the guard at the RPC (§13 rule 7): a destructive plan on Prod requires destructive confirmation,
+        // and no execution starts until it is given.
         var first = await h.Rpc.PlanGet(p);
-        Assert.Equal(GuardReason.ProdFirstRun, first.Blocked?.Reason);
+        Assert.Equal(GuardReason.Destructive, first.Blocked?.Reason);
         Assert.Null(first.ExecutionId);
         var destructive = await h.Rpc.PlanGet(p with { ConfirmedProd = true });
         Assert.Equal(GuardReason.Destructive, destructive.Blocked?.Reason);

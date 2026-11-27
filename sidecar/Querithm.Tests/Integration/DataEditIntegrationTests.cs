@@ -403,8 +403,8 @@ public class DataEditIntegrationTests
             SessionId = sid, ExecutionId = exec, ConfirmedProd = confirmedProd, ConfirmedDestructive = destructive,
             Deletes = [new GridRowDelete { RowIndex = 2, Key = [V("3")], Token = token }],
         };
-        // Already past the first-run confirm, yet every Querithm-generated write on Prod is confirmed again.
-        Assert.Equal(GuardReason.ProdWrite, (await h.Rpc.DataApplyPatch(Patch(false, false))).Blocked?.Reason);
+        // Already past the first-run confirm, yet every Querithm-generated write on Prod is confirmed again (combined into one Destructive block for deletes).
+        Assert.Equal(GuardReason.Destructive, (await h.Rpc.DataApplyPatch(Patch(false, false))).Blocked?.Reason);
         Assert.Equal(GuardReason.Destructive, (await h.Rpc.DataApplyPatch(Patch(true, false))).Blocked?.Reason);
         var r = await h.Rpc.DataApplyPatch(Patch(true, true));
         Assert.True(r.Ok, r.Error);

@@ -35,9 +35,11 @@ export function tabStops(root: HTMLElement): HTMLElement[] {
  * Cancel cancels.
  */
 export function Modal({
-  title, subtitle, children, footer, onClose, width = 520, danger = false, alert = danger, onEnter, onEscape, bodyClassName = "p-4 overflow-auto", topRule, closeButton = false,
+  title, subtitle, children, footer, onClose, width = 520, danger = false, warn = false, alert = danger || warn, onEnter, onEscape, bodyClassName = "p-4 overflow-auto", topRule, closeButton = false,
 }: {
   title: ReactNode; subtitle?: ReactNode; children: ReactNode; footer?: ReactNode; onClose: () => void; width?: number; danger?: boolean;
+  /** Calm amber alert styling (non-destructive Production confirmation); still behaves as an alertdialog with Cancel focused. */
+  warn?: boolean;
   /** A × in the header that closes the dialog (the footer then needs no Close button). Not a tab stop: Esc does the same. */
   closeButton?: boolean;
   /** A 3 px colour rule along the dialog's top edge (the profile editor's Production marker). */
@@ -132,15 +134,15 @@ export function Modal({
         aria-labelledby={`${id}-title`}
         aria-describedby={subtitle ? `${id}-subtitle` : undefined}
         tabIndex={-1}
-        className={`q-modal-dialog bg-panel rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-full outline-none ${danger ? "border-2 border-err shadow-[0_0_50px_rgba(239,68,68,0.3)]" : "border border-line"}`}
+        className={`q-modal-dialog bg-panel rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-full outline-none ${danger ? "border-2 border-err shadow-[0_0_50px_rgba(239,68,68,0.3)]" : warn ? "border-2 border-warn/70" : "border border-line"}`}
         style={{ width, maxWidth: "100%", ...(topRule ? { borderTop: `3px solid ${topRule}` } : {}) }}
       >
-        <div className={`px-4 py-3 flex items-start gap-2 ${danger ? "bg-err-solid text-white" : "border-b border-line"}`}>
+        <div className={`px-4 py-3 flex items-start gap-2 ${danger ? "bg-err-solid text-white" : warn ? "bg-warn/(--q-warn-row-alpha) border-b border-warn/40 text-fg" : "border-b border-line"}`}>
           <div className="flex-1 min-w-0">
             {/* Shown as written: titles carry identifiers and names ("Rename @OrderId", "Execute dbo.usp_Get"), which a
                 text-transform would change. */}
             <div id={`${id}-title`} className={`text-xs font-bold ${danger ? "" : "text-fg"}`} data-modal-title>{title}</div>
-            {subtitle && <div id={`${id}-subtitle`} className={`text-[11px] mt-0.5 ${danger ? "text-white" : "text-muted"}`}>{subtitle}</div>}
+            {subtitle && <div id={`${id}-subtitle`} className={`text-[11px] mt-0.5 ${danger ? "text-white" : warn ? "text-fg" : "text-muted"}`}>{subtitle}</div>}
           </div>
           {closeButton && (
             <button type="button" tabIndex={-1} aria-label="Close" title="Close (Esc)" className="q-icon-btn -my-1 -mr-2 w-7 h-7 shrink-0" onClick={onClose}>

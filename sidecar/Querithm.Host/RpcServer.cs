@@ -52,9 +52,9 @@ public sealed class Services : IAsyncDisposable
         var metadata = new MetadataService(sessions, metaStore, cache, notifier, logs.CreateLogger("metadata"));
         var executions = new ExecutionService(sessions, frames, notifier, history, logs.CreateLogger("execution"), cache);
         var settings = new SettingsStore(store);
-        // §13 rule 7: the Prod confirmations setting as stored; an unreadable store leaves them on.
-        try { executions.Guard.ProdConfirmations = QueryGuard.ParseSetting(settings.Get([QueryGuard.SettingKey]).FirstOrDefault()?.ValueJson); }
-        catch (Exception e) when (e is not OutOfMemoryException) { executions.Guard.ProdConfirmations = true; }
+        // §13 rule 7: the Prod confirmations setting as stored; an unreadable store fails closed to Strict.
+        try { executions.Guard.ProdMode = QueryGuard.ParseSetting(settings.Get([QueryGuard.SettingKey]).FirstOrDefault()?.ValueJson); }
+        catch (Exception e) when (e is not OutOfMemoryException) { executions.Guard.ProdMode = ProdGuardMode.Strict; }
         var dataEditor = new DataEditorService(sessions, executions, metaStore, cache, logs.CreateLogger("dataedit"));
         executions.Editability = dataEditor.Decide;
         // A read-only verdict that out-of-date metadata may explain is decided again once the metadata was read again.
@@ -762,25 +762,37 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
     public Task<HistoryRetention> HistorySetRetention(HistoryRetention p) => Task.Run(() => s.History.SetRetention(p));
     public Task<SettingEntry[]> SettingsGet(SettingsGetParams p) => Task.FromResult(s.Settings.Get(p.Keys));
 
+    readonly Lock _guardSettingGate = new();
+
     public Task SettingsSet(SettingEntry p)
     {
+        if (p == null || string.IsNullOrEmpty(p.Key) || p.Key.Length > SettingsPatchLimits.MaxNameLength)
+            throw QuerithmException.Invalid($"settings.set needs a key of 1–{SettingsPatchLimits.MaxNameLength} characters.");
         if (p.Key == QueryGuard.SettingKey)
         {
-            // §13 rule 7: the Prod confirmations switch takes exactly true or false; it is stored first, then applied.
-            var on = p.ValueJson?.Trim() switch
+            // §13 rule 7: the Prod confirmations mode takes strict / risky / off (or legacy true / false); stored and applied atomically.
+            if (QueryGuard.TryParseInput(p.ValueJson) is not var (mode, canonical))
+                throw QuerithmException.Invalid("The production confirmation setting must be \"strict\", \"risky\" or \"off\".");
+            return Task.Run(() => StoreWrite(() =>
             {
-                "true" => true,
-                "false" => false,
-                _ => throw QuerithmException.Invalid("The production confirmation setting must be true or false."),
-            };
-            s.Settings.Set(p.Key, on ? "true" : "false");
-            s.Executions.Guard.ProdConfirmations = on;
-            return Task.CompletedTask;
+                lock (_guardSettingGate)
+                {
+                    s.Settings.Set(p.Key, canonical);
+                    s.Executions.Guard.ProdMode = mode;
+                }
+                return true;
+            }));
         }
         // Groups live in the profile_group table; the old key stays as stored and is never written again.
         if (p.Key == LegacyGroupsKey) throw QuerithmException.Invalid("Connection groups are not a setting; use the group methods.");
-        s.Settings.Set(p.Key, p.ValueJson);
-        return Task.CompletedTask;
+        if (p.ValueJson == null) throw QuerithmException.Invalid("settings.set needs a valid JSON value.");
+        try { using var _ = System.Text.Json.JsonDocument.Parse(p.ValueJson); }
+        catch (System.Text.Json.JsonException) { throw QuerithmException.Invalid("settings.set needs a valid JSON value."); }
+        return Task.Run(() => StoreWrite(() =>
+        {
+            s.Settings.Set(p.Key, p.ValueJson);
+            return true;
+        }));
     }
 
     /// <summary>
@@ -792,7 +804,7 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
     {
         if (p == null || string.IsNullOrEmpty(p.Key) || p.Key.Length > SettingsPatchLimits.MaxNameLength)
             throw QuerithmException.Invalid($"settings.patch needs a key of 1–{SettingsPatchLimits.MaxNameLength} characters.");
-        // §13 rule 7: the Prod confirmations switch takes exactly true or false, through settings.set, never a merged object.
+        // §13 rule 7: the Prod confirmations mode takes "strict", "risky" or "off", through settings.set, never a merged object.
         if (p.Key == QueryGuard.SettingKey) throw QuerithmException.Invalid("The production confirmation setting is changed with settings.set.");
         if (p.Key == LegacyGroupsKey) throw QuerithmException.Invalid("Connection groups are not a setting; use the group methods.");
         var names = new List<string>();

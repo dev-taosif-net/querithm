@@ -61,7 +61,7 @@ public sealed class OracleSecurityTests
         await Run(async (rpc, sid) =>
         {
             var first = await rpc.QueryExecute(new QueryExecuteParams { SessionId = sid, Sql = sql });
-            Assert.Equal(GuardReason.ProdFirstRun, first.Blocked?.Reason);
+            Assert.Equal(GuardReason.Destructive, first.Blocked?.Reason);
             var second = await rpc.QueryExecute(new QueryExecuteParams { SessionId = sid, Sql = sql, Options = new ExecuteOptions { ConfirmedProd = true } });
             Assert.Equal(GuardReason.Destructive, second.Blocked?.Reason);
             Assert.Contains(rule, second.Blocked!.Findings.Select(f => f.Rule));

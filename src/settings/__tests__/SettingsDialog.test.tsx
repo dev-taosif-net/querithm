@@ -123,6 +123,25 @@ describe("Settings: rows", () => {
     expect(useSettings.getState().keywordCase).toBe("lower");
   });
 
+  it("production confirmations shows a 3-level control with a live checklist, warning when Off, and focuses its active radio", async () => {
+    open({ page: "execution", focus: "prodConfirmations" });
+    await raf();
+    const group = screen.getByRole("radiogroup", { name: "Production confirmations" });
+    const risky = within(group).getByRole("radio", { name: "Risky only" });
+    expect(risky).toBeChecked();
+    expect(document.activeElement).toBe(risky);
+    expect(screen.getByText(/SELECT runs without asking/)).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(within(group).getByRole("radio", { name: "Strict" }));
+    expect(useSettings.getState().prodConfirmations).toBe("strict");
+    expect(screen.getByText(/First query on each Prod database/)).toBeInTheDocument();
+
+    await user.click(within(group).getByRole("radio", { name: "Off" }));
+    expect(useSettings.getState().prodConfirmations).toBe("off");
+    expect(screen.getByText(/No confirmations on production/)).toBeInTheDocument();
+  });
+
   it("color themes are cards in a dark and a light group; a card picks the theme and its mode; Match system keeps both picks", async () => {
     open({ page: "appearance" });
     const user = userEvent.setup();

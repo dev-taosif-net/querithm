@@ -105,11 +105,29 @@ export interface Settings {
   /** Interface scale in percent (L26): the webview's page zoom, so text, the grid and the editor grow together (src/app/uiScale.ts). */
   uiScale: number;
   /**
-   * Confirm before running on production (§13 rule 7, §16 2026-11-18): the first run, destructive statements and grid
-   * edits / imports on a Prod target ask first. The sidecar enforces it and owns the value (store.db key
-   * `guard.prodConfirmations`, PROD_GUARD_KEY), so it is not part of ui.settings.
+   * Production confirmations (§13 rule 7, §16 2026-11-18 / 2026-11-27): "strict" (first run + destructive + writes),
+   * "risky" (default: destructive + writes, SELECT runs without asking), or "off". The sidecar enforces it and owns
+   * the value (store.db key `guard.prodConfirmations`, PROD_GUARD_KEY), so it is not part of ui.settings.
    */
-  prodConfirmations: boolean;
+  prodConfirmations: ProdConfirmMode;
+}
+
+export const PROD_CONFIRM_MODES = ["strict", "risky", "off"] as const;
+export type ProdConfirmMode = (typeof PROD_CONFIRM_MODES)[number];
+export const PROD_CONFIRM_LABELS: Record<ProdConfirmMode, string> = {
+  strict: "Strict",
+  risky: "Risky only",
+  off: "Off",
+};
+
+/** Parses the sidecar's `guard.prodConfirmations` value identically to QueryGuard.ParseSetting (unknown fails closed to strict). */
+export function parseProdGuardSetting(valueJson: string | null | undefined): ProdConfirmMode {
+  if (valueJson == null) return defaultSettings.prodConfirmations;
+  const t = valueJson.trim();
+  if (t === '"risky"') return "risky";
+  if (t === '"strict"' || t === "true") return "strict";
+  if (t === '"off"' || t === "false") return "off";
+  return "strict";
 }
 
 export const TAB_LAYOUTS = ["singleLine", "numbered", "twoLine", "guard"] as const;
@@ -178,7 +196,7 @@ export const defaultSettings: Settings = {
   panelDock: "bottom",
   resultLayout: "tabs",
   uiScale: 100,
-  prodConfirmations: true,
+  prodConfirmations: "risky",
 };
 
 /** Numeric ranges: the store clamps to them on load and on every change, and the Settings page shows them. */
@@ -201,6 +219,7 @@ const choices: Partial<Record<keyof Settings, readonly string[]>> = {
   tabLayout: TAB_LAYOUTS,
   commentPlacement: ["indent", "column1"],
   mysqlLineCommentStyle: ["-- ", "# "],
+  prodConfirmations: PROD_CONFIRM_MODES,
 };
 
 /** One value read from store.db or passed to set(): the cleaned value, or undefined when it is unusable. */
@@ -322,9 +341,9 @@ let syntaxNoticeDue = false;
 
 async function readSaved(): Promise<Partial<Settings>> {
   const entries = await limited(rpc("settings.get", { keys: [KEY, PROD_GUARD_KEY] }), "the settings read");
-  // As the sidecar reads it (QueryGuard.ParseSetting): only false is off.
+  // As the sidecar reads it (QueryGuard.ParseSetting): missing = risky, legacy true/false = strict/off, unknown = strict.
   const guard = entries.find((e) => e.key === PROD_GUARD_KEY);
-  const owned: Partial<Settings> = guard ? { prodConfirmations: guard.valueJson.trim() !== "false" } : {};
+  const owned: Partial<Settings> = guard ? { prodConfirmations: parseProdGuardSetting(guard.valueJson) } : {};
   const saved = entries.find((e) => e.key === KEY);
   if (!saved) {
     lastRead = { hadSaved: false, migrated: false, adopted: false };
@@ -348,18 +367,49 @@ export function takeSyntaxMigrationNotice(): boolean {
   return due;
 }
 
+/** In-flight `guard.prodConfirmations` write (null when idle); rapid picks are serialized and coalesced to the latest mode. */
+let prodInFlight: Promise<void> | null = null;
+/** Last value confirmed on the sidecar for the current in-flight write burst (null when idle). */
+let prodConfirmed: ProdConfirmMode | null = null;
+/** Latest mode requested while a `guard.prodConfirmations` write is already in flight. */
+let prodQueued: ProdConfirmMode | null = null;
+
 /**
- * Writes the Prod confirmations switch to the sidecar at once (no debounce: the guard follows it). If the sidecar does
- * not take it, the switch goes back to what the sidecar still enforces and the user is told.
+ * Writes the Prod confirmations mode to the sidecar at once (no debounce: the guard follows it), serialized one RPC at
+ * a time with a bounded wait so rapid clicks never finish out of order or hang forever. On failure, rolls back to the
+ * last value confirmed on the sidecar and tells the user.
  */
-async function writeProdConfirmations(on: boolean, before: boolean): Promise<void> {
-  try {
-    await rpc("settings.set", { key: PROD_GUARD_KEY, valueJson: on ? "true" : "false" });
-  } catch (e) {
-    if (useSettings.getState().prodConfirmations === on) useSettings.setState({ prodConfirmations: before });
-    const error = e instanceof Error ? e.message : String(e);
-    toast("error", `The production confirmation setting could not be saved: ${error}. It is still ${before ? "on" : "off"}.`);
+function writeProdConfirmations(mode: ProdConfirmMode, before: ProdConfirmMode): void {
+  if (prodInFlight) {
+    prodQueued = mode;
+    return;
   }
+  prodConfirmed = before;
+  let current: ProdConfirmMode | null = mode;
+  prodInFlight = (async () => {
+    try {
+      while (current !== null) {
+        const target: ProdConfirmMode = current;
+        prodQueued = null;
+        try {
+          await limited(rpc("settings.set", { key: PROD_GUARD_KEY, valueJson: JSON.stringify(target) }), "the production confirmation write");
+          prodConfirmed = target;
+        } catch (e) {
+          if (prodQueued === null && useSettings.getState().prodConfirmations === target) {
+            useSettings.setState({ prodConfirmations: prodConfirmed! });
+            const error = e instanceof Error ? e.message : String(e);
+            toast("error", `The production confirmation setting could not be saved: ${error}. It is still ${PROD_CONFIRM_LABELS[prodConfirmed!]}.`);
+          }
+        }
+        const next: ProdConfirmMode | null = prodQueued;
+        current = next !== null && next !== prodConfirmed ? next : null;
+      }
+    } finally {
+      prodInFlight = null;
+      prodConfirmed = null;
+      prodQueued = null;
+    }
+  })();
 }
 
 function failed(e: unknown) {
@@ -396,7 +446,10 @@ function persist(): Promise<void> {
 async function writeSettings(): Promise<void> {
   if (useSettingsStatus.getState().loadFailed) {
     try {
+      while (prodInFlight) await prodInFlight;
       const saved = await readSaved();
+      // If a prod confirmation write started while readSaved() was in flight, keep the newer optimistic mode.
+      if (prodInFlight) delete saved.prodConfirmations;
       const cur = useSettings.getState();
       const mine = Object.fromEntries([...dirty.keys()].map((k) => [k, cur[k]]));
       useSettings.setState({ ...saved, ...mine });
@@ -437,8 +490,8 @@ async function writeSettings(): Promise<void> {
  * with nothing pending it still waits for that write, so closing never cuts one off.
  */
 export async function flushSettings(): Promise<void> {
-  if (saveTimer) await persist();
-  else await writing;
+  await (saveTimer ? persist() : writing);
+  while (prodInFlight) await prodInFlight;
 }
 
 /** Tries a failed save again (Retry in Settings, engine restarted). */

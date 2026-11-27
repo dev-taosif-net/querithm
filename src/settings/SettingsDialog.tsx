@@ -88,8 +88,13 @@ export function SettingsDialog({ close, page: initialPage, focus }: { close: () 
   // Opened at a page (About, Keyboard shortcuts): focus that page's tab, or the named control; otherwise the search box.
   useEffect(() => {
     const t = requestAnimationFrame(() => {
-      if (focus) document.getElementById(focus.startsWith("setting-") ? focus : controlId(focus as SettingDef["id"]))?.focus();
-      else if (initialPage) document.getElementById(tabId(initialPage))?.focus();
+      if (focus) {
+        const el = document.getElementById(focus.startsWith("setting-") ? focus : controlId(focus as SettingDef["id"]));
+        const target = el?.matches("input, button, select, textarea, [tabindex]")
+          ? el
+          : (el?.querySelector<HTMLElement>("input:checked") ?? el?.querySelector<HTMLElement>("input:not([disabled]), button:not([disabled])"));
+        (target ?? el)?.focus();
+      } else if (initialPage) document.getElementById(tabId(initialPage))?.focus();
       else searchBox.current?.focus();
     });
     return () => cancelAnimationFrame(t);

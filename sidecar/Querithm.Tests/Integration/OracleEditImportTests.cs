@@ -541,7 +541,7 @@ public sealed class OracleEditImportTests
             Deletes = [new GridRowDelete { RowIndex = 2, Key = [V("3")], Original = new() { ["NAME"] = V("three") } }],
         };
         var blocked = await o.H.Rpc.DataApplyPatch(patch);
-        Assert.Equal(GuardReason.ProdWrite, blocked.Blocked?.Reason);
+        Assert.Equal(GuardReason.Destructive, blocked.Blocked?.Reason);
         var destructive = await o.H.Rpc.DataApplyPatch(patch with { ConfirmedProd = true });
         Assert.Equal(GuardReason.Destructive, destructive.Blocked?.Reason);
         Assert.Equal("one", await ScalarAsync($"SELECT name FROM {Orders} WHERE id = 1"));

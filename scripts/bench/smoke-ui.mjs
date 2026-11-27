@@ -1253,17 +1253,32 @@ try {
   }, mssqlHost);
   await page.evaluate((pw) => window.__bench.useProd(window.__prodProfile, pw), MSSQL_PW);
   await sleep(1500);
-  await page.keyboard.down("Control"); await page.keyboard.press("A"); await page.keyboard.up("Control");
-  await page.keyboard.type("SELECT 1;\nDELETE FROM dbo.OrderTotals;");
-  await page.keyboard.press("F5");
-  await page.waitForFunction(() => document.body.innerText.includes("FIRST EXECUTION ON PRODUCTION"), { timeout: 15_000 }).catch(() => errors.push("prod first-run guard did not appear"));
-  await shot("08-prod-first");
-  await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent?.includes("Confirm & execute on PROD"))?.click());
-  await page.waitForFunction(() => document.body.innerText.includes("DESTRUCTIVE STATEMENT DETECTED ON PRODUCTION"), { timeout: 15_000 }).catch(() => errors.push("destructive guard did not appear"));
-  await sleep(300);
-  await shot("09-prod-destructive");
-  await page.keyboard.press("Escape");
-  await sleep(300);
+  // Strict mode verifies the calm first-query guard, then the destructive statement guard (always restore default Risky).
+  await page.evaluate(() => window.__bench.rpc("settings.set", { key: "guard.prodConfirmations", valueJson: '"strict"' }));
+  try {
+    await page.keyboard.down("Control"); await page.keyboard.press("A"); await page.keyboard.up("Control");
+    await page.keyboard.type("SELECT 1;");
+    await page.keyboard.press("F5");
+    await page.waitForFunction(() => document.body.innerText.includes("First query on PRODUCTION"), { timeout: 15_000 }).catch(() => errors.push("prod first-run guard did not appear"));
+    await shot("08-prod-first");
+    await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent?.includes("Continue on PROD"))?.click());
+    // Wait for the first TLS query to finish so the tab is no longer busy when F5 runs DELETE.
+    await page.waitForFunction(
+      () => !document.body.innerText.includes("First query on PRODUCTION") && !document.body.innerText.includes("Executing"),
+      { timeout: 15_000 },
+    ).catch(() => errors.push("prod first query did not finish"));
+    await page.click(".monaco-editor").catch(() => {});
+    await page.keyboard.down("Control"); await page.keyboard.press("A"); await page.keyboard.up("Control");
+    await page.keyboard.type("DELETE FROM dbo.OrderTotals;");
+    await page.keyboard.press("F5");
+    await page.waitForFunction(() => document.body.innerText.includes("Destructive statement on PRODUCTION"), { timeout: 15_000 }).catch(() => errors.push("destructive guard did not appear"));
+    await sleep(300);
+    await shot("09-prod-destructive");
+    await page.keyboard.press("Escape");
+    await sleep(300);
+  } finally {
+    await page.evaluate(() => window.__bench.rpc("settings.set", { key: "guard.prodConfirmations", valueJson: '"risky"' })).catch(() => {});
+  }
   // PostgreSQL tab.
   await page.evaluate(async (pw) => {
     const b = window.__bench;

@@ -57,6 +57,12 @@ describe("settings registry", () => {
     expect(defOf("autosave").warning!(s({ autosave: false }))).toMatch(/lost/);
     expect(defOf("autoUpdateCheck").warning!(s({ autoUpdateCheck: false }))).toMatch(/fixes/);
     expect(defOf("autoUpdateCheck").warning!(s())).toBeNull();
+    expect(defOf("prodConfirmations").warning!(s({ prodConfirmations: "off" }))).toMatch(/No confirmations/);
+    expect(defOf("prodConfirmations").warning!(s({ prodConfirmations: "risky" }))).toBeNull();
+    expect(defOf("prodConfirmations").warning!(s({ prodConfirmations: "strict" }))).toBeNull();
+    expect(defOf("prodConfirmations").checklist!(s({ prodConfirmations: "strict" }))?.every((c) => c.checked)).toBe(true);
+    expect(defOf("prodConfirmations").checklist!(s({ prodConfirmations: "risky" }))?.some((c) => !c.checked)).toBe(true);
+    expect(defOf("prodConfirmations").checklist!(s({ prodConfirmations: "off" }))).toBeNull();
   });
 
   it("SQL Server's Preserve keyword case is described honestly", () => {

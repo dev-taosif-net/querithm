@@ -14,7 +14,7 @@ const { rpc, onNotify, handlers } = vi.hoisted(() => {
 vi.mock("../../ipc/client", () => ({ rpc, onNotify, shell: {}, RpcError: class extends Error {} }));
 
 import { useDiag, installDiagListeners } from "../diag";
-import { useSettings, useSettingsStatus, defaultSettings, flushSettings, retrySettingsSave, schemaGroupKey, settingLimits, SETTINGS_RPC_LIMIT_MS, TAB_LAYOUTS, isSingleLineLayout } from "../settings";
+import { useSettings, useSettingsStatus, defaultSettings, flushSettings, parseProdGuardSetting, retrySettingsSave, schemaGroupKey, settingLimits, SETTINGS_RPC_LIMIT_MS, TAB_LAYOUTS, isSingleLineLayout } from "../settings";
 import { fakeSettingsDb, patchesOf } from "./fakeSettingsDb";
 import { useToolTabs, isToolId, newToolId } from "../toolTabs";
 import { useUsages } from "../usages";
@@ -112,32 +112,42 @@ describe("settings store", () => {
   });
 
   describe("production confirmations (sidecar-owned, guard.prodConfirmations)", () => {
-    it("is on by default and is read from the sidecar's key, never from ui.settings", async () => {
-      expect(defaultSettings.prodConfirmations).toBe(true);
-      rpc.mockResolvedValueOnce([{ key: "ui.settings", valueJson: JSON.stringify({ prodConfirmations: false }) }]);
+    it("defaults to risky and is read from the sidecar's key, never from ui.settings", async () => {
+      expect(defaultSettings.prodConfirmations).toBe("risky");
+      rpc.mockResolvedValueOnce([{ key: "ui.settings", valueJson: JSON.stringify({ prodConfirmations: "off" }) }]);
       await useSettings.getState().load();
       expect(rpc).toHaveBeenCalledWith("settings.get", { keys: ["ui.settings", "guard.prodConfirmations"] });
-      expect(useSettings.getState().prodConfirmations).toBe(true);
-      useSettings.setState({ loaded: false });
-      rpc.mockResolvedValueOnce([{ key: "guard.prodConfirmations", valueJson: "false" }]);
-      await useSettings.getState().load();
-      expect(useSettings.getState().prodConfirmations).toBe(false);
+      expect(useSettings.getState().prodConfirmations).toBe("risky");
+
+      for (const [stored, expected] of [
+        ['"strict"', "strict"],
+        ['"risky"', "risky"],
+        ['"off"', "off"],
+        ["true", "strict"],
+        ["false", "off"],
+      ] as const) {
+        useSettings.setState({ loaded: false });
+        rpc.mockResolvedValueOnce([{ key: "guard.prodConfirmations", valueJson: stored }]);
+        await useSettings.getState().load();
+        expect(useSettings.getState().prodConfirmations).toBe(expected);
+      }
     });
 
-    it("anything stored but false reads as on, as the sidecar reads it", async () => {
-      rpc.mockResolvedValueOnce([{ key: "guard.prodConfirmations", valueJson: "\"off\"" }]);
+    it("unrecognised stored values fail closed to strict, matching the sidecar", async () => {
+      rpc.mockResolvedValueOnce([{ key: "guard.prodConfirmations", valueJson: '"bogus"' }]);
       await useSettings.getState().load();
-      expect(useSettings.getState().prodConfirmations).toBe(true);
+      expect(useSettings.getState().prodConfirmations).toBe("strict");
     });
 
-    it("turning it off writes the sidecar's key at once, and ui.settings never carries it", async () => {
-      useSettings.getState().set({ prodConfirmations: false });
-      expect(rpc).toHaveBeenCalledWith("settings.set", { key: "guard.prodConfirmations", valueJson: "false" });
+    it("changing the mode writes the sidecar's key at once, and ui.settings never carries it", async () => {
+      useSettings.getState().set({ prodConfirmations: "off" });
+      expect(rpc).toHaveBeenCalledWith("settings.set", { key: "guard.prodConfirmations", valueJson: '"off"' });
       // Alone it has nothing for ui.settings: no read and write of an unchanged object.
       await vi.advanceTimersByTimeAsync(400);
       expect(rpc.mock.calls.map(([m, a]) => `${m} ${a?.key ?? a?.keys}`)).toEqual(["settings.set guard.prodConfirmations"]);
       expect(useSettingsStatus.getState().save).toBe("saved");
-      useSettings.getState().set({ prodConfirmations: true, minimap: false });
+      useSettings.getState().set({ prodConfirmations: "strict", minimap: false });
+      expect(rpc).toHaveBeenCalledWith("settings.set", { key: "guard.prodConfirmations", valueJson: '"strict"' });
       await vi.advanceTimersByTimeAsync(400);
       const [patch] = patchesOf(rpc.mock.calls);
       expect(patch.set).toEqual({ minimap: "false" });
@@ -146,14 +156,82 @@ describe("settings store", () => {
       expect(patch.remove).toEqual(["prodConfirmations"]);
     });
 
-    it("when the sidecar does not take the change, the switch goes back to what it still enforces and says so", async () => {
+    it("when the sidecar does not take the change, the mode goes back to what it still enforces and says so", async () => {
       rpc.mockImplementation(async (m: string, a: { key: string }) => {
         if (m === "settings.set" && a.key === "guard.prodConfirmations") throw new Error("engine down");
       });
-      useSettings.getState().set({ prodConfirmations: false });
+      useSettings.getState().set({ prodConfirmations: "off" });
       await vi.advanceTimersByTimeAsync(0);
-      expect(useSettings.getState().prodConfirmations).toBe(true);
-      expect(useUi.getState().toasts.at(-1)?.text).toMatch(/production confirmation setting could not be saved: engine down\. It is still on/);
+      expect(useSettings.getState().prodConfirmations).toBe("risky");
+      expect(useUi.getState().toasts.at(-1)?.text).toMatch(/production confirmation setting could not be saved: engine down\. It is still Risky only/);
+    });
+
+    it("serializes rapid mode switches, awaits them in flushSettings, rolls back to the last confirmed mode, and bounds stalled writes", async () => {
+      const pending: Array<{ value: string; resolve: () => void; reject: (e: Error) => void }> = [];
+      rpc.mockImplementation((m: string, a: { key: string; valueJson: string }) => {
+        if (m !== "settings.set" || a.key !== "guard.prodConfirmations") return Promise.resolve(undefined);
+        return new Promise<void>((resolve, reject) => pending.push({ value: a.valueJson, resolve, reject }));
+      });
+
+      // Rapid risky -> strict -> off sends only "strict" while in flight, then "off" after it resolves.
+      useSettings.getState().set({ prodConfirmations: "strict" });
+      useSettings.getState().set({ prodConfirmations: "off" });
+      expect(pending.map((p) => p.value)).toEqual(['"strict"']);
+
+      let flushed = false;
+      const flush = flushSettings().then(() => { flushed = true; });
+      await Promise.resolve();
+      expect(flushed).toBe(false);
+
+      pending[0].resolve();
+      await vi.waitFor(() => expect(pending.map((p) => p.value)).toEqual(['"strict"', '"off"']));
+      pending[1].resolve();
+      await flush;
+      expect(flushed).toBe(true);
+
+      // Rapid off -> strict (fails) -> risky (fails) rolls back to last confirmed ("off"), never unpersisted "strict".
+      pending.length = 0;
+      useSettings.getState().set({ prodConfirmations: "strict" });
+      useSettings.getState().set({ prodConfirmations: "risky" });
+      pending[0].reject(new Error("down 1"));
+      await vi.waitFor(() => expect(pending).toHaveLength(2));
+      pending[1].reject(new Error("down 2"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(useSettings.getState().prodConfirmations).toBe("off");
+      expect(useUi.getState().toasts.at(-1)?.text).toMatch(/down 2\. It is still Off/);
+
+      // A stalled RPC is bounded by SETTINGS_RPC_LIMIT_MS and rolls back cleanly.
+      pending.length = 0;
+      useSettings.getState().set({ prodConfirmations: "strict" });
+      await vi.advanceTimersByTimeAsync(SETTINGS_RPC_LIMIT_MS + 1);
+      expect(useSettings.getState().prodConfirmations).toBe("off");
+      expect(useUi.getState().toasts.at(-1)?.text).toMatch(/did not answer/);
+    });
+
+    it("parseProdGuardSetting tolerates null as default", () => {
+      expect(parseProdGuardSetting(null)).toBe("risky");
+      expect(parseProdGuardSetting(undefined)).toBe("risky");
+    });
+
+    it("loadFailed recovery does not clobber a prodConfirmations change started while settings.get is in flight", async () => {
+      useSettingsStatus.setState({ loadFailed: true, save: "saved" });
+      let resolveGet!: (v: unknown) => void;
+      let resolveSet!: () => void;
+      rpc.mockImplementation((m: string, a: { key?: string }) => {
+        if (m === "settings.get") return new Promise((r) => (resolveGet = r));
+        if (m === "settings.set" && a.key === "guard.prodConfirmations") return new Promise<void>((r) => (resolveSet = r));
+        return Promise.resolve(undefined);
+      });
+      useSettings.getState().set({ wordWrap: true });
+      const flushing = flushSettings();
+      await vi.waitFor(() => expect(resolveGet).toBeDefined());
+      // User switches production confirmations while settings.get is still in flight.
+      useSettings.getState().set({ prodConfirmations: "strict" });
+      resolveGet([{ key: "guard.prodConfirmations", valueJson: '"off"' }]);
+      await vi.waitFor(() => expect(resolveSet).toBeDefined());
+      resolveSet();
+      await flushing;
+      expect(useSettings.getState().prodConfirmations).toBe("strict");
     });
   });
 
