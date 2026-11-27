@@ -163,3 +163,21 @@ public interface IDebugSession : IAsyncDisposable
     Task StepAsync(DebugStepKind kind, CancellationToken ct);
     Task<string> GetSourceAsync(long functionOid, CancellationToken ct);
 }
+
+/// <summary>
+/// Server-level linked / external servers (SQL Server sys.servers + lazy sp_catalogs / sp_tables_ex / sp_testlinkedserver;
+/// MySQL / MariaDB mysql.servers without credentials). Null on engines without server-level external servers.
+/// </summary>
+public interface ILinkedServerProvider
+{
+    Task<LinkedServersResult> ListServersAsync(DbConnection connection, CancellationToken ct);
+
+    Task<LinkedCatalogInfo[]> ListCatalogsAsync(DbConnection connection, string serverName, CancellationToken ct) =>
+        Task.FromException<LinkedCatalogInfo[]>(new NotSupportedException("Browsing remote catalogs is not supported on this engine."));
+
+    Task<LinkedTablesResult> ListTablesAsync(DbConnection connection, string serverName, string? catalog, int limit, CancellationToken ct) =>
+        Task.FromException<LinkedTablesResult>(new NotSupportedException("Browsing remote tables is not supported on this engine."));
+
+    Task<LinkedTestResult> TestAsync(DbConnection connection, string serverName, CancellationToken ct) =>
+        Task.FromException<LinkedTestResult>(new NotSupportedException("Testing external servers is not supported on this engine."));
+}

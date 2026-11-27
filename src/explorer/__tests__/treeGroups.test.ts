@@ -17,7 +17,7 @@ function input(over: Partial<TreeInput> = {}): TreeInput {
   };
 }
 const labels = (rows: TreeRow[]) =>
-  rows.map((r) => `${"  ".repeat(r.level - 1)}${r.t}:${r.t === "server" ? r.profileId : r.t === "env" ? r.env : r.t === "group" ? r.name : r.t === "db" ? r.db : r.t === "note" ? r.text : r.t === "action" ? r.action : ""}`);
+  rows.map((r) => `${"  ".repeat(r.level - 1)}${r.t}:${r.t === "server" ? r.profileId : r.t === "env" ? r.env : r.t === "group" ? r.name : r.t === "db" ? r.db : r.t === "serverObjects" ? r.profileId : r.t === "note" ? r.text : r.t === "action" ? r.action : ""}`);
 /** What a row is, without where it sits in the list (parents are indexes). */
 const shape = (rows: TreeRow[]) => rows.map((r) => ({ t: r.t, key: r.key, level: r.level, expanded: r.expanded, pos: r.pos, size: r.size }));
 
@@ -99,7 +99,7 @@ describe("Group › Environment › Connection", () => {
 
   it("an expanded server keeps its databases under the group, one level deeper", () => {
     const rows = buildTree(input({ profiles: ps.slice(0, 1), servers, groupByEnv: true, expanded: new Set(["s:orders"]) })).rows;
-    expect(labels(rows)).toEqual(["group:Payments", "  env:prod", "    server:orders", "      db:AppDb"]);
+    expect(labels(rows)).toEqual(["group:Payments", "  env:prod", "    server:orders", "      db:AppDb", "      serverObjects:orders"]);
   });
 
   it("lists the servers in the order the tree draws them, respecting custom groupOrder and profileOrder", () => {

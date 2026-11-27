@@ -39,36 +39,98 @@ public sealed class PostgresMetadata : IMetadataProvider
         // CREATE OR REPLACE TRIGGER and a replaced function both count as a change. The function itself stays a Func.
         cmd.CommandText = $"""
             SELECT c.oid::bigint, n.nspname, c.relname, c.relkind::text,
-                   hashtextextended({RelationMarker}, 0),
-                   NULL::text, NULL::bigint
+                   hashtextextended(concat_ws('|', {RelationMarker}, COALESCE(fs.srvname, '')), 0),
+                   NULL::text, NULL::bigint,
+                   CASE WHEN c.relkind = 'f' THEN CASE WHEN fs.srvname IS NOT NULL THEN 'foreign table · ' || fs.srvname ELSE 'foreign table' END END,
+                   NULL::text[]
             FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+            LEFT JOIN pg_foreign_table ft ON ft.ftrelid = c.oid AND c.relkind = 'f'
+            LEFT JOIN pg_foreign_server fs ON fs.oid = ft.ftserver
             WHERE c.relkind IN ('r','p','v','m','f','S') AND {SystemSchemas}
             UNION ALL
             SELECT p.oid::bigint, n.nspname, p.proname,
                    CASE WHEN p.prokind = 'p' THEN 'P' WHEN p.proretset THEN 'T' ELSE 'F' END,
-                   p.xmin::text::bigint, pg_get_function_result(p.oid), NULL::bigint
+                   p.xmin::text::bigint, pg_get_function_result(p.oid), NULL::bigint,
+                   NULL::text, NULL::text[]
             FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
             LEFT JOIN pg_depend d ON d.objid = p.oid AND d.deptype = 'e'
             WHERE p.prokind IN ('f','p') AND {SystemSchemas} AND d.objid IS NULL
             UNION ALL
             SELECT t.oid::bigint, n.nspname, t.tgname, 'G',
-                   (t.xmin::text::bigint << 32) | f.xmin::text::bigint, NULL::text, t.tgrelid::bigint
+                   (t.xmin::text::bigint << 32) | f.xmin::text::bigint, NULL::text, t.tgrelid::bigint,
+                   NULL::text, NULL::text[]
             FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
             JOIN pg_proc f ON f.oid = t.tgfoid
             WHERE NOT t.tgisinternal AND {NotPartitionClone} AND c.relkind IN ('r','p','v','m','f') AND {SystemSchemas}
+            UNION ALL
+            SELECT s.oid::bigint, ''::text, s.srvname, 'FS',
+                   hashtextextended(concat_ws('|', s.xmin::text, w.fdwname, COALESCE(s.srvtype, ''), COALESCE(s.srvversion, ''), COALESCE(array_to_string(s.srvoptions, ','), '')), 0),
+                   NULL::text, NULL::bigint,
+                   w.fdwname, s.srvoptions
+            FROM pg_foreign_server s JOIN pg_foreign_data_wrapper w ON w.oid = s.srvfdw
             """;
         await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         var list = new List<ObjectStamp>();
         while (await r.ReadAsync(ct).ConfigureAwait(false))
         {
-            var kind = r.GetString(3) switch
+            var code = r.GetString(3);
+            var kind = code switch
             {
                 "r" or "p" or "f" => ObjectKind.Table, "v" or "m" => ObjectKind.View, "S" => ObjectKind.Sequence,
-                "P" => ObjectKind.Proc, "T" => ObjectKind.Tvf, "G" => ObjectKind.Trigger, _ => ObjectKind.Func,
+                "P" => ObjectKind.Proc, "T" => ObjectKind.Tvf, "G" => ObjectKind.Trigger, "FS" => ObjectKind.ForeignServer, _ => ObjectKind.Func,
             };
-            list.Add(new ObjectStamp(r.GetInt64(0), r.GetString(1), r.GetString(2), kind, r.GetInt64(4), r.IsDBNull(5) ? null : r.GetString(5), r.IsDBNull(6) ? null : r.GetInt64(6)));
+            var note = code == "FS"
+                ? FormatForeignServerNote(r.IsDBNull(7) ? "" : r.GetString(7), r.IsDBNull(8) ? null : r.GetFieldValue<string[]>(8))
+                : (r.IsDBNull(7) ? null : r.GetString(7));
+            list.Add(new ObjectStamp(r.GetInt64(0), r.GetString(1), r.GetString(2), kind, r.GetInt64(4), r.IsDBNull(5) ? null : r.GetString(5), r.IsDBNull(6) ? null : r.GetInt64(6), Note: note));
         }
         return list;
+    }
+
+    /// <summary>Allowlist of non-secret pg_foreign_server option keys (§13 rule 1: never expose credentials/keys/tokens).</summary>
+    static readonly HashSet<string> SafeForeignOptionKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "host", "hostaddr", "port", "dbname", "database", "schema_name", "table_name",
+        "filename", "format", "service", "use_remote_estimate", "fetch_size", "updatable",
+    };
+
+    /// <summary>Filters pg_foreign_server.srvoptions to allowlisted non-secret key/value pairs; <paramref name="omitted"/> is true when any option was dropped.</summary>
+    internal static List<(string Key, string Value)> SafeForeignOptions(string[]? rawOptions, out bool omitted)
+    {
+        omitted = false;
+        var safe = new List<(string Key, string Value)>();
+        if (rawOptions is null) return safe;
+        foreach (var entry in rawOptions)
+        {
+            var eq = entry.IndexOf('=');
+            if (eq <= 0) { omitted = true; continue; }
+            var key = entry[..eq].Trim();
+            var val = entry[(eq + 1)..];
+            if (!SafeForeignOptionKeys.Contains(key)) { omitted = true; continue; }
+            safe.Add((key, val));
+        }
+        return safe;
+    }
+
+    /// <summary>Concise non-secret Explorer note for a PostgreSQL foreign server (e.g. "postgres_fdw · db.internal:5432/crm").</summary>
+    internal static string? FormatForeignServerNote(string fdwName, string[]? rawOptions)
+    {
+        var opts = SafeForeignOptions(rawOptions, out _);
+        string? Get(string k) => opts.FirstOrDefault(x => string.Equals(x.Key, k, StringComparison.OrdinalIgnoreCase)).Value is { Length: > 0 } v ? v : null;
+        var host = Get("host") ?? Get("hostaddr") ?? Get("service");
+        var port = Get("port");
+        var db = Get("dbname") ?? Get("database");
+        var file = Get("filename");
+        string? target = null;
+        if (host != null)
+        {
+            var hp = port != null ? $"{host}:{port}" : host;
+            target = db != null ? $"{hp}/{db}" : hp;
+        }
+        else if (db != null) target = db;
+        else if (file != null) target = file;
+        if (string.IsNullOrWhiteSpace(fdwName)) return target;
+        return target == null ? fdwName : $"{fdwName} · {target}";
     }
 
     /// <summary>What a relation's marker hashes (see <see cref="GetStampsAsync"/>); expects pg_class as c.</summary>
@@ -174,7 +236,7 @@ public sealed class PostgresMetadata : IMetadataProvider
         return new MetadataBundle(columns, parms, indexes, fks);
     }
 
-    static string QuoteIdent(string s) => s.All(ch => char.IsLower(ch) || char.IsDigit(ch) || ch == '_') && s.Length > 0 && !char.IsDigit(s[0])
+    internal static string QuoteIdent(string s) => s.All(ch => char.IsLower(ch) || char.IsDigit(ch) || ch == '_') && s.Length > 0 && !char.IsDigit(s[0])
         ? s : "\"" + s.Replace("\"", "\"\"") + "\"";
 
     public async Task<string?> GetDefinitionAsync(DbConnection c, ObjectRef obj, CancellationToken ct)
@@ -236,6 +298,7 @@ public sealed class PostgresMetadata : IMetadataProvider
 
     public async Task<Dependency[]> GetDependenciesAsync(DbConnection c, ObjectRef obj, CancellationToken ct)
     {
+        if (obj.Kind == ObjectKind.ForeignServer) return [];
         await using var cmd = (NpgsqlCommand)c.CreateCommand();
         // Views record their dependencies through pg_rewrite; tables are "used by" those views (§10 Dependencies).
         cmd.CommandText = $"""

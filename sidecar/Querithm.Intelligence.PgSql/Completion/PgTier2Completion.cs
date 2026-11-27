@@ -153,7 +153,7 @@ public static class PgTier2Completion
                 return;
             }
             if (r.Schema is { } s && s.Schemas.Contains(q))
-                foreach (var o in s.Snapshot.Objects.Where(o => names.Equals(o.Schema, q) && o.Kind is not ObjectKind.Trigger))
+                foreach (var o in s.Snapshot.Objects.Where(o => names.Equals(o.Schema, q) && o.Kind is not (ObjectKind.Trigger or ObjectKind.DbLink or ObjectKind.ForeignServer)))
                     items.Add(o.Name, Kind(o), o.ReturnType ?? KindText(o), s.IsRowset(o) ? "1" : "3", PgIdent.Quote(o.Name));
             return;
         }

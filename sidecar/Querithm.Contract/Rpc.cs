@@ -97,6 +97,10 @@ public interface IQuerithmRpc
     [RpcMethod("meta.search")] Task<ObjectRef[]> MetaSearch(SearchParams p);
     [RpcMethod("meta.script")] Task<SqlText> MetaScript(ScriptParams p);
     [RpcMethod("meta.rowCounts")] Task<RowCount[]> MetaRowCounts(RowCountsParams p);
+    [RpcMethod("meta.linkedServers")] Task<LinkedServersResult> MetaLinkedServers(SessionRef p);
+    [RpcMethod("meta.linkedCatalogs")] Task<LinkedCatalogInfo[]> MetaLinkedCatalogs(LinkedServerRef p);
+    [RpcMethod("meta.linkedTables")] Task<LinkedTablesResult> MetaLinkedTables(LinkedTablesParams p);
+    [RpcMethod("meta.testLinkedServer")] Task<LinkedTestResult> MetaTestLinkedServer(LinkedServerRef p);
 
     [RpcMethod("lang.complete")] Task<CompletionItem[]> LangComplete(CompleteParams p);
     [RpcMethod("lang.diagnostics")] Task<Diagnostic[]> LangDiagnostics(DiagnosticsParams p);

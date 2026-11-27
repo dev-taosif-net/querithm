@@ -267,6 +267,7 @@ public sealed class FakeDbProvider : IDbProvider
     public IObjectScripter Scripter => throw new NotSupportedException();
     public ITraceProvider? Trace => null;
     public IDebugProvider? Debugger { get; set; }
+    public ILinkedServerProvider? LinkedServers { get; set; }
     /// <summary>Data compare tests: a real engine's dialects over the fake connections; null = not supported, as before.</summary>
     public IDataEditDialect? DataEditImpl { get; set; }
     public IDataCompareDialect? DataCompareImpl { get; set; }

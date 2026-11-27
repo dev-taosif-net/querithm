@@ -153,6 +153,8 @@ public static class EditabilityAnalyzer
         ObjectKind.Synonym => "synonym",
         ObjectKind.Package => "package",
         ObjectKind.PackageBody => "package body",
+        ObjectKind.DbLink => "database link",
+        ObjectKind.ForeignServer => "foreign server",
         _ => k.ToString().ToLowerInvariant(),
     };
 }

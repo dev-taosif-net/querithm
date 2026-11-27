@@ -152,6 +152,7 @@ public sealed class PostgresScripter : IObjectScripter
         var meta = new PostgresMetadata();
         var major = (c as NpgsqlConnection)?.PostgreSqlVersion.Major;
         if (o.Kind == ObjectKind.Trigger) return await ScriptTriggerAsync(c, o, kind, major, ct).ConfigureAwait(false);
+        if (o.Kind == ObjectKind.ForeignServer) return await ScriptForeignServerAsync(c, o, kind, ct).ConfigureAwait(false);
         if (kind is ScriptKind.Enable or ScriptKind.Disable) throw new InvalidOperationException("Only triggers can be scripted as ENABLE / DISABLE.");
         switch (kind)
         {
@@ -191,6 +192,64 @@ public sealed class PostgresScripter : IObjectScripter
 
     static Capabilities Caps(int? major) =>
         new() { CompletionTier = "", Trace = new(), Debugger = new(), EstimatedPlan = new(), ActualPlan = new(), MajorVersion = major };
+
+    static string SqlLiteral(string text)
+    {
+        var quoted = "'" + text.Replace("'", "''") + "'";
+        return text.Contains('\\') ? "E" + quoted.Replace("\\", "\\\\") : quoted;
+    }
+
+    static async Task<string> ScriptForeignServerAsync(DbConnection c, ObjectRef o, ScriptKind kind, CancellationToken ct)
+    {
+        if (kind is ScriptKind.Enable or ScriptKind.Disable) throw new InvalidOperationException("Only triggers can be scripted as ENABLE / DISABLE.");
+        if (kind is ScriptKind.Execute or ScriptKind.SelectTop) throw new InvalidOperationException("A foreign server cannot be executed or selected from.");
+        if (kind == ScriptKind.Alter) throw new NotSupportedException("PostgreSQL has no CREATE OR REPLACE SERVER; use ALTER SERVER or script DROP and CREATE.");
+        var quoted = PostgresMetadata.QuoteIdent(o.Name);
+        var drop = $"DROP SERVER IF EXISTS {quoted};\n";
+        if (kind == ScriptKind.Drop) return drop;
+        await using var cmd = (NpgsqlCommand)c.CreateCommand();
+        cmd.CommandText = """
+            SELECT s.srvname, w.fdwname, s.srvtype, s.srvversion, s.srvoptions
+            FROM pg_foreign_server s JOIN pg_foreign_data_wrapper w ON w.oid = s.srvfdw
+            WHERE (@oid::bigint IS NOT NULL AND s.oid = @oid::oid) OR (@oid::bigint IS NULL AND s.srvname = @n)
+            ORDER BY s.oid LIMIT 1
+            """;
+        cmd.Parameters.AddWithValue("oid", o.ObjectId is { } id ? id : DBNull.Value).NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Bigint;
+        cmd.Parameters.AddWithValue("n", o.Name);
+        string srvName, fdwName;
+        string? srvType, srvVersion;
+        string[]? srvOptions;
+        await using (var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false))
+        {
+            if (!await r.ReadAsync(ct).ConfigureAwait(false)) throw new InvalidOperationException($"Foreign server {o.Name} was not found (it may have been dropped).");
+            srvName = r.GetString(0);
+            fdwName = r.GetString(1);
+            srvType = r.IsDBNull(2) ? null : r.GetString(2);
+            srvVersion = r.IsDBNull(3) ? null : r.GetString(3);
+            srvOptions = r.IsDBNull(4) ? null : r.GetFieldValue<string[]>(4);
+        }
+        var create = BuildForeignServerCreate(srvName, fdwName, srvType, srvVersion, srvOptions);
+        return kind == ScriptKind.DropCreate ? $"DROP SERVER IF EXISTS {PostgresMetadata.QuoteIdent(srvName)};\n{create}" : create;
+    }
+
+    internal static string BuildForeignServerCreate(string srvName, string fdwName, string? srvType, string? srvVersion, string[]? srvOptions)
+    {
+        var safe = PostgresMetadata.SafeForeignOptions(srvOptions, out var omitted);
+        var sb = new System.Text.StringBuilder();
+        if (omitted) sb.AppendLine("-- Non-public or credential options are omitted for safety.");
+        sb.Append("CREATE SERVER ").Append(PostgresMetadata.QuoteIdent(srvName));
+        if (!string.IsNullOrEmpty(srvType)) sb.Append(" TYPE ").Append(SqlLiteral(srvType));
+        if (!string.IsNullOrEmpty(srvVersion)) sb.Append(" VERSION ").Append(SqlLiteral(srvVersion));
+        sb.Append("\n    FOREIGN DATA WRAPPER ").Append(PostgresMetadata.QuoteIdent(fdwName));
+        if (safe.Count > 0)
+        {
+            sb.Append("\n    OPTIONS (\n");
+            sb.Append(string.Join(",\n", safe.Select(kv => $"        {PostgresMetadata.QuoteIdent(kv.Key)} {SqlLiteral(kv.Value)}")));
+            sb.Append("\n    )");
+        }
+        sb.Append(";\n");
+        return sb.ToString();
+    }
 
     /// <summary>
     /// A trigger lives on its table: DROP / ENABLE / DISABLE name both (quoted by the server), and ALTER is

@@ -66,6 +66,7 @@ public sealed class OracleScripter : IObjectScripter
     internal const string NoReplaceTable = "Oracle has no CREATE OR REPLACE TABLE: change a table with ALTER TABLE, or script DROP and CREATE (its rows are lost).";
     internal const string NoReplaceSequence = "Oracle has no CREATE OR REPLACE SEQUENCE: change it with ALTER SEQUENCE (INCREMENT BY, MAXVALUE, CACHE, …), or script DROP and CREATE.";
     internal const string NoReplaceMView = "A materialized view cannot be replaced: change it with ALTER MATERIALIZED VIEW, or script DROP and CREATE.";
+    internal const string NoReplaceDbLink = "Oracle has no CREATE OR REPLACE DATABASE LINK: change it with ALTER DATABASE LINK, or script DROP and CREATE.";
     internal const string RecycleBin = "-- DROP TABLE moves the table to the recycle bin (FLASHBACK TABLE … TO BEFORE DROP brings it back); add PURGE to drop it for good.";
 
     static string Name(ObjectRef o) => o.Kind == ObjectKind.Synonym && o.Schema == "PUBLIC"
@@ -78,6 +79,7 @@ public sealed class OracleScripter : IObjectScripter
     public async Task<string> ScriptAsync(DbConnection connection, ObjectRef obj, ScriptKind kind, bool withBody, CancellationToken ct)
     {
         if (obj.Kind is ObjectKind.Package or ObjectKind.PackageBody) return await PackageAsync(connection, obj, kind, withBody, ct).ConfigureAwait(false);
+        if (obj.Kind == ObjectKind.DbLink) return await DbLinkAsync(connection, obj, kind, ct).ConfigureAwait(false);
         if (kind == ScriptKind.Execute) return await ExecuteAsync(connection, obj, [], ct).ConfigureAwait(false);
         var name = Name(obj);
         switch (kind)
@@ -127,8 +129,62 @@ public sealed class OracleScripter : IObjectScripter
             ObjectKind.Type => $"DROP TYPE {name};",
             ObjectKind.Sequence => $"DROP SEQUENCE {name};",
             ObjectKind.Synonym => obj.Schema == "PUBLIC" ? $"DROP PUBLIC SYNONYM {name};" : $"DROP SYNONYM {name};",
+            ObjectKind.DbLink => DropDbLink(obj),
             _ => throw new NotSupportedException($"Script as DROP is not available for Oracle {obj.Kind.ToString().ToLowerInvariant()}s."),
         };
+    }
+
+    static string DropDbLink(ObjectRef obj) =>
+        obj.Schema == "PUBLIC"
+            ? $"DROP PUBLIC DATABASE LINK {OracleIdentifiers.QuoteIfNeeded(obj.Name)};"
+            : $"DROP DATABASE LINK {OracleIdentifiers.QuoteIfNeeded(obj.Name)};";
+
+    async Task<string> DbLinkAsync(DbConnection connection, ObjectRef obj, ScriptKind kind, CancellationToken ct)
+    {
+        if (kind is ScriptKind.Enable or ScriptKind.Disable) throw new InvalidOperationException("Only triggers can be scripted as ENABLE / DISABLE.");
+        if (kind is ScriptKind.SelectTop or ScriptKind.Execute) throw new InvalidOperationException("A database link cannot be selected from or executed.");
+        if (kind == ScriptKind.Alter) throw new NotSupportedException(NoReplaceDbLink);
+        var drop = DropDbLink(obj);
+        if (kind == ScriptKind.Drop) return drop;
+        await using var cmd = (OracleCommand)connection.CreateCommand();
+        cmd.BindByName = true;
+        cmd.CommandText = "SELECT username, host FROM ALL_DB_LINKS WHERE owner = :owner AND db_link = :name";
+        cmd.Parameters.Add(new OracleParameter("owner", OracleDbType.Varchar2, obj.Schema, System.Data.ParameterDirection.Input));
+        cmd.Parameters.Add(new OracleParameter("name", OracleDbType.Varchar2, obj.Name, System.Data.ParameterDirection.Input));
+        string? username = null, host = null;
+        var found = false;
+        try
+        {
+            await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            if (await r.ReadAsync(ct).ConfigureAwait(false))
+            {
+                found = true;
+                username = r.IsDBNull(0) ? null : r.GetString(0);
+                host = r.IsDBNull(1) ? null : r.GetString(1);
+            }
+        }
+        catch (Exception ex) when (OracleMetadata.IsDenied(ex))
+        {
+            throw new InvalidOperationException("Cannot script this database link: this login cannot read ALL_DB_LINKS.", ex);
+        }
+        if (!found) throw new InvalidOperationException($"Database link {obj.Schema}.{obj.Name} was not found (or is not visible in ALL_DB_LINKS).");
+        var create = BuildDbLinkCreate(obj.Schema == "PUBLIC", obj.Name, username, host);
+        return kind == ScriptKind.DropCreate ? $"{drop}\n\n{create}" : create;
+    }
+
+    internal static string BuildDbLinkCreate(bool isPublic, string linkName, string? username, string? host)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("-- Passwords are never read from Oracle; supply the remote password before running.");
+        sb.Append("CREATE ");
+        if (isPublic) sb.Append("PUBLIC ");
+        sb.Append("DATABASE LINK ").Append(OracleIdentifiers.QuoteIfNeeded(linkName));
+        if (!string.IsNullOrEmpty(username))
+            sb.Append("\nCONNECT TO ").Append(OracleIdentifiers.QuoteIfNeeded(username)).Append(" IDENTIFIED BY \"<password>\"");
+        if (!string.IsNullOrEmpty(host))
+            sb.Append("\nUSING '").Append(host.Replace("'", "''")).Append('\'');
+        sb.Append(';');
+        return sb.ToString();
     }
 
     // ---------------------------------------------------------------------------------------------- packages (D4 S08)

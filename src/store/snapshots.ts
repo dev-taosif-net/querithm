@@ -9,6 +9,7 @@ import { DIALECTS, foldIdentifier, isLocalEngine } from "../engines";
 import { locationOf } from "../connections/auth";
 import { profileDialect as dialectOf, useProfiles } from "./profiles";
 import { isDisconnected, useConnections } from "./connections";
+import { useLinkedServers } from "./linkedServers";
 import { useTabs, type TabState } from "./tabs";
 
 /**
@@ -427,7 +428,13 @@ export async function refreshServer(profileId: string): Promise<void> {
   const online = new Set(server.databases.filter((d) => !d.state || d.state.toUpperCase() === "ONLINE").map((d) => d.name));
   const store = useSnapshots.getState();
   const loaded = Object.values(store.entries).filter((e) => e.profileId === profileId && !e.sessionId && online.has(e.database));
-  await Promise.all(loaded.map((e) => store.refresh(profileId, e.database, false)));
+  const linked = useLinkedServers.getState();
+  const reloadLinked = !!linked.servers[profileId];
+  linked.forget(profileId);
+  await Promise.all([
+    ...loaded.map((e) => store.refresh(profileId, e.database, false)),
+    ...(reloadLinked ? [linked.loadServers(profileId, true)] : []),
+  ]);
 }
 
 /**
@@ -581,7 +588,14 @@ export function installSnapshotListeners() {
   const offMeta = onNotify("meta.updated", (e) => { onMetaUpdated(e).catch((err) => console.warn("[snapshots] meta.updated", err)); });
   // A disconnected server's schema is no longer shown or searched (explorer, completion).
   const offConn = useConnections.subscribe((s, prev) => {
-    if (s.order !== prev.order) for (const id of prev.order) if (!s.order.includes(id)) useSnapshots.getState().forget(id);
+    if (s.order !== prev.order) {
+      for (const id of prev.order) {
+        if (!s.order.includes(id)) {
+          useSnapshots.getState().forget(id);
+          useLinkedServers.getState().forget(id);
+        }
+      }
+    }
     // Reconnected: the tabs still bound to the server get their schema back (it was dropped on disconnect). A schema
     // loaded before the server was connected is asked for again: restored tabs load theirs at startup, often before the
     // sidecar holds the profile's credentials, and without those it starts no refresh — the cache then stayed as old as

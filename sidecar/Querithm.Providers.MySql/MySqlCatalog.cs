@@ -43,16 +43,18 @@ public sealed class MySqlMetadata : IMetadataProvider
           IFNULL(t.ENGINE, '')), 256) AS marker, NULL AS parent, NULL AS rtype,
           CASE WHEN t.ENGINE IS NOT NULL AND t.TABLE_TYPE <> 'VIEW'
                 AND IFNULL((SELECT e.TRANSACTIONS FROM information_schema.ENGINES e WHERE e.ENGINE = t.ENGINE), 'NO') <> 'YES'
-               THEN t.ENGINE END AS no_rollback
+               THEN t.ENGINE END AS no_rollback,
+          CASE WHEN t.TABLE_TYPE <> 'VIEW' AND UPPER(IFNULL(t.ENGINE, '')) IN ('FEDERATED', 'FEDERATEDX', 'CONNECT', 'SPIDER')
+               THEN UPPER(t.ENGINE) END AS ext_engine
         FROM information_schema.TABLES t WHERE t.TABLE_SCHEMA = DATABASE()
         UNION ALL
         SELECT r.ROUTINE_NAME, r.ROUTINE_TYPE, SHA2(CONCAT_WS('#', IFNULL(r.ROUTINE_DEFINITION, ''), IFNULL(r.DTD_IDENTIFIER, ''), r.SQL_MODE,
           (SELECT GROUP_CONCAT(CONCAT_WS('|', p.PARAMETER_MODE, p.PARAMETER_NAME, p.DTD_IDENTIFIER) ORDER BY p.ORDINAL_POSITION SEPARATOR '\n')
              FROM information_schema.PARAMETERS p WHERE p.SPECIFIC_SCHEMA = r.ROUTINE_SCHEMA AND p.SPECIFIC_NAME = r.SPECIFIC_NAME AND p.ORDINAL_POSITION > 0)), 256),
-          NULL, r.DTD_IDENTIFIER, NULL
+          NULL, r.DTD_IDENTIFIER, NULL, NULL
         FROM information_schema.ROUTINES r WHERE r.ROUTINE_SCHEMA = DATABASE()
         UNION ALL
-        SELECT tr.TRIGGER_NAME, 'TRIGGER', SHA2(CONCAT_WS('#', tr.ACTION_TIMING, tr.EVENT_MANIPULATION, tr.ACTION_STATEMENT, tr.SQL_MODE), 256), tr.EVENT_OBJECT_TABLE, NULL, NULL
+        SELECT tr.TRIGGER_NAME, 'TRIGGER', SHA2(CONCAT_WS('#', tr.ACTION_TIMING, tr.EVENT_MANIPULATION, tr.ACTION_STATEMENT, tr.SQL_MODE), 256), tr.EVENT_OBJECT_TABLE, NULL, NULL, NULL
         FROM information_schema.TRIGGERS tr WHERE tr.TRIGGER_SCHEMA = DATABASE()
         """;
 
@@ -88,8 +90,9 @@ public sealed class MySqlMetadata : IMetadataProvider
             long? parent = r.IsDBNull(3) ? null : IdOf(schema, "rel", r.GetString(3));
             // A table whose engine has no transactions (MyISAM, MEMORY, ARCHIVE, Aria …) keeps a failed grid Apply's earlier rows.
             var noRollback = k.Kind == ObjectKind.Table && !r.IsDBNull(5) ? r.GetString(5) : null;
+            var extNote = k.Kind == ObjectKind.Table && !r.IsDBNull(6) ? r.GetString(6) : null;
             list.Add(new ObjectStamp(IdOf(schema, k.Group, name), schema, name, k.Kind, Hash(marker), r.IsDBNull(4) ? null : r.GetString(4), parent,
-                NoRollbackEngine: noRollback));
+                NoRollbackEngine: noRollback, Note: extNote));
         }
         return list;
     }

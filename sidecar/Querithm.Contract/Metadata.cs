@@ -308,3 +308,72 @@ public sealed record RowCount
     /// <summary>Phase D4: when the statistics the estimate comes from were gathered (Unix ms; Oracle LAST_ANALYZED), null when the engine does not say.</summary>
     public long? AnalyzedAt { get; init; }
 }
+
+/// <summary>One server-level linked or external server (SQL Server sys.servers, MySQL/MariaDB mysql.servers). Never carries passwords or secrets; text fields are scrubbed before leaving the sidecar.</summary>
+public sealed record LinkedServerInfo
+{
+    public required string Name { get; init; }
+    public string? Product { get; init; }
+    public string? Provider { get; init; }
+    public string? DataSource { get; init; }
+    public string? Catalog { get; init; }
+    /// <summary>Short non-secret summary shown beside the name in Object Explorer.</summary>
+    public string? Note { get; init; }
+    /// <summary>True when remote catalogs and tables can be browsed lazily on expand (SQL Server).</summary>
+    public bool CanBrowse { get; init; }
+    /// <summary>True when the engine can test connectivity to this server (SQL Server sp_testlinkedserver).</summary>
+    public bool CanTest { get; init; }
+}
+
+/// <summary>Reply of meta.linkedServers; <see cref="Note"/> reports non-fatal permission limits (e.g. mysql.servers SELECT denied).</summary>
+public sealed record LinkedServersResult
+{
+    public required LinkedServerInfo[] Servers { get; init; }
+    public string? Note { get; init; }
+}
+
+/// <summary>Identifies a server-level linked/external server on a session (used by meta.linkedCatalogs and meta.testLinkedServer).</summary>
+public sealed record LinkedServerRef
+{
+    public required string SessionId { get; init; }
+    public required string ServerName { get; init; }
+}
+
+public sealed record LinkedCatalogInfo
+{
+    public required string Name { get; init; }
+    public string? Description { get; init; }
+}
+
+public sealed record LinkedTablesParams
+{
+    public required string SessionId { get; init; }
+    public required string ServerName { get; init; }
+    public string? Catalog { get; init; }
+    /// <summary>Maximum number of remote tables/views to return (clamped to the sidecar's hard cap of 5,000).</summary>
+    public int? Limit { get; init; }
+}
+
+public enum LinkedTableKind { Table, View }
+
+public sealed record LinkedTableInfo
+{
+    public required string Schema { get; init; }
+    public required string Name { get; init; }
+    public required LinkedTableKind Kind { get; init; }
+}
+
+public sealed record LinkedTablesResult
+{
+    public required LinkedTableInfo[] Tables { get; init; }
+    /// <summary>True when more remote objects existed than the cap returned.</summary>
+    public bool Truncated { get; init; }
+    public string? Note { get; init; }
+}
+
+public sealed record LinkedTestResult
+{
+    public bool Ok { get; init; }
+    public double ElapsedMs { get; init; }
+    public string? Error { get; init; }
+}

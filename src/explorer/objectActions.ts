@@ -1,10 +1,11 @@
 // What Explorer rows do: open, script, insert names, connect. Scripts open as text in a new tab and never run from
 // here (the sidecar's guards apply when the user runs them, §13 rule 7); Select top 1000 is the one item that runs.
 import { quoteIdentifier } from "../editor/completion/quoteIdentifier";
-import type { Engine, SnapObject } from "../ipc/contract";
+import type { Engine, LinkedTableInfo, SnapObject } from "../ipc/contract";
 import { assertNever, dialectOf, DIALECTS, engineTraits } from "../engines";
 import { rpc } from "../ipc/client";
 import { useConnections } from "../store/connections";
+import { useLinkedServers } from "../store/linkedServers";
 import { useProfiles } from "../store/profiles";
 import { useTabs } from "../store/tabs";
 import { toast } from "../store/ui";
@@ -21,7 +22,54 @@ export function ref(o: SnapObject) {
 
 export function qualified(o: Pick<SnapObject, "schema" | "name">, engine: Engine | undefined) {
   const dialect = dialectOf(engine);
-  return `${quoteIdentifier(o.schema, dialect)}.${quoteIdentifier(o.name, dialect)}`;
+  return o.schema ? `${quoteIdentifier(o.schema, dialect)}.${quoteIdentifier(o.name, dialect)}` : quoteIdentifier(o.name, dialect);
+}
+
+/** Oracle database link reference suffix (`@MY_LINK` / `@"Mixed.Link"`). */
+export function dbLinkRef(name: string, engine: Engine | undefined) {
+  return `@${quoteIdentifier(name, dialectOf(engine))}`;
+}
+
+/** SQL Server four-part name `[server].[catalog].[schema].[table]` (leaving catalog/schema empty as `..` when omitted). */
+export function linkedFourPartName(serverName: string, catalog: string, schema: string, tableName: string) {
+  const q = DIALECTS.tsql.quote;
+  return `${q(serverName)}.${catalog ? q(catalog) : ""}.${schema ? q(schema) : ""}.${q(tableName)}`;
+}
+
+/** Opens a SELECT TOP (1000) script for a linked-server table/view in a new tab without running it. */
+export function scriptLinkedSelect(profileId: string, serverName: string, catalog: string, table: LinkedTableInfo) {
+  const full = linkedFourPartName(serverName, catalog, table.schema, table.name);
+  const title = `SELECT ${table.schema ? `${table.schema}.` : ""}${table.name}.sql`;
+  newQueryTab({ profileId, text: `SELECT TOP (1000) *\nFROM ${full};\n`, title });
+}
+
+/** Opens an OPENQUERY template for a SQL Server linked server (or one of its tables) in a new tab without running it. */
+export function scriptLinkedOpenQuery(profileId: string, serverName: string, catalog?: string, table?: LinkedTableInfo) {
+  const q = DIALECTS.tsql.quote;
+  const inner = table
+    ? `SELECT TOP (1000) * FROM ${catalog ? `${q(catalog)}.` : ""}${table.schema ? `${q(table.schema)}.` : ""}${q(table.name)}`
+    : "SELECT 1 AS ok";
+  const escaped = inner.replace(/'/g, "''");
+  const title = table ? `OPENQUERY ${table.name}.sql` : `OPENQUERY ${serverName}.sql`;
+  newQueryTab({ profileId, text: `SELECT *\nFROM OPENQUERY(${q(serverName)}, '${escaped}');\n`, title });
+}
+
+const testingLinked = new Set<string>();
+
+/** Runs sp_testlinkedserver and reports the result as a toast (deduplicated while in flight). */
+export async function testLinkedServer(profileId: string, serverName: string) {
+  const key = `${profileId}\u001f${serverName}`;
+  if (testingLinked.has(key)) return;
+  testingLinked.add(key);
+  try {
+    const res = await useLinkedServers.getState().testServer(profileId, serverName);
+    if (res.ok) toast("success", `Connected to linked server “${serverName}” (${res.elapsedMs.toFixed(0)} ms).`);
+    else toast("error", `Linked server “${serverName}” failed: ${res.error ?? "unknown error"}`);
+  } catch (e) {
+    toast("error", `Linked server “${serverName}” test failed: ${(e as Error).message}`);
+  } finally {
+    testingLinked.delete(key);
+  }
 }
 
 /** A column name as SQL text: bracketed on SQL Server; elsewhere delimited only where needed (on PostgreSQL that
@@ -101,10 +149,11 @@ export async function modifyTrigger(profileId: string, db: string, o: SnapObject
   }
 }
 
-/** The double-click / Enter action of an object: Select top 1000 for tables and views, else Modify. */
+/** The double-click / Enter action of an object: Select top 1000 for tables and views, CREATE script for external objects, else Modify. */
 export function openObject(profileId: string, db: string, o: SnapObject) {
   if (o.kind === "table" || o.kind === "view") void scriptObject(profileId, db, ref(o), "selectTop", true);
   else if (o.kind === "trigger") void modifyTrigger(profileId, db, o);
+  else if (o.kind === "dbLink" || o.kind === "foreignServer") void scriptObject(profileId, db, ref(o), "create");
   else void openDefinition(profileId, db, ref(o), true);
 }
 
@@ -124,6 +173,7 @@ export function insertText(text: string): boolean {
 
 export function insertName(o: SnapObject, profileId: string, columns = false) {
   const engine = useProfiles.getState().byId(profileId)?.engine;
+  if (o.kind === "dbLink") return insertText(dbLinkRef(o.name, engine));
   return insertText(columns ? columnList(o, engine) : qualified(o, engine));
 }
 

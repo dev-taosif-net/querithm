@@ -143,6 +143,9 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
     /// </summary>
     public TimeSpan InteractiveDeadline { get; init; } = TimeSpan.FromSeconds(60);
 
+    /// <summary>Shorter deadline for remote linked-server probes (sp_catalogs, sp_tables_ex, sp_testlinkedserver) so an unreachable host fails promptly without pinning a pooled connection.</summary>
+    public TimeSpan LinkedServerDeadline { get; init; } = TimeSpan.FromSeconds(15);
+
     /// <summary>
     /// The deadline of long reads the user waits for with a progress view but that have no cancel RPC: schema compare (and
     /// its model export), find usages and the rename preview, which may first fetch every definition of a large database.
@@ -691,6 +694,10 @@ public sealed class RpcServer(Services s, Action shutdown) : IQuerithmRpc
     public Task<ObjectRef[]> MetaSearch(SearchParams p) => Task.Run(() => s.Metadata.Search(p));
     public Task<SqlText> MetaScript(ScriptParams p) => Interactive("Scripting the object", ct => s.Objects.ScriptAsync(p, ct));
     public Task<RowCount[]> MetaRowCounts(RowCountsParams p) => Interactive("Loading row counts", ct => s.Objects.RowCountsAsync(p, ct));
+    public Task<LinkedServersResult> MetaLinkedServers(SessionRef p) => Interactive("Listing linked servers", ct => s.Objects.LinkedServersAsync(Required(p, "meta.linkedServers"), ct));
+    public Task<LinkedCatalogInfo[]> MetaLinkedCatalogs(LinkedServerRef p) => Bounded("Listing linked server catalogs", LinkedServerDeadline, ct => s.Objects.LinkedCatalogsAsync(Required(p, "meta.linkedCatalogs"), ct));
+    public Task<LinkedTablesResult> MetaLinkedTables(LinkedTablesParams p) => Bounded("Listing linked server tables", LinkedServerDeadline, ct => s.Objects.LinkedTablesAsync(Required(p, "meta.linkedTables"), ct));
+    public Task<LinkedTestResult> MetaTestLinkedServer(LinkedServerRef p) => Bounded("Testing the linked server", LinkedServerDeadline, ct => s.Objects.TestLinkedServerAsync(Required(p, "meta.testLinkedServer"), ct));
 
     // ---- language ----
     public Task<CompletionItem[]> LangComplete(CompleteParams p) => s.Language.CompleteAsync(Required(p, "lang.complete"));

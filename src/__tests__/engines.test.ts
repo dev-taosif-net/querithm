@@ -12,7 +12,8 @@ import {
 const ENGINE_TRAITS = {
   label: "string", shortLabel: "string", listLabel: "string", badge: "string", dialect: "string", language: "string", defaultSchema: "string|null",
   defaultPort: "number|null", defaultAuth: "string", defaultUser: "string|null", defaultDatabase: "string|null", statisticsIo: "boolean",
-  statisticsTime: "boolean", actualPlan: "string", actualPlanConfirm: "string|null", actualPlanRun: "string|null", trace: "boolean", debugger: "boolean", synonyms: "boolean", packages: "boolean", triggerFunctions: "boolean",
+  statisticsTime: "boolean", actualPlan: "string", actualPlanConfirm: "string|null", actualPlanRun: "string|null", trace: "boolean", debugger: "boolean",
+  synonyms: "boolean", packages: "boolean", foreignServers: "boolean", dbLinks: "boolean", serverObjects: "boolean", linkedServersLabel: "string|null", triggerFunctions: "boolean",
   procedures: "boolean", monitor: "boolean", serverOutput: "boolean", locations: "object",
 } satisfies Record<keyof EngineTraits, string>;
 
@@ -73,7 +74,8 @@ describe("engine table", () => {
     expect(ENGINES.sqlite).toEqual({
       label: "SQLite", shortLabel: "SQLite", listLabel: "SQLite", badge: "SL", dialect: "sqlite", language: "sqlite", defaultSchema: "main", defaultPort: null,
       defaultAuth: "none", defaultUser: null, defaultDatabase: "main", statisticsIo: false, statisticsTime: false, actualPlan: "none",
-      actualPlanConfirm: null, actualPlanRun: null, trace: false, debugger: false, synonyms: false, packages: false, triggerFunctions: false, procedures: false, monitor: false, serverOutput: false, locations: ["file", "memory"],
+      actualPlanConfirm: null, actualPlanRun: null, trace: false, debugger: false, synonyms: false, packages: false, foreignServers: false, dbLinks: false, serverObjects: false, linkedServersLabel: null,
+      triggerFunctions: false, procedures: false, monitor: false, serverOutput: false, locations: ["file", "memory"],
     });
   });
 
@@ -81,7 +83,8 @@ describe("engine table", () => {
     expect(ENGINES.mySql).toEqual({
       label: "MySQL / MariaDB", shortLabel: "MySQL", listLabel: "MySQL / MariaDB", badge: "MY", dialect: "mySql", language: "mysql", defaultSchema: null, defaultPort: 3306,
       defaultAuth: "password", defaultUser: "root", defaultDatabase: null, statisticsIo: false, statisticsTime: false, actualPlan: "none",
-      actualPlanConfirm: null, actualPlanRun: null, trace: false, debugger: false, synonyms: false, packages: false, triggerFunctions: false, procedures: true, monitor: false, serverOutput: false, locations: ["server"],
+      actualPlanConfirm: null, actualPlanRun: null, trace: false, debugger: false, synonyms: false, packages: false, foreignServers: false, dbLinks: false, serverObjects: true, linkedServersLabel: "External servers",
+      triggerFunctions: false, procedures: true, monitor: false, serverOutput: false, locations: ["server"],
     });
   });
 });
@@ -92,7 +95,8 @@ describe("Oracle (Phase D4, hidden engine)", () => {
       label: "Oracle Database", shortLabel: "Oracle", listLabel: "Oracle", badge: "OR", dialect: "oracle", language: "oracle", defaultSchema: null,
       defaultPort: 2484, defaultAuth: "password", defaultUser: "system", defaultDatabase: null, statisticsIo: false,
       statisticsTime: false, actualPlan: "explainAnalyze", actualPlanConfirm: ENGINES.oracle.actualPlanConfirm, actualPlanRun: "Run for the actual plan",
-      trace: false, debugger: false, synonyms: false, packages: true, triggerFunctions: false, procedures: true, monitor: true, serverOutput: true,
+      trace: false, debugger: false, synonyms: false, packages: true, foreignServers: false, dbLinks: true, serverObjects: false, linkedServersLabel: null,
+      triggerFunctions: false, procedures: true, monitor: true, serverOutput: true,
       locations: ["server"],
     });
     // D4 S09: actual plans run the statement (GATHER_PLAN_STATISTICS) and are rolled back; DDL is refused, since Oracle commits it.

@@ -62,11 +62,13 @@ public sealed class RefactorService(SessionManager sessions, MetadataService met
         _ => throw new QuerithmException("refactorUnsupported", $"Rename is not available for {ProfileRules.EngineName(e)} yet."),
     };
 
-    // Triggers are not referenced by name from SQL (and a PostgreSQL trigger may share its table's name), so name lookups skip them.
+    // Triggers, database links and foreign servers are not refactored by object name (and may share a table's name), so name lookups skip them.
+    static bool IsRefactorIndexable(ObjectKind k) => k is not (ObjectKind.Trigger or ObjectKind.DbLink or ObjectKind.ForeignServer);
+
     Index IndexOf(SchemaSnapshot snap, StringComparer names) => _indexes.GetValue(snap, s => new Index
     {
-        ByName = s.Objects.Where(o => o.Kind != ObjectKind.Trigger).GroupBy(o => o.Name, names).ToDictionary(g => g.Key, g => g.ToList(), names),
-        ByQualified = s.Objects.Where(o => o.Kind != ObjectKind.Trigger).GroupBy(o => (o.Schema, o.Name), new NamePairComparer(names)).ToDictionary(g => g.Key, g => g.First(), new NamePairComparer(names)),
+        ByName = s.Objects.Where(o => IsRefactorIndexable(o.Kind)).GroupBy(o => o.Name, names).ToDictionary(g => g.Key, g => g.ToList(), names),
+        ByQualified = s.Objects.Where(o => IsRefactorIndexable(o.Kind)).GroupBy(o => (o.Schema, o.Name), new NamePairComparer(names)).ToDictionary(g => g.Key, g => g.First(), new NamePairComparer(names)),
     });
 
     RefContext Context(SchemaSnapshot? snap, string defaultSchema, StringComparer names)
@@ -126,7 +128,18 @@ public sealed class RefactorService(SessionManager sessions, MetadataService met
     {
         why = null;
         var idx = IndexOf(snap, names);
-        if (!idx.ByQualified.TryGetValue((t.Schema, t.Name), out var o)) { why = $"{t.Schema}.{t.Name} is not in the cached metadata."; return null; }
+        if (!idx.ByQualified.TryGetValue((t.Schema, t.Name), out var o))
+        {
+            if (snap.Objects.FirstOrDefault(x => x.Kind is ObjectKind.DbLink or ObjectKind.ForeignServer
+                    && names.Equals(x.Schema, t.Schema) && names.Equals(x.Name, t.Name)) is { } ext)
+            {
+                var label = string.IsNullOrEmpty(ext.Schema) ? ext.Name : $"{ext.Schema}.{ext.Name}";
+                why = $"{label} is a {(ext.Kind == ObjectKind.DbLink ? "database link" : "foreign server")}: find usages and rename are not available for it.";
+                return null;
+            }
+            why = $"{(string.IsNullOrEmpty(t.Schema) ? t.Name : $"{t.Schema}.{t.Name}")} is not in the cached metadata.";
+            return null;
+        }
         if (o.Kind is ObjectKind.Package or ObjectKind.PackageBody)
         {
             why = $"{o.Schema}.{o.Name} is a package: its usages are its members' calls, and finding or renaming package members is not available yet.";

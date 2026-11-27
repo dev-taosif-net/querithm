@@ -201,6 +201,14 @@ export interface EngineTraits {
   synonyms: boolean;
   /** Packages (a specification and its body) in the Object Explorer: Oracle (D4 S08). */
   packages: boolean;
+  /** Database-scoped foreign servers in the Object Explorer (PostgreSQL). */
+  foreignServers: boolean;
+  /** Database-scoped database links in the Object Explorer (Oracle). */
+  dbLinks: boolean;
+  /** Server-level Server Objects folder (Linked / External Servers) in the Object Explorer (SQL Server, MySQL / MariaDB). */
+  serverObjects: boolean;
+  /** Label of the server-level linked/external servers folder, or null when the engine has none. */
+  linkedServersLabel: string | null;
   /** A trigger's body is a separate trigger function, which Modify opens (PostgreSQL); else the trigger itself. */
   triggerFunctions: boolean;
   /** Stored procedures and functions that a statement calls (Execute…, Script as ▸ EXECUTE). */
@@ -241,6 +249,10 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     debugger: false,
     synonyms: true,
     packages: false,
+    foreignServers: false,
+    dbLinks: false,
+    serverObjects: true,
+    linkedServersLabel: "Linked servers",
     triggerFunctions: false,
     procedures: true,
     monitor: true,
@@ -269,6 +281,10 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     debugger: true,
     synonyms: false,
     packages: false,
+    foreignServers: true,
+    dbLinks: false,
+    serverObjects: false,
+    linkedServersLabel: null,
     triggerFunctions: true,
     procedures: true,
     monitor: true,
@@ -296,6 +312,10 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     debugger: false,
     synonyms: false,
     packages: false,
+    foreignServers: false,
+    dbLinks: false,
+    serverObjects: false,
+    linkedServersLabel: null,
     triggerFunctions: false,
     procedures: false,
     monitor: false,
@@ -323,6 +343,10 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     debugger: false,
     synonyms: false,
     packages: false,
+    foreignServers: false,
+    dbLinks: false,
+    serverObjects: true,
+    linkedServersLabel: "External servers",
     triggerFunctions: false,
     procedures: true,
     monitor: false,
@@ -352,6 +376,10 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     debugger: false,
     synonyms: false,
     packages: false,
+    foreignServers: false,
+    dbLinks: false,
+    serverObjects: false,
+    linkedServersLabel: null,
     triggerFunctions: false,
     procedures: false,
     monitor: false,
@@ -388,6 +416,10 @@ export const ENGINES: Record<Engine, EngineTraits> = {
     debugger: false,
     synonyms: false,
     packages: true,
+    foreignServers: false,
+    dbLinks: true,
+    serverObjects: false,
+    linkedServersLabel: null,
     triggerFunctions: false,
     // D4 S11: Execute… and Script as ▸ EXECUTE build an anonymous block in the sidecar from the live ALL_ARGUMENTS.
     procedures: true,

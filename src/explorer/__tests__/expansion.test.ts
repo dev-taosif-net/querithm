@@ -3,8 +3,8 @@ import { pruneExpanded, takeNewlyConnected } from "../expansion";
 
 describe("explorer expansion", () => {
   it("drops every key of a server that left the tree and keeps the others", () => {
-    const keys = new Set(["s:p1", "d:p1", "db:p1:Sales", "sc:p1:Sales:dbo", "c:p1:Sales:tables", "o:p1:Sales:7", "s:p2", "db:p2:Hr", "env:prod", "h:tables"]);
-    expect([...pruneExpanded(keys, ["p2"])]).toEqual(["s:p2", "db:p2:Hr", "env:prod", "h:tables"]);
+    const keys = new Set(["s:p1", "d:p1", "db:p1:Sales", "sc:p1:Sales:dbo", "c:p1:Sales:tables", "o:p1:Sales:7", "so:p1", "lsf:p1", "ls:p1:ERP", "lc:p1:ERP:Prod", "s:p2", "db:p2:Hr", "so:p2", "env:prod", "h:tables"]);
+    expect([...pruneExpanded(keys, ["p2"])]).toEqual(["s:p2", "db:p2:Hr", "so:p2", "env:prod", "h:tables"]);
   });
   it("returns the same set when nothing changes (no re-render)", () => {
     const keys = new Set(["s:p1", "db:p1:Sales"]);

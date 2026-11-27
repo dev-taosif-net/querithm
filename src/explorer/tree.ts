@@ -2,8 +2,10 @@
 // Rows have stable keys made of names (never object ids), so an object dropped and created again — or a server that
 // reconnects after an engine restart — keeps its place, its expansion and its selection. Per-snapshot buckets (kind,
 // schema, lowercased names, triggers by table) are built once per snapshot object, so a rebuild costs the rows shown.
-import type { Engine, EnvironmentKind, ObjectDetails, ObjectKind, Profile, SnapObject } from "../ipc/contract";
+import type { Engine, EnvironmentKind, LinkedCatalogInfo, LinkedServerInfo, LinkedTableInfo, ObjectDetails, ObjectKind, Profile, SnapObject } from "../ipc/contract";
 import type { ServerConn } from "../store/connections";
+import type { LinkedCatalogsEntry, LinkedServersEntry, LinkedTablesEntry } from "../store/linkedServers";
+import { linkedCatalogKey, linkedTableKey } from "../store/linkedServers";
 import type { SnapEntry } from "../store/snapshots";
 import { snapKey } from "../store/snapshots";
 import { schemaGroupKey } from "../store/settings";
@@ -12,7 +14,7 @@ import { engineTraits } from "../engines";
 import { orderMap, orderRank, sortGroupNames } from "../connections/order";
 
 export type { Engine };
-export type CatId = "tables" | "views" | "procs" | "funcs" | "types" | "sequences" | "synonyms" | "packages";
+export type CatId = "tables" | "views" | "procs" | "funcs" | "types" | "sequences" | "synonyms" | "packages" | "foreignServers" | "dbLinks";
 export type KindFilter = "all" | CatId | "triggers";
 export type Sub = "columns" | "keys" | "indexes" | "params" | "triggers" | "members";
 export type ServerStatus = "connected" | "connecting" | "error" | "off";
@@ -28,6 +30,8 @@ export const CATEGORIES: { id: CatId; kinds: ObjectKind[]; label: string; icon: 
   { id: "synonyms", kinds: ["synonym"], label: "Synonyms", icon: "synonym" },
   // Oracle (D4 S08): package specifications; each body sits under its specification, not beside it.
   { id: "packages", kinds: ["package", "packageBody"], label: "Packages", icon: "package" },
+  { id: "foreignServers", kinds: ["foreignServer"], label: "Foreign servers", icon: "server" },
+  { id: "dbLinks", kinds: ["dbLink"], label: "Database links", icon: "link" },
 ];
 
 /** Under an Oracle package whose body is missing: the specification's note says which case it is (the sidecar knows the owner). */
@@ -64,9 +68,14 @@ export type TreeRow = Base &
     | { t: "env"; env: EnvironmentKind; count: number; group?: string }
     | { t: "server"; profileId: string; status: ServerStatus; error?: string; memory?: boolean; refreshing?: boolean }
     | { t: "note"; text: string; tone: "muted" | "warn" | "err"; busy?: boolean }
-    | { t: "action"; action: "reconnect" | "editProfile" | "repick" | "retryMeta" | "retryDetails"; label: string; profileId: string; db?: string; objKey?: string; obj?: SnapObject }
+    | { t: "action"; action: "reconnect" | "editProfile" | "repick" | "retryMeta" | "retryDetails" | "retryLinkedServers" | "retryLinkedCatalogs" | "retryLinkedTables"; label: string; profileId: string; db?: string; objKey?: string; obj?: SnapObject; serverName?: string; catalog?: string }
     | { t: "db"; profileId: string; db: string; active: boolean; state: DbState; refreshedAt?: number | null; error?: string | null; dbState?: string | null }
     | { t: "sysdbs"; profileId: string; count: number }
+    | { t: "serverObjects"; profileId: string }
+    | { t: "linkedFolder"; profileId: string; label: string; count?: number; loading?: boolean }
+    | { t: "linkedServer"; profileId: string; server: LinkedServerInfo; loading?: boolean }
+    | { t: "linkedCatalog"; profileId: string; serverName: string; catalog: LinkedCatalogInfo; loading?: boolean }
+    | { t: "linkedTable"; profileId: string; serverName: string; catalog: string; table: LinkedTableInfo }
     | { t: "schema"; profileId: string; db: string; schema: string; count: number }
     | { t: "cat"; profileId: string; db: string; schema?: string; cat: CatId; count: number; shown?: number; filter?: string }
     | { t: "filter"; catKey: string; text: string; shown: number; total: number }
@@ -109,6 +118,12 @@ export interface TreeInput {
   folderFilters: Readonly<Record<string, string>>;
   /** The active query tab's database. */
   active?: { profileId: string; db: string };
+  /** Lazy in-memory cache of server-level Linked / External Servers and browsed remote catalogs/tables. */
+  linked?: {
+    servers: Readonly<Record<string, LinkedServersEntry>>;
+    catalogs: Readonly<Record<string, LinkedCatalogsEntry>>;
+    tables: Readonly<Record<string, LinkedTablesEntry>>;
+  };
 }
 
 export interface TreeResult {
@@ -117,6 +132,12 @@ export interface TreeResult {
   needDetails: { key: string; profileId: string; db: string; obj: SnapObject }[];
   /** Expanded databases in view whose catalog was never read: only those, not every restored key (lazy, §10). */
   needCatalog: { profileId: string; db: string }[];
+  /** Expanded Linked / External Servers folders whose server list has not been read yet. */
+  needLinkedServers: string[];
+  /** Expanded browsable linked servers whose remote catalogs have not been read yet. */
+  needLinkedCatalogs: { profileId: string; serverName: string }[];
+  /** Expanded remote catalogs whose remote tables/views have not been read yet. */
+  needLinkedTables: { profileId: string; serverName: string; catalog: string }[];
   /** Profile ids of the server rows, in order. */
   shown: string[];
 }
@@ -128,6 +149,8 @@ interface Buckets {
   /** Every object by kind, as search lists them (package bodies included; the tree shows them under their specification). */
   searchKind: Map<ObjectKind, SnapObject[]>;
   bySchema: Map<string, Map<ObjectKind, SnapObject[]>>;
+  /** Database-scoped objects with no schema (e.g. PostgreSQL foreign servers), kept visible below schemas in schema-grouped mode. */
+  unschemed: Map<ObjectKind, SnapObject[]>;
   schemaCount: Map<string, number>;
   triggers: Map<number, SnapObject[]>;
   /** Oracle package bodies by their specification's id: shown under it, not as a category item. */
@@ -141,11 +164,11 @@ const bucketCache = new WeakMap<object, Buckets>();
 export function bucketsOf(objects: readonly SnapObject[]): Buckets {
   let b = bucketCache.get(objects);
   if (b) return b;
-  b = { byKind: new Map(), searchKind: new Map(), bySchema: new Map(), schemaCount: new Map(), triggers: new Map(), bodies: new Map(), byId: new Map(), lower: new Map() };
+  b = { byKind: new Map(), searchKind: new Map(), bySchema: new Map(), unschemed: new Map(), schemaCount: new Map(), triggers: new Map(), bodies: new Map(), byId: new Map(), lower: new Map() };
   for (const o of objects) {
     if (!o) continue;
     b.byId.set(o.id, o);
-    b.lower.set(o, `${o.schema}.${o.name}`.toLowerCase());
+    b.lower.set(o, (o.schema ? `${o.schema}.${o.name}` : o.name).toLowerCase());
     if (o.kind === "trigger") {
       if (o.parentObjectId != null) {
         const list = b.triggers.get(o.parentObjectId);
@@ -165,10 +188,14 @@ export function bucketsOf(objects: readonly SnapObject[]): Buckets {
     }
     push(b.byKind, o.kind, o);
     push(b.searchKind, o.kind, o);
-    let s = b.bySchema.get(o.schema);
-    if (!s) b.bySchema.set(o.schema, (s = new Map()));
-    push(s, o.kind, o);
-    b.schemaCount.set(o.schema, (b.schemaCount.get(o.schema) ?? 0) + 1);
+    if (o.schema) {
+      let s = b.bySchema.get(o.schema);
+      if (!s) b.bySchema.set(o.schema, (s = new Map()));
+      push(s, o.kind, o);
+      b.schemaCount.set(o.schema, (b.schemaCount.get(o.schema) ?? 0) + 1);
+    } else {
+      push(b.unschemed, o.kind, o);
+    }
   }
   for (const list of b.triggers.values()) list.sort((x, y) => x.name.localeCompare(y.name));
   bucketCache.set(objects, b);
@@ -186,6 +213,11 @@ const ofKinds = (m: Map<ObjectKind, SnapObject[]> | undefined, kinds: ObjectKind
 export const serverKey = (profileId: string) => `s:${profileId}`;
 export const dbKey = (profileId: string, db: string) => `db:${profileId}:${db}`;
 export const sysKey = (profileId: string) => `y:${profileId}`;
+export const serverObjectsKey = (profileId: string) => `so:${profileId}`;
+export const linkedFolderKey = (profileId: string) => `lsf:${profileId}`;
+export const linkedServerRowKey = (profileId: string, serverName: string) => `ls:${profileId}:${serverName}`;
+export const linkedCatalogRowKey = (profileId: string, serverName: string, catalog: string) => `lc:${profileId}:${serverName}:${catalog}`;
+export const linkedTableRowKey = (profileId: string, serverName: string, catalog: string, t: LinkedTableInfo) => `lt:${profileId}:${serverName}:${catalog}:${t.kind}:${t.schema}.${t.name}`;
 export const schemaKey = (profileId: string, db: string, schema: string) => `sc:${profileId}:${db}:${schema}`;
 export const catKey = (profileId: string, db: string, cat: CatId, schema?: string) => (schema === undefined ? `c:${profileId}:${db}:${cat}` : `c:${profileId}:${db}:${schema}:${cat}`);
 
@@ -254,7 +286,7 @@ export function orderedServers(i: Pick<TreeInput, "profiles" | "servers" | "orde
 
 export function buildTree(i: TreeInput): TreeResult {
   const rows: TreeRow[] = [];
-  const need: Need = { details: [], catalog: [] };
+  const need: Need = { details: [], catalog: [], linkedServers: [], linkedCatalogs: [], linkedTables: [] };
   const add = (r: TreeRow) => rows.push(r) - 1;
   const servers = orderedServers(i);
   const collapsedGroups = i.collapsedGroups ?? new Set<string>();
@@ -274,7 +306,11 @@ export function buildTree(i: TreeInput): TreeResult {
   }
   addServers(i, rows, need, servers.slice(at), 0, -1, undefined);
   numberSiblings(rows);
-  return { rows, needDetails: need.details, needCatalog: need.catalog, shown: servers.map((p) => p.id) };
+  return {
+    rows, needDetails: need.details, needCatalog: need.catalog,
+    needLinkedServers: need.linkedServers, needLinkedCatalogs: need.linkedCatalogs, needLinkedTables: need.linkedTables,
+    shown: servers.map((p) => p.id),
+  };
 }
 
 /** Servers at `base` + 1 (under environment rows when grouping by environment), as the tree always drew them. */
@@ -333,9 +369,118 @@ function addServer(i: TreeInput, rows: TreeRow[], need: Need, p: Profile, base: 
     const yIdx = add({ t: "sysdbs", key: yKey, level: base + 2, parent: sIdx, expandable: true, expanded: yOpen, profileId: p.id, count: system.length });
     if (yOpen) for (const d of system) addDb(i, rows, need, p, d.name, d.state, base + 3, yIdx);
   }
+  const traits = engineTraits(p.engine);
+  if (status === "connected" && traits.serverObjects && traits.linkedServersLabel) {
+    addServerObjects(i, rows, need, p, traits.linkedServersLabel, base + 2, sIdx);
+  }
 }
 
-interface Need { details: TreeResult["needDetails"]; catalog: TreeResult["needCatalog"] }
+function addServerObjects(i: TreeInput, rows: TreeRow[], need: Need, p: Profile, label: string, level: number, parent: number) {
+  const add = (r: TreeRow) => rows.push(r) - 1;
+  const soKey = serverObjectsKey(p.id);
+  const soOpen = i.expanded.has(soKey);
+  const soIdx = add({ t: "serverObjects", key: soKey, level, parent, expandable: true, expanded: soOpen, profileId: p.id });
+  if (!soOpen) return;
+  const lfKey = linkedFolderKey(p.id);
+  const lfOpen = i.expanded.has(lfKey);
+  const entry = i.linked?.servers[p.id];
+  const lfIdx = add({
+    t: "linkedFolder", key: lfKey, level: level + 1, parent: soIdx, expandable: true, expanded: lfOpen,
+    profileId: p.id, label, count: entry?.status === "ok" ? entry.items.length : undefined, loading: entry?.status === "loading",
+  });
+  if (!lfOpen) return;
+  if (!entry) {
+    need.linkedServers.push(p.id);
+    add({ t: "note", key: `${lfKey}:loading`, level: level + 2, parent: lfIdx, expandable: false, expanded: false, text: `Loading ${label.toLowerCase()}…`, tone: "muted", busy: true });
+    return;
+  }
+  if (entry.status === "loading" && !entry.items.length) {
+    add({ t: "note", key: `${lfKey}:loading`, level: level + 2, parent: lfIdx, expandable: false, expanded: false, text: `Loading ${label.toLowerCase()}…`, tone: "muted", busy: true });
+    return;
+  }
+  if (entry.status === "error") {
+    add({ t: "note", key: `${lfKey}:err`, level: level + 2, parent: lfIdx, expandable: false, expanded: false, text: firstSentence(entry.error) ?? `Could not load ${label.toLowerCase()}.`, tone: "err" });
+    add({ t: "action", key: `${lfKey}:retry`, level: level + 2, parent: lfIdx, expandable: false, expanded: false, action: "retryLinkedServers", label: "Retry", profileId: p.id });
+    return;
+  }
+  if (entry.note) add({ t: "note", key: `${lfKey}:note`, level: level + 2, parent: lfIdx, expandable: false, expanded: false, text: entry.note, tone: "warn" });
+  if (!entry.items.length) {
+    if (!entry.note) add({ t: "note", key: `${lfKey}:empty`, level: level + 2, parent: lfIdx, expandable: false, expanded: false, text: `No ${label.toLowerCase()}`, tone: "muted" });
+    return;
+  }
+  for (const srv of entry.items) {
+    const lsKey = linkedServerRowKey(p.id, srv.name);
+    const lsOpen = srv.canBrowse && i.expanded.has(lsKey);
+    const catEntry = srv.canBrowse ? i.linked?.catalogs[linkedCatalogKey(p.id, srv.name)] : undefined;
+    const lsIdx = add({
+      t: "linkedServer", key: lsKey, level: level + 2, parent: lfIdx,
+      expandable: srv.canBrowse, expanded: lsOpen, profileId: p.id, server: srv, loading: catEntry?.status === "loading",
+    });
+    if (!lsOpen) continue;
+    if (!catEntry) {
+      need.linkedCatalogs.push({ profileId: p.id, serverName: srv.name });
+      add({ t: "note", key: `${lsKey}:loading`, level: level + 3, parent: lsIdx, expandable: false, expanded: false, text: "Loading catalogs…", tone: "muted", busy: true });
+      continue;
+    }
+    if (catEntry.status === "loading" && !catEntry.items.length) {
+      add({ t: "note", key: `${lsKey}:loading`, level: level + 3, parent: lsIdx, expandable: false, expanded: false, text: "Loading catalogs…", tone: "muted", busy: true });
+      continue;
+    }
+    if (catEntry.status === "error") {
+      add({ t: "note", key: `${lsKey}:err`, level: level + 3, parent: lsIdx, expandable: false, expanded: false, text: firstSentence(catEntry.error) ?? "Could not load catalogs.", tone: "err" });
+      add({ t: "action", key: `${lsKey}:retry`, level: level + 3, parent: lsIdx, expandable: false, expanded: false, action: "retryLinkedCatalogs", label: "Retry", profileId: p.id, serverName: srv.name });
+      continue;
+    }
+    if (!catEntry.items.length) {
+      add({ t: "note", key: `${lsKey}:empty`, level: level + 3, parent: lsIdx, expandable: false, expanded: false, text: "No catalogs listed", tone: "muted" });
+      continue;
+    }
+    for (const cat of catEntry.items) {
+      const lcKey = linkedCatalogRowKey(p.id, srv.name, cat.name);
+      const lcOpen = i.expanded.has(lcKey);
+      const tblEntry = i.linked?.tables[linkedTableKey(p.id, srv.name, cat.name)];
+      const lcIdx = add({
+        t: "linkedCatalog", key: lcKey, level: level + 3, parent: lsIdx,
+        expandable: true, expanded: lcOpen, profileId: p.id, serverName: srv.name, catalog: cat, loading: tblEntry?.status === "loading",
+      });
+      if (!lcOpen) continue;
+      if (!tblEntry) {
+        need.linkedTables.push({ profileId: p.id, serverName: srv.name, catalog: cat.name });
+        add({ t: "note", key: `${lcKey}:loading`, level: level + 4, parent: lcIdx, expandable: false, expanded: false, text: "Loading tables…", tone: "muted", busy: true });
+        continue;
+      }
+      if (tblEntry.status === "loading" && !tblEntry.items.length) {
+        add({ t: "note", key: `${lcKey}:loading`, level: level + 4, parent: lcIdx, expandable: false, expanded: false, text: "Loading tables…", tone: "muted", busy: true });
+        continue;
+      }
+      if (tblEntry.status === "error") {
+        add({ t: "note", key: `${lcKey}:err`, level: level + 4, parent: lcIdx, expandable: false, expanded: false, text: firstSentence(tblEntry.error) ?? "Could not load tables.", tone: "err" });
+        add({ t: "action", key: `${lcKey}:retry`, level: level + 4, parent: lcIdx, expandable: false, expanded: false, action: "retryLinkedTables", label: "Retry", profileId: p.id, serverName: srv.name, catalog: cat.name });
+        continue;
+      }
+      if (tblEntry.note) add({ t: "note", key: `${lcKey}:note`, level: level + 4, parent: lcIdx, expandable: false, expanded: false, text: tblEntry.note, tone: "warn" });
+      if (!tblEntry.items.length) {
+        add({ t: "note", key: `${lcKey}:empty`, level: level + 4, parent: lcIdx, expandable: false, expanded: false, text: "No tables or views", tone: "muted" });
+        continue;
+      }
+      for (const tbl of tblEntry.items) {
+        add({
+          t: "linkedTable", key: linkedTableRowKey(p.id, srv.name, cat.name, tbl),
+          level: level + 4, parent: lcIdx, expandable: false, expanded: false,
+          profileId: p.id, serverName: srv.name, catalog: cat.name, table: tbl,
+        });
+      }
+    }
+  }
+}
+
+interface Need {
+  details: TreeResult["needDetails"];
+  catalog: TreeResult["needCatalog"];
+  linkedServers: TreeResult["needLinkedServers"];
+  linkedCatalogs: TreeResult["needLinkedCatalogs"];
+  linkedTables: TreeResult["needLinkedTables"];
+}
 
 /** aria-posinset / aria-setsize for every row in two passes, so drawing a row never scans its siblings. */
 export function numberSiblings(rows: TreeRow[]) {
@@ -401,13 +546,15 @@ function addDb(i: TreeInput, rows: TreeRow[], need: Need, p: Profile, db: string
   if (i.schemaGroups.includes(schemaGroupKey(p.id, db))) {
     const dflt = defaultSchema(engine);
     const schemas = [...b.bySchema.keys()].filter((s) => i.kind === "all" || hasKind(b.bySchema.get(s), i.kind)).sort((a, c) => (a === dflt ? -1 : c === dflt ? 1 : a.localeCompare(c, undefined, { sensitivity: "base" })));
-    if (!schemas.length) return void add({ t: "note", key: `${key}:none`, level: child, parent: dIdx, expandable: false, expanded: false, text: i.kind === "all" ? "No objects" : noneOfKind(i.kind), tone: "muted" });
+    const before = rows.length;
     for (const s of schemas) {
       const sk = schemaKey(p.id, db, s);
       const sOpen = i.expanded.has(sk);
       const sIdx = add({ t: "schema", key: sk, level: child, parent: dIdx, expandable: true, expanded: sOpen, profileId: p.id, db, schema: s, count: b.schemaCount.get(s) ?? 0 });
       if (sOpen) addCats(ctx, b.bySchema.get(s), s, child + 1, sIdx);
     }
+    if (b.unschemed.size) addCats(ctx, b.unschemed, undefined, child, dIdx, true);
+    if (rows.length === before) return void add({ t: "note", key: `${key}:none`, level: child, parent: dIdx, expandable: false, expanded: false, text: i.kind === "all" ? "No objects" : noneOfKind(i.kind), tone: "muted" });
   } else {
     const before = rows.length;
     addCats(ctx, b.byKind, undefined, child, dIdx);
@@ -430,14 +577,14 @@ interface DbCtx {
   keys: Set<string>;
 }
 
-function addCats(c: DbCtx, m: Map<ObjectKind, SnapObject[]> | undefined, schema: string | undefined, level: number, parent: number) {
+function addCats(c: DbCtx, m: Map<ObjectKind, SnapObject[]> | undefined, schema: string | undefined, level: number, parent: number, nonEmptyOnly = false) {
   const { i, rows, p, db } = c;
   const add = (r: TreeRow) => rows.push(r) - 1;
   for (const cat of CATEGORIES) {
     if (i.kind !== "all" && i.kind !== cat.id) continue;
     const list = ofKinds(m, cat.kinds);
-    // Under a schema only non-empty categories are shown; the flat tree keeps the four main ones.
-    if (!list.length && (schema !== undefined || !MAIN_CATS.has(cat.id))) continue;
+    // Under a schema (or unschemed database-level extras) only non-empty categories are shown; the flat tree keeps the four main ones.
+    if (!list.length && (nonEmptyOnly || schema !== undefined || !MAIN_CATS.has(cat.id))) continue;
     const key = catKey(p.id, db, cat.id, schema);
     const open = i.expanded.has(key) && list.length > 0;
     const filter = i.folderFilters[key]?.trim().toLowerCase() || undefined;
@@ -446,7 +593,7 @@ function addCats(c: DbCtx, m: Map<ObjectKind, SnapObject[]> | undefined, schema:
     if (!open) continue;
     if (filter) add({ t: "filter", key: `${key}:filter`, level: level + 1, parent: cIdx, expandable: false, expanded: false, catKey: key, text: i.folderFilters[key], shown: shown.length, total: list.length });
     const dflt = defaultSchema(c.engine);
-    for (const o of shown) addObj(c, o, level + 1, cIdx, schema !== undefined || o.schema === dflt, false);
+    for (const o of shown) addObj(c, o, level + 1, cIdx, !o.schema || schema !== undefined || o.schema === dflt, false);
     if (filter && !shown.length) add({ t: "note", key: `${key}:nomatch`, level: level + 1, parent: cIdx, expandable: false, expanded: false, text: `No ${cat.label.toLowerCase()} match “${i.folderFilters[key]}”`, tone: "muted" });
   }
 }
@@ -608,7 +755,7 @@ export function searchRows(profileId: string, db: string, engine: Engine, object
     const h = rows.push({ t: "header", key: `h:${g.id}`, level: 1, parent: -1, expandable: false, expanded: true, text: capped ? `${g.label.toUpperCase()} · FIRST ${SEARCH_CAP} OF ${hits.length.toLocaleString("en-US")}` : `${g.label.toUpperCase()} · ${hits.length.toLocaleString("en-US")}`, kind: g.id, capped }) - 1;
     for (const o of list) {
       const parent = o.kind === "trigger" && o.parentObjectId != null ? b.byId.get(o.parentObjectId) : undefined;
-      rows.push({ t: "obj", key: `r:${objKey(profileId, db, o, parent)}`, level: 2, parent: h, expandable: false, expanded: false, profileId, db, obj: o, bare: o.schema === dflt, leaf: true });
+      rows.push({ t: "obj", key: `r:${objKey(profileId, db, o, parent)}`, level: 2, parent: h, expandable: false, expanded: false, profileId, db, obj: o, bare: !o.schema || o.schema === dflt, leaf: true });
     }
   }
   numberSiblings(rows);

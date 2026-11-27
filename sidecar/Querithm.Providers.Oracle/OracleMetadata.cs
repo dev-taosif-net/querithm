@@ -37,7 +37,7 @@ public sealed class OracleMetadata : IMetadataProvider
     internal static bool IsDenied(Exception ex) => ex is OracleException { Number: 942 or 1031 };
 
     /// <summary>The optional dictionary views and what is lost without each. ALL_OBJECTS and ALL_USERS are the catalog itself: without them the refresh fails.</summary>
-    internal enum Piece { Tables, ExternalTables, MViews, Views, Columns, Indexes, IndexColumns, Constraints, ConstraintColumns, Triggers, Source, Sequences, Synonyms, Arguments, Procedures }
+    internal enum Piece { Tables, ExternalTables, MViews, Views, Columns, Indexes, IndexColumns, Constraints, ConstraintColumns, Triggers, Source, Sequences, Synonyms, Arguments, Procedures, DbLinks }
 
     internal static readonly IReadOnlyDictionary<Piece, (string View, string Effect)> Pieces = new Dictionary<Piece, (string, string)>
     {
@@ -56,6 +56,7 @@ public sealed class OracleMetadata : IMetadataProvider
         [Piece.Synonyms] = ("ALL_SYNONYMS", "Public synonyms are not listed"),
         [Piece.Arguments] = ("ALL_ARGUMENTS", "Parameters and return types are not shown"),
         [Piece.Procedures] = ("ALL_PROCEDURES", "Package members are not shown"),
+        [Piece.DbLinks] = ("ALL_DB_LINKS", "Database links are not listed"),
     };
 
     /// <summary>At most this many notes per refresh, each bounded: they are shown, stored and sent as they are.</summary>
@@ -221,6 +222,23 @@ public sealed class OracleMetadata : IMetadataProvider
             : "NULL";
         var synonym = Has(Piece.Synonyms) ? "CASE WHEN o.owner <> 'PUBLIC' OR y.synonym_name IS NOT NULL THEN 1 END" : "CASE WHEN o.owner <> 'PUBLIC' THEN 1 END";
 
+        var dbLinks = Has(Piece.DbLinks)
+            ? $"""
+
+            UNION ALL
+            SELECT -(2 + {H(J("'DBLINK'", "l.owner", "l.db_link"))}) AS object_id,
+              l.owner, l.db_link, 'DATABASE LINK',
+              {H(J("l.owner", "l.db_link", "l.username", "l.host"))} AS marker,
+              NULL AS rtype, NULL AS parent, 'VALID' AS status,
+              SUBSTR(CASE WHEN l.username IS NOT NULL AND l.host IS NOT NULL THEN 'L:' || l.username || '@' || l.host
+                          WHEN l.host IS NOT NULL THEN 'L:' || l.host
+                          WHEN l.username IS NOT NULL THEN 'L:' || l.username END, 1, 200) AS flag,
+              NULL AS target, NULL AS rowaddr
+            FROM {V("ALL_DB_LINKS")} l
+            WHERE l.owner {InS} OR l.owner = 'PUBLIC'
+            """
+            : "";
+
         return $"""
             WITH s AS (
               SELECT u.username AS owner FROM {V("ALL_USERS")} u
@@ -245,7 +263,7 @@ public sealed class OracleMetadata : IMetadataProvider
               WHEN 'TYPE' THEN CASE WHEN o.generated = 'N' THEN 1 END
               WHEN 'SEQUENCE' THEN CASE WHEN o.generated = 'N' THEN 1 END
               WHEN 'SYNONYM' THEN {synonym}
-              ELSE 1 END = 1
+              ELSE 1 END = 1{dbLinks}
             """;
     }
 
@@ -266,6 +284,7 @@ public sealed class OracleMetadata : IMetadataProvider
         "SYNONYM" => ObjectKind.Synonym,
         "PACKAGE" => ObjectKind.Package,
         "PACKAGE BODY" => ObjectKind.PackageBody,
+        "DATABASE LINK" => ObjectKind.DbLink,
         _ => null,
     };
 
@@ -279,9 +298,15 @@ public sealed class OracleMetadata : IMetadataProvider
     /// </summary>
     internal const string BodyNotVisible = "body not visible";
 
-    /// <summary>What the explorer shows beside the name: a materialized view, an external table, an invalid object.</summary>
+    /// <summary>What the explorer shows beside the name: a materialized view, an external table, an invalid object, a database link's target.</summary>
     internal static string? NoteOf(string type, string? status, string? flag)
     {
+        if (type == "DATABASE LINK")
+        {
+            if (flag is not { Length: > 2 } || !flag.StartsWith("L:", StringComparison.Ordinal)) return null;
+            var cleaned = string.Join(' ', flag[2..].Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+            return cleaned.Length > 0 ? cleaned : null;
+        }
         var parts = new List<string>(2);
         if (type == "MATERIALIZED VIEW") parts.Add("materialized view");
         if (flag == "X") parts.Add("external table");

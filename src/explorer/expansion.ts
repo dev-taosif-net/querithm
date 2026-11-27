@@ -1,13 +1,15 @@
 // Tree expansion keys are "<kind>:<profileId>[:…]" (s:, y:, db:, sc:, c:, o:, by name, tree.ts); a server's keys go when it
 // leaves the Explorer, so it opens one level again when the user reconnects it.
 
+const SERVER_KEY_PREFIXES = new Set(["s", "y", "d", "db", "sc", "c", "o", "so", "lsf", "ls", "lc"]);
+
 /** Drops the expansion of servers that left the Explorer, so a reconnect the user starts opens one level again. */
 export function pruneExpanded(expanded: ReadonlySet<string>, shown: readonly string[]): ReadonlySet<string> {
   const live = new Set(shown);
   const next = new Set<string>();
   for (const k of expanded) {
     const parts = k.split(":");
-    if (parts.length > 1 && ["s", "y", "d", "db", "sc", "c", "o"].includes(parts[0]) && !live.has(parts[1])) continue;
+    if (parts.length > 1 && SERVER_KEY_PREFIXES.has(parts[0]) && !live.has(parts[1])) continue;
     next.add(k);
   }
   return next.size === expanded.size ? expanded : next;

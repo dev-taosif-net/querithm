@@ -201,7 +201,7 @@ describe.each<Engine>(["mssql", "pg"])("Explorer tree (%s)", (engine) => {
     seed(engine);
     render(<Explorer />);
     expect(item(`DEV, Srv-p1, ${engineName}, connected`).getAttribute("aria-expanded")).toBe("true");
-    expect(names()).toEqual([`DEV, Srv-p1, ${engineName}, connected`, "Database AppDb"]);
+    expect(names()).toEqual(engine === "mssql" ? [`DEV, Srv-p1, ${engineName}, connected`, "Database AppDb", "Server objects"] : [`DEV, Srv-p1, ${engineName}, connected`, "Database AppDb"]);
     expect(item("Database AppDb").getAttribute("aria-expanded")).toBe("false");
   });
 
@@ -733,7 +733,7 @@ describe.each<Engine>(["mssql", "pg"])("Explorer keyboard (%s)", (engine) => {
     key("ArrowLeft");
     expect(item("Database AppDb").getAttribute("aria-expanded")).toBe("false");
     key("End");
-    expect(item("Database AppDb").getAttribute("aria-selected")).toBe("true");
+    expect(item(engine === "mssql" ? "Server objects" : "Database AppDb").getAttribute("aria-selected")).toBe("true");
     key("Home");
     expect(item(/^DEV, Srv-p1/).getAttribute("aria-selected")).toBe("true");
     expect(item(/^DEV, Srv-p1/).getAttribute("aria-level")).toBe("1");

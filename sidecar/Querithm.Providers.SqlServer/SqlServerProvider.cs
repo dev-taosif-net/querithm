@@ -51,6 +51,7 @@ public sealed partial class SqlServerProvider : IDbProvider
     public IDataCompareDialect? DataCompare { get; } = new SqlServerDataCompare();
     public IReferenceFinder? References { get; } = new TSqlReferenceFinder();
     public IActivityProvider? Activity { get; }
+    public ILinkedServerProvider? LinkedServers { get; } = new SqlServerLinkedServers();
 
     public SqlServerProvider() => Activity = new SqlServerActivity(Plans, DataEdit);
 

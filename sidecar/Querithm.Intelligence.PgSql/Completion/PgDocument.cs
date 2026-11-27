@@ -203,7 +203,7 @@ sealed class PgSchema
         var byName = new Dictionary<string, List<SnapObject>>(names);
         foreach (var o in s.Objects.Concat(PgCompletionRules.Current.BuiltinRoutines))
         {
-            if (o.Kind == ObjectKind.Trigger) continue; // never named in queries
+            if (o.Kind is ObjectKind.Trigger or ObjectKind.DbLink or ObjectKind.ForeignServer) continue; // never named as schema objects in queries
             if (!byName.TryGetValue(o.Name, out var list)) byName[o.Name] = list = [];
             list.Add(o);
         }
@@ -211,8 +211,9 @@ sealed class PgSchema
         foreach (var o in s.Objects) byId.TryAdd(o.Id, o);
         return new PgSchema
         {
-            Snapshot = s, ByName = byName, ById = byId, Schemas = s.Objects.Select(o => o.Schema).ToHashSet(names), Names = names,
-            DefaultSchema = PgCompletionRules.Current.DefaultSchema, SearchPath = PgCompletionRules.Current.SearchPath,
+            Snapshot = s, ByName = byName, ById = byId,
+            Schemas = s.Objects.Where(o => o.Kind is not (ObjectKind.DbLink or ObjectKind.ForeignServer) && !string.IsNullOrEmpty(o.Schema)).Select(o => o.Schema).ToHashSet(names),
+            Names = names, DefaultSchema = PgCompletionRules.Current.DefaultSchema, SearchPath = PgCompletionRules.Current.SearchPath,
         };
     });
 

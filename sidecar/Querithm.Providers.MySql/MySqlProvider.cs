@@ -36,6 +36,7 @@ public sealed class MySqlProvider : IDbProvider
     public IDataCompareDialect? DataCompare { get; } = new MySqlDataCompare();
     public IReferenceFinder? References { get; } = new MySqlReferenceFinder();
     public IActivityProvider? Activity { get; } = new MySqlActivity();
+    public ILinkedServerProvider? LinkedServers { get; } = new MySqlLinkedServers();
     public ITransactionControl Transactions { get; } = new MySqlTransactions();
 
     public EngineTraits Traits { get; } = new()

@@ -8,8 +8,10 @@ import { DIALECTS, foldIdentifier, knownDialect } from "../../engines";
  * DialectTraits.loginSchema); ignored elsewhere.
  */
 export function buildSchemaIndex(snapshot: SchemaSnapshot, dialect: Dialect, databases: string[], loginSchema?: string | null): SchemaIndex {
-  // Triggers are never named in queries (and a PostgreSQL trigger may share its table's name), so completion skips them.
-  const objects = (snapshot?.objects ?? []).filter((o): o is SnapObject => !!o && typeof o.name === "string" && o.kind !== "trigger");
+  // Triggers, database links and foreign servers are not named as schema objects in queries, so completion skips them.
+  const objects = (snapshot?.objects ?? []).filter(
+    (o): o is SnapObject => !!o && typeof o.name === "string" && o.kind !== "trigger" && o.kind !== "dbLink" && o.kind !== "foreignServer",
+  );
   const byName = new Map<string, SnapObject[]>();
   const byQualified = new Map<string, SnapObject>();
   const byId = new Map<number, SnapObject>();

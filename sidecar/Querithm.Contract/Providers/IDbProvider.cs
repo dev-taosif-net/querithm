@@ -65,6 +65,8 @@ public interface IDbProvider
     IReferenceFinder? References { get; }
     /// <summary>Server activity monitor (Phase B); null degrades the monitor with a reason.</summary>
     IActivityProvider? Activity { get; }
+    /// <summary>Server-level linked / external servers (SQL Server, MySQL / MariaDB); null on engines without them.</summary>
+    ILinkedServerProvider? LinkedServers => null;
 
     /// <summary>
     /// Null when the provider implements <paramref name="feature"/>, else the reason shown to the user (Phase D0a). Static:

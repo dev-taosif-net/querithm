@@ -6,6 +6,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import type { EnvironmentKind, Profile, SnapObject } from "../ipc/contract";
 import { rpc } from "../ipc/client";
 import { useConnections } from "../store/connections";
+import { useLinkedServers } from "../store/linkedServers";
 import { envColor, envLabel, useProfiles } from "../store/profiles";
 import { refreshServer, sessionParam, tabScope, useSnapshots } from "../store/snapshots";
 import { repickFile } from "../connections/fileAccess";
@@ -24,7 +25,7 @@ import { useExplorer } from "./explorerState";
 import { pruneExpanded, takeNewlyConnected } from "./expansion";
 import { useLastBinding } from "../app/lastBinding";
 import { menuFor, sessionReason } from "./menus";
-import { bindActiveTab, columnList, columnName, connectFromExplorer, copyText, insertName, insertText, openObject, qualified } from "./objectActions";
+import { bindActiveTab, columnList, columnName, connectFromExplorer, copyText, dbLinkRef, insertName, insertText, linkedFourPartName, openObject, qualified, scriptLinkedSelect } from "./objectActions";
 import {
   ancestorsOf, buildTree, CATEGORIES, catKey, dbKey, headsOf, objKey, schemaKey, searchRows, searchScope, serverKey, sysKey,
   type CatId, type DetailsCell, type Engine, type KindFilter, type RowOf, type TreeRow,
@@ -48,6 +49,11 @@ function rowName(r: TreeRow, profiles: Map<string, Profile>): string {
     case "cat": return CATEGORIES.find((c) => c.id === r.cat)!.label;
     case "obj": return r.obj.name;
     case "leaf": return r.text;
+    case "serverObjects": return "Server objects";
+    case "linkedFolder": return r.label;
+    case "linkedServer": return r.server.name;
+    case "linkedCatalog": return r.catalog.name || "(default)";
+    case "linkedTable": return r.table.schema ? `${r.table.schema}.${r.table.name}` : r.table.name;
     case "env": return envLabel[r.env];
     case "group": return r.name;
     default: return "";
@@ -91,6 +97,9 @@ export function Explorer() {
   const servers = useConnections((s) => s.servers);
   const order = useConnections((s) => s.order);
   const entries = useSnapshots((s) => s.entries);
+  const linkedServers = useLinkedServers((s) => s.servers);
+  const linkedCatalogs = useLinkedServers((s) => s.catalogs);
+  const linkedTables = useLinkedServers((s) => s.tables);
   const groupOrder = useSettings((s) => s.groupOrder);
   const profileOrder = useSettings((s) => s.profileOrder);
   const showAll = useSettings((s) => s.explorerShowAll);
@@ -169,9 +178,14 @@ export function Explorer() {
         ? { profileId: lastDb.profileId, db: lastDb.database }
         : undefined;
   const tree = useMemo(
-    () => buildTree({ profiles: profilesList, servers, order, groupOrder, profileOrder, showAll, groupByEnv, collapsedEnvs: ex.collapsedEnvs, showGroups, collapsedGroups: ex.collapsedGroups, expanded: ex.expanded, entries, details: ex.details, schemaGroups, kind: ex.kind, folderFilters: ex.folderFilters, active }),
+    () => buildTree({
+      profiles: profilesList, servers, order, groupOrder, profileOrder, showAll, groupByEnv,
+      collapsedEnvs: ex.collapsedEnvs, showGroups, collapsedGroups: ex.collapsedGroups, expanded: ex.expanded,
+      entries, details: ex.details, schemaGroups, kind: ex.kind, folderFilters: ex.folderFilters, active,
+      linked: { servers: linkedServers, catalogs: linkedCatalogs, tables: linkedTables },
+    }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [profilesList, servers, order, groupOrder, profileOrder, showAll, groupByEnv, ex.collapsedEnvs, showGroups, ex.collapsedGroups, ex.expanded, entries, ex.details, schemaGroups, ex.kind, ex.folderFilters, active?.profileId, active?.db],
+    [profilesList, servers, order, groupOrder, profileOrder, showAll, groupByEnv, ex.collapsedEnvs, showGroups, ex.collapsedGroups, ex.expanded, entries, ex.details, schemaGroups, ex.kind, ex.folderFilters, active?.profileId, active?.db, linkedServers, linkedCatalogs, linkedTables],
   );
 
   // Keys and indexes of expanded objects are read lazily, again after a refresh replaced the object's record.
@@ -186,6 +200,22 @@ export function Explorer() {
       if (servers[n.profileId]?.status === "connected" && !useSnapshots.getState().get(n.profileId, n.db)) useSnapshots.getState().ensure(n.profileId, n.db);
     }
   }, [tree.needCatalog, servers]);
+
+  // Server-level Linked / External Servers and remote catalogs/tables are loaded strictly lazily on expand.
+  useEffect(() => {
+    const ls = useLinkedServers.getState();
+    for (const profileId of tree.needLinkedServers) if (servers[profileId]?.status === "connected") void ls.loadServers(profileId);
+  }, [tree.needLinkedServers, servers]);
+
+  useEffect(() => {
+    const ls = useLinkedServers.getState();
+    for (const n of tree.needLinkedCatalogs) if (servers[n.profileId]?.status === "connected") void ls.loadCatalogs(n.profileId, n.serverName);
+  }, [tree.needLinkedCatalogs, servers]);
+
+  useEffect(() => {
+    const ls = useLinkedServers.getState();
+    for (const n of tree.needLinkedTables) if (servers[n.profileId]?.status === "connected") void ls.loadTables(n.profileId, n.serverName, n.catalog);
+  }, [tree.needLinkedTables, servers]);
 
   // ---- search, scoped to the active tab's database, or with none in front the top bar's (never another server)
   const query = ex.query;
@@ -289,12 +319,16 @@ export function Explorer() {
         return;
       case "db": return bindActiveTab(r.profileId, r.db);
       case "obj": return void (whenConnected(r.profileId) && openObject(r.profileId, r.db, r.obj));
+      case "linkedTable": return void scriptLinkedSelect(r.profileId, r.serverName, r.catalog, r.table);
       case "action":
         if (r.action === "reconnect") void connectFromExplorer(r.profileId);
         else if (r.action === "editProfile") useUi.getState().openDialog({ kind: "profile", profileId: r.profileId });
         else if (r.action === "repick") void repickFile(r.profileId);
         else if (r.action === "retryMeta" && r.db) void useSnapshots.getState().refresh(r.profileId, r.db, false);
         else if (r.action === "retryDetails" && r.objKey && r.obj && r.db) loadDetails(r.objKey, r.profileId, r.db, r.obj, true);
+        else if (r.action === "retryLinkedServers") void useLinkedServers.getState().loadServers(r.profileId, true);
+        else if (r.action === "retryLinkedCatalogs" && r.serverName) void useLinkedServers.getState().loadCatalogs(r.profileId, r.serverName, true);
+        else if (r.action === "retryLinkedTables" && r.serverName && r.catalog !== undefined) void useLinkedServers.getState().loadTables(r.profileId, r.serverName, r.catalog, true);
         return;
       case "header":
         if (r.capped && r.kind) useExplorer.getState().set({ uncapped: new Set([...useExplorer.getState().uncapped, r.kind]) });
@@ -318,8 +352,9 @@ export function Explorer() {
     const cat = CATEGORIES.find((c) => c.kinds.includes(target.kind))?.id;
     const keys = [serverKey(r.profileId), dbKey(r.profileId, r.db)];
     if (sysdb) keys.push(sysKey(r.profileId));
-    if (grouped) keys.push(schemaKey(r.profileId, r.db, target.schema));
-    const ck = cat ? catKey(r.profileId, r.db, cat, grouped ? target.schema : undefined) : undefined;
+    const underSchema = grouped && !!target.schema;
+    if (underSchema) keys.push(schemaKey(r.profileId, r.db, target.schema));
+    const ck = cat ? catKey(r.profileId, r.db, cat, underSchema ? target.schema : undefined) : undefined;
     if (ck) keys.push(ck);
     if (owner) keys.push(objKey(r.profileId, r.db, owner), ...(r.obj.kind === "trigger" ? [`${objKey(r.profileId, r.db, owner)}:triggers`] : []));
     st.setExpanded((prev) => new Set([...prev, ...keys]));
@@ -381,7 +416,8 @@ export function Explorer() {
       }
       const engine = r.t === "obj" || r.t === "sub" ? useProfiles.getState().byId(r.profileId)?.engine : r.t === "leaf" && r.profileId ? useProfiles.getState().byId(r.profileId)?.engine : undefined;
       let text = "";
-      if (r.t === "obj") text = e.altKey ? columnList(r.obj, engine) : qualified(r.obj, engine);
+      if (r.t === "obj") text = r.obj.kind === "dbLink" ? dbLinkRef(r.obj.name, engine) : e.altKey ? columnList(r.obj, engine) : qualified(r.obj, engine);
+      else if (r.t === "linkedTable") text = linkedFourPartName(r.serverName, r.catalog, r.table.schema, r.table.name);
       else if (r.t === "sub" && r.sub === "columns") text = columnList(r.obj, engine);
       else if (r.t === "leaf" && r.drag) text = r.drag;
       if (text) e.dataTransfer.setData("text/plain", text);
@@ -470,6 +506,8 @@ export function Explorer() {
     if (e.key === "Enter" && ctrl) {
       e.preventDefault();
       if (r.t === "obj") insertName(r.obj, r.profileId, e.altKey);
+      else if (r.t === "linkedTable") insertText(linkedFourPartName(r.serverName, r.catalog, r.table.schema, r.table.name));
+      else if (r.t === "linkedServer") insertText(qualified({ schema: "", name: r.server.name }, useProfiles.getState().byId(r.profileId)?.engine));
       else if (r.t === "leaf" && r.column) insertText(columnName(r.column, r.profileId ? useProfiles.getState().byId(r.profileId)?.engine : undefined));
       return;
     }
@@ -486,24 +524,30 @@ export function Explorer() {
     if (e.key === "F2" && (r.t === "obj" || (r.t === "leaf" && r.column))) {
       e.preventDefault();
       const o = r.t === "obj" ? r.obj : r.obj!;
-      if (o.kind !== "synonym" && o.kind !== "trigger" && whenConnected(r.profileId!)) renameOf(r.t === "obj" ? r.profileId : r.profileId!, r.db!, { schema: o.schema, name: o.name, kind: o.kind, column: r.t === "leaf" ? r.column : undefined });
+      if (o.kind !== "synonym" && o.kind !== "trigger" && o.kind !== "dbLink" && o.kind !== "foreignServer" && whenConnected(r.profileId!)) renameOf(r.t === "obj" ? r.profileId : r.profileId!, r.db!, { schema: o.schema, name: o.name, kind: o.kind, column: r.t === "leaf" ? r.column : undefined });
       return;
     }
     if (e.key === "F12" && e.shiftKey && (r.t === "obj" || (r.t === "leaf" && r.column))) {
       e.preventDefault();
       const o = r.t === "obj" ? r.obj : r.obj!;
-      if (o.kind !== "synonym" && o.kind !== "trigger" && whenConnected(r.profileId!)) findUsagesOf(r.t === "obj" ? r.profileId : r.profileId!, r.db!, { schema: o.schema, name: o.name, kind: o.kind, column: r.t === "leaf" ? r.column : undefined });
+      if (o.kind !== "synonym" && o.kind !== "trigger" && o.kind !== "dbLink" && o.kind !== "foreignServer" && whenConnected(r.profileId!)) findUsagesOf(r.t === "obj" ? r.profileId : r.profileId!, r.db!, { schema: o.schema, name: o.name, kind: o.kind, column: r.t === "leaf" ? r.column : undefined });
       return;
     }
     if (e.key === "F5") {
       e.preventDefault();
       if (r.t === "server" && r.status === "connected") void refreshServer(r.profileId).catch((e) => toast("error", `Could not refresh databases: ${e instanceof Error ? e.message : String(e)}. Press F5 to retry.`));
+      else if (r.t === "linkedFolder" && whenConnected(r.profileId)) void useLinkedServers.getState().loadServers(r.profileId, true);
+      else if (r.t === "linkedServer" && r.server.canBrowse && whenConnected(r.profileId)) void useLinkedServers.getState().loadCatalogs(r.profileId, r.server.name, true);
+      else if (r.t === "linkedCatalog" && whenConnected(r.profileId)) void useLinkedServers.getState().loadTables(r.profileId, r.serverName, r.catalog.name, true);
       else if ("db" in r && r.db && "profileId" in r && r.profileId) void useSnapshots.getState().refresh(r.profileId, r.db, false);
       return;
     }
     if (ctrl && e.key.toLowerCase() === "c" && !e.shiftKey && !e.altKey) {
       e.preventDefault();
-      const name = r.t === "obj" ? qualified(r.obj, useProfiles.getState().byId(r.profileId)?.engine) : rowName(r, profiles);
+      const name = r.t === "obj"
+        ? (r.obj.kind === "dbLink" ? dbLinkRef(r.obj.name, useProfiles.getState().byId(r.profileId)?.engine) : qualified(r.obj, useProfiles.getState().byId(r.profileId)?.engine))
+        : r.t === "linkedTable" ? linkedFourPartName(r.serverName, r.catalog, r.table.schema, r.table.name)
+        : rowName(r, profiles);
       if (name) void copyText(name);
       return;
     }
@@ -711,6 +755,8 @@ function kindUnavailable(cat: CatId, engine: Engine | undefined): string | undef
   if (!engine) return undefined;
   if (cat === "synonyms" && !ENGINES[engine].synonyms) return `${ENGINES[engine].shortLabel} has no synonyms`;
   if (cat === "packages" && !ENGINES[engine].packages) return `${ENGINES[engine].shortLabel} has no packages`;
+  if (cat === "foreignServers" && !ENGINES[engine].foreignServers) return `${ENGINES[engine].shortLabel} has no foreign servers`;
+  if (cat === "dbLinks" && !ENGINES[engine].dbLinks) return `${ENGINES[engine].shortLabel} has no database links`;
   return undefined;
 }
 
@@ -800,9 +846,13 @@ function menuTarget(r: TreeRow, rows: readonly TreeRow[], i: number): { header: 
   const server = p?.name ?? "";
   const db = "db" in r ? (r.db as string | undefined) : undefined;
   let what = "";
-  if (r.t === "obj") what = `${r.obj.schema}.${r.obj.name}`;
+  if (r.t === "obj") what = r.obj.schema ? `${r.obj.schema}.${r.obj.name}` : r.obj.name;
   else if (r.t === "schema") what = r.schema;
   else if (r.t === "cat") what = CATEGORIES.find((c) => c.id === r.cat)!.label;
+  else if (r.t === "linkedFolder") what = r.label;
+  else if (r.t === "linkedServer") what = r.server.name;
+  else if (r.t === "linkedCatalog") what = `${r.serverName} › ${r.catalog.name || "(default)"}`;
+  else if (r.t === "linkedTable") what = `${r.serverName} › ${r.catalog || "(default)"} › ${r.table.schema ? `${r.table.schema}.` : ""}${r.table.name}`;
   else if (r.t === "leaf") {
     const owner = ancestorsOf(rows, i).map((a) => rows[a]).find((x): x is RowOf<"obj"> => x.t === "obj");
     what = owner ? `${owner.obj.schema}.${owner.obj.name}.${r.text}` : r.text;
@@ -1104,10 +1154,10 @@ function StickyPath({ rows, chain, view, onJump }: { rows: TreeRow[]; chain: num
   );
 }
 
-const ICON_OF: Partial<Record<string, IconName>> = { table: "table", view: "view", proc: "proc", func: "func", tvf: "func", type: "type", sequence: "sequence", synonym: "synonym", trigger: "trigger", package: "package", packageBody: "package" };
+const ICON_OF: Partial<Record<string, IconName>> = { table: "table", view: "view", proc: "proc", func: "func", tvf: "func", type: "type", sequence: "sequence", synonym: "synonym", trigger: "trigger", package: "package", packageBody: "package", dbLink: "link", foreignServer: "server" };
 const OBJ_COLOR: Record<string, string> = {
   table: "text-obj-table", view: "text-obj-view", proc: "text-obj-proc", func: "text-obj-func", tvf: "text-obj-func", type: "text-obj-type", sequence: "text-obj-sequence", synonym: "text-obj-synonym", trigger: "text-obj-proc",
-  package: "text-obj-proc", packageBody: "text-obj-proc",
+  package: "text-obj-proc", packageBody: "text-obj-proc", dbLink: "text-obj-synonym", foreignServer: "text-obj-synonym",
 };
 const TONE: Record<string, string> = { warn: "text-warn", muted: "text-muted", ident: "text-ident", "obj.index": "text-obj-index", "obj.table": "text-obj-table" };
 
@@ -1126,7 +1176,7 @@ const Row = memo(function Row({ row: r, index: i, selected, focused, fresh, drag
     "aria-posinset": r.pos,
     "aria-expanded": r.expandable || (r.t === "server" && r.status === "off") ? r.expanded : undefined,
     "aria-selected": selected,
-    "aria-busy": (r.t === "server" && (r.status === "connecting" || r.refreshing)) || (r.t === "note" && r.busy) || (r.t === "db" && (r.state === "loading" || r.state === "refreshing")) || undefined,
+    "aria-busy": (r.t === "server" && (r.status === "connecting" || r.refreshing)) || (r.t === "note" && r.busy) || (r.t === "db" && (r.state === "loading" || r.state === "refreshing")) || ((r.t === "linkedFolder" || r.t === "linkedServer" || r.t === "linkedCatalog") && r.loading) || undefined,
     "aria-label": label,
     style,
     onClick: (e: MouseEvent) => handlers.click(i, e),
@@ -1145,7 +1195,7 @@ const Row = memo(function Row({ row: r, index: i, selected, focused, fresh, drag
     <span aria-hidden className="w-3 shrink-0" />
   );
   const reorderable = view.canReorder && (r.t === "group" || r.t === "server");
-  const draggable = reorderable || r.t === "obj" || (r.t === "leaf" && !!r.drag) || (r.t === "sub" && r.sub === "columns");
+  const draggable = reorderable || r.t === "obj" || r.t === "linkedTable" || (r.t === "leaf" && !!r.drag) || (r.t === "sub" && r.sub === "columns");
   return (
     <div
       {...common}
@@ -1251,6 +1301,51 @@ function RowBody({ r, view, handlers }: { r: TreeRow; view: RowView; handlers: H
           <span className="shrink-0 text-[10px] text-muted q-mono">{r.count}</span>
         </>
       );
+    case "serverObjects":
+      return (
+        <>
+          <Icon name="folder" size={14} className="text-muted" />
+          <span className="flex-1 min-w-0 truncate text-fg">Server objects</span>
+        </>
+      );
+    case "linkedFolder":
+      return (
+        <>
+          <Icon name="link" size={14} className="text-obj-synonym" />
+          <span className="flex-1 min-w-0 truncate text-fg">{r.label}</span>
+          {r.loading && <Icon name="spinner" size={12} className="shrink-0 text-muted animate-spin motion-reduce:animate-none" />}
+          {!r.loading && r.count !== undefined && <span className="shrink-0 text-[10px] text-muted q-mono">{r.count.toLocaleString("en-US")}</span>}
+        </>
+      );
+    case "linkedServer":
+      return (
+        <>
+          <Icon name="server" size={14} className="text-obj-synonym" />
+          <span className="flex-1 min-w-0 truncate q-mono text-[11.5px] text-fg" title={r.server.note ? `${r.server.name} · ${r.server.note}` : r.server.name}>{r.server.name}</span>
+          {r.loading && <Icon name="spinner" size={12} className="shrink-0 text-muted animate-spin motion-reduce:animate-none" />}
+          {!r.loading && r.server.note && <span className="shrink-0 max-w-[45%] truncate text-[10.5px] text-muted">{r.server.note}</span>}
+        </>
+      );
+    case "linkedCatalog": {
+      const catLabel = r.catalog.name || "(default)";
+      return (
+        <>
+          <Icon name="database" size={14} className="text-muted" />
+          <span className="flex-1 min-w-0 truncate q-mono text-[11.5px] text-fg" title={r.catalog.description ? `${catLabel} · ${r.catalog.description}` : catLabel}>{catLabel}</span>
+          {r.loading && <Icon name="spinner" size={12} className="shrink-0 text-muted animate-spin motion-reduce:animate-none" />}
+        </>
+      );
+    }
+    case "linkedTable":
+      return (
+        <>
+          <Icon name={r.table.kind === "view" ? "view" : "table"} size={14} className={r.table.kind === "view" ? "text-obj-view" : "text-obj-table"} />
+          <span className="flex-1 min-w-0 truncate q-mono text-[11.5px] text-fg" title={linkedFourPartName(r.serverName, r.catalog, r.table.schema, r.table.name)}>
+            {r.table.schema && <span className="text-muted">{r.table.schema}.</span>}
+            {r.table.name}
+          </span>
+        </>
+      );
     case "schema":
       return (
         <>
@@ -1284,12 +1379,12 @@ function RowBody({ r, view, handlers }: { r: TreeRow; view: RowView; handlers: H
       return (
         <>
           <Icon name={ICON_OF[r.obj.kind] ?? "table"} size={14} className={OBJ_COLOR[r.obj.kind]} />
-          <span className="flex-1 min-w-0 truncate q-mono text-[11.5px] text-fg" title={`${r.obj.schema}.${r.obj.name} (${r.obj.kind})`}>
-            {!r.bare && <span className="text-muted">{r.obj.schema}.</span>}
+          <span className="flex-1 min-w-0 truncate q-mono text-[11.5px] text-fg" title={`${r.obj.schema ? `${r.obj.schema}.` : ""}${r.obj.name} (${r.obj.kind})`}>
+            {!r.bare && r.obj.schema && <span className="text-muted">{r.obj.schema}.</span>}
             {r.obj.name}
           </span>
           {r.obj.kind === "packageBody" && <span className="shrink-0 text-[10.5px] text-muted">body</span>}
-          {r.obj.note && <span className={`shrink-0 text-[10.5px] ${/invalid/.test(r.obj.note) ? "text-warn" : "text-muted"}`}>{r.obj.note}</span>}
+          {r.obj.note && <span className={`shrink-0 max-w-[45%] truncate text-[10.5px] ${/\binvalid\b/.test(r.obj.note) ? "text-warn" : "text-muted"}`} title={r.obj.note}>{r.obj.note}</span>}
         </>
       );
     case "sub":
@@ -1353,6 +1448,11 @@ function ariaLabelOf(r: TreeRow, view: RowView): string {
     case "filter": return `Filter ${r.text}, ${r.shown} of ${r.total}`;
     case "schema": return `Schema ${r.schema}, ${r.count} objects`;
     case "sysdbs": return `System databases, ${r.count}`;
+    case "serverObjects": return "Server objects";
+    case "linkedFolder": return `${r.label}${r.count !== undefined ? `, ${r.count}` : ""}${r.loading ? ", loading" : ""}`;
+    case "linkedServer": return `Linked server ${r.server.name}${r.server.note ? `, ${r.server.note}` : ""}${r.loading ? ", loading" : ""}`;
+    case "linkedCatalog": return `Remote catalog ${r.catalog.name || "(default)"}${r.loading ? ", loading" : ""}`;
+    case "linkedTable": return `Remote ${r.table.kind} ${r.table.schema ? `${r.table.schema}.` : ""}${r.table.name}`;
     case "sub": return SUB_TEXT[r.sub];
     case "note": return r.text;
     case "action": return r.label;

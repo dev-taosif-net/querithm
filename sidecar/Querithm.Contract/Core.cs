@@ -3,7 +3,7 @@ namespace Querithm.Contract;
 /// <summary>Contract version; system.ping returns it and the webview refuses to run on a mismatch (§5).</summary>
 public static class ContractInfo
 {
-    public const string Version = "1.21.0";
+    public const string Version = "1.22.0";
 }
 
 /// <summary>Members are appended as providers land (Phase D); existing spellings never change ("mssql", "pg").</summary>
@@ -43,10 +43,11 @@ public enum Severity { Info, Warning, Error }
 /// <summary>
 /// Trigger: a DML trigger on a table or view (its parent is <see cref="SnapObject.ParentObjectId"/>). Package / PackageBody
 /// (Phase D4, Oracle only): a package specification and its body, two objects with their own ids, status and source; a body
-/// names its specification in <see cref="SnapObject.SpecObjectId"/>. No other engine lists either. Stored by name, so new
-/// kinds go at the end and an older build skips the rows it does not know.
+/// names its specification in <see cref="SnapObject.SpecObjectId"/>. DbLink (Oracle: database links) and ForeignServer
+/// (PostgreSQL: foreign servers) are database-scoped external objects. Stored by name, so new kinds go at the end and an
+/// older build skips the rows it does not know.
 /// </summary>
-public enum ObjectKind { Table, View, Proc, Func, Tvf, Type, Sequence, Synonym, Trigger, Package, PackageBody }
+public enum ObjectKind { Table, View, Proc, Func, Tvf, Type, Sequence, Synonym, Trigger, Package, PackageBody, DbLink, ForeignServer }
 
 public enum SnapshotStatus { Empty, Fresh, Stale, Refreshing, Error }
 

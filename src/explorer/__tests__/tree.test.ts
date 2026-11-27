@@ -3,7 +3,12 @@ import type { DatabaseInfo, Engine, Profile, SnapObject } from "../../ipc/contra
 import type { ServerConn } from "../../store/connections";
 import type { SnapEntry } from "../../store/snapshots";
 import { snapKey } from "../../store/snapshots";
-import { buildTree, bucketsOf, catKey, dbKey, objKey, PACKAGE_BODY_HIDDEN, PACKAGE_MEMBERS_NOTE, PACKAGE_NO_BODY, schemaKey, searchRows, searchScope, SEARCH_CAP, serverKey, shownServers, sysKey, ancestorsOf, type TreeInput, type TreeRow } from "../tree";
+import {
+  buildTree, bucketsOf, catKey, dbKey, linkedCatalogRowKey, linkedFolderKey, linkedServerRowKey, objKey,
+  PACKAGE_BODY_HIDDEN, PACKAGE_MEMBERS_NOTE, PACKAGE_NO_BODY, schemaKey, searchRows, searchScope, SEARCH_CAP,
+  serverKey, serverObjectsKey, shownServers, sysKey, ancestorsOf, type TreeInput, type TreeRow,
+} from "../tree";
+import { linkedCatalogKey, linkedTableKey } from "../../store/linkedServers";
 
 const profile = (id: string, engine: Engine, over: Partial<Profile> = {}): Profile => ({ id, name: `Srv-${id}`, engine, environment: "dev", databaseDefault: "AppDb", groupName: null, color: null, ...over }) as Profile;
 const conn = (id: string, over: Partial<ServerConn> = {}): ServerConn => ({ profileId: id, status: "connected", sessionId: "s", databases: [{ name: "AppDb", isSystem: false }], ...over });
@@ -17,7 +22,7 @@ function input(over: Partial<TreeInput> = {}): TreeInput {
     entries: {}, details: {}, schemaGroups: [], kind: "all", folderFilters: {}, ...over,
   };
 }
-const labels = (rows: TreeRow[]) => rows.map((r) => `${"  ".repeat(r.level - 1)}${r.t}:${r.t === "server" ? r.profileId : r.t === "db" ? r.db : r.t === "cat" ? r.cat : r.t === "obj" ? `${r.bare ? "" : `${r.obj.schema}.`}${r.obj.name}` : r.t === "schema" ? r.schema : r.t === "sub" ? r.sub : r.t === "leaf" ? r.text : r.t === "note" ? r.text : r.t === "action" ? r.action : r.t === "sysdbs" ? r.count : r.t === "env" ? r.env : r.t === "header" ? r.text : ""}`);
+const labels = (rows: TreeRow[]) => rows.map((r) => `${"  ".repeat(r.level - 1)}${r.t}:${r.t === "server" ? r.profileId : r.t === "db" ? r.db : r.t === "cat" ? r.cat : r.t === "obj" ? `${r.bare ? "" : `${r.obj.schema}.`}${r.obj.name}` : r.t === "schema" ? r.schema : r.t === "sub" ? r.sub : r.t === "leaf" ? r.text : r.t === "note" ? r.text : r.t === "action" ? r.action : r.t === "sysdbs" ? r.count : r.t === "serverObjects" ? r.profileId : r.t === "linkedFolder" ? r.label : r.t === "linkedServer" ? r.server.name : r.t === "linkedCatalog" ? r.catalog.name : r.t === "linkedTable" ? `${r.table.schema ? `${r.table.schema}.` : ""}${r.table.name}` : r.t === "env" ? r.env : r.t === "header" ? r.text : ""}`);
 
 describe("which servers the tree lists (owner decision, revised 2026-10-30)", () => {
   const ps = [profile("a", "mssql", { environment: "prod" }), profile("b", "pg"), profile("c", "pg", { environment: "local" }), profile("d", "mssql", { environment: "test" }), profile("e", "pg", { environment: "staging" })];
@@ -75,7 +80,7 @@ describe.each<Engine>(["mssql", "pg"])("tree levels (%s)", (engine) => {
 
   it("server → databases (no 'Databases' level), system databases folded, the profile's default kept out of the folder", () => {
     const rows = buildTree(base({ expanded: new Set([serverKey("p")]) })).rows;
-    expect(labels(rows)).toEqual(engine === "pg" ? ["server:p", "  db:postgres", "  db:AppDb", "  sysdbs:1"] : ["server:p", "  db:AppDb", "  sysdbs:2"]);
+    expect(labels(rows)).toEqual(engine === "pg" ? ["server:p", "  db:postgres", "  db:AppDb", "  sysdbs:1"] : ["server:p", "  db:AppDb", "  sysdbs:2", "  serverObjects:p"]);
     const open = buildTree(base({ expanded: new Set([serverKey("p"), sysKey("p")]) })).rows;
     expect(labels(open).filter((l) => l.startsWith("    "))).toEqual(engine === "pg" ? ["    db:template_x"] : ["    db:master", "    db:msdb"]);
   });
@@ -364,5 +369,121 @@ describe("Oracle packages (D4 S08)", () => {
       expanded: new Set([serverKey("g"), dbKey("g", "AppDb")]),
     })).rows;
     expect(rows.some((r) => r.t === "cat" && r.cat === "packages")).toBe(false);
+  });
+});
+
+describe("linked servers, foreign servers and database links", () => {
+  it("SQL Server shows Server objects ▸ Linked servers lazily and drills down through catalogs to remote tables", () => {
+    const p = profile("ms", "mssql");
+    const baseInput = (over: Partial<TreeInput> = {}) => input({ profiles: [p], servers: { ms: conn("ms") }, order: ["ms"], ...over });
+
+    // Expanding Server objects ▸ Linked servers requests the server list lazily.
+    const step1 = buildTree(baseInput({ expanded: new Set([serverKey("ms"), serverObjectsKey("ms"), linkedFolderKey("ms")]) }));
+    expect(step1.needLinkedServers).toEqual(["ms"]);
+    expect(labels(step1.rows)).toContain("      note:Loading linked servers…");
+
+    // Once loaded, expanding a browsable linked server requests catalogs; expanding a catalog requests tables.
+    const erp = { name: "ERP_LINK", product: "SQL Server", note: "SQL Server · 10.0.1.5", canBrowse: true, canTest: true };
+    const step2 = buildTree(baseInput({
+      expanded: new Set([serverKey("ms"), serverObjectsKey("ms"), linkedFolderKey("ms"), linkedServerRowKey("ms", "ERP_LINK")]),
+      linked: { servers: { ms: { status: "ok", items: [erp] } }, catalogs: {}, tables: {} },
+    }));
+    expect(step2.needLinkedCatalogs).toEqual([{ profileId: "ms", serverName: "ERP_LINK" }]);
+
+    const step3 = buildTree(baseInput({
+      expanded: new Set([
+        serverKey("ms"), serverObjectsKey("ms"), linkedFolderKey("ms"),
+        linkedServerRowKey("ms", "ERP_LINK"), linkedCatalogRowKey("ms", "ERP_LINK", "ErpProd"),
+      ]),
+      linked: {
+        servers: { ms: { status: "ok", items: [erp] } },
+        catalogs: { [linkedCatalogKey("ms", "ERP_LINK")]: { status: "ok", items: [{ name: "ErpProd" }] } },
+        tables: { [linkedTableKey("ms", "ERP_LINK", "ErpProd")]: { status: "ok", items: [{ schema: "dbo", name: "Invoices", kind: "table" }, { schema: "dbo", name: "v_Open", kind: "view" }] } },
+      },
+    }));
+    expect(labels(step3.rows)).toEqual(expect.arrayContaining([
+      "  serverObjects:ms",
+      "    linkedFolder:Linked servers",
+      "      linkedServer:ERP_LINK",
+      "        linkedCatalog:ErpProd",
+      "          linkedTable:dbo.Invoices",
+      "          linkedTable:dbo.v_Open",
+    ]));
+  });
+
+  it("offline linked server surfaces an inline error and Retry action without affecting local databases", () => {
+    const p = profile("ms", "mssql");
+    const erp = { name: "ERP_OFFLINE", canBrowse: true, canTest: true };
+    const r = buildTree(input({
+      profiles: [p], servers: { ms: conn("ms") }, order: ["ms"],
+      expanded: new Set([serverKey("ms"), serverObjectsKey("ms"), linkedFolderKey("ms"), linkedServerRowKey("ms", "ERP_OFFLINE")]),
+      linked: {
+        servers: { ms: { status: "ok", items: [erp] } },
+        catalogs: { [linkedCatalogKey("ms", "ERP_OFFLINE")]: { status: "error", items: [], error: "Remote server did not respond." } },
+        tables: {},
+      },
+    }));
+    expect(r.rows.find((x) => x.t === "action" && x.action === "retryLinkedCatalogs")).toMatchObject({ profileId: "ms", serverName: "ERP_OFFLINE" });
+    expect(r.rows.some((x) => x.t === "db" && x.db === "AppDb")).toBe(true);
+  });
+
+  it("MySQL shows External servers and surfaces non-fatal mysql.servers permission notes; SQLite and DuckDB show no Server objects", () => {
+    const my = profile("my", "mySql");
+    const myTree = buildTree(input({
+      profiles: [my], servers: { my: conn("my") }, order: ["my"],
+      expanded: new Set([serverKey("my"), serverObjectsKey("my"), linkedFolderKey("my")]),
+      linked: { servers: { my: { status: "ok", items: [], note: "This login cannot read mysql.servers (SELECT privilege required)." } }, catalogs: {}, tables: {} },
+    }));
+    expect(labels(myTree.rows)).toEqual(expect.arrayContaining(["  serverObjects:my", "    linkedFolder:External servers"]));
+    expect(myTree.rows.find((x) => x.t === "note" && x.tone === "warn")?.t).toBe("note");
+
+    for (const eng of ["sqlite", "duckDb"] as Engine[]) {
+      const p = profile(eng, eng);
+      const rows = buildTree(input({ profiles: [p], servers: { [eng]: conn(eng) }, order: [eng], expanded: new Set([serverKey(eng)]) })).rows;
+      expect(rows.some((r) => r.t === "serverObjects")).toBe(false);
+    }
+  });
+
+  it("PostgreSQL foreign servers stay visible in both flat mode and Group by schema mode", () => {
+    const p = profile("pg", "pg");
+    const objects = [
+      obj(1, "public", "orders", "table"),
+      obj(2, "public", "ext_customers", "table", { note: "foreign table · crm_srv" }),
+      obj(3, "", "crm_srv", "foreignServer", { note: "postgres_fdw · 10.0.2.8/crm" }),
+    ];
+    const basePg = (over: Partial<TreeInput> = {}) => input({
+      profiles: [p], servers: { pg: conn("pg") }, order: ["pg"],
+      entries: { [snapKey("pg", "AppDb")]: entry("pg", "AppDb", objects) },
+      ...over,
+    });
+    const flat = buildTree(basePg({ expanded: new Set([serverKey("pg"), dbKey("pg", "AppDb"), catKey("pg", "AppDb", "foreignServers")]) })).rows;
+    expect(flat.find((r) => r.t === "cat" && r.cat === "foreignServers")).toMatchObject({ count: 1 });
+    expect(flat.find((r) => r.t === "obj" && r.obj.kind === "foreignServer")).toMatchObject({ bare: true, obj: { name: "crm_srv" } });
+
+    const grouped = buildTree(basePg({
+      schemaGroups: ["pg|AppDb"],
+      expanded: new Set([serverKey("pg"), dbKey("pg", "AppDb"), catKey("pg", "AppDb", "foreignServers")]),
+    })).rows;
+    expect(grouped.find((r) => r.t === "cat" && r.cat === "foreignServers")).toMatchObject({ count: 1 });
+    expect(grouped.find((r) => r.t === "obj" && r.obj.kind === "foreignServer")).toMatchObject({ bare: true, obj: { name: "crm_srv" } });
+  });
+
+  it("Oracle database links appear under Database links and are searchable", () => {
+    const p = profile("o", "oracle", { databaseDefault: "FREEPDB1" });
+    const objects = [
+      obj(-10, "APP", "HR_PROD", "dbLink", { note: "HR@hrdb:1521/HRPDB" }),
+      obj(-11, "PUBLIC", "DW_LINK", "dbLink", { note: "dwdb:1521/DW" }),
+    ];
+    const rows = buildTree(input({
+      profiles: [p], servers: { o: conn("o", { databases: [{ name: "FREEPDB1", isSystem: false }] }) }, order: ["o"],
+      entries: { [snapKey("o", "FREEPDB1")]: entry("o", "FREEPDB1", objects) },
+      expanded: new Set([serverKey("o"), dbKey("o", "FREEPDB1"), catKey("o", "FREEPDB1", "dbLinks")]),
+    })).rows;
+    expect(rows.find((r) => r.t === "cat" && r.cat === "dbLinks")).toMatchObject({ count: 2 });
+    expect(rows.filter((r) => r.t === "obj").map((r) => r.t === "obj" && r.obj.name)).toEqual(["HR_PROD", "DW_LINK"]);
+
+    const found = searchRows("o", "FREEPDB1", "oracle", objects, "hr_", "all", new Set());
+    expect(found.total).toBe(1);
+    expect(found.rows.find((r) => r.t === "header")).toMatchObject({ text: "DATABASE LINKS · 1" });
   });
 });

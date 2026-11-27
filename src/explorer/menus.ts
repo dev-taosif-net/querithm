@@ -20,8 +20,13 @@ import { findUsagesOf, renameOf } from "../refactor/refactorActions";
 import { isFileProfile, repickFile, revokeFileAccess } from "../connections/fileAccess";
 import { confirmDeleteGroup } from "../connections/groupActions";
 import { rpc } from "../ipc/client";
+import { useLinkedServers } from "../store/linkedServers";
 import { toast } from "../store/ui";
-import { bindActiveTab, columnName, connectFromExplorer, copyText, insertName, insertText, modifyTrigger, openObject, qualified, ref, scriptDml } from "./objectActions";
+import {
+  bindActiveTab, columnName, connectFromExplorer, copyText, dbLinkRef, insertName, insertText,
+  linkedFourPartName, modifyTrigger, openObject, qualified, ref, scriptDml, scriptLinkedOpenQuery,
+  scriptLinkedSelect, testLinkedServer,
+} from "./objectActions";
 import { CATEGORIES, type Engine, type RowOf, type TreeRow } from "./tree";
 import { useExplorer } from "./explorerState";
 
@@ -61,6 +66,7 @@ export const NAMESPACE_GROUP: Record<NamespaceModel, { label: string; unavailabl
 /** Oracle packages (D4 S08) are browsed and scripted as whole objects; what needs member identity says why it is off. */
 export const PACKAGE_REFACTOR = "Packages are browsed and scripted as whole objects: find usages and rename are not available for them yet";
 const isPackage = (o: SnapObject) => o.kind === "package" || o.kind === "packageBody";
+const isExternal = (o: SnapObject) => o.kind === "dbLink" || o.kind === "foreignServer";
 
 /** "PostgreSQL only": the engines with a step debugger. */
 const DEBUGGER_ONLY = `${ENGINE_LIST.filter((e) => ENGINES[e].debugger).map((e) => ENGINES[e].shortLabel).join(", ")} only`;
@@ -92,7 +98,7 @@ function scriptItems(profileId: string, db: string, o: SnapObject, ctx: MenuCont
   // A package specification alone, or with its body (one script, specification first).
   if (o.kind === "package") out.push(item("CREATE with body", () => void scriptObject(profileId, db, r, "create", false, true), { detail: "specification and body" }));
   if (isPackage(o)) out.push(s("ALTER … COMPILE", "alter"));
-  else if (o.kind !== "table") out.push(s("ALTER", "alter"));
+  else if (o.kind !== "table" && !isExternal(o)) out.push(s("ALTER", "alter"));
   out.push(s("DROP and CREATE", "dropCreate"), s("DROP", "drop"));
   if (o.kind === "table") out.push("sep", item("INSERT", () => scriptDml(profileId, db, o, "insert")), item("UPDATE", () => scriptDml(profileId, db, o, "update")), item("DELETE", () => scriptDml(profileId, db, o, "delete")));
   const execute = EXECUTE_LABEL[knownEngine(engine)];
@@ -132,16 +138,30 @@ export function objectMenu(row: RowOf<"obj">, ctx: MenuContext = {}): MenuEntry[
   if (out.length) out.push("sep");
   out.push(item("Script as", () => {}, { detail: "new tab, nothing runs", sub: scriptItems(profileId, db, o, ctx), unavailable: waiting }));
   out.push("sep");
-  out.push(item("Insert name", () => insertName(o, profileId), { hint: "Ctrl+Enter" }));
-  if (o.columns?.length) out.push(item("Insert column list", () => insertName(o, profileId, true), { hint: "Ctrl+Alt+Enter" }));
-  out.push(item("Copy name", () => void copyText(qualified(o, engine)), { hint: "Ctrl+C" }));
+  if (o.kind === "dbLink") {
+    const linkTxt = dbLinkRef(o.name, engine);
+    out.push(item("Insert @dblink", () => insertText(linkTxt), { hint: "Ctrl+Enter" }));
+    out.push(item("Copy @dblink", () => void copyText(linkTxt), { hint: "Ctrl+C" }));
+    out.push(item("Copy name", () => void copyText(o.name)));
+  } else {
+    out.push(item("Insert name", () => insertName(o, profileId), { hint: "Ctrl+Enter" }));
+    if (o.columns?.length) out.push(item("Insert column list", () => insertName(o, profileId, true), { hint: "Ctrl+Alt+Enter" }));
+    out.push(item("Copy name", () => void copyText(qualified(o, engine)), { hint: "Ctrl+C" }));
+  }
   out.push("sep");
   if (o.kind !== "trigger") {
-    const noRefactor = o.kind === "synonym" ? "Not for synonyms" : isPackage(o) ? PACKAGE_REFACTOR : waiting;
+    const noRefactor =
+      o.kind === "synonym" ? "Not for synonyms"
+      : o.kind === "dbLink" ? "Not available for database links"
+      : o.kind === "foreignServer" ? "Not available for foreign servers"
+      : isPackage(o) ? PACKAGE_REFACTOR
+      : waiting;
     out.push(item("Find usages", () => findUsagesOf(profileId, db, { schema: o.schema, name: o.name, kind: o.kind }), { hint: "Shift+F12", unavailable: noRefactor }));
     out.push(item("Rename…", () => renameOf(profileId, db, { schema: o.schema, name: o.name, kind: o.kind }), { hint: "F2", unavailable: noRefactor }));
   }
-  out.push(item("Dependencies", () => useUi.getState().openDialog({ kind: "dependencies", profileId, database: db, schema: o.schema, name: o.name, objectId: o.id, kind2: o.kind }), { unavailable: waiting }));
+  if (!isExternal(o)) {
+    out.push(item("Dependencies", () => useUi.getState().openDialog({ kind: "dependencies", profileId, database: db, schema: o.schema, name: o.name, objectId: o.id, kind2: o.kind }), { unavailable: waiting }));
+  }
   if (o.kind === "table" || o.kind === "view") {
     out.push("sep");
     if (o.kind === "table") out.push(item("View ER diagram", () => openErdForTable(profileId, db, o.id, o.name), { unavailable: waiting }));
@@ -267,6 +287,48 @@ export function leafMenu(row: RowOf<"leaf">): MenuEntry[] {
   ];
 }
 
+export function linkedFolderMenu(row: RowOf<"linkedFolder">): MenuEntry[] {
+  const waiting = sessionReason(row.profileId);
+  return [item(`Refresh ${row.label.toLowerCase()}`, () => void useLinkedServers.getState().loadServers(row.profileId, true), { hint: "F5", unavailable: waiting })];
+}
+
+export function linkedServerMenu(row: RowOf<"linkedServer">): MenuEntry[] {
+  const { profileId, server } = row;
+  const waiting = sessionReason(profileId);
+  const engine = useProfiles.getState().byId(profileId)?.engine;
+  const out: MenuEntry[] = [];
+  if (server.canTest) out.push(item("Test connection", () => void testLinkedServer(profileId, server.name), { bold: true, unavailable: waiting }));
+  if (engine === "mssql") out.push(item("Script OPENQUERY", () => scriptLinkedOpenQuery(profileId, server.name), { detail: "new tab, nothing runs" }));
+  if (out.length) out.push("sep");
+  out.push(item("Insert name", () => insertText(qualified({ schema: "", name: server.name }, engine)), { hint: "Ctrl+Enter" }));
+  out.push(item("Copy name", () => void copyText(server.name), { hint: "Ctrl+C" }));
+  if (server.canBrowse) {
+    out.push("sep", item("Refresh catalogs", () => void useLinkedServers.getState().loadCatalogs(profileId, server.name, true), { hint: "F5", unavailable: waiting }));
+  }
+  return out;
+}
+
+export function linkedCatalogMenu(row: RowOf<"linkedCatalog">): MenuEntry[] {
+  const waiting = sessionReason(row.profileId);
+  return [
+    item("Copy name", () => void copyText(row.catalog.name), { hint: "Ctrl+C", unavailable: row.catalog.name ? undefined : "Virtual default catalog" }),
+    "sep",
+    item("Refresh tables", () => void useLinkedServers.getState().loadTables(row.profileId, row.serverName, row.catalog.name, true), { hint: "F5", unavailable: waiting }),
+  ];
+}
+
+export function linkedTableMenu(row: RowOf<"linkedTable">): MenuEntry[] {
+  const { profileId, serverName, catalog, table } = row;
+  const full = linkedFourPartName(serverName, catalog, table.schema, table.name);
+  return [
+    item("Select top 1000", () => scriptLinkedSelect(profileId, serverName, catalog, table), { bold: true, detail: "new tab, nothing runs", hint: "Double-click" }),
+    item("Script OPENQUERY", () => scriptLinkedOpenQuery(profileId, serverName, catalog, table), { detail: "new tab, nothing runs" }),
+    "sep",
+    item("Insert four-part name", () => insertText(full), { hint: "Ctrl+Enter" }),
+    item("Copy four-part name", () => void copyText(full), { hint: "Ctrl+C" }),
+  ];
+}
+
 /** The menu of any row, or null (notes, headers). */
 export function menuFor(row: TreeRow, ctx: MenuContext = {}): MenuEntry[] | null {
   switch (row.t) {
@@ -277,6 +339,10 @@ export function menuFor(row: TreeRow, ctx: MenuContext = {}): MenuEntry[] | null
     case "cat": return catMenu(row);
     case "obj": return objectMenu(row, ctx);
     case "leaf": return leafMenu(row);
+    case "linkedFolder": return linkedFolderMenu(row);
+    case "linkedServer": return linkedServerMenu(row);
+    case "linkedCatalog": return linkedCatalogMenu(row);
+    case "linkedTable": return linkedTableMenu(row);
     default: return null;
   }
 }

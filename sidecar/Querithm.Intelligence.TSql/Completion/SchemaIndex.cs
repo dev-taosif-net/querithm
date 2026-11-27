@@ -21,11 +21,12 @@ sealed class SchemaIndex
             var byName = new Dictionary<string, List<SnapObject>>(StringComparer.OrdinalIgnoreCase);
             foreach (var o in s.Objects)
             {
-                if (o.Kind == ObjectKind.Trigger) continue; // never named in queries
+                if (o.Kind is ObjectKind.Trigger or ObjectKind.DbLink or ObjectKind.ForeignServer) continue; // never named as schema objects in queries
                 if (!byName.TryGetValue(o.Name, out var list)) byName[o.Name] = list = [];
                 list.Add(o);
             }
-            var schemas = s.Objects.Select(o => o.Schema).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
+            var schemas = s.Objects.Where(o => o.Kind is not (ObjectKind.DbLink or ObjectKind.ForeignServer) && !string.IsNullOrEmpty(o.Schema))
+                .Select(o => o.Schema).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
             return new SchemaIndex { Snapshot = s, ByName = byName, Schemas = schemas };
         });
     }

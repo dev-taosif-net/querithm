@@ -155,6 +155,98 @@ public sealed class ObjectService(SessionManager sessions, MetadataService metad
         return await WithConnectionAsync(s, c => s.Provider.ListDatabasesAsync(c.Db, ct), ct).ConfigureAwait(false);
     }
 
+    public const int MaxLinkedNameLength = 256;
+    public const int MaxLinkedTables = 5_000;
+
+    static string CheckSessionId(string? sessionId, string method)
+    {
+        if (string.IsNullOrEmpty(sessionId) || sessionId.Length > LanguageService.MaxNameLength || sessionId.Contains('\0'))
+            throw QuerithmException.Invalid($"{method} needs a valid sessionId (1–{LanguageService.MaxNameLength} characters).");
+        return sessionId;
+    }
+
+    static string ValidLinkedName(string? value, string field)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length > MaxLinkedNameLength || value.Contains('\0'))
+            throw QuerithmException.Invalid($"{field} must be 1–{MaxLinkedNameLength} non-empty characters.");
+        return value;
+    }
+
+    static string? ValidOptionalLinkedName(string? value, string field)
+    {
+        if (value is null) return null;
+        if (value.Length > MaxLinkedNameLength || value.Contains('\0'))
+            throw QuerithmException.Invalid($"{field} must be at most {MaxLinkedNameLength} characters.");
+        return value;
+    }
+
+    static string? Scrub(string? text) => text is null ? null : Logging.LogScrubber.Scrub(text);
+
+    static ILinkedServerProvider RequireLinkedServers(Session s) =>
+        s.Provider.LinkedServers ?? throw new QuerithmException("unsupported", $"{s.Provider.Traits.Name} does not list linked or external servers.");
+
+    async Task<T> RunLinkedAsync<T>(Session s, Func<ILinkedServerProvider, System.Data.Common.DbConnection, Task<T>> work, CancellationToken ct)
+    {
+        var provider = RequireLinkedServers(s);
+        try
+        {
+            return await WithConnectionAsync(s, c => work(provider, c.Db), ct).ConfigureAwait(false);
+        }
+        catch (NotSupportedException ex)
+        {
+            throw new QuerithmException("unsupported", ex.Message);
+        }
+    }
+
+    public async Task<LinkedServersResult> LinkedServersAsync(SessionRef p, CancellationToken ct)
+    {
+        var sessionId = CheckSessionId(p?.SessionId, "meta.linkedServers");
+        var s = sessions.Get(sessionId);
+        var res = await RunLinkedAsync(s, (lp, db) => lp.ListServersAsync(db, ct), ct).ConfigureAwait(false);
+        return new LinkedServersResult
+        {
+            Servers = (res.Servers ?? []).Select(x => x with
+            {
+                Product = Scrub(x.Product), Provider = Scrub(x.Provider),
+                DataSource = Scrub(x.DataSource), Catalog = Scrub(x.Catalog), Note = Scrub(x.Note),
+            }).ToArray(),
+            Note = Scrub(res.Note),
+        };
+    }
+
+    public async Task<LinkedCatalogInfo[]> LinkedCatalogsAsync(LinkedServerRef p, CancellationToken ct)
+    {
+        var sessionId = CheckSessionId(p?.SessionId, "meta.linkedCatalogs");
+        var serverName = ValidLinkedName(p!.ServerName, "serverName");
+        var s = sessions.Get(sessionId);
+        var res = await RunLinkedAsync(s, (lp, db) => lp.ListCatalogsAsync(db, serverName, ct), ct).ConfigureAwait(false);
+        return (res ?? []).Select(x => x with { Description = Scrub(x.Description) }).ToArray();
+    }
+
+    public async Task<LinkedTablesResult> LinkedTablesAsync(LinkedTablesParams p, CancellationToken ct)
+    {
+        var sessionId = CheckSessionId(p?.SessionId, "meta.linkedTables");
+        var serverName = ValidLinkedName(p!.ServerName, "serverName");
+        var catalog = ValidOptionalLinkedName(p.Catalog, "catalog");
+        var limit = p.Limit is null ? MaxLinkedTables : p.Limit.Value is > 0 and <= MaxLinkedTables ? p.Limit.Value
+            : throw QuerithmException.Invalid($"limit must be between 1 and {MaxLinkedTables:N0}.");
+        var s = sessions.Get(sessionId);
+        var res = await RunLinkedAsync(s, (lp, db) => lp.ListTablesAsync(db, serverName, catalog, limit, ct), ct).ConfigureAwait(false);
+        var rawTables = res.Tables ?? [];
+        var truncated = res.Truncated || rawTables.Length > limit;
+        var tables = rawTables.Length > limit ? rawTables[..limit] : rawTables;
+        return new LinkedTablesResult { Tables = tables, Truncated = truncated, Note = Scrub(res.Note) };
+    }
+
+    public async Task<LinkedTestResult> TestLinkedServerAsync(LinkedServerRef p, CancellationToken ct)
+    {
+        var sessionId = CheckSessionId(p?.SessionId, "meta.testLinkedServer");
+        var serverName = ValidLinkedName(p!.ServerName, "serverName");
+        var s = sessions.Get(sessionId);
+        var res = await RunLinkedAsync(s, (lp, db) => lp.TestAsync(db, serverName, ct), ct).ConfigureAwait(false);
+        return res with { Error = Scrub(res.Error) };
+    }
+
     public async Task<Capabilities> CapabilitiesAsync(SessionRef p, CancellationToken ct)
     {
         var s = sessions.Get(p.SessionId);

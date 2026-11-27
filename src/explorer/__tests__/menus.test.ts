@@ -394,3 +394,42 @@ describe("database files and namespace levels (Phase D)", () => {
     expect(item.unavailable).toBe(unavailable);
   });
 });
+
+describe("linked servers, foreign servers and database link menus", () => {
+  it("Oracle database link offers @dblink insert/copy, CREATE/DROP scripting without ALTER, and disables refactor", () => {
+    useProfiles.setState({ profiles: [{ id: "p", name: "Ora", engine: "oracle", environment: "dev" } as never] });
+    const menu = objectMenu(objRow(obj("dbLink", { schema: "APP", name: "HR_LINK" })));
+    expect(labels(menu)).toContain("Insert @dblink");
+    expect(labels(menu)).toContain("Copy @dblink");
+    expect(sub(menu, "Script as")).toEqual(["CREATE", "DROP and CREATE", "DROP"]);
+    expect(find(menu, "Find usages").unavailable).toBe("Not available for database links");
+    expect(find(menu, "Rename…").unavailable).toBe("Not available for database links");
+    expect(labels(menu)).not.toContain("Dependencies");
+  });
+
+  it("PostgreSQL foreign server scripts CREATE/DROP without ALTER and disables refactor", () => {
+    useProfiles.setState({ profiles: [{ id: "p", name: "Pg", engine: "pg", environment: "dev" } as never] });
+    const menu = objectMenu(objRow(obj("foreignServer", { schema: "", name: "crm_srv" })));
+    expect(sub(menu, "Script as")).toEqual(["CREATE", "DROP and CREATE", "DROP"]);
+    expect(find(menu, "Find usages").unavailable).toBe("Not available for foreign servers");
+    expect(find(menu, "Rename…").unavailable).toBe("Not available for foreign servers");
+  });
+
+  it("SQL Server linked server and remote table menus script safely without auto-running", () => {
+    useProfiles.setState({ profiles: [{ id: "p", name: "Ms", engine: "mssql", environment: "prod" } as never] });
+    const srvMenu = menuFor({ ...base, t: "linkedServer", key: "ls:p:ERP", profileId: "p", server: { name: "ERP", canBrowse: true, canTest: true } })!;
+    expect(labels(srvMenu)).toEqual(expect.arrayContaining(["Test connection", "Script OPENQUERY", "Refresh catalogs"]));
+
+    const tblMenu = menuFor({ ...base, t: "linkedTable", key: "lt:p:ERP:Db:table:dbo.Orders", profileId: "p", serverName: "ERP", catalog: "Db", table: { schema: "dbo", name: "Orders", kind: "table" } })!;
+    expect(items(tblMenu)[0]).toMatchObject({ label: "Select top 1000", bold: true, detail: "new tab, nothing runs" });
+    items(tblMenu)[0].run();
+    expect(m.newQueryTab).toHaveBeenCalledWith(expect.objectContaining({
+      profileId: "p",
+      text: "SELECT TOP (1000) *\nFROM [ERP].[Db].[dbo].[Orders];\n",
+    }));
+
+    const defCatMenu = menuFor({ ...base, t: "linkedCatalog", key: "lc:p:ERP:", profileId: "p", serverName: "ERP", catalog: { name: "", description: "Default catalog" } })!;
+    expect(find(defCatMenu, "Copy name").unavailable).toBe("Virtual default catalog");
+    expect(find(defCatMenu, "Refresh tables").unavailable).toBeUndefined();
+  });
+});
