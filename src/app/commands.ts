@@ -2,7 +2,8 @@
 // A capture-phase listener dispatches them, so they also work while Monaco has focus.
 import { activeTabState, applyProcedure, cancelQuery, closeTab, duplicateTab, formatTab, newQueryTab, runQuery, showPlan, stepRun, toggleBottom, toggleMaximize, toggleTrace, txAction, workspaceHooks } from "./actions";
 import { useTabs } from "../store/tabs";
-import { sessionParam, tabScope } from "../store/snapshots";
+import { ownSessionFor, sessionParam, tabScope } from "../store/snapshots";
+import { lastBindingTarget } from "./lastBinding";
 import { useUi } from "../store/ui";
 import { useSettings } from "../store/settings";
 import { useDiag } from "../store/diag";
@@ -154,9 +155,11 @@ export const commands: Command[] = [
     id: "import.open", title: "Import data from a file…", keys: ["Ctrl+Alt+I"], category: "Data",
     run: () => {
       const t = activeTabState();
-      if (!t?.profileId || !t.database) return void useUi.getState().toast("info", "Pick a connection and database for this tab first.");
+      const target = t ?? lastBindingTarget();
+      if (!target?.profileId || !target.database) return void useUi.getState().toast("info", "Pick a connection and database for this tab first.");
       // A session-owned engine's tab imports through its own session (its in-memory database, its temporary tables).
-      useUi.getState().openDialog({ kind: "import", profileId: t.profileId, database: t.database, ...sessionParam(tabScope(t)?.sessionId) });
+      const sessionId = t ? tabScope(t)?.sessionId : ownSessionFor(target.profileId, target.database);
+      useUi.getState().openDialog({ kind: "import", profileId: target.profileId, database: target.database, ...sessionParam(sessionId) });
     },
   },
   { id: "view.settings", title: "Settings", keys: ["Ctrl+,"], category: "View", run: () => useUi.getState().openDialog({ kind: "settings" }) },

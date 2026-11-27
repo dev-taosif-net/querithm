@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useConnections } from "../../store/connections";
+import { useProfiles } from "../../store/profiles";
+import { useTabs } from "../../store/tabs";
 
 const m = vi.hoisted(() => ({
   rpc: vi.fn(), invoke: vi.fn(), openTool: vi.fn(), activeTabState: vi.fn(), saveBytes: vi.fn(), toast: vi.fn(), tauri: { v: false },
@@ -17,7 +19,9 @@ const A = await import("../compareActions");
 beforeEach(() => {
   vi.clearAllMocks();
   m.tauri.v = false;
-  useConnections.setState({ sessionFor: vi.fn().mockResolvedValue("sess") } as never);
+  useConnections.setState({ sessionFor: vi.fn().mockResolvedValue("sess"), servers: {}, disconnected: {} } as never);
+  useProfiles.setState({ profiles: [] } as never);
+  useTabs.setState({ tabs: {}, order: [], activeId: undefined, lastBinding: undefined } as never);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -33,6 +37,16 @@ describe("openSchemaCompare", () => {
     A.openSchemaCompare();
     expect(m.openTool.mock.calls[0][2].params.source).toEqual({ kind: "live", profileId: "p2", database: "d2", schema: null });
     m.activeTabState.mockReturnValue({ profileId: "p2" });
+    A.openSchemaCompare();
+    expect(m.openTool.mock.calls[1][2]).toMatchObject({ profileId: undefined, params: { source: { kind: "live" } } });
+  });
+  it("with every tab closed, falls back to the last tab's connection unless disconnected", () => {
+    m.activeTabState.mockReturnValue(undefined);
+    useProfiles.setState({ profiles: [{ id: "p2", engine: "mssql" } as never] });
+    useTabs.setState({ tabs: {}, order: [], activeId: undefined, lastBinding: { profileId: "p2", database: "d2" } } as never);
+    A.openSchemaCompare();
+    expect(m.openTool.mock.calls[0][2].params.source).toEqual({ kind: "live", profileId: "p2", database: "d2", schema: null });
+    useConnections.setState({ disconnected: { p2: true } } as never);
     A.openSchemaCompare();
     expect(m.openTool.mock.calls[1][2]).toMatchObject({ profileId: undefined, params: { source: { kind: "live" } } });
   });
@@ -53,6 +67,10 @@ describe("openDataCompare", () => {
     m.activeTabState.mockReturnValue(undefined);
     A.openDataCompare();
     expect(m.openTool.mock.calls[1][2].profileId).toBeUndefined();
+    useProfiles.setState({ profiles: [{ id: "p", engine: "mssql" } as never] });
+    useTabs.setState({ tabs: {}, order: [], activeId: undefined, lastBinding: { profileId: "p", database: "db" } } as never);
+    A.openDataCompare();
+    expect(m.openTool.mock.calls[2][2].params.source).toEqual({ mode: "table", profileId: "p", database: "db", table: undefined });
   });
 });
 

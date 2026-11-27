@@ -229,6 +229,16 @@ describe("Palette", () => {
         r.unmount();
       }
     });
+
+    it("with every tab closed and lastBinding missing an explicit database, resolves the connected server's default database", () => {
+      snapshot([{ id: 5, schema: "dbo", name: "Thing", kind: "table" }]);
+      useConnections.setState({ servers: { ms1: { profileId: "ms1", status: "connected", database: "Sales", databases: [{ name: "Sales" }] } as any } });
+      useTabs.setState({ tabs: {}, order: [], activeId: undefined, mru: [], lastBinding: { profileId: "ms1" } });
+      render(<Palette />);
+      open({ mode: "objects" });
+      expect(screen.getByPlaceholderText("Go to object in Sales (type > for commands)")).toBeInTheDocument();
+      expect(screen.getByText("dbo.Thing")).toBeInTheDocument();
+    });
   });
 
   describe("snippets", () => {
@@ -246,6 +256,14 @@ describe("Palette", () => {
       await user.click(screen.getByText("any — T any"));
       // No editor in this test: the insert path reports it instead of failing silently.
       await waitFor(() => expect(useUi.getState().toasts.at(-1)?.text).toContain("Open a query tab"));
+    });
+    it("with every tab closed, uses the last tab's engine dialect instead of defaulting to T-SQL", () => {
+      useSnippets.setState({ loaded: true, snippets: [snip("1", "selt", "tsql", { builtIn: true }), snip("2", "sell", "pg"), snip("3", "any", null)] as any });
+      useTabs.setState({ tabs: {}, order: [], activeId: undefined, mru: [], lastBinding: { profileId: "pg1", database: "reports" } });
+      render(<Palette />);
+      open({ mode: "snippets" });
+      expect(screen.getByText("sell — T sell")).toBeInTheDocument();
+      expect(screen.queryByText("selt — T selt")).toBeNull();
     });
     it("says when the library is empty, still loading, or failed", () => {
       useSnippets.setState({ loaded: true, snippets: [], error: undefined });
@@ -313,6 +331,15 @@ describe("Palette", () => {
       open({ mode: "databases" });
       expect(connect).not.toHaveBeenCalled();
       expect(screen.getByText(/Disconnected. Connect to list databases/)).toBeInTheDocument();
+    });
+    it("with no tab and no last connection, offers to pick a connection instead of staying on Connecting…", async () => {
+      useTabs.setState({ tabs: {}, order: [], activeId: undefined, mru: [], lastBinding: undefined });
+      const user = userEvent.setup();
+      render(<Palette />);
+      open({ mode: "databases" });
+      expect(screen.queryByText("Connecting…")).toBeNull();
+      await user.click(screen.getByText("Choose a connection first"));
+      expect(useUi.getState().palette).toEqual({ mode: "connections" });
     });
   });
 

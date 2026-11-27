@@ -5,6 +5,7 @@ import type { SessionBlockingEvent } from "../ipc/contract";
 import { onNotify, onSidecarStatus, rpc } from "../ipc/client";
 import { openTool } from "../app/toolActions";
 import { workspaceHooks, activeTabState } from "../app/actions";
+import { lastBindingTarget } from "../app/lastBinding";
 import { useTabs } from "../store/tabs";
 import { useToolTabs } from "../store/toolTabs";
 import { useProfiles } from "../store/profiles";
@@ -39,7 +40,8 @@ export function modelsFor(profileId: string) {
 
 /** Explorer server node → "Activity monitor", palette command. One tab per call (two monitors on a server are allowed). */
 export function openActivityMonitor(profileId?: string) {
-  const id = profileId ?? activeTabState()?.profileId;
+  const t = activeTabState();
+  const id = profileId ?? (t ? t.profileId : lastBindingTarget()?.profileId);
   if (!id) {
     toast("warn", "Choose a server first (open a query tab on it, or use the explorer).");
     return;

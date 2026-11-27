@@ -6,6 +6,7 @@ import { buildGraph } from "../erdLayout";
 import { buildSvg, svgToPng } from "../erdExport";
 import { snapKey, useSnapshots } from "../../store/snapshots";
 import { useProfiles } from "../../store/profiles";
+import { useConnections } from "../../store/connections";
 import { useTabs } from "../../store/tabs";
 import { useToolTabs } from "../../store/toolTabs";
 
@@ -19,7 +20,11 @@ vi.mock("../../editor/editors", () => ({ getModel: m.getModel, editorForTab: m.e
 const actions = await import("../erdActions");
 const { TableNodeCard, handleId } = await import("../TableNodeCard");
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  useTabs.setState({ tabs: {}, order: [], activeId: undefined, lastBinding: undefined } as never);
+  useConnections.setState({ servers: {}, disconnected: {} } as never);
+});
 afterEach(cleanup);
 
 describe("erdActions", () => {
@@ -87,6 +92,19 @@ describe("erdActions", () => {
       m.getModel.mockReturnValue(undefined);
       actions.openErdFromActiveTab();
       expect(m.openTool).toHaveBeenCalledTimes(2);
+    });
+
+    it("with every tab closed, opens the whole database for the last tab's connection unless disconnected", () => {
+      m.activeTabState.mockReturnValue(undefined);
+      useProfiles.setState({ profiles: [{ id: "p", engine: "mssql" } as never] });
+      useTabs.setState({ activeId: undefined, tabs: {}, order: [], lastBinding: { profileId: "p", database: "db" } } as never);
+      actions.openErdFromActiveTab();
+      expect(m.openTool).toHaveBeenCalledWith("erd", "ERD · db", { profileId: "p", database: "db", params: { mode: "schema", schema: null } });
+      m.openTool.mockClear();
+      useConnections.setState({ disconnected: { p: true } } as never);
+      actions.openErdFromActiveTab();
+      expect(m.openTool).not.toHaveBeenCalled();
+      expect(m.toast).toHaveBeenCalledWith("info", "Pick a connection and database for this tab first.");
     });
   });
 });

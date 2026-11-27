@@ -2,15 +2,16 @@
 import type { Dialect, Snippet } from "../ipc/contract";
 import { useUi, toast } from "../store/ui";
 import { useTabs } from "../store/tabs";
+import { lastBindingTarget } from "../app/lastBinding";
 import { profileDialect } from "../store/profiles";
 import { editorForTab } from "../editor/editors";
 import { blankSnippet } from "./snippetStore";
 
-/** The active tab's dialect (its profile's engine; T-SQL for an unbound tab). */
+/** The active tab's dialect (with none in front, the last tab's; T-SQL when unbound). */
 export function activeDialect(): Dialect {
   const s = useTabs.getState();
   const tab = s.activeId ? s.tabs[s.activeId] : undefined;
-  return profileDialect(tab?.profileId);
+  return profileDialect(tab ? tab.profileId : lastBindingTarget()?.profileId);
 }
 
 /** Inserts the snippet at the active tab's cursor, placeholders and all. */

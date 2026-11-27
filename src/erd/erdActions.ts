@@ -1,5 +1,6 @@
 // Opening ER diagrams: from a table, a database/schema, or the tables of the statement at the cursor.
 import { activeTabState } from "../app/actions";
+import { lastBindingTarget } from "../app/lastBinding";
 import { openTool } from "../app/toolActions";
 import { profileDialect } from "../store/profiles";
 import type { Dialect } from "../ipc/contract";
@@ -40,11 +41,16 @@ export function queryTableIds(text: string, offset: number, dialect: Dialect, pr
   return idx ? statementTables(idx, text, offset, dialect) : [];
 }
 
-/** Ctrl+Shift+E: the statement at the cursor when it references tables, else the tab's whole database. */
+/** Ctrl+Shift+E: the statement at the cursor when it references tables, else the tab's (or last tab's) whole database. */
 export function openErdFromActiveTab() {
   const t = activeTabState();
-  if (!t?.profileId || !t.database) {
+  const target = t ?? lastBindingTarget();
+  if (!target?.profileId || !target.database) {
     toast("info", "Pick a connection and database for this tab first.");
+    return;
+  }
+  if (!t) {
+    schemaDiagram(target.profileId, target.database, null, ownSessionFor(target.profileId, target.database));
     return;
   }
   const model = getModel(t.id);

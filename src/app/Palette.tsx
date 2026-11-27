@@ -105,19 +105,23 @@ export function Palette() {
     } else if (effective === "databases") {
       const pid = dbTarget?.profileId;
       const conn = pid && !dbOffline ? servers[pid] : undefined;
+      const currentDb = dbTarget?.database ?? (pid ? (profiles.find((p) => p.id === pid)?.databaseDefault ?? conn?.database) : undefined);
       list = (conn?.status === "connected" ? conn.databases : []).map((d) => ({
-        id: d.name, label: d.name, detail: d.isSystem ? "system" : d.state ?? "", hint: d.name === dbTarget?.database ? "current" : undefined,
+        id: d.name, label: d.name, detail: d.isSystem ? "system" : d.state ?? "", hint: d.name === currentDb ? "current" : undefined,
         run: () => {
           if (tab) void changeDatabase(tab.id, d.name);
           else if (pid) newQueryTab({ profileId: pid, database: d.name });
         },
       }));
-      if (pid && dbOffline) {
+      if (!pid) {
+        list = [{ id: "c", label: "Choose a connection first", detail: "Enter: connections", run: () => useUi.getState().setPalette({ mode: "connections" }) }];
+      } else if (dbOffline) {
         list = [{ id: "c", label: "Disconnected. Connect to list databases", detail: "Enter: connect", run: () => void useConnections.getState().connect(pid).then((ok) => ok && useUi.getState().setPalette({ mode: "databases" })) }];
       } else if (conn?.status === "error") list = [{ id: "c", label: conn.error ?? "Connection failed", run: () => {} }];
       else if (conn?.status !== "connected") list = [{ id: "c", label: "Connecting…", run: () => {} }];
     } else if (effective === "snippets") {
-      const dialect = dialectOf(profiles.find((p) => p.id === tab?.profileId)?.engine);
+      const pid = tab ? tab.profileId : lastShown?.profileId;
+      const dialect = dialectOf(profiles.find((p) => p.id === pid)?.engine);
       list = snippetsFor(snippetLib.snippets, dialect).map((s) => ({
         id: s.id, label: `${s.prefix} — ${s.title}`, detail: s.builtIn ? "built-in" : s.tags.join(", "), hint: "Enter: insert",
         run: () => void import("../snippets/snippetActions").then((m) => m.insertSnippet(s)),
@@ -140,7 +144,7 @@ export function Palette() {
       .sort((a, b) => b.s - a.s)
       .slice(0, 200)
       .map((x) => x.i);
-  }, [palette, q, mode, snap?.version, profiles, servers, disconnected, tab?.id, tab?.database, objTarget?.profileId, objTarget?.database, dbTarget?.profileId, dbTarget?.database, dbOffline, tabs, snippetLib]);
+  }, [palette, q, mode, snap?.version, profiles, servers, disconnected, tab?.id, tab?.profileId, tab?.database, lastShown?.profileId, objTarget?.profileId, objTarget?.database, dbTarget?.profileId, dbTarget?.database, dbOffline, tabs, snippetLib]);
 
   if (!palette) return null;
   if (palette.mode === "tabs") return <TabList onClose={close} only={palette.only} />;

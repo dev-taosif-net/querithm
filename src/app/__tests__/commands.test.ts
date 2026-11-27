@@ -445,4 +445,25 @@ describe("commands: import data (Phase D0d)", () => {
     expect(useUi.getState().dialogs.at(-1)).toEqual({ kind: "import", profileId: "ms", database: "Sales" });
     actions.activeTabState.mockReturnValue({ id: "t1" });
   });
+
+  it("with every tab closed, opens Import for the last tab's connection unless disconnected", async () => {
+    const { useProfiles } = await import("../../store/profiles");
+    const { useTabs } = await import("../../store/tabs");
+    const { useConnections } = await import("../../store/connections");
+    useProfiles.setState({ profiles: [{ id: "ms", engine: "mssql" } as never] });
+    useConnections.setState({ servers: {}, disconnected: {} } as never);
+    useTabs.setState({ tabs: {}, order: [], activeId: undefined, lastBinding: { profileId: "ms", database: "Sales" } } as never);
+    useUi.setState({ dialogs: [], toasts: [] });
+    actions.activeTabState.mockReturnValue(undefined);
+    cmd("import.open").run();
+    expect(useUi.getState().dialogs.at(-1)).toEqual({ kind: "import", profileId: "ms", database: "Sales" });
+    useUi.setState({ dialogs: [], toasts: [] });
+    useConnections.setState({ disconnected: { ms: true } } as never);
+    cmd("import.open").run();
+    expect(useUi.getState().dialogs).toEqual([]);
+    expect(useUi.getState().toasts.at(-1)?.text).toContain("Pick a connection and database");
+    useConnections.setState({ disconnected: {} } as never);
+    useTabs.setState({ lastBinding: undefined } as never);
+    actions.activeTabState.mockReturnValue({ id: "t1" });
+  });
 });

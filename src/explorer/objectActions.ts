@@ -112,7 +112,10 @@ export function openObject(profileId: string, db: string, o: SnapObject) {
 export function insertText(text: string): boolean {
   const tab = useTabs.getState().activeId;
   const ed = tab ? editorForTab(tab) : undefined;
-  if (!ed) return false;
+  if (!ed) {
+    toast("info", "Open a query tab to insert text.");
+    return false;
+  }
   const sel = ed.getSelection();
   if (sel) ed.executeEdits("explorer", [{ range: sel, text, forceMoveMarkers: true }]);
   ed.focus();

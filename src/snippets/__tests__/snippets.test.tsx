@@ -27,12 +27,13 @@ vi.mock("../../editor/editors", () => ({
 
 import { SNIPPET_RETRY_MS, blankSnippet, snippetsFor, useSnippets } from "../snippetStore";
 import { SnippetEditor, SnippetsPanel } from "../SnippetsPanel";
-import { escapeSnippetText, insertSnippet, saveSelectionAsSnippet } from "../snippetActions";
+import { activeDialect, escapeSnippetText, insertSnippet, saveSelectionAsSnippet } from "../snippetActions";
 // @ts-expect-error -- Monaco ships no types for its internal snippet parser; the test uses it to check the real grammar.
 import { SnippetParser } from "monaco-editor/esm/vs/editor/contrib/snippet/browser/snippetParser.js";
 import { useUi } from "../../store/ui";
 import { useTabs } from "../../store/tabs";
 import { useProfiles } from "../../store/profiles";
+import { useConnections } from "../../store/connections";
 
 const sn = (over: Partial<Snippet>): Snippet => ({ id: "u1", title: "Mine", prefix: "mine", body: "SELECT 1;", dialect: null, tags: [], updatedAt: 1, builtIn: false, ...over });
 const LIB: Snippet[] = [
@@ -49,7 +50,8 @@ beforeEach(() => {
   useSnippets.setState({ snippets: [], loaded: false, error: undefined, failedAt: undefined });
   useUi.setState({ dialogs: [], toasts: [], palette: null });
   useProfiles.setState({ profiles: [{ id: "p-pg", engine: "pg" } as never, { id: "p-ms", engine: "mssql" } as never] });
-  useTabs.setState({ activeId: "t1", tabs: { t1: { id: "t1", profileId: "p-ms" } as never }, order: ["t1"] } as never);
+  useConnections.setState({ servers: {}, disconnected: {} } as never);
+  useTabs.setState({ activeId: "t1", tabs: { t1: { id: "t1", profileId: "p-ms" } as never }, order: ["t1"], lastBinding: undefined } as never);
 });
 afterEach(() => cleanup());
 
@@ -306,5 +308,12 @@ describe("snippet actions", () => {
     h.editor = { getContribution: () => null, getSelection: () => ({ r: 1 }), executeEdits, focus: vi.fn() };
     expect(insertSnippet(LIB[2])).toBe(true);
     expect(executeEdits).toHaveBeenCalledWith("snippet", [{ range: { r: 1 }, text: "SELECT 1;", forceMoveMarkers: true }]);
+  });
+
+  it("with every tab closed, activeDialect follows the last tab's engine unless disconnected", () => {
+    useTabs.setState({ activeId: undefined, tabs: {}, order: [], lastBinding: { profileId: "p-pg", database: "app" } } as never);
+    expect(activeDialect()).toBe("pg");
+    useConnections.setState({ disconnected: { "p-pg": true } } as never);
+    expect(activeDialect()).toBe("tsql");
   });
 });

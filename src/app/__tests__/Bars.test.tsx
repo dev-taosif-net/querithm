@@ -607,6 +607,19 @@ describe("StatusBar", () => {
     expect(screen.getByText(/Engine ready/)).toBeInTheDocument();
   });
 
+  it("with every tab closed shows the last tab's connection and database, and drops it when disconnected or deleted", () => {
+    useTabs.setState({ tabs: {}, order: [], activeId: undefined, mru: [], lastBinding: { profileId: "pg1", database: "reports" } });
+    const { container, unmount } = render(<StatusBar />);
+    expect(screen.getByText(/PROD - Analytics/)).toBeInTheDocument();
+    expect(screen.getByText("DB: reports")).toBeInTheDocument();
+    expect((container.firstChild as HTMLElement).style.borderTop).toBe("4px solid rgb(255, 0, 0)");
+    expect(screen.queryByText("No connection")).toBeNull();
+    unmount();
+    useConnections.setState({ disconnected: { pg1: true } });
+    render(<StatusBar />);
+    expect(screen.getByText("No connection")).toBeInTheDocument();
+  });
+
   it.each([
     ["running", /Engine ready/], ["restarted", /Engine ready/], ["dead", /Engine restarting/], ["failed", /Engine stopped/],
   ])("engine state %s", (state, text) => {

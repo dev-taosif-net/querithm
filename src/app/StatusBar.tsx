@@ -10,6 +10,7 @@ import { serverAddress, serverAddressLine } from "../connections/serverAddress";
 import { executionData } from "../results/model";
 import { fmtMs } from "../results/MessagesPanel";
 import { useEngineStatus } from "./engineStatus";
+import { useLastBinding } from "./lastBinding";
 
 function useNow(active: boolean) {
   const [, set] = useState(0);
@@ -30,8 +31,10 @@ const EMPTY = { subscribe: () => () => {}, getVersion: () => 0 };
  */
 export function StatusBar() {
   const tab = useActiveTab();
-  const profile = useProfiles((s) => s.profiles.find((p) => p.id === tab?.profileId));
-  const disconnected = useConnections((s) => !!tab?.profileId && !!s.disconnected[tab.profileId]);
+  const last = useLastBinding(!!tab);
+  const shown = tab ?? last;
+  const profile = useProfiles((s) => s.profiles.find((p) => p.id === shown?.profileId));
+  const disconnected = useConnections((s) => !!shown?.profileId && !!s.disconnected[shown.profileId]);
   // The tab's database file needs picking again (its grant was revoked, or the file moved or was replaced).
   const needsFile = useConnections((s) => !!tab?.profileId && !!s.servers[tab.profileId]?.repick);
   const view = useExecutions((s) => (tab?.activeExecutionId ? s.views[tab.activeExecutionId] : undefined));
@@ -59,9 +62,9 @@ export function StatusBar() {
         ) : (
           <span className="text-muted">No connection</span>
         )}
-        {tab?.profileId && (
+        {shown?.profileId && (
           <span className="text-fg whitespace-nowrap">
-            DB: {tab.database != null ? escapeForDisplay(tab.database) : "(default)"}{disconnected ? " (disconnected)" : ""}
+            DB: {shown.database != null ? escapeForDisplay(shown.database) : "(default)"}{disconnected ? " (disconnected)" : ""}
           </span>
         )}
         {address && (

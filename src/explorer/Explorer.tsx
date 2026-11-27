@@ -162,7 +162,12 @@ export function Explorer() {
     }
   }, [order, servers]);
 
-  const active = activeProfile && activeDb ? { profileId: activeProfile, db: activeDb } : undefined;
+  const active =
+    activeProfile && activeDb
+      ? { profileId: activeProfile, db: activeDb }
+      : lastDb?.profileId && lastDb.database
+        ? { profileId: lastDb.profileId, db: lastDb.database }
+        : undefined;
   const tree = useMemo(
     () => buildTree({ profiles: profilesList, servers, order, groupOrder, profileOrder, showAll, groupByEnv, collapsedEnvs: ex.collapsedEnvs, showGroups, collapsedGroups: ex.collapsedGroups, expanded: ex.expanded, entries, details: ex.details, schemaGroups, kind: ex.kind, folderFilters: ex.folderFilters, active }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -632,7 +637,7 @@ export function Explorer() {
             </button>
           </div>
           {popup === "kind" && <DropMenu anchor={kindBtn} label="Filter by kind" items={kindItems(ex.kind, scopeEngine ?? (engines.size === 1 ? ([...engines][0] as Engine) : undefined))} onClose={() => setPopup(null)} />}
-          {/* Reveals the database the line names: the active tab's, or with none in front the last tab's (no `active`). */}
+          {/* Reveals the database the line names: the active tab's, or with none in front the last tab's. */}
           <ScopeLine scope={scope} tabless={!hasTab} profiles={profiles} envText={envText} kind={ex.kind} count={results?.total} searching={searching} compact={compact} onReveal={() => revealActive("db" in scope ? { profileId: scope.profileId, db: scope.db } : undefined)} />
         </div>
       )}

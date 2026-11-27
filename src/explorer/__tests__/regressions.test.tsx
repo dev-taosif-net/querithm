@@ -116,6 +116,46 @@ describe.each<Engine>(["mssql", "pg"])("Explorer regressions (%s)", (engine) => 
     expect(useExplorer.getState().selected).toBe("db:p1:AppDb");
   });
 
+  it("B1: with every tab closed, the tree still marks the last tab's database as ACTIVE and enables active-database View items", () => {
+    useProfiles.setState({ profiles: [profile("p1", engine)] });
+    connect("p1", [orders(1, dflt)]);
+    useExplorer.setState({ expanded: new Set(["srv:p1"]) });
+    useTabs.setState({ lastBinding: { profileId: "p1", database: "AppDb" } } as never);
+    const { unmount } = render(<Explorer />);
+    expect(screen.getByRole("treeitem", { name: "Database AppDb, active in tab" }).textContent).toContain("ACTIVE");
+    fireEvent.click(screen.getByRole("button", { name: "View options" }));
+    const view = screen.getByRole("menu", { name: "View options" });
+    expect(within(view).getByRole("menuitemcheckbox", { name: "Group active database by schema" }).getAttribute("aria-disabled")).toBeNull();
+    expect(within(view).getByRole("menuitem", { name: "Reveal active database" }).getAttribute("aria-disabled")).toBeNull();
+    unmount();
+    useConnections.setState({ disconnected: { p1: true } } as never);
+    render(<Explorer />);
+    expect(screen.queryByRole("treeitem", { name: "Database AppDb, active in tab" })).toBeNull();
+  });
+
+  it("B1: with every tab closed and lastBinding without an explicit database, resolves the connected server's default database", () => {
+    useProfiles.setState({ profiles: [profile("p1", engine, { databaseDefault: null })] });
+    connect("p1", [orders(1, dflt)]);
+    useConnections.setState((s) => ({ servers: { ...s.servers, p1: { ...s.servers.p1, database: "AppDb" } } }) as never);
+    useExplorer.setState({ expanded: new Set(["srv:p1"]) });
+    useTabs.setState({ lastBinding: { profileId: "p1" } } as never);
+    render(<Explorer />);
+    expect(screen.getByRole("treeitem", { name: "Database AppDb, active in tab" }).textContent).toContain("ACTIVE");
+    expect(searchBox().getAttribute("placeholder")).toBe("Search AppDb on Srv-p1…");
+    typeSearch("Ord");
+    expect(screen.getByText("1 match")).toBeTruthy();
+  });
+
+  it("B1: with every tab closed, inserting a name via Ctrl+Enter tells the user to open a query tab", () => {
+    useProfiles.setState({ profiles: [profile("p1", engine)] });
+    connect("p1", [orders(1, dflt)]);
+    useTabs.setState({ lastBinding: { profileId: "p1", database: "AppDb" } } as never);
+    render(<Explorer />);
+    typeSearch("Ord");
+    fireEvent.keyDown(searchBox(), { key: "Enter", ctrlKey: true });
+    expect(useUi.getState().toasts.at(-1)?.text).toContain("Open a query tab");
+  });
+
   it("B1: with every tab closed, a server the user disconnected since (the top bar drops it too) is not searched", () => {
     useProfiles.setState({ profiles: [profile("p1", engine)] });
     connect("p1", [orders(1, dflt)]);

@@ -4,6 +4,7 @@ import type { CompareSide } from "../ipc/contract";
 import { rpc } from "../ipc/client";
 import { isTauri, transport } from "../ipc/transport";
 import { activeTabState } from "../app/actions";
+import { lastBindingTarget } from "../app/lastBinding";
 import { openTool } from "../app/toolActions";
 import { saveBytes } from "../app/saveBytes";
 import { ownSessionFor, sessionParam, tabScope, toolSession } from "../store/snapshots";
@@ -20,7 +21,9 @@ const asParams = (p: CompareTabParams) => p as unknown as Record<string, unknown
 function startFrom(source: { profileId: string; database: string } | undefined): { profileId: string; database: string; sessionId?: string } | undefined {
   if (source) return { profileId: source.profileId, database: source.database, ...sessionParam(ownSessionFor(source.profileId, source.database)) };
   const t = activeTabState();
-  return t?.profileId && t.database ? { profileId: t.profileId, database: t.database, ...sessionParam(tabScope(t)?.sessionId) } : undefined;
+  if (t) return t.profileId && t.database ? { profileId: t.profileId, database: t.database, ...sessionParam(tabScope(t)?.sessionId) } : undefined;
+  const last = lastBindingTarget();
+  return last?.profileId && last.database ? { profileId: last.profileId, database: last.database, ...sessionParam(ownSessionFor(last.profileId, last.database)) } : undefined;
 }
 
 /** Ctrl+Shift+D / Explorer: the given database (else the active tab's) is the source; the target is picked in the tab. */
