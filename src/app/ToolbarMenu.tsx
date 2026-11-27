@@ -230,7 +230,7 @@ export function DropMenu({ anchor, at, label, header, items, onClose }: {
         onContextMenu={(e) => e.preventDefault()}
       >
         {header && <div className="h-[26px] px-2.5 flex items-center gap-1.5 text-[11px] text-muted whitespace-nowrap overflow-hidden shrink-0 border-b border-line mb-1">{header}</div>}
-        <MenuItems items={items} onClose={onClose} subOpen={sub} onSub={(n) => (n === null ? setSub(null) : openSub(n, false))} itemRefs={itemRefs.current} />
+        <MenuItems items={items} onClose={dismiss} subOpen={sub} onSub={(n) => (n === null ? setSub(null) : openSub(n, false))} itemRefs={itemRefs.current} />
       </div>
       {subItems && (
         <div
@@ -243,7 +243,7 @@ export function DropMenu({ anchor, at, label, header, items, onClose }: {
           onKeyDown={onSubKeyDown}
           onContextMenu={(e) => e.preventDefault()}
         >
-          <MenuItems items={subItems} onClose={onClose} />
+          <MenuItems items={subItems} onClose={dismiss} />
         </div>
       )}
     </>,

@@ -1483,7 +1483,7 @@ pointer change.
 
 | Region | Default | Contents |
 |---|---|---|
-| Top bar, 40 px | Always | Logo · back / forward · New query ▾ · launch strip (environment badge, engine, connection › database joined to Run ▾ / Cancel) · Explain ▾ · transaction (Begin Tx, or `TX mm:ss` · Commit · Rollback) · search · history · settings · update |
+| Top bar, 40 px | Always | Logo · back / forward · New query ▾ · launch strip (environment badge, engine, connection › database joined to Run ▾ / Cancel) · Explain ▾ · transaction (Begin Tx, or `TX mm:ss` · Commit · Rollback) · Comment ▾ · search · history · settings · update |
 | Left dock, 280 px (200–600), docked / auto-hide / closed | Explorer | Header, 40 px so its bottom line continues the tab strip's (Connect…, View ⋯, pushpin, close) · search scoped to the active tab's database with a kind filter and its scope line · the virtualized tree (§10) |
 | Center group | Query tabs | One model per tab in the group's shared editor (`setModel`, below); line 1 = markers (TX pill, spinner, lock) · script verb · name without `.sql`; line 2 = engine mark · database in the environment color fitted to every tab surface, never cut (the tab's minimum width grows to the whole name, past 184 px if it must; owner revision 2026-11-04) · server muted, cut with "…" when there is no room, no environment word (the color, Prod's band, the tooltip, the top bar and the accessible name say it); a disconnected tab leads line 2 with a plug and "disconnected" (`src/app/TabIdentity.tsx`) |
 | Center group | Notebook tabs | A `.sqlbook` notebook (`TabState.notebook`, `src/notebook/`): a query tab whose panel shows cells instead of one editor, with the same header, session, top-bar pickers, Run / Cancel, transaction and close rules; saved with the workspace like a query tab |
@@ -1498,7 +1498,7 @@ paused) and the transaction clock; the tab strip and the status bar repeat them 
 focusing Run, or an item of its menu, marks in the editor exactly the text it would run (one Monaco
 decoration, the environment color on prod; `src/editor/runScope.ts`). Run and Cancel are one element
 that ignores pointer clicks for 400 ms after it swaps, so a double-click cannot run and then cancel.
-Comment / uncomment live in the editor's right-click menu, on their shortcuts and in the palette.
+Comment ▾ sits left of the search box with a fixed line-comment face (click toggles line comments or inline `/* */` selections; Shift+click toggles block comments), and its menu holds block, statement, convert, header, strip and quick toggles alongside the editor's right-click menu, shortcuts and palette.
 Below 1440 px labels drop, never functions; the environment, Run / Cancel and the transaction never
 collapse.
 

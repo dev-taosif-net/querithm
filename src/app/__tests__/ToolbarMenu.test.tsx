@@ -71,12 +71,24 @@ describe("toolbar drop-down menu", () => {
     expect(screen.getByRole("menuitemcheckbox", { name: "Include actual plan on every run, SQL Server only" })).toHaveAttribute("aria-checked", "false");
   });
 
-  it("clicking an item closes the menu and runs it", async () => {
+  it("clicking an item closes the menu, restores focus to the trigger when the action does not move focus, and runs it", async () => {
     const { run, items } = make();
     render(<Harness items={items} />);
     await userEvent.setup().click(screen.getByRole("menuitem", { name: /Explain analyze/ }));
     expect(run.b).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByText("caret"));
+  });
+
+  it("activating a menuitemcheckbox restores focus to the trigger instead of dropping it to body", async () => {
+    const toggle = vi.fn();
+    render(<Harness items={[{ label: "Advance cursor", checked: false, run: toggle }]} />);
+    const cb = screen.getByRole("menuitemcheckbox", { name: "Advance cursor" });
+    expect(document.activeElement).toBe(cb);
+    await userEvent.setup().click(cb);
+    expect(toggle).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByText("caret"));
   });
 
   it("an unavailable item stays focusable, says why and does nothing", async () => {

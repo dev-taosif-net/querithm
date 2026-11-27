@@ -43,9 +43,9 @@ function runCommand(id: string) {
 }
 
 /** Click handler for a control that keeps focus when unavailable (aria-disabled): it says why, it does nothing. */
-const guarded = (unavailable: boolean, run: () => void) => (e: MouseEvent) => {
+const guarded = (unavailable: boolean, run: (e: MouseEvent) => void) => (e: MouseEvent) => {
   if (unavailable) e.preventDefault();
-  else run();
+  else run(e);
 };
 
 function useRunning(tab: TabState | undefined) {
@@ -114,6 +114,7 @@ function SplitButton({ face, caretLabel, menuLabel, items, caretClass = "", disa
         ref={caret}
         type="button"
         className={`q-tb !min-w-0 w-[18px] !px-0 rounded-l-none ${caretClass}`}
+        title={caretLabel}
         aria-label={caretLabel}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -543,7 +544,7 @@ function LiveStatus({ tab }: { tab: TabState | undefined }) {
   );
 }
 
-/** Comment ▾: the face toggles line comments (or inline block comments); the menu holds block, statement, strip and quick toggles. */
+/** Comment ▾: click toggles line comments (or inline block comments), Shift+click toggles block comments; the menu holds statement, strip and quick toggles. */
 function CommentButton({ tab }: { tab: TabState | undefined }) {
   const engine = useProfiles((s) => s.profiles.find((p) => p.id === tab?.profileId)?.engine);
   const advanceCursor = useSettings((s) => s.commentAdvanceCursor);
@@ -551,6 +552,10 @@ function CommentButton({ tab }: { tab: TabState | undefined }) {
   const mysqlStyle = useSettings((s) => s.mysqlLineCommentStyle);
   const off = !tab || !!tab.readOnly;
   const why = !tab ? "Open a query first" : "This tab is read-only";
+  const toggleKeys = keyOf("editor.toggleComment");
+  const faceTitle = off
+    ? why
+    : `${tip("Toggle line comment", "editor.toggleComment")} · ${tip("Shift+click for block", "editor.blockComment")}`;
   const previewStatement = (on: boolean) => {
     if (on && tab && !tab.readOnly) showCommentScope(tab.id);
     else clearRunScope();
@@ -565,8 +570,8 @@ function CommentButton({ tab }: { tab: TabState | undefined }) {
       onClose={clearRunScope}
       items={() => {
         const items: MenuEntry[] = [
-          { label: "Toggle line comment", hint: keyOf("editor.toggleComment"), run: () => runCommand("editor.toggleComment") },
-          { label: "Toggle block comment", hint: keyOf("editor.blockComment"), run: () => runCommand("editor.blockComment") },
+          { label: "Toggle line comment", bold: true, hint: toggleKeys, run: () => runCommand("editor.toggleComment") },
+          { label: "Toggle block comment", detail: "Shift+click", hint: keyOf("editor.blockComment"), run: () => runCommand("editor.blockComment") },
           { label: "Toggle current statement", hint: keyOf("editor.statementComment"), run: () => { clearRunScope(); runCommand("editor.statementComment"); }, onHighlight: previewStatement },
           "sep",
           { label: "Comment selected lines", hint: keyOf("editor.comment"), run: () => runCommand("editor.comment") },
@@ -594,8 +599,12 @@ function CommentButton({ tab }: { tab: TabState | undefined }) {
           type="button"
           className="q-tb w-7 !px-0 rounded-r-none text-muted hover:text-fg"
           aria-disabled={off || undefined}
-          onClick={guarded(off, () => runCommand("editor.toggleComment"))}
-          title={off ? why : tip("Toggle line comment", "editor.toggleComment")}
+          aria-keyshortcuts={toggleKeys || undefined}
+          onMouseDown={(e) => {
+            if (e.shiftKey) e.preventDefault();
+          }}
+          onClick={guarded(off, (e) => runCommand(e.shiftKey ? "editor.blockComment" : "editor.toggleComment"))}
+          title={faceTitle}
           aria-label="Toggle line comment"
         >
           <Icon name="comment" />

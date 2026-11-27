@@ -163,7 +163,7 @@ function isHintOrVersionedComment(text: string, tok: Token, dialect: Dialect): b
     if (tok.line && text.startsWith("--+", tok.start)) return true;
     if (!tok.line && text.startsWith("/*+", tok.start)) return true;
   }
-  if (dialect === "mySql" && !tok.line && text.startsWith("/*!", tok.start)) return true;
+  if (dialect === "mySql" && !tok.line && (text.startsWith("/*!", tok.start) || text.startsWith("/*+", tok.start))) return true;
   return false;
 }
 
@@ -333,13 +333,17 @@ function commentLineSpans(
   return { edits };
 }
 
-// Checks if wrapping raw text inside `/* ... */` would break syntax due to `*/` (non-nested) or unbalanced `/*`/`*/` (nested).
-function hasUnsafeBlockDelimiters(body: string, nested: boolean): boolean {
-  if (!nested) return body.includes("*/");
+// Zero-allocation check: would wrapping `text[start..end)` inside `/* ... */` break syntax due to `*/` (non-nested)
+// or unbalanced `/*`/`*/` (nested), including delimiters inside strings or `--` line comments?
+function hasUnsafeBlockDelimitersInRange(text: string, start: number, end: number, nested: boolean): boolean {
+  if (!nested) {
+    const idx = text.indexOf("*/", start);
+    return idx >= 0 && idx + 2 <= end;
+  }
   let depth = 0;
-  for (let i = 0; i < body.length - 1; i++) {
-    const c = body.charCodeAt(i);
-    const c1 = body.charCodeAt(i + 1);
+  for (let i = start; i < end - 1; i++) {
+    const c = text.charCodeAt(i);
+    const c1 = text.charCodeAt(i + 1);
     if (c === 47 /* / */ && c1 === 42 /* * */) {
       depth++;
       i++;
@@ -350,6 +354,11 @@ function hasUnsafeBlockDelimiters(body: string, nested: boolean): boolean {
     }
   }
   return depth !== 0;
+}
+
+// Checks if wrapping raw text inside `/* ... */` would break syntax due to `*/` (non-nested) or unbalanced `/*`/`*/` (nested).
+function hasUnsafeBlockDelimiters(body: string, nested: boolean): boolean {
+  return hasUnsafeBlockDelimitersInRange(body, 0, body.length, nested);
 }
 
 // O(log M + K) check for block delimiters inside `[start, end]` that would break wrapping in `/* ... */`.
@@ -407,29 +416,45 @@ function blockCommentSelection(
     }
   }
 
-  if (stringContaining(stream.code, sel.start) || stringContaining(stream.code, sel.end)) {
+  // Standard editor rule for multi-line selections (e.g. Shift+Down): exclude a trailing column-1 line break so `*/`
+  // closes at the end of the last selected line instead of gluing onto the next live SQL line (`*/ORDER BY`).
+  const startLine = lineSpanAt(text, sel.start);
+  let effectiveEnd = sel.end;
+  if (sel.end > startLine.end) {
+    const endLine = lineSpanAt(text, sel.end);
+    if (endLine.start > startLine.start && sel.end === endLine.start) {
+      const prev = prevLineSpan(text, endLine);
+      if (prev && prev.end > sel.start) effectiveEnd = prev.end;
+    }
+  }
+
+  if (stringContaining(stream.code, sel.start) || stringContaining(stream.code, effectiveEnd)) {
     return { edits: [], notice: "Selection crosses a string literal — skipped commenting." };
   }
 
   const nested = supportsNestedBlockComments(dialect);
-  if (hasUnsafeInnerBlockComment(text, stream, sel.start, sel.end, nested)) {
-    const spans = linesForSelection(text, sel);
-    const res = commentLineSpans(text, spans, "add", stream, dialect, opts);
+  const hasInnerBlock = hasUnsafeInnerBlockComment(text, stream, sel.start, effectiveEnd, nested);
+  const hasRawDelimiter = !hasInnerBlock && hasUnsafeBlockDelimitersInRange(text, sel.start, effectiveEnd, nested);
+  if (hasInnerBlock || hasRawDelimiter) {
+    const spans = linesForSelection(text, { start: sel.start, end: effectiveEnd });
+    const res = commentLineSpans(text, spans, "toggle", stream, dialect, opts);
+    const fallbackNotice = hasInnerBlock
+      ? nested
+        ? "Selection splits an existing block comment — used line comments instead."
+        : `Block comments cannot nest in ${DIALECT_LABEL[dialect]} — used line comments instead.`
+      : nested
+        ? "Selection contains unbalanced '/*' or '*/' — used line comments instead."
+        : "Selection contains '*/' — used line comments instead.";
     return {
       edits: res.edits,
-      notice:
-        res.notice ??
-        (nested
-          ? "Selection splits an existing block comment — used line comments instead."
-          : `Block comments cannot nest in ${DIALECT_LABEL[dialect]} — used line comments instead.`),
+      notice: res.notice ?? fallbackNotice,
     };
   }
 
   // On single-line selections, trim leading/trailing horizontal spaces outside `/* ... */` so wrap → unwrap is lossless.
   let wrapStart = sel.start;
-  let wrapEnd = sel.end;
-  const startLine = lineSpanAt(text, sel.start);
-  if (sel.end <= startLine.end && trimmed.start < trimmed.end) {
+  let wrapEnd = effectiveEnd;
+  if (effectiveEnd <= startLine.end && trimmed.start < trimmed.end) {
     wrapStart = trimmed.start;
     wrapEnd = trimmed.end;
   }
@@ -973,12 +998,27 @@ export function computeCommentEdits(
   const handledLineStarts = sels.length > 1 ? new Set<number>() : null;
 
   for (const sel of sels) {
-    // 1. Toggle or remove when the whole trimmed selection is a single block comment → unwrap it.
-    if ((mode === "toggle" || mode === "remove") && sel.start < sel.end) {
-      const trimmed = trimSpan(text, sel);
-      if (trimmed.start < trimmed.end) {
-        const block = blockCommentCovering(stream.comments, trimmed.start, trimmed.end);
-        if (block && block.start === trimmed.start && block.end === trimmed.end && !isHintOrVersionedComment(text, block, d)) {
+    // 1. Toggle or remove when the whole trimmed selection — or, with no selection, the whole trimmed line — is a single block comment → unwrap it.
+    if (mode === "toggle" || mode === "remove") {
+      let candidate: SelectionSpan | null = null;
+      if (sel.start < sel.end) {
+        const trimmed = trimSpan(text, sel);
+        if (trimmed.start < trimmed.end) candidate = trimmed;
+      } else {
+        const li = lineSpanAt(text, sel.start);
+        const lineFirst = firstNonSpaceOffset(text, li);
+        let lineLast = li.end;
+        while (lineLast > lineFirst && isHorizontalSpaceCode(text.charCodeAt(lineLast - 1))) lineLast--;
+        if (lineFirst < lineLast) candidate = { start: lineFirst, end: lineLast };
+      }
+      if (candidate) {
+        const block = blockCommentCovering(stream.comments, candidate.start, candidate.end);
+        if (block && block.start === candidate.start && block.end === candidate.end && !isHintOrVersionedComment(text, block, d)) {
+          if (handledLineStarts) {
+            const li = lineSpanAt(text, candidate.start);
+            if (handledLineStarts.has(li.start)) continue;
+            handledLineStarts.add(li.start);
+          }
           allEdits.push(...unwrapBlockCommentEdits(text, block));
           continue;
         }

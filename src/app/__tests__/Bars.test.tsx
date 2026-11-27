@@ -130,19 +130,35 @@ describe("TopBar: brand and navigation", () => {
     expect(face.parentElement?.className).toMatch(/\bborder\b/);
   });
 
-  it("has a Comment split button with the Commented Lines icon left of the search box, plus dropdown actions and statement preview", async () => {
+  it("has a Comment split button with the Commented Lines icon left of the search box, Shift+click block accelerator, dropdown actions, and statement preview", async () => {
     const user = userEvent.setup();
     render(<TopBar />);
     const commentBtn = btn("Toggle line comment");
+    const caretBtn = btn("Comment options");
     expect(commentBtn.querySelector("svg")).not.toBeNull();
-    expect(commentBtn).toHaveAttribute("title", "Toggle line comment (Ctrl+/)");
+    expect(commentBtn).toHaveAttribute("title", "Toggle line comment (Ctrl+/) · Shift+click for block (Shift+Alt+A)");
+    expect(commentBtn).toHaveAttribute("aria-keyshortcuts", "Ctrl+/");
+    expect(caretBtn).toHaveAttribute("title", "Comment options");
     expect(commentBtn.parentElement?.nextElementSibling).toBe(btn("Go to table, proc, or command"));
     await user.click(commentBtn);
     expect(h.cmd["editor.toggleComment"]).toHaveBeenCalledTimes(1);
+    expect(h.cmd["editor.blockComment"]).not.toHaveBeenCalled();
 
-    // Open the split-button dropdown and verify statement preview + actions.
-    await user.click(btn("Comment options"));
+    // Shift+click on the face runs Toggle block comment directly and suppresses stray mouseDown text selection.
+    const shiftDown = new MouseEvent("mousedown", { bubbles: true, cancelable: true, shiftKey: true });
+    commentBtn.dispatchEvent(shiftDown);
+    expect(shiftDown.defaultPrevented).toBe(true);
+    fireEvent.click(commentBtn, { shiftKey: true });
+    expect(h.cmd["editor.blockComment"]).toHaveBeenCalledTimes(1);
+    expect(h.cmd["editor.toggleComment"]).toHaveBeenCalledTimes(1);
+
+    // Open the split-button dropdown and verify bold default face item, Shift+click hint, and statement preview + actions.
+    await user.click(caretBtn);
     const menu = screen.getByRole("menu", { name: "Comments" });
+    const lineItem = within(menu).getByRole("menuitem", { name: "Toggle line comment" });
+    expect(lineItem.className).toMatch(/font-semibold/);
+    const blockItem = within(menu).getByRole("menuitem", { name: "Toggle block comment, Shift+click" });
+    expect(blockItem).toHaveAttribute("aria-keyshortcuts", "Shift+Alt+A");
     const stmtItem = within(menu).getByRole("menuitem", { name: /Toggle current statement/i });
     await user.hover(stmtItem);
     expect(h.scope.showCommentScope).toHaveBeenCalledWith("t1");
@@ -153,7 +169,7 @@ describe("TopBar: brand and navigation", () => {
 
     // Dismissing the menu with Escape while hovering clears the statement preview.
     h.scope.clearRunScope.mockClear();
-    await user.click(btn("Comment options"));
+    await user.click(caretBtn);
     const menu2 = screen.getByRole("menu", { name: "Comments" });
     await user.hover(within(menu2).getByRole("menuitem", { name: /Toggle current statement/i }));
     await user.keyboard("{Escape}");
@@ -161,11 +177,14 @@ describe("TopBar: brand and navigation", () => {
 
     cleanup();
     h.cmd["editor.toggleComment"].mockClear();
+    h.cmd["editor.blockComment"].mockClear();
     setTab({ readOnly: true });
     render(<TopBar />);
     unavailable(btn("Toggle line comment"));
     unavailable(btn("Comment options"));
     expect(btn("Toggle line comment")).toHaveAttribute("title", "This tab is read-only");
+    fireEvent.click(btn("Toggle line comment"), { shiftKey: true });
+    expect(h.cmd["editor.blockComment"]).not.toHaveBeenCalled();
 
     cleanup();
     useTabs.setState({ tabs: {}, order: [], activeId: undefined });
@@ -173,7 +192,9 @@ describe("TopBar: brand and navigation", () => {
     unavailable(btn("Toggle line comment"));
     unavailable(btn("Comment options"));
     await user.click(btn("Toggle line comment"));
+    fireEvent.click(btn("Toggle line comment"), { shiftKey: true });
     expect(h.cmd["editor.toggleComment"]).not.toHaveBeenCalled();
+    expect(h.cmd["editor.blockComment"]).not.toHaveBeenCalled();
   });
 });
 

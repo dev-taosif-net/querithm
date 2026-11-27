@@ -174,9 +174,12 @@ describe("smartComment — dialect-specific rules", () => {
     expect(run("--foo|", "mySql", "toggle").out).toBe("-- --foo");
   });
 
-  it("MySQL: stripComments preserves /*!50000 ... */ executable comments", () => {
-    const sql = "# note\nSELECT /*!50000 SQL_NO_CACHE */ 1 -- end";
-    expect(run(sql, "mySql", "strip").out).toBe("SELECT /*!50000 SQL_NO_CACHE */ 1");
+  it("MySQL: stripComments preserves /*!50000 ... */ executable comments and /*+ ... */ optimizer hints", () => {
+    const sql = "# note\nSELECT /*+ MAX_EXECUTION_TIME(1000) */ /*!50000 SQL_NO_CACHE */ 1 -- end";
+    expect(run(sql, "mySql", "strip").out).toBe("SELECT /*+ MAX_EXECUTION_TIME(1000) */ /*!50000 SQL_NO_CACHE */ 1");
+    // Cursor inside a MySQL 8+ /*+ hint */ must not unwrap it on block comment.
+    const hintBlock = run("SELECT /*+ NO_MERGE|(t) */ 1 FROM t", "mySql", "block");
+    expect(hintBlock.out).toBe("-- SELECT /*+ NO_MERGE(t) */ 1 FROM t");
   });
 
   it("Oracle: stripComments preserves /*+ ... */ and --+ optimizer hints, and toggle does not corrupt --+ hints", () => {
@@ -278,5 +281,54 @@ describe("smartComment — dialect-specific rules", () => {
       { start: 7, end: 8, text: "A" },
     ]);
     expect(coal).toEqual({ start: 7, end: 11, text: "A, B" });
+  });
+
+  it.each(ALL_DIALECTS)("%s: block comment handles trailing col-1 Shift+Down selections cleanly (LF and CRLF) and round-trips", (d) => {
+    const lf = "SELECT *\n[FROM orders o\nWHERE o.status = 'open'\n]ORDER BY o.id";
+    const r1 = run(lf, d, "block");
+    expect(r1.out).toBe("SELECT *\n/* FROM orders o\nWHERE o.status = 'open' */\nORDER BY o.id");
+    // Unwrapping with the same trailing-newline selection restores the original SQL losslessly.
+    const r2 = run("SELECT *\n[/* FROM orders o\nWHERE o.status = 'open' */\n]ORDER BY o.id", d, "block");
+    expect(r2.out).toBe("SELECT *\nFROM orders o\nWHERE o.status = 'open'\nORDER BY o.id");
+
+    const crlf = "SELECT *\r\n[FROM orders o\r\nWHERE o.status = 'open'\r\n]ORDER BY o.id";
+    const r3 = run(crlf, d, "block");
+    expect(r3.out).toBe("SELECT *\r\n/* FROM orders o\r\nWHERE o.status = 'open' */\r\nORDER BY o.id");
+  });
+
+  it.each(NESTED_DIALECTS)("%s: block comment falls back to line toggle on unbalanced /* or */ inside strings/line comments", (d) => {
+    const glob = run("[SELECT * FROM read_parquet('data/*.parquet');]", d, "block");
+    expect(glob.out).toBe("-- SELECT * FROM read_parquet('data/*.parquet');");
+    expect(glob.notice).toMatch(/unbalanced/i);
+    // Repeated block toggle on the fallback line cleanly uncomments instead of stacking `-- --`.
+    const glob2 = run(`[${glob.out}]`, d, "block");
+    expect(glob2.out).toBe("SELECT * FROM read_parquet('data/*.parquet');");
+
+    const cron = run("[SELECT '*/5 * * * *' AS cron;]", d, "block");
+    expect(cron.out).toBe("-- SELECT '*/5 * * * *' AS cron;");
+    expect(cron.notice).toMatch(/unbalanced/i);
+  });
+
+  it.each(NON_NESTED_DIALECTS)("%s: block comment guards */ inside strings and -- line comments and toggles cleanly on repeat", (d) => {
+    const cron = run("[SELECT '*/5 * * * *' AS cron;]", d, "block");
+    expect(cron.out).toBe("-- SELECT '*/5 * * * *' AS cron;");
+    expect(cron.notice).toMatch(/contains '\*\/'/i);
+
+    // Repeating block comment on a line with an inner block comment/hint must toggle `-- ` off instead of corrupting SQL.
+    const first = run("SELECT /*+ FULL(t) */ * FROM t|", d, "block");
+    expect(first.out).toBe("-- SELECT /*+ FULL(t) */ * FROM t");
+    const second = run(`${first.out}|`, d, "block");
+    expect(second.out).toBe("SELECT /*+ FULL(t) */ * FROM t");
+  });
+
+  it.each(ALL_DIALECTS)("%s: Ctrl+/ with no selection unwraps a whole-line block comment (including multi-cursor) without touching inline notes or hints", (d) => {
+    expect(run("  /* SELECT| 1 */  ", d, "toggle").out).toBe("  SELECT 1  ");
+    expect(run("/* a| b| */", d, "toggle").out).toBe("a b");
+    // Inline block comment alongside code still comments the full line.
+    expect(run("SELECT /* note| */ 1 FROM t", d, "toggle").out).toBe("-- SELECT /* note */ 1 FROM t");
+    // Hints on Oracle/MySQL are never unwrapped.
+    if (d === "oracle" || d === "mySql") {
+      expect(run("/*+ FULL(t)| */", d, "toggle").out).toBe("-- /*+ FULL(t) */");
+    }
   });
 });
